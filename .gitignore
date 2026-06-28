@@ -1,0 +1,26 @@
+# Rendered cluster directories — generated locally, contain environment-specific IPs
+# These are created by: make new CLUSTER=<name>
+# Do not commit them — they are not portable across environments.
+
+# Ignore all cluster dirs (any directory with a cluster-config.yaml)
+*/cluster-config.yaml
+*/cluster-v2.yaml
+*/cluster-base.yaml
+*/bootstrap.sh
+*/generate-manifest.sh
+
+# But keep the example and templates
+!cluster-config.yaml.example
+!templates/
+
+# macOS
+.DS_Store
+__MACOSX/
+
+# Python
+__pycache__/
+*.pyc
+
+# Kubeconfigs — never commit
+*.yaml.bak
+kubeconfig*

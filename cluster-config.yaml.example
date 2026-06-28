@@ -1,0 +1,37 @@
+# OpenKubes cluster config — example
+# Copy to <cluster-name>/cluster-config.yaml and adjust values.
+# Run: make new CLUSTER=<name> TYPE=talos|ubuntu [HA=true] [WORKERS=2]
+
+name: my-cluster
+type: talos          # talos | ubuntu
+
+controlPlane:
+  replicas: 3        # 1 = single control plane, 3 = HA
+  cores: 2
+  memory: 4Gi
+
+workers:
+  replicas: 2
+  cores: 2
+  memory: 4Gi
+  disk: 15Gi
+
+versions:
+  kubernetes: v1.36.2
+  talos: v1.13.4     # talos only — remove for ubuntu clusters
+
+network:
+  endpoint: auto     # auto: allocates next free MetalLB IP from pool
+  podCIDR: auto      # auto: allocates next free /16 from pod CIDR pool
+  serviceCIDR: auto  # auto: allocates next free /20 from service CIDR pool
+
+# nodeSelector: <hostname>
+# Pin VMs to a specific host node. Required for Talos (local-path PVC binding).
+# Leave empty for ubuntu clusters if any node is acceptable.
+nodeSelector: ""
+
+upgrade:
+  strategy: blue-green
+  workloadMigration:
+    stateless: gitops
+    stateful: app-native
