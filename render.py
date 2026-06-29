@@ -106,8 +106,9 @@ def build_context(cfg: dict) -> dict:
         "TALOS_VERSION":      ver.get("talos", "v1.13.4"),
         "UPGRADE_STRATEGY":   upg.get("strategy", "blue-green"),
         "NODE_SELECTOR":      cfg.get("nodeSelector", ""),
-        "TALOS_SCHEMATIC_ID": os.environ.get(
-            "TALOS_SCHEMATIC_ID",
+        "TALOS_SCHEMATIC_ID": (
+            cfg.get("os", {}).get("schematic_id") or
+            os.environ.get("TALOS_SCHEMATIC_ID") or
             "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
         ),
     }
