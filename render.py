@@ -19,6 +19,13 @@ TEMPLATES_DIR = SCRIPT_DIR / "templates"
 METALLB_POOL_START = ipaddress.IPv4Address("192.168.100.200")
 METALLB_POOL_END   = ipaddress.IPv4Address("192.168.100.254")
 
+# ok-linux is the source of truth for this default.
+# See: https://github.com/openkubes/ok-linux/blob/main/profiles/kubevirt/profile.yaml
+# Verified against the running ok1-talos cluster (ok-linux v0.1.0).
+OK_LINUX_DEFAULT_PROFILE = "kubevirt"
+OK_LINUX_DEFAULT_SCHEMATIC_ID = "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+OK_LINUX_DEFAULT_TALOS_VERSION = "v1.9.5"
+
 def load_yaml(path: Path) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
@@ -80,6 +87,25 @@ def resolve_config(cfg: dict, cluster_name: str) -> dict:
     # nodeSelector defaults to empty string (= no pinning)
     if "nodeSelector" not in cfg:
         cfg["nodeSelector"] = ""
+
+    # versions.talos defaults to the ok-linux verified version, not an
+    # arbitrary hardcoded one. Only applies if the cluster type is talos —
+    # ubuntu clusters don't carry a talos version at all.
+    if cfg.get("type") == "talos":
+        ver = cfg.setdefault("versions", {})
+        ver.setdefault("talos", OK_LINUX_DEFAULT_TALOS_VERSION)
+
+    # os: section — explicit, written back to cluster-config.yaml.
+    # This is the seam described in ok-linux ADR-004: today these defaults
+    # are hardcoded here, in the future they will be resolved dynamically
+    # from the ok-linux repository. The field names and structure stay
+    # the same either way.
+    if cfg.get("type") == "talos":
+        os_cfg = cfg.setdefault("os", {})
+        os_cfg.setdefault("distribution", "ok-linux")
+        os_cfg.setdefault("profile", OK_LINUX_DEFAULT_PROFILE)
+        os_cfg.setdefault("schematic_id", OK_LINUX_DEFAULT_SCHEMATIC_ID)
+
     return cfg
 
 def build_context(cfg: dict) -> dict:
@@ -103,13 +129,13 @@ def build_context(cfg: dict) -> dict:
         "POD_CIDR":           net.get("podCIDR"),
         "SERVICE_CIDR":       net.get("serviceCIDR"),
         "K8S_VERSION":        ver.get("kubernetes", "v1.34.1"),
-        "TALOS_VERSION":      ver.get("talos", "v1.13.4"),
+        "TALOS_VERSION":      ver.get("talos", OK_LINUX_DEFAULT_TALOS_VERSION),
         "UPGRADE_STRATEGY":   upg.get("strategy", "blue-green"),
         "NODE_SELECTOR":      cfg.get("nodeSelector", ""),
         "TALOS_SCHEMATIC_ID": (
             cfg.get("os", {}).get("schematic_id") or
             os.environ.get("TALOS_SCHEMATIC_ID") or
-            "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+            OK_LINUX_DEFAULT_SCHEMATIC_ID
         ),
     }
 
