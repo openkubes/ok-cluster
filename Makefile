@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu]
-.PHONY: new render install kubeconfig install-cni bootstrap annotate-pvcs upgrade clean teardown list status help
+.PHONY: new render install kubeconfig install-cni install-storage bootstrap annotate-pvcs upgrade clean teardown list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -62,6 +62,21 @@ install-cni: require-cluster kubeconfig
 	@echo ""
 	@echo "✅ Cluster $(CLUSTER) ready!"
 	@echo "   kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes"
+
+install-storage: require-cluster kubeconfig ## Install local-path StorageClass (required for Talos clusters)
+	@echo "Installing local-path-provisioner on $(CLUSTER)..."
+	kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml apply -f \
+		https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
+	@echo "Setting local-path as default StorageClass..."
+	kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml patch storageclass local-path \
+		-p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+	@echo "Labeling namespaces for privileged pod security (required on Talos)..."
+	kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml label namespace local-path-storage \
+		pod-security.kubernetes.io/enforce=privileged \
+		pod-security.kubernetes.io/warn=privileged \
+		pod-security.kubernetes.io/audit=privileged \
+		--overwrite
+	@echo "✅ local-path StorageClass installed and set as default on $(CLUSTER)"
 
 bootstrap: require-cluster
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
