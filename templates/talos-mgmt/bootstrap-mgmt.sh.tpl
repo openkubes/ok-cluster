@@ -8,7 +8,9 @@
 #   3. Crossplane Functions (patch-and-transform, go-templating)
 #   4. CAPI + CAPK + Talos providers (via clusterctl)
 #   5. XRDs + Compositions (from openkubes/openkubes)
-#   6. RBAC for Crossplane provider ServiceAccounts
+#   6. XRDs + Compositions (cluster-management)
+#   7. RBAC for Crossplane provider ServiceAccounts
+#   8. OpenWebUI XRD + Composition (platform/ai)
 #
 # Run after: make bootstrap CLUSTER=${CLUSTER_NAME}
 # Context:   KUBECONFIG must point to the management cluster
@@ -224,17 +226,35 @@ YAML
 ok "RBAC configured"
 echo ""
 
+# ── Step 8: OpenWebUI XRD + Composition ──────────────────────────────────────
+log "Step 8: Applying OpenWebUI platform contracts (XRD, Composition)..."
+
+OPENKUBES_AI_DIR="${OPENKUBES_REPO}/platform/ai/open-webui/crossplane"
+
+if [[ ! -d "$$OPENKUBES_AI_DIR" ]]; then
+  log "WARNING: platform/ai not found at $$OPENKUBES_AI_DIR — skipping OpenWebUI setup"
+else
+  kubectl apply -f "$$OPENKUBES_AI_DIR/xrd.yaml"
+  kubectl apply -f "$$OPENKUBES_AI_DIR/composition.yaml"
+
+  kubectl wait xrd/openwebuiinstances.platform.openkubes.ai \
+    --for=condition=Established --timeout=60s
+
+  ok "OpenWebUI XRD + Composition ready on ok-mgmt"
+  log "  Deploy with: kubectl apply -f platform/ai/open-webui/crossplane/examples/<cluster>.yaml"
+fi
+echo ""
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "Management cluster '${CLUSTER_NAME}' is fully operational!"
 echo ""
 echo "  Crossplane:      $$(kubectl get deployment crossplane -n crossplane-system -o jsonpath='{.status.readyReplicas}')/1 ready"
 echo "  CAPI providers:  $$(kubectl get deployments -A --field-selector metadata.namespace!=kube-system -o name | grep -cE 'capi|capk|cacppt|cabpt') running"
-echo "  XRDs:            $$(kubectl get xrd --no-headers 2>/dev/null | wc -l | tr -d ' ') established"
+echo "  XRDs:            $$(kubectl get xrd --no-headers 2>/dev/null | wc -l | tr -d ' ') established (cluster-management + AI)"
 echo ""
 echo "  Next steps:"
-echo "    1. Submit a KubeVirtClusterClaim:"
-echo "       kubectl apply -f crossplane/examples/ok1-talos.yaml"
-echo "    2. Watch deployment:"
-echo "       make deploy cluster=ok1-talos"
+echo "    1. Add workload cluster kubeconfig as secret in ok-mgmt"
+echo "    2. Deploy Open WebUI: kubectl apply -f platform/ai/open-webui/crossplane/examples/<cluster>.yaml"
+echo "    3. Submit a KubeVirtClusterClaim: kubectl apply -f crossplane/examples/ok1-talos.yaml"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
