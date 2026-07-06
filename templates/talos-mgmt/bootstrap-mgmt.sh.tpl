@@ -74,9 +74,9 @@ spec:
 YAML
 
 log "Waiting for providers to become healthy..."
-kubectl wait provider/crossplane-contrib-provider-kubernetes \
+kubectl wait provider.pkg.crossplane.io/crossplane-contrib-provider-kubernetes \
   --for=condition=Healthy --timeout=300s
-kubectl wait provider/crossplane-contrib-provider-helm \
+kubectl wait provider.pkg.crossplane.io/crossplane-contrib-provider-helm \
   --for=condition=Healthy --timeout=300s
 
 ok "Providers installed and healthy"
