@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu]
-.PHONY: new render install kubeconfig install-cni install-storage bootstrap annotate-pvcs upgrade clean teardown list status help
+.PHONY: new render install kubeconfig install-cni install-storage bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -104,10 +104,12 @@ bootstrap: require-cluster
 	@$(MAKE) --no-print-directory annotate-pvcs CLUSTER=$(CLUSTER)
 	@echo ""
 	@echo "⏳ Waiting for control plane to register (nodes stay NotReady until CNI is installed)..."
-	@until $(MAKE) --no-print-directory kubeconfig CLUSTER=$(CLUSTER) 2>/dev/null && \
+	@i=0; until $(MAKE) --no-print-directory kubeconfig CLUSTER=$(CLUSTER) 2>/dev/null && \
 		kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes \
 		-l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | grep -q .; \
-		do echo "  ⏳ API not reachable yet, retrying in 15s..."; sleep 15; done
+		do i=$$((i+1)); \
+		if [ $$i -ge 40 ]; then echo "❌ Control plane not reachable after 10 min — check: make status CLUSTER=$(CLUSTER)"; exit 1; fi; \
+		echo "  ⏳ API not reachable yet, retrying in 15s... ($$i/40)"; sleep 15; done
 	@echo "✅ Control plane registered — installing Cilium CNI..."
 	@$(MAKE) --no-print-directory install-cni CLUSTER=$(CLUSTER)
 	@echo "⏳ Waiting for all nodes to become Ready..."
@@ -159,6 +161,83 @@ teardown: require-cluster
 	rm -rf $(CLUSTERS_DIR)/$(CLUSTER)
 	@echo "✅ Talos cluster $(CLUSTER) torn down."
 
+# ── e2e ───────────────────────────────────────────────────────────────────────
+MGMT_CLUSTER       ?= ok-mgmt
+MGMT_WORKERS       ?= 2
+MGMT_NODE_SELECTOR ?= ok-infra
+WORKLOAD_CLUSTER   ?= ok1-talos
+WORKLOAD_WORKERS   ?= 1
+OPENWEBUI_CLAIM    ?= $(SCRIPT_DIR)/../openkubes/platform/ai/open-webui/crossplane/examples/$(WORKLOAD_CLUSTER).yaml
+OLLAMA_URL         ?=
+
+teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-config.yaml)
+	@for cfg in $(CLUSTERS_DIR)/*/cluster-config.yaml; do \
+		[ -f "$$cfg" ] || continue; \
+		c=$$(basename $$(dirname $$cfg)); \
+		$(MAKE) --no-print-directory teardown CLUSTER=$$c; \
+	done
+
+e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster → Crossplane wiring → OpenWebUI claim → verify
+	@echo "━━━ E2E [0/5]: teardown all clusters ━━━"
+	@$(MAKE) --no-print-directory teardown-all
+	@echo ""
+	@echo "━━━ E2E [1/5]: $(MGMT_CLUSTER) (TYPE=talos-mgmt) ━━━"
+	@$(MAKE) --no-print-directory new CLUSTER=$(MGMT_CLUSTER) TYPE=talos-mgmt WORKERS=$(MGMT_WORKERS) NODE_SELECTOR=$(MGMT_NODE_SELECTOR)
+	@$(MAKE) --no-print-directory bootstrap CLUSTER=$(MGMT_CLUSTER)
+	@echo ""
+	@echo "━━━ E2E [2/5]: management stack (bootstrap-mgmt.sh) ━━━"
+	KUBECONFIG=$$HOME/.kube/$(MGMT_CLUSTER).yaml bash $(CLUSTERS_DIR)/$(MGMT_CLUSTER)/bootstrap-mgmt.sh
+	@echo ""
+	@echo "━━━ E2E [3/5]: $(WORKLOAD_CLUSTER) (TYPE=talos) ━━━"
+	@$(MAKE) --no-print-directory new CLUSTER=$(WORKLOAD_CLUSTER) TYPE=talos WORKERS=$(WORKLOAD_WORKERS)
+	@$(MAKE) --no-print-directory bootstrap CLUSTER=$(WORKLOAD_CLUSTER)
+	@$(MAKE) --no-print-directory install-storage CLUSTER=$(WORKLOAD_CLUSTER)
+	@echo ""
+	@echo "━━━ E2E [4/5]: Crossplane wiring → $(WORKLOAD_CLUSTER) ━━━"
+	kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml -n crossplane-system \
+		create secret generic $(WORKLOAD_CLUSTER)-kubeconfig \
+		--from-file=kubeconfig=$$HOME/.kube/$(WORKLOAD_CLUSTER).yaml \
+		--dry-run=client -o yaml | kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml apply -f -
+	@printf 'apiVersion: helm.crossplane.io/v1beta1\nkind: ProviderConfig\nmetadata:\n  name: %s\nspec:\n  credentials:\n    source: Secret\n    secretRef:\n      namespace: crossplane-system\n      name: %s-kubeconfig\n      key: kubeconfig\n' "$(WORKLOAD_CLUSTER)" "$(WORKLOAD_CLUSTER)" \
+		| kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml apply -f -
+	@echo ""
+	@echo "━━━ E2E [5/5]: OpenWebUI claim ━━━"
+	@if [ -f "$(OPENWEBUI_CLAIM)" ]; then \
+		kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml apply -f $(OPENWEBUI_CLAIM); \
+		kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml wait --for=condition=Ready \
+			openwebuiclaim/$(WORKLOAD_CLUSTER) -n openkubes-system --timeout=300s; \
+		kubectl --kubeconfig ~/.kube/$(WORKLOAD_CLUSTER).yaml -n open-webui \
+			wait --for=condition=Ready pod -l app.kubernetes.io/component=open-webui --timeout=300s 2>/dev/null || \
+			kubectl --kubeconfig ~/.kube/$(WORKLOAD_CLUSTER).yaml -n open-webui get pods; \
+		if [ -n "$(OLLAMA_URL)" ]; then \
+			kubectl --kubeconfig ~/.kube/$(WORKLOAD_CLUSTER).yaml -n open-webui \
+				set env statefulset/open-webui-$(WORKLOAD_CLUSTER) OLLAMA_BASE_URL=$(OLLAMA_URL); \
+		else \
+			echo "  (OLLAMA_URL not set — skipping OLLAMA_BASE_URL workaround)"; \
+		fi; \
+	else \
+		echo "  (skipped — claim not found at $(OPENWEBUI_CLAIM); override with OPENWEBUI_CLAIM=...)"; \
+	fi
+	@echo ""
+	@$(MAKE) --no-print-directory e2e-verify
+
+e2e-verify: ## Verification matrix: nodes, cilium-health, kube-proxy absence, providers, claim
+	@echo "━━━ Verification ━━━"
+	@for c in $(MGMT_CLUSTER) $(WORKLOAD_CLUSTER); do \
+		echo "--- $$c ---"; \
+		kubectl --kubeconfig ~/.kube/$$c.yaml get nodes --no-headers 2>/dev/null || true; \
+		printf "cilium-health: "; \
+		kubectl --kubeconfig ~/.kube/$$c.yaml -n kube-system exec ds/cilium -- \
+			cilium-health status 2>/dev/null | head -1 || echo "n/a"; \
+		printf "kube-proxy:    "; \
+		kubectl --kubeconfig ~/.kube/$$c.yaml -n kube-system get ds kube-proxy --no-headers 2>/dev/null \
+			&& echo "⚠️ PRESENT (unexpected)" || echo "absent ✅"; \
+		echo ""; \
+	done
+	@echo "--- crossplane ($(MGMT_CLUSTER)) ---"
+	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml get providers 2>/dev/null || true
+	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml get openwebuiclaim -n openkubes-system 2>/dev/null || true
+
 # ── info ──────────────────────────────────────────────────────────────────────
 list:
 	@python3 $(SCRIPT_DIR)/render.py list
@@ -200,6 +279,9 @@ help:
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
 	@echo "  make clean         CLUSTER=ok1"
 	@echo "  make teardown      CLUSTER=ok1-talos"
+	@echo "  make teardown-all                      # tear down ALL rendered clusters"
+	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434]  # full clean rebuild + verify"
+	@echo "  make e2e-verify                        # verification matrix only"
 	@echo "  make list"
 	@echo "  make status        CLUSTER=ok1"
 	@echo ""
