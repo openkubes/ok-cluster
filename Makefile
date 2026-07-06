@@ -122,19 +122,19 @@ bootstrap: require-cluster
 annotate-pvcs: require-cluster
 	@$(eval NODE := $(shell python3 -c "import yaml; cfg=yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')); print(cfg.get('nodeSelector','ok-gpu'))"))
 	@$(eval EXPECTED := $(shell python3 -c "import yaml; c=yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')); print(int(c['controlPlane']['replicas'])+int(c['workers']['replicas']))"))
-	@echo "Annotating PVCs for $(CLUSTER) → $(NODE) (expecting ≥$(EXPECTED) PVCs, retrying until all Bound)..."
-	@for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	@echo "Annotating PVCs for $(CLUSTER) → $(NODE) (until $(EXPECTED) DataVolume imports succeed)..."
+	@for i in $$(seq 1 20); do \
 		for pvc in $$($(OKB) get pvc -n $(CLUSTER) --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null); do \
 			$(OKB) annotate pvc $$pvc -n $(CLUSTER) \
 				volume.kubernetes.io/selected-node=$(NODE) --overwrite 2>/dev/null || true; \
 		done; \
-		TOTAL=$$($(OKB) get pvc -n $(CLUSTER) --no-headers 2>/dev/null | wc -l | tr -d ' '); \
+		DONE=$$($(OKB) get dv -n $(CLUSTER) --no-headers 2>/dev/null | grep -c Succeeded | tr -d ' '); \
 		PENDING=$$($(OKB) get pvc -n $(CLUSTER) --no-headers 2>/dev/null | grep Pending | wc -l | tr -d ' '); \
-		if [ "$$TOTAL" -ge "$(EXPECTED)" ] && [ "$$PENDING" = "0" ]; then \
-			echo "  ✅ $$TOTAL PVC(s) present, all Bound."; \
+		if [ "$$DONE" -ge "$(EXPECTED)" ] && [ "$$PENDING" = "0" ]; then \
+			echo "  ✅ $$DONE/$(EXPECTED) DataVolume import(s) succeeded, no Pending PVCs."; \
 			break; \
 		fi; \
-		echo "  ⏳ $$TOTAL/$(EXPECTED) PVC(s), $$PENDING Pending — retrying in 15s... ($$i/12)"; \
+		echo "  ⏳ $$DONE/$(EXPECTED) imports done, $$PENDING PVC(s) Pending — retrying in 15s... ($$i/20)"; \
 		sleep 15; \
 	done
 
