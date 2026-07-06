@@ -22,6 +22,13 @@ controlPlane:
   memory: 4Gi
   disk: 20Gi
 
+# LB-IP block for in-cluster Services (Cilium LB-IPAM + L2 announcements).
+# Allocation plan (ADR-Platform-010): host MetalLB ok-pool owns .200–.209;
+# guest clusters get disjoint 5-IP blocks from .210 upward:
+#   ok1-talos: .210–.214, ok-mgmt: .215–.219, next: .220–.224, ...
+# Omit if an external LB implementation assigns Service IPs.
+lbPool: 192.168.100.210-192.168.100.214
+
 workers:
   replicas: 1
   cores: 2

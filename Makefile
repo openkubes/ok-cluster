@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu]
-.PHONY: new render install kubeconfig install-cni install-storage bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -63,6 +63,9 @@ install-cni: require-cluster kubeconfig
 			--set k8sServiceHost=localhost \
 			--set k8sServicePort=7445 \
 			--set tunnelPort=8473 \
+			--set l2announcements.enabled=true \
+			--set k8sClientRateLimit.qps=10 \
+			--set k8sClientRateLimit.burst=20 \
 			--set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
 			--set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
 			--set cgroup.autoMount.enabled=false \
@@ -97,6 +100,44 @@ install-storage: require-cluster kubeconfig ## Install local-path StorageClass (
 		--overwrite
 	@echo "✅ local-path StorageClass installed and set as default on $(CLUSTER)"
 
+install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + IngressClass ok-ingress
+	@echo "Installing Traefik ingress controller on $(CLUSTER)..."
+	@$(eval LB_POOL := $(shell python3 -c "import yaml; print(yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')).get('lbPool',''))"))
+	@if [ -n "$(LB_POOL)" ]; then \
+		LB_START=$$(echo "$(LB_POOL)" | cut -d- -f1); \
+		LB_STOP=$$(echo "$(LB_POOL)" | cut -d- -f2); \
+		echo "  Cilium LB-IPAM pool: $$LB_START – $$LB_STOP (from cluster-config lbPool)"; \
+		printf 'apiVersion: cilium.io/v2\nkind: CiliumLoadBalancerIPPool\nmetadata:\n  name: %s-lb-pool\nspec:\n  blocks:\n    - start: %s\n      stop: %s\n---\napiVersion: cilium.io/v2alpha1\nkind: CiliumL2AnnouncementPolicy\nmetadata:\n  name: default-l2\nspec:\n  loadBalancerIPs: true\n' \
+			"$(CLUSTER)" "$$LB_START" "$$LB_STOP" \
+			| kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml apply -f -; \
+	else \
+		echo "  ⚠️  No lbPool in cluster-config.yaml — assuming an external LB implementation assigns the IP"; \
+	fi
+	@helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true
+	@helm repo update traefik 2>/dev/null
+	helm upgrade --install traefik traefik/traefik \
+		--kubeconfig ~/.kube/$(CLUSTER).yaml \
+		--namespace ingress \
+		--create-namespace \
+		--set deployment.replicas=1 \
+		--set service.type=LoadBalancer \
+		--set ingressClass.enabled=true \
+		--set ingressClass.name=ok-ingress \
+		--set ingressClass.isDefaultClass=false \
+		--set providers.kubernetesIngress.ingressClass=ok-ingress
+	@echo "Waiting for the LoadBalancer IP (Cilium LB-IPAM)..."
+	@for i in $$(seq 1 30); do \
+		LB_IP=$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get svc traefik -n ingress \
+			-o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null); \
+		if [ -n "$$LB_IP" ]; then \
+			echo "✅ Traefik installed on $(CLUSTER) — ingress entry point: $$LB_IP"; \
+			echo "   Contract: ingressClassName: ok-ingress, hostnames <app>.$(CLUSTER).internal → $$LB_IP"; \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "⚠️  No LoadBalancer IP after 60s — check lbPool in cluster-config.yaml / Cilium l2announcements"; exit 1
+
 bootstrap: require-cluster
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
 	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
@@ -117,6 +158,7 @@ bootstrap: require-cluster
 	@echo ""
 	@echo "✅ Talos cluster $(CLUSTER) bootstrapped with Cilium. Next steps:"
 	@echo "   make install-storage CLUSTER=$(CLUSTER)"
+	@echo "   make install-ingress CLUSTER=$(CLUSTER)"
 	@echo "   make status          CLUSTER=$(CLUSTER)"
 
 annotate-pvcs: require-cluster
@@ -274,6 +316,8 @@ help:
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"
 	@echo "  make install-cni   CLUSTER=ok1        # cilium only (manual)"
+	@echo "  make install-storage CLUSTER=ok1-talos # local-path StorageClass (Talos)"
+	@echo "  make install-ingress CLUSTER=ok1-talos # ingress controller (Traefik) + IngressClass ok-ingress"
 	@echo "  make bootstrap     CLUSTER=ok1-talos  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok1-talos  # annotate PVCs manually"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
