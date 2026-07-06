@@ -48,17 +48,35 @@ kubeconfig: require-cluster
 
 install-cni: require-cluster kubeconfig
 	@echo "Installing Cilium CNI on $(CLUSTER)..."
-	@$(eval CLUSTER_CP_IP := $(shell kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'))
-	@echo "  Control plane IP: $(CLUSTER_CP_IP)"
+	@$(eval CLUSTER_TYPE := $(shell python3 -c "import yaml; print(yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')).get('type','ubuntu'))"))
+	@echo "  Cluster type: $(CLUSTER_TYPE)"
 	@helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true
 	@helm repo update cilium 2>/dev/null
-	helm upgrade --install cilium cilium/cilium \
-		--kubeconfig ~/.kube/$(CLUSTER).yaml \
-		--namespace kube-system \
-		--set operator.replicas=1 \
-		--set k8sServiceHost=$(CLUSTER_CP_IP) \
-		--set k8sServicePort=6443 \
-		--set kubeProxyReplacement=true
+	@if [ "$(CLUSTER_TYPE)" = "talos" ]; then \
+		echo "  Using Talos values (KubePrism localhost:7445, cgroup hostRoot, agent capabilities)"; \
+		helm upgrade --install cilium cilium/cilium \
+			--kubeconfig ~/.kube/$(CLUSTER).yaml \
+			--namespace kube-system \
+			--set operator.replicas=1 \
+			--set ipam.mode=kubernetes \
+			--set kubeProxyReplacement=true \
+			--set k8sServiceHost=localhost \
+			--set k8sServicePort=7445 \
+			--set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
+			--set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
+			--set cgroup.autoMount.enabled=false \
+			--set cgroup.hostRoot=/sys/fs/cgroup; \
+	else \
+		CLUSTER_CP_IP=$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'); \
+		echo "  Control plane IP: $$CLUSTER_CP_IP"; \
+		helm upgrade --install cilium cilium/cilium \
+			--kubeconfig ~/.kube/$(CLUSTER).yaml \
+			--namespace kube-system \
+			--set operator.replicas=1 \
+			--set k8sServiceHost=$$CLUSTER_CP_IP \
+			--set k8sServicePort=6443 \
+			--set kubeProxyReplacement=true; \
+	fi
 	@echo ""
 	@echo "✅ Cluster $(CLUSTER) ready!"
 	@echo "   kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes"
@@ -84,9 +102,19 @@ bootstrap: require-cluster
 	@echo ""
 	@$(MAKE) --no-print-directory annotate-pvcs CLUSTER=$(CLUSTER)
 	@echo ""
-	@echo "✅ Talos manifests applied. Next steps:"
-	@echo "   make status     CLUSTER=$(CLUSTER)"
-	@echo "   make kubeconfig CLUSTER=$(CLUSTER)   # once nodes Running"
+	@echo "⏳ Waiting for control plane to register (nodes stay NotReady until CNI is installed)..."
+	@until $(MAKE) --no-print-directory kubeconfig CLUSTER=$(CLUSTER) 2>/dev/null && \
+		kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes \
+		-l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | grep -q .; \
+		do echo "  ⏳ API not reachable yet, retrying in 15s..."; sleep 15; done
+	@echo "✅ Control plane registered — installing Cilium CNI..."
+	@$(MAKE) --no-print-directory install-cni CLUSTER=$(CLUSTER)
+	@echo "⏳ Waiting for all nodes to become Ready..."
+	@kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml wait --for=condition=Ready nodes --all --timeout=300s
+	@echo ""
+	@echo "✅ Talos cluster $(CLUSTER) bootstrapped with Cilium. Next steps:"
+	@echo "   make install-storage CLUSTER=$(CLUSTER)"
+	@echo "   make status          CLUSTER=$(CLUSTER)"
 
 annotate-pvcs: require-cluster
 	@$(eval NODE := $(shell python3 -c "import yaml; cfg=yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')); print(cfg.get('nodeSelector','ok-gpu'))"))
@@ -96,7 +124,7 @@ annotate-pvcs: require-cluster
 			$(OKB) annotate pvc $$pvc -n $(CLUSTER) \
 				volume.kubernetes.io/selected-node=$(NODE) --overwrite 2>/dev/null || true; \
 		done; \
-		PENDING=$$($(OKB) get pvc -n $(CLUSTER) --no-headers 2>/dev/null | grep Pending | wc -l); \
+		PENDING=$$($(OKB) get pvc -n $(CLUSTER) --no-headers 2>/dev/null | grep Pending | wc -l | tr -d ' '); \
 		if [ "$$PENDING" = "0" ]; then \
 			echo "  ✅ All PVCs Bound."; \
 			break; \
@@ -155,7 +183,7 @@ help:
 	@echo ""
 	@echo "── Talos Workflow ───────────────────────────────────────────────────"
 	@echo "  make new       CLUSTER=ok1-talos TYPE=talos [WORKERS=2] [K8S_VERSION=v1.36.2] [TALOS_VERSION=v1.13.4]"
-	@echo "  make bootstrap CLUSTER=ok1-talos   # apply + annotate PVCs until Bound"
+	@echo "  make bootstrap CLUSTER=ok1-talos   # apply + annotate PVCs + Cilium CNI"
 	@echo "  make kubeconfig CLUSTER=ok1-talos  # once nodes Running"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
@@ -164,7 +192,7 @@ help:
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"
 	@echo "  make install-cni   CLUSTER=ok1        # cilium only (manual)"
-	@echo "  make bootstrap     CLUSTER=ok1-talos  # talos: apply + annotate PVCs"
+	@echo "  make bootstrap     CLUSTER=ok1-talos  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok1-talos  # annotate PVCs manually"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
 	@echo "  make clean         CLUSTER=ok1"

@@ -57,6 +57,15 @@ spec:
     controlplane:
       generateType: controlplane
       talosVersion: ${TALOS_VERSION}
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
@@ -68,6 +77,15 @@ spec:
     spec:
       generateType: worker
       talosVersion: ${TALOS_VERSION}
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
 ---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment
