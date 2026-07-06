@@ -24,3 +24,4 @@ __pycache__/
 # Kubeconfigs — never commit
 *.yaml.bak
 kubeconfig*
+*/bootstrap-mgmt.sh
