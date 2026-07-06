@@ -152,7 +152,9 @@ def apply_node_selector(rendered: str, node_selector: str) -> str:
 def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
     cluster_type = cfg.get("type", "ubuntu")
     ctx = build_context(cfg)
-    tpl_dir = TEMPLATES_DIR / cluster_type
+    tpl_dirs = [TEMPLATES_DIR / cluster_type]
+    if cluster_type == "talos-mgmt":
+        tpl_dirs = [TEMPLATES_DIR / "talos", TEMPLATES_DIR / "talos-mgmt"]
     out_dir = output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,15 +163,16 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
     print(f"  ✔ {resolved_cfg_path.relative_to(SCRIPT_DIR)}")
 
-    for tpl in sorted(tpl_dir.glob("*.tpl")):
-        rendered = Template(tpl.read_text()).safe_substitute(ctx)
-        rendered = apply_node_selector(rendered, ctx["NODE_SELECTOR"])
-        out_name = tpl.stem
-        out_path = out_dir / out_name
-        out_path.write_text(rendered)
-        if out_path.suffix == ".sh":
-            out_path.chmod(0o755)
-        print(f"  ✔ {out_path.relative_to(SCRIPT_DIR)}")
+    for tpl_dir in tpl_dirs:
+        for tpl in sorted(tpl_dir.glob("*.tpl")):
+            rendered = Template(tpl.read_text()).safe_substitute(ctx)
+            rendered = apply_node_selector(rendered, ctx["NODE_SELECTOR"])
+            out_name = tpl.stem
+            out_path = out_dir / out_name
+            out_path.write_text(rendered)
+            if out_path.suffix == ".sh":
+                out_path.chmod(0o755)
+            print(f"  ✔ {out_path.relative_to(SCRIPT_DIR)}")
 
 def cmd_render(args):
     cluster_name = args.cluster

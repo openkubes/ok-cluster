@@ -33,7 +33,7 @@ if [[ -z "$CLUSTER" ]]; then
 fi
 
 # Talos requires a nodeSelector for local-path PVC binding
-if [[ "$TYPE" == "talos" && -z "$NODE_SELECTOR" ]]; then
+if [[ "$TYPE" == talos* && -z "$NODE_SELECTOR" ]]; then
   NODE_SELECTOR="ok-gpu"
   echo "  INFO: Talos requires nodeSelector for PVC binding, defaulting to ok-gpu"
 fi
@@ -55,7 +55,7 @@ NEXT_IP=$(python3 "${SCRIPT_DIR}/render.py" next-ip --cluster "${CLUSTER}" 2>/de
 NODE_DISPLAY="${NODE_SELECTOR:-any}"
 
 echo "Creating cluster: ${CLUSTER}"
-if [[ "$TYPE" == "talos" ]]; then
+if [[ "$TYPE" == talos* ]]; then
   echo "  type=${TYPE}  HA=${HA}  cp=${CP_REPLICAS}  workers=${WORKERS}  next-ip=${NEXT_IP}  node=${NODE_DISPLAY}  os-profile=${OS_PROFILE}"
 else
   echo "  type=${TYPE}  HA=${HA}  cp=${CP_REPLICAS}  workers=${WORKERS}  next-ip=${NEXT_IP}  node=${NODE_DISPLAY}"
@@ -79,8 +79,8 @@ workers:
 
 versions:
   kubernetes: ${K8S_VERSION}
-$(if [[ "$TYPE" == "talos" ]]; then echo "  talos: ${TALOS_VERSION}"; fi)
-$(if [[ "$TYPE" == "talos" ]]; then cat <<OSBLOCK
+$(if [[ "$TYPE" == talos* ]]; then echo "  talos: ${TALOS_VERSION}"; fi)
+$(if [[ "$TYPE" == talos* ]]; then cat <<OSBLOCK
 
 # OS layer — owned by ok-linux (github.com/openkubes/ok-linux)
 # schematic_id is verified via: make build PROFILE=${OS_PROFILE} (in ok-linux repo)
@@ -112,7 +112,7 @@ python3 "${SCRIPT_DIR}/render.py" render --cluster "${CLUSTER}"
 
 echo ""
 echo "Done. Next steps:"
-if [[ "$TYPE" == "talos" ]]; then
+if [[ "$TYPE" == talos* ]]; then
   echo "  make bootstrap CLUSTER=${CLUSTER}"
 else
   echo "  make install CLUSTER=${CLUSTER}"

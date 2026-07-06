@@ -52,7 +52,7 @@ install-cni: require-cluster kubeconfig
 	@echo "  Cluster type: $(CLUSTER_TYPE)"
 	@helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true
 	@helm repo update cilium 2>/dev/null
-	@if [ "$(CLUSTER_TYPE)" = "talos" ]; then \
+	@if [ "$(CLUSTER_TYPE)" = "talos" ] || [ "$(CLUSTER_TYPE)" = "talos-mgmt" ]; then \
 		echo "  Using Talos values (KubePrism localhost:7445, cgroup hostRoot, agent capabilities)"; \
 		helm upgrade --install cilium cilium/cilium \
 			--kubeconfig ~/.kube/$(CLUSTER).yaml \
