@@ -66,6 +66,10 @@ spec:
         path: /cluster/proxy
         value:
           disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
@@ -86,6 +90,10 @@ spec:
         path: /cluster/proxy
         value:
           disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
 ---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment
