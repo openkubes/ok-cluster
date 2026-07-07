@@ -13,6 +13,8 @@
 
 ## Traffic path
 
+![Ingress traffic path](./ingress-traffic-path.svg)
+
 ```
 client
   → 192.168.100.20X:80          (MetalLB on RKE2 host cluster)
