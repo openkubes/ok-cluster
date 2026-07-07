@@ -227,7 +227,10 @@ e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster →
 	@$(MAKE) --no-print-directory bootstrap CLUSTER=$(MGMT_CLUSTER)
 	@echo ""
 	@echo "━━━ E2E [2/5]: management stack (bootstrap-mgmt.sh) ━━━"
-	KUBECONFIG=$$HOME/.kube/$(MGMT_CLUSTER).yaml bash $(CLUSTERS_DIR)/$(MGMT_CLUSTER)/bootstrap-mgmt.sh
+	KUBECONFIG=$$HOME/.kube/$(MGMT_CLUSTER).yaml \
+		OPENKUBES_PATH=$(SCRIPT_DIR)/../openkubes \
+		INFRA_KUBECONFIG_PATH=$$HOME/.kube/ok-infra.yaml \
+		bash $(CLUSTERS_DIR)/$(MGMT_CLUSTER)/bootstrap-mgmt.sh
 	@echo ""
 	@echo "━━━ E2E [3/5]: $(WORKLOAD_CLUSTER) (TYPE=talos) ━━━"
 	@$(MAKE) --no-print-directory new CLUSTER=$(WORKLOAD_CLUSTER) TYPE=talos WORKERS=$(WORKLOAD_WORKERS)
@@ -259,6 +262,12 @@ e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster →
 	else \
 		echo "  (skipped — claim not found at $(OPENWEBUI_CLAIM); override with OPENWEBUI_CLAIM=...)"; \
 	fi
+	@echo ""
+	@echo "━━━ E2E [5b/5]: install-ingress + update OpenWebUI claim ━━━"
+	@$(MAKE) --no-print-directory install-ingress CLUSTER=$(WORKLOAD_CLUSTER)
+	@echo "  Updating OpenWebUI claim with ingress: true..."
+	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml patch openwebuiclaim $(WORKLOAD_CLUSTER) \
+		-n openkubes-system --type=merge -p '{"spec":{"ingress":true}}' 2>/dev/null || true
 	@echo ""
 	@$(MAKE) --no-print-directory e2e-verify
 
