@@ -1,0 +1,219 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ok-mgmt
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: ok-mgmt
+  namespace: ok-mgmt
+  labels:
+    openkubes.io/type: talos
+    openkubes.io/k8s-version: v1.34.1
+    openkubes.io/talos-version: v1.9.5
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 10.32.0.0/16
+    services:
+      cidrBlocks:
+      - 10.96.0.0/20
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: TalosControlPlane
+    name: ok-mgmt-cp
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: KubevirtCluster
+    name: ok-mgmt
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: ok-mgmt
+  namespace: ok-mgmt
+spec:
+  controlPlaneServiceTemplate:
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
+kind: TalosControlPlane
+metadata:
+  name: ok-mgmt-cp
+  namespace: ok-mgmt
+spec:
+  version: v1.34.1
+  replicas: 1
+  infrastructureTemplate:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtMachineTemplate
+    name: ok-mgmt-cp
+    namespace: ok-mgmt
+  controlPlaneConfig:
+    controlplane:
+      generateType: controlplane
+      talosVersion: v1.9.5
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+kind: TalosConfigTemplate
+metadata:
+  name: ok-mgmt-workers
+  namespace: ok-mgmt
+spec:
+  template:
+    spec:
+      generateType: worker
+      talosVersion: v1.9.5
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ok-mgmt-workers
+  namespace: ok-mgmt
+spec:
+  clusterName: ok-mgmt
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: ok-mgmt
+  template:
+    spec:
+      clusterName: ok-mgmt
+      version: v1.34.1
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: TalosConfigTemplate
+          name: ok-mgmt-workers
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: KubevirtMachineTemplate
+        name: ok-mgmt-workers
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ok-mgmt-cp
+  namespace: ok-mgmt
+spec:
+  template:
+    spec:
+      virtualMachineTemplate:
+        metadata:
+          namespace: ok-mgmt
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              nodeSelector:
+                kubernetes.io/hostname: ok-infra
+              domain:
+                cpu:
+                  cores: 2
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: talos
+                  networkInterfaceMultiqueue: true
+                memory:
+                  guest: 4Gi
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: ok-mgmt-cp-disk
+                name: talos
+          dataVolumeTemplates:
+          - metadata:
+              name: ok-mgmt-cp-disk
+              namespace: ok-mgmt
+            spec:
+              pvc:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 15Gi
+                storageClassName: local-path
+              source:
+                http:
+                  url: "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.9.5/openstack-amd64.qcow2"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ok-mgmt-workers
+  namespace: ok-mgmt
+spec:
+  template:
+    spec:
+      virtualMachineTemplate:
+        metadata:
+          namespace: ok-mgmt
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              nodeSelector:
+                kubernetes.io/hostname: ok-infra
+              domain:
+                cpu:
+                  cores: 2
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: talos
+                  networkInterfaceMultiqueue: true
+                memory:
+                  guest: 4Gi
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: ok-mgmt-worker-disk
+                name: talos
+          dataVolumeTemplates:
+          - metadata:
+              name: ok-mgmt-worker-disk
+              namespace: ok-mgmt
+            spec:
+              pvc:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 15Gi
+                storageClassName: local-path
+              source:
+                http:
+                  url: "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.9.5/openstack-amd64.qcow2"

@@ -1,0 +1,28 @@
+controlPlane:
+  cores: 2
+  memory: 4Gi
+  replicas: 1
+name: ok-mgmt
+network:
+  endpoint: 192.168.100.200
+  podCIDR: 10.32.0.0/16
+  serviceCIDR: 10.96.0.0/20
+nodeSelector: ok-infra
+os:
+  distribution: ok-linux
+  profile: kubevirt
+  schematic_id: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+type: talos-mgmt
+upgrade:
+  strategy: blue-green
+  workloadMigration:
+    stateful: app-native
+    stateless: gitops
+versions:
+  kubernetes: v1.34.1
+  talos: v1.9.5
+workers:
+  cores: 2
+  disk: 15Gi
+  memory: 4Gi
+  replicas: 2
