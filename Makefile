@@ -220,6 +220,10 @@ teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-confi
 
 e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster → Crossplane wiring → OpenWebUI claim → verify
 	@echo "━━━ E2E [0/5]: teardown all clusters ━━━"
+	@echo "  Removing OpenWebUI claim before teardown (prevents Crossplane finalizer hang)..."
+	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml \
+		delete openwebuiclaim $(WORKLOAD_CLUSTER) -n openkubes-system \
+		--ignore-not-found 2>/dev/null || true
 	@$(MAKE) --no-print-directory teardown-all
 	@echo ""
 	@echo "━━━ E2E [1/5]: $(MGMT_CLUSTER) (TYPE=talos-mgmt) ━━━"
