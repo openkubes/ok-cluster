@@ -63,7 +63,6 @@ install-cni: require-cluster kubeconfig
 			--set k8sServiceHost=localhost \
 			--set k8sServicePort=7445 \
 			--set tunnelPort=8473 \
-			--set l2announcements.enabled=true \
 			--set k8sClientRateLimit.qps=10 \
 			--set k8sClientRateLimit.burst=20 \
 			--set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
@@ -100,19 +99,8 @@ install-storage: require-cluster kubeconfig ## Install local-path StorageClass (
 		--overwrite
 	@echo "✅ local-path StorageClass installed and set as default on $(CLUSTER)"
 
-install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + IngressClass ok-ingress
+install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + IngressClass ok-ingress + host-cluster LB proxy
 	@echo "Installing Traefik ingress controller on $(CLUSTER)..."
-	@$(eval LB_POOL := $(shell python3 -c "import yaml; print(yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')).get('lbPool',''))"))
-	@if [ -n "$(LB_POOL)" ]; then \
-		LB_START=$$(echo "$(LB_POOL)" | cut -d- -f1); \
-		LB_STOP=$$(echo "$(LB_POOL)" | cut -d- -f2); \
-		echo "  Cilium LB-IPAM pool: $$LB_START – $$LB_STOP (from cluster-config lbPool)"; \
-		printf 'apiVersion: cilium.io/v2\nkind: CiliumLoadBalancerIPPool\nmetadata:\n  name: %s-lb-pool\nspec:\n  blocks:\n    - start: %s\n      stop: %s\n---\napiVersion: cilium.io/v2alpha1\nkind: CiliumL2AnnouncementPolicy\nmetadata:\n  name: default-l2\nspec:\n  loadBalancerIPs: true\n' \
-			"$(CLUSTER)" "$$LB_START" "$$LB_STOP" \
-			| kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml apply -f -; \
-	else \
-		echo "  ⚠️  No lbPool in cluster-config.yaml — assuming an external LB implementation assigns the IP"; \
-	fi
 	@helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true
 	@helm repo update traefik 2>/dev/null
 	helm upgrade --install traefik traefik/traefik \
@@ -120,23 +108,34 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 		--namespace ingress \
 		--create-namespace \
 		--set deployment.replicas=1 \
-		--set service.type=LoadBalancer \
+		--set service.type=NodePort \
+		--set ports.web.nodePort=30080 \
+		--set ports.websecure.nodePort=30443 \
 		--set ingressClass.enabled=true \
 		--set ingressClass.name=ok-ingress \
 		--set ingressClass.isDefaultClass=false \
 		--set providers.kubernetesIngress.ingressClass=ok-ingress
-	@echo "Waiting for the LoadBalancer IP (Cilium LB-IPAM)..."
+	@echo "  Traefik deployed as NodePort (30080/30443) in $(CLUSTER)"
+	@echo "  Creating host-cluster LoadBalancer proxy service on RKE2 (MetalLB)..."
+	@printf 'apiVersion: v1\nkind: Service\nmetadata:\n  name: %s-ingress\n  namespace: %s\n  labels:\n    ok-cluster/ingress-proxy: "true"\n    ok-cluster/cluster: %s\nspec:\n  type: LoadBalancer\n  ports:\n    - name: http\n      port: 80\n      targetPort: 30080\n    - name: https\n      port: 443\n      targetPort: 30443\n  selector:\n    cluster.x-k8s.io/cluster-name: %s\n    cluster.x-k8s.io/role: worker\n' \
+		"$(CLUSTER)" "$(CLUSTER)" "$(CLUSTER)" "$(CLUSTER)" \
+		| $(OKB) apply -f -
+	@echo "  Waiting for MetalLB to assign the host-cluster LoadBalancer IP..."
 	@for i in $$(seq 1 30); do \
-		LB_IP=$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get svc traefik -n ingress \
+		LB_IP=$$($(OKB) get svc $(CLUSTER)-ingress -n $(CLUSTER) \
 			-o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null); \
 		if [ -n "$$LB_IP" ]; then \
-			echo "✅ Traefik installed on $(CLUSTER) — ingress entry point: $$LB_IP"; \
-			echo "   Contract: ingressClassName: ok-ingress, hostnames <app>.$(CLUSTER).internal → $$LB_IP"; \
+			echo ""; \
+			echo "✅ Ingress ready for $(CLUSTER)"; \
+			echo "   Entry point : $$LB_IP (MetalLB on RKE2 host cluster)"; \
+			echo "   Traffic path: client → $$LB_IP:80 → virt-launcher:30080 → Traefik → <app>.$(CLUSTER).internal"; \
+			echo "   Contract    : ingressClassName: ok-ingress, hostname <app>.$(CLUSTER).internal"; \
+			echo "   Interim DNS : echo \"$$LB_IP <app>.$(CLUSTER).internal\" | sudo tee -a /etc/hosts"; \
 			exit 0; \
 		fi; \
 		sleep 2; \
 	done; \
-	echo "⚠️  No LoadBalancer IP after 60s — check lbPool in cluster-config.yaml / Cilium l2announcements"; exit 1
+	echo "⚠️  No LoadBalancer IP after 60s — check MetalLB pool ok-pool on RKE2 host cluster"; exit 1
 
 bootstrap: require-cluster
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
