@@ -274,6 +274,16 @@ e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster →
 		-n openkubes-system --type=merge -p '{"spec":{"ingress":true}}' 2>/dev/null || true
 	@echo ""
 	@$(MAKE) --no-print-directory e2e-verify
+	@echo ""
+	@echo "━━━ E2E [post]: committing rendered cluster state to Git ━━━"
+	@git add $(MGMT_CLUSTER)/ $(WORKLOAD_CLUSTER)/ 2>/dev/null || true
+	@if git diff --cached --quiet; then \
+		echo "  (no changes to rendered manifests — nothing to commit)"; \
+	else \
+		git commit -m "state: e2e $(MGMT_CLUSTER)+$(WORKLOAD_CLUSTER) $$(date +%Y-%m-%dT%H:%M) [ok-cluster]" && \
+		git push && \
+		echo "✅ Rendered cluster state committed and pushed (knowledge graph: state: prefix)"; \
+	fi
 
 e2e-verify: ## Verification matrix: nodes, cilium-health, kube-proxy absence, providers, claim
 	@echo "━━━ Verification ━━━"
