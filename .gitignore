@@ -1,17 +1,8 @@
-# Rendered cluster directories — generated locally, contain environment-specific IPs
+# Rendered cluster directories — environment-specific but committed for reproducibility.
 # These are created by: make new CLUSTER=<name>
-# Do not commit them — they are not portable across environments.
-
-# Ignore all cluster dirs (any directory with a cluster-config.yaml)
-*/cluster-config.yaml
-*/cluster-v2.yaml
-*/cluster-base.yaml
-*/bootstrap.sh
-*/generate-manifest.sh
-
-# But keep the example and templates
-!cluster-config.yaml.example
-!templates/
+# Note: contains Hetzner-specific IPs and node names — not portable across environments.
+# GitOps migration (ok-gitops, ADR-Platform-011-candidate): rendered/ will move to
+# a dedicated repo/branch; until then, commit rendered manifests here.
 
 # macOS
 .DS_Store
@@ -24,4 +15,7 @@ __pycache__/
 # Kubeconfigs — never commit
 *.yaml.bak
 kubeconfig*
-*/bootstrap-mgmt.sh
+
+# But keep the example and templates
+!cluster-config.yaml.example
+!templates/
