@@ -121,6 +121,7 @@ make install       CLUSTER=<name>                    # ubuntu: apply + wait + ci
 make bootstrap     CLUSTER=<name>                    # talos: apply + annotate PVCs
 make kubeconfig    CLUSTER=<name>                    # save kubeconfig to ~/.kube/<name>.yaml
 make install-cni   CLUSTER=<name>                    # install Cilium (manual)
+make install-storage CLUSTER=<name>                  # install local-path-provisioner *inside* the workload cluster
 make annotate-pvcs CLUSTER=<name>                    # annotate PVCs for node binding
 make upgrade       CLUSTER=<name> K8S_VERSION=v1.x.y [TALOS_VERSION=v1.x.y]
 make status        CLUSTER=<name>                    # show cluster, machines, VMs
@@ -128,6 +129,16 @@ make clean         CLUSTER=<name>                    # delete ubuntu cluster + l
 make teardown      CLUSTER=<name>                    # delete talos cluster + local files
 make list                                            # list all defined clusters
 ```
+
+> **`install-storage` is not the same layer as [ok-storage](https://github.com/openkubes/ok-storage).**
+> This target installs `local-path-provisioner` *inside* the newly created
+> workload (Talos) cluster, for that cluster's own pods — node-local,
+> non-replicated, no cross-node redundancy. `ok-storage` (Longhorn v1)
+> runs on the RKE2 *host* cluster instead, one layer down, and is what
+> backs `KubeVirtClusterClaim`/VM disks and anything needing real
+> replication or RWX. Don't confuse workload-cluster `local-path` with the
+> host cluster's `ok-storage-local` contract class — same underlying
+> provisioner, different cluster, different guarantees.
 
 ---
 
