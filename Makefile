@@ -195,12 +195,26 @@ clean: require-cluster
 	@echo "✅ Cluster $(CLUSTER) removed."
 
 teardown: require-cluster
-	@echo "Tearing down Talos cluster $(CLUSTER)..."
-	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground
-	$(OKB) delete namespace $(CLUSTER) --ignore-not-found
-	@echo "Removing local cluster directory..."
-	rm -rf $(CLUSTERS_DIR)/$(CLUSTER)
-	@echo "✅ Talos cluster $(CLUSTER) torn down."
+	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
+	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
+	if [ -n "$$PVS" ]; then \
+		echo "  VM disks use ok-storage-shared (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
+		echo "$$PVS" | sed 's/^/    /'; \
+	fi; \
+	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
+	$(OKB) delete namespace $(CLUSTER) --ignore-not-found; \
+	echo "Removing local cluster directory..."; \
+	rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
+	if [ -n "$$PVS" ]; then \
+		echo "Cleaning up Retain-policy PVs and their underlying Longhorn volumes..."; \
+		for pv in $$PVS; do \
+			echo "  Deleting PV $$pv..."; \
+			$(OKB) delete pv $$pv --ignore-not-found; \
+			echo "  Deleting Longhorn volume $$pv (best-effort -- may already be gone)..."; \
+			$(OKB) -n longhorn-system delete volumes.longhorn.io $$pv --ignore-not-found 2>/dev/null || true; \
+		done; \
+	fi; \
+	echo "✅ Talos cluster $(CLUSTER) torn down (including Retain-policy PV cleanup)."
 
 # ── e2e ───────────────────────────────────────────────────────────────────────
 MGMT_CLUSTER       ?= ok-mgmt

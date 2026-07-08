@@ -160,11 +160,11 @@ spec:
             spec:
               pvc:
                 accessModes:
-                - ReadWriteOnce
+                - ReadWriteMany
                 resources:
                   requests:
                     storage: ${WORKER_DISK}
-                storageClassName: local-path
+                storageClassName: ok-storage-shared
               source:
                 http:
                   url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/openstack-amd64.qcow2"
@@ -209,11 +209,11 @@ spec:
             spec:
               pvc:
                 accessModes:
-                - ReadWriteOnce
+                - ReadWriteMany
                 resources:
                   requests:
                     storage: ${WORKER_DISK}
-                storageClassName: local-path
+                storageClassName: ok-storage-shared
               source:
                 http:
                   url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/openstack-amd64.qcow2"
