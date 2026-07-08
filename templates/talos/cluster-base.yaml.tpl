@@ -145,6 +145,10 @@ spec:
                   - disk:
                       bus: virtio
                     name: talos
+                  - cdrom:
+                      bus: sata
+                      readonly: true
+                    name: cloudinitdisk
                   networkInterfaceMultiqueue: true
                 memory:
                   guest: ${CP_MEMORY}
@@ -153,6 +157,8 @@ spec:
               - dataVolume:
                   name: ${CLUSTER_NAME}-cp-disk
                 name: talos
+              - cloudInitConfigDrive: {}
+                name: cloudinitdisk
           dataVolumeTemplates:
           - metadata:
               name: ${CLUSTER_NAME}-cp-disk
@@ -194,6 +200,10 @@ spec:
                   - disk:
                       bus: virtio
                     name: talos
+                  - cdrom:
+                      bus: sata
+                      readonly: true
+                    name: cloudinitdisk
                   networkInterfaceMultiqueue: true
                 memory:
                   guest: ${WORKER_MEMORY}
@@ -202,6 +212,8 @@ spec:
               - dataVolume:
                   name: ${CLUSTER_NAME}-worker-disk
                 name: talos
+              - cloudInitConfigDrive: {}
+                name: cloudinitdisk
           dataVolumeTemplates:
           - metadata:
               name: ${CLUSTER_NAME}-worker-disk
