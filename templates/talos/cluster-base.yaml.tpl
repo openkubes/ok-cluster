@@ -167,7 +167,7 @@ spec:
                 storageClassName: ok-storage-shared
               source:
                 http:
-                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.qcow2"
+                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.raw.xz"
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
@@ -216,4 +216,4 @@ spec:
                 storageClassName: ok-storage-shared
               source:
                 http:
-                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.qcow2"
+                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.raw.xz"
