@@ -145,10 +145,6 @@ spec:
                   - disk:
                       bus: virtio
                     name: talos
-                  - cdrom:
-                      bus: sata
-                      readonly: true
-                    name: cloudinitdisk
                   networkInterfaceMultiqueue: true
                 memory:
                   guest: ${CP_MEMORY}
@@ -157,8 +153,6 @@ spec:
               - dataVolume:
                   name: ${CLUSTER_NAME}-cp-disk
                 name: talos
-              - cloudInitConfigDrive: {}
-                name: cloudinitdisk
           dataVolumeTemplates:
           - metadata:
               name: ${CLUSTER_NAME}-cp-disk
@@ -173,7 +167,7 @@ spec:
                 storageClassName: ok-storage-block
               source:
                 http:
-                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.raw.xz"
+                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/openstack-amd64.qcow2"
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
@@ -200,10 +194,6 @@ spec:
                   - disk:
                       bus: virtio
                     name: talos
-                  - cdrom:
-                      bus: sata
-                      readonly: true
-                    name: cloudinitdisk
                   networkInterfaceMultiqueue: true
                 memory:
                   guest: ${WORKER_MEMORY}
@@ -212,8 +202,6 @@ spec:
               - dataVolume:
                   name: ${CLUSTER_NAME}-worker-disk
                 name: talos
-              - cloudInitConfigDrive: {}
-                name: cloudinitdisk
           dataVolumeTemplates:
           - metadata:
               name: ${CLUSTER_NAME}-worker-disk
@@ -228,4 +216,4 @@ spec:
                 storageClassName: ok-storage-block
               source:
                 http:
-                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.raw.xz"
+                  url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/openstack-amd64.qcow2"
