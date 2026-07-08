@@ -160,11 +160,11 @@ spec:
             spec:
               pvc:
                 accessModes:
-                - ReadWriteMany
+                - ReadWriteOnce
                 resources:
                   requests:
                     storage: ${WORKER_DISK}
-                storageClassName: ok-storage-shared
+                storageClassName: ok-storage-block
               source:
                 http:
                   url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.raw.xz"
@@ -209,11 +209,11 @@ spec:
             spec:
               pvc:
                 accessModes:
-                - ReadWriteMany
+                - ReadWriteOnce
                 resources:
                   requests:
                     storage: ${WORKER_DISK}
-                storageClassName: ok-storage-shared
+                storageClassName: ok-storage-block
               source:
                 http:
                   url: "https://factory.talos.dev/image/${TALOS_SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.raw.xz"

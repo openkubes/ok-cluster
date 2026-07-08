@@ -198,7 +198,7 @@ teardown: require-cluster
 	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
 	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
 	if [ -n "$$PVS" ]; then \
-		echo "  VM disks use ok-storage-shared (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
+		echo "  VM disks use ok-storage-* (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
 		echo "$$PVS" | sed 's/^/    /'; \
 	fi; \
 	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
