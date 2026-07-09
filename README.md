@@ -14,6 +14,7 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Two cluster types** — Talos (immutable, API-driven) and Ubuntu (kubeadm, flexible)
 - **OS layer owned by [ok-linux](https://github.com/openkubes/ok-linux)** — Talos version and schematic ID are read from ok-linux profiles, not hardcoded here
 - **Auto IP/CIDR allocation** — MetalLB IPs and pod/service CIDRs allocated automatically
+- **Management plane registration** — `make register-cluster` wires any workload cluster into ok-mgmt/Crossplane per [ADR-Platform-013](https://github.com/openkubes/openkubes/blob/main/architecture/decisions/ADR-Platform-013-workload-cluster-registration.md)
 - **Blue/Green upgrades** — rolling Kubernetes version upgrades with workload migration
 - **GitOps-ready** — all cluster state is declarative YAML, rendered from templates
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
@@ -54,6 +55,9 @@ make kubeconfig CLUSTER=my-cluster
 
 # Check status
 make status CLUSTER=my-cluster
+
+# Optional: register with the ok-mgmt management plane (Crossplane)
+make register-cluster CLUSTER=my-cluster
 ```
 
 ### Ubuntu Cluster
@@ -68,6 +72,26 @@ make install CLUSTER=my-cluster
 # Get kubeconfig
 make kubeconfig CLUSTER=my-cluster
 ```
+
+---
+
+## Management Plane Registration (ADR-Platform-013)
+
+To let Crossplane on the management cluster (ok-mgmt) deploy into a workload cluster, the cluster must be **registered**: a kubeconfig secret `<cluster>-kubeconfig` in `crossplane-system` plus a same-named provider-helm `ProviderConfig`. The cluster name is the single join key — Compositions target the cluster via `providerConfigRef.name: <cluster>`.
+
+```bash
+# Standard case: kubeconfig at ~/.kube/<cluster>.yaml (written by make bootstrap)
+make register-cluster CLUSTER=ok1-talos
+
+# Externally provided kubeconfig (e.g. handed over by another cluster owner)
+make register-cluster CLUSTER=ok2-rmf KUBECONFIG_SRC=~/incoming/ok2-rmf.yaml
+```
+
+The target validates the source kubeconfig first (fail fast) and uses **replace semantics** — the same command handles first registration and re-registration. **Re-run it after every re-bootstrap of the cluster** (cluster owner's responsibility); this retires the stale-secret trap.
+
+Registration is deliberately **not** part of `make bootstrap`: bootstrap acts on the workload cluster, registration writes to the management plane — two different trust boundaries. Deregistration after teardown is a planned follow-up (OK-62).
+
+> Contract: [ADR-Platform-013 — Workload cluster registration contract](https://github.com/openkubes/openkubes/blob/main/architecture/decisions/ADR-Platform-013-workload-cluster-registration.md). The Make target is its non-normative reference implementation.
 
 ---
 
@@ -118,15 +142,20 @@ OS_PROFILE=baremetal make new CLUSTER=my-cluster TYPE=talos
 make new           CLUSTER=<name> [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=<node>]
 make render        CLUSTER=<name>                    # re-render manifests from config
 make install       CLUSTER=<name>                    # ubuntu: apply + wait + cilium
-make bootstrap     CLUSTER=<name>                    # talos: apply + annotate PVCs
+make bootstrap     CLUSTER=<name>                    # talos: apply + annotate PVCs + cilium
 make kubeconfig    CLUSTER=<name>                    # save kubeconfig to ~/.kube/<name>.yaml
 make install-cni   CLUSTER=<name>                    # install Cilium (manual)
 make install-storage CLUSTER=<name>                  # install local-path-provisioner *inside* the workload cluster
+make install-ingress CLUSTER=<name>                  # Traefik + IngressClass ok-ingress + host-cluster LB proxy
+make register-cluster CLUSTER=<name> [KUBECONFIG_SRC=<path>] [MGMT_CLUSTER=ok-mgmt]  # register with ok-mgmt (ADR-013)
 make annotate-pvcs CLUSTER=<name>                    # annotate PVCs for node binding
 make upgrade       CLUSTER=<name> K8S_VERSION=v1.x.y [TALOS_VERSION=v1.x.y]
 make status        CLUSTER=<name>                    # show cluster, machines, VMs
 make clean         CLUSTER=<name>                    # delete ubuntu cluster + local files
 make teardown      CLUSTER=<name>                    # delete talos cluster + local files
+make teardown-all                                    # tear down ALL rendered clusters
+make e2e           [OLLAMA_URL=http://<ip>:11434]    # full clean rebuild + verify
+make e2e-verify                                      # verification matrix only
 make list                                            # list all defined clusters
 ```
 
