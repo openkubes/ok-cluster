@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu]
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress register-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -225,6 +225,35 @@ WORKLOAD_WORKERS   ?= 1
 OPENWEBUI_CLAIM    ?= $(SCRIPT_DIR)/../openkubes/platform/ai/open-webui/crossplane/examples/$(WORKLOAD_CLUSTER).yaml
 OLLAMA_URL         ?=
 
+# ── registration (ADR-Platform-013) ──────────────────────────────────────────
+# Contract: secret <cluster>-kubeconfig in crossplane-system + ProviderConfig
+# <cluster> (provider-helm). Replace semantics — safe to re-run after any
+# re-bootstrap (cluster owner's responsibility). Reference implementation,
+# non-normative. See openkubes/architecture/decisions/ADR-Platform-013.
+KUBECONFIG_SRC     ?= $(HOME)/.kube/$(CLUSTER).yaml
+MGMT_KUBECONFIG     = $(HOME)/.kube/$(MGMT_CLUSTER).yaml
+
+register-cluster: require-cluster ## Register workload cluster with ok-mgmt (ADR-Platform-013): kubeconfig secret + ProviderConfig, idempotent
+	@echo "━━━ Registering $(CLUSTER) with $(MGMT_CLUSTER) (ADR-Platform-013) ━━━"
+	@test -f "$(KUBECONFIG_SRC)" || \
+		(echo "❌ Kubeconfig not found: $(KUBECONFIG_SRC) (override with KUBECONFIG_SRC=...)"; exit 1)
+	@echo "  [1/4] Validating source kubeconfig against $(CLUSTER)..."
+	@kubectl --kubeconfig $(KUBECONFIG_SRC) get nodes --request-timeout=10s > /dev/null || \
+		(echo "❌ $(KUBECONFIG_SRC) cannot reach $(CLUSTER) — refusing to register a dead kubeconfig"; exit 1)
+	@echo "  [2/4] Applying secret $(CLUSTER)-kubeconfig (replace semantics)..."
+	@kubectl --kubeconfig $(MGMT_KUBECONFIG) -n crossplane-system \
+		create secret generic $(CLUSTER)-kubeconfig \
+		--from-file=kubeconfig=$(KUBECONFIG_SRC) \
+		--dry-run=client -o yaml | kubectl --kubeconfig $(MGMT_KUBECONFIG) apply -f -
+	@echo "  [3/4] Applying ProviderConfig $(CLUSTER) (provider-helm)..."
+	@printf 'apiVersion: helm.crossplane.io/v1beta1\nkind: ProviderConfig\nmetadata:\n  name: %s\nspec:\n  credentials:\n    source: Secret\n    secretRef:\n      namespace: crossplane-system\n      name: %s-kubeconfig\n      key: kubeconfig\n' "$(CLUSTER)" "$(CLUSTER)" \
+		| kubectl --kubeconfig $(MGMT_KUBECONFIG) apply -f -
+	@echo "  [4/4] Verifying registration..."
+	@kubectl --kubeconfig $(MGMT_KUBECONFIG) get providerconfig.helm.crossplane.io $(CLUSTER) > /dev/null
+	@echo "✅ $(CLUSTER) registered with $(MGMT_CLUSTER)"
+	@echo "   Contract : secret crossplane-system/$(CLUSTER)-kubeconfig + ProviderConfig $(CLUSTER)"
+	@echo "   Re-run this target after every re-bootstrap of $(CLUSTER) (cluster owner's job)"
+
 teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-config.yaml)
 	@for cfg in $(CLUSTERS_DIR)/*/cluster-config.yaml; do \
 		[ -f "$$cfg" ] || continue; \
@@ -255,13 +284,9 @@ e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster →
 	@$(MAKE) --no-print-directory bootstrap CLUSTER=$(WORKLOAD_CLUSTER)
 	@$(MAKE) --no-print-directory install-storage CLUSTER=$(WORKLOAD_CLUSTER)
 	@echo ""
-	@echo "━━━ E2E [4/5]: Crossplane wiring → $(WORKLOAD_CLUSTER) ━━━"
-	kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml -n crossplane-system \
-		create secret generic $(WORKLOAD_CLUSTER)-kubeconfig \
-		--from-file=kubeconfig=$$HOME/.kube/$(WORKLOAD_CLUSTER).yaml \
-		--dry-run=client -o yaml | kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml apply -f -
-	@printf 'apiVersion: helm.crossplane.io/v1beta1\nkind: ProviderConfig\nmetadata:\n  name: %s\nspec:\n  credentials:\n    source: Secret\n    secretRef:\n      namespace: crossplane-system\n      name: %s-kubeconfig\n      key: kubeconfig\n' "$(WORKLOAD_CLUSTER)" "$(WORKLOAD_CLUSTER)" \
-		| kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml apply -f -
+	@echo "━━━ E2E [4/5]: Crossplane wiring → $(WORKLOAD_CLUSTER) (register-cluster) ━━━"
+	@$(MAKE) --no-print-directory register-cluster \
+		CLUSTER=$(WORKLOAD_CLUSTER) MGMT_CLUSTER=$(MGMT_CLUSTER)
 	@echo ""
 	@echo "━━━ E2E [5/5]: OpenWebUI claim ━━━"
 	@if [ -f "$(OPENWEBUI_CLAIM)" ]; then \
@@ -354,6 +379,7 @@ help:
 	@echo "  make install-cni   CLUSTER=ok1        # cilium only (manual)"
 	@echo "  make install-storage CLUSTER=ok1-talos # local-path StorageClass (Talos)"
 	@echo "  make install-ingress CLUSTER=ok1-talos # ingress controller (Traefik) + IngressClass ok-ingress"
+	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok1-talos  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok1-talos  # annotate PVCs manually"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
