@@ -1,0 +1,134 @@
+# OK-57 Spike — bridge NAD validation on Hetzner vSwitch (VLAN 4000)
+# Target: RKE2 host cluster (okb / ok-infra.yaml), VM pinned to ok-gpu.
+# Everything here is throwaway: kubectl delete -f ok57-spike.yaml cleans up fully.
+#
+# Prereqs to verify BEFORE applying (on ok-gpu):
+#   ip -d link show br-vswitch        # bridge exists, MTU 1400
+#   ip addr show br-vswitch           # 192.168.100.3/24 lives on the bridge (not on enp4s0.4000)
+#   bridge link                       # enp4s0.4000 enslaved to br-vswitch
+#
+# Test IPs used: 192.168.100.60 (VM), 192.168.100.61 (test pod)
+# -> adjust if these collide with your lbPool ranges in cluster-config.yaml
+---
+# 1) NAD for KubeVirt VMs — no IPAM, the guest configures its own IP (cloud-init).
+#    This is the shape that would later go into cluster-base.yaml.tpl.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: vswitch-test
+  namespace: kubevirt
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "vswitch-test",
+      "type": "bridge",
+      "bridge": "br-vswitch",
+      "mtu": 1400,
+      "ipam": {}
+    }
+---
+# 2) Same NAD with static IPAM — for the quick pod-level smoke test (step A below).
+#    Pods can't run cloud-init, so the CNI assigns the IP directly.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: vswitch-test-static
+  namespace: kubevirt
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "vswitch-test-static",
+      "type": "bridge",
+      "bridge": "br-vswitch",
+      "mtu": 1400,
+      "ipam": {
+        "type": "static",
+        "addresses": [
+          { "address": "192.168.100.61/24" }
+        ]
+      }
+    }
+---
+# 3) Smoke-test pod (fastest signal, no VM boot involved).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ok57-nettest-pod
+  namespace: kubevirt
+  annotations:
+    k8s.v1.cni.cncf.io/networks: kubevirt/vswitch-test-static
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: ok-gpu
+  containers:
+    - name: nettest
+      image: nicolaka/netshoot:latest
+      command: ["sleep", "infinity"]
+      securityContext:
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+  restartPolicy: Never
+---
+# 4) Throwaway Fedora VM on ok-gpu with the vSwitch NIC as second interface.
+#    Static IP 192.168.100.60, MTU 1400 set inside the guest via cloud-init.
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ok57-testvm
+  namespace: kubevirt
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        app: ok57-testvm
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: ok-gpu
+      domain:
+        cpu:
+          cores: 2
+        memory:
+          guest: 2Gi
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinit
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}          # pod network, like eth0 on the Talos VMs
+            - name: vswitch
+              bridge: {}              # the interface under test
+      networks:
+        - name: default
+          pod: {}
+        - name: vswitch
+          multus:
+            networkName: kubevirt/vswitch-test
+      volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:latest
+        - name: cloudinit
+          cloudInitNoCloud:
+            networkData: |
+              version: 2
+              ethernets:
+                eth0:
+                  dhcp4: true
+                eth1:
+                  dhcp4: false
+                  mtu: 1400
+                  addresses:
+                    - 192.168.100.60/24
+            userData: |
+              #cloud-config
+              password: ok57spike
+              chpasswd: { expire: false }
+              ssh_pwauth: true
