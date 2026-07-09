@@ -1,0 +1,219 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ok2-rmf
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: ok2-rmf
+  namespace: ok2-rmf
+  labels:
+    openkubes.io/type: talos
+    openkubes.io/k8s-version: v1.34.1
+    openkubes.io/talos-version: v1.9.5
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 10.34.0.0/16
+    services:
+      cidrBlocks:
+      - 10.96.32.0/20
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: TalosControlPlane
+    name: ok2-rmf-cp
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: KubevirtCluster
+    name: ok2-rmf
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: ok2-rmf
+  namespace: ok2-rmf
+spec:
+  controlPlaneServiceTemplate:
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
+kind: TalosControlPlane
+metadata:
+  name: ok2-rmf-cp
+  namespace: ok2-rmf
+spec:
+  version: v1.34.1
+  replicas: 1
+  infrastructureTemplate:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtMachineTemplate
+    name: ok2-rmf-cp
+    namespace: ok2-rmf
+  controlPlaneConfig:
+    controlplane:
+      generateType: controlplane
+      talosVersion: v1.9.5
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+kind: TalosConfigTemplate
+metadata:
+  name: ok2-rmf-workers
+  namespace: ok2-rmf
+spec:
+  template:
+    spec:
+      generateType: worker
+      talosVersion: v1.9.5
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ok2-rmf-workers
+  namespace: ok2-rmf
+spec:
+  clusterName: ok2-rmf
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: ok2-rmf
+  template:
+    spec:
+      clusterName: ok2-rmf
+      version: v1.34.1
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: TalosConfigTemplate
+          name: ok2-rmf-workers
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: KubevirtMachineTemplate
+        name: ok2-rmf-workers
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ok2-rmf-cp
+  namespace: ok2-rmf
+spec:
+  template:
+    spec:
+      virtualMachineTemplate:
+        metadata:
+          namespace: ok2-rmf
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              nodeSelector:
+                kubernetes.io/hostname: ok-gpu
+              domain:
+                cpu:
+                  cores: 2
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: talos
+                  networkInterfaceMultiqueue: true
+                memory:
+                  guest: 4Gi
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: ok2-rmf-cp-disk
+                name: talos
+          dataVolumeTemplates:
+          - metadata:
+              name: ok2-rmf-cp-disk
+              namespace: ok2-rmf
+            spec:
+              pvc:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 15Gi
+                storageClassName: ok-storage-block
+              source:
+                http:
+                  url: "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.9.5/openstack-amd64.qcow2"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ok2-rmf-workers
+  namespace: ok2-rmf
+spec:
+  template:
+    spec:
+      virtualMachineTemplate:
+        metadata:
+          namespace: ok2-rmf
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              nodeSelector:
+                kubernetes.io/hostname: ok-gpu
+              domain:
+                cpu:
+                  cores: 2
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: talos
+                  networkInterfaceMultiqueue: true
+                memory:
+                  guest: 4Gi
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: ok2-rmf-worker-disk
+                name: talos
+          dataVolumeTemplates:
+          - metadata:
+              name: ok2-rmf-worker-disk
+              namespace: ok2-rmf
+            spec:
+              pvc:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 15Gi
+                storageClassName: ok-storage-block
+              source:
+                http:
+                  url: "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.9.5/openstack-amd64.qcow2"
