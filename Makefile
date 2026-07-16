@@ -102,7 +102,7 @@ install-storage: require-cluster kubeconfig ## Install local-path StorageClass (
 		--overwrite
 	@echo "✅ local-path StorageClass installed and set as default on $(CLUSTER)"
 
-install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + IngressClass ok-ingress + host-cluster LB proxy
+install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + IngressClass ok-ingress + allowCrossNamespace + host-cluster LB proxy
 	@echo "Installing Traefik ingress controller on $(CLUSTER)..."
 	@helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true
 	@helm repo update traefik 2>/dev/null
@@ -117,7 +117,8 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 		--set ingressClass.enabled=true \
 		--set ingressClass.name=ok-ingress \
 		--set ingressClass.isDefaultClass=false \
-		--set providers.kubernetesIngress.ingressClass=ok-ingress
+		--set providers.kubernetesIngress.ingressClass=ok-ingress \
+		--set providers.kubernetesCRD.allowCrossNamespace=true
 	@echo "  Traefik deployed as NodePort (30080/30443) in $(CLUSTER)"
 	@echo "  Creating host-cluster LoadBalancer proxy service on RKE2 (MetalLB)..."
 	@printf 'apiVersion: v1\nkind: Service\nmetadata:\n  name: %s-ingress\n  namespace: %s\n  labels:\n    ok-cluster/ingress-proxy: "true"\n    ok-cluster/cluster: %s\nspec:\n  type: LoadBalancer\n  ports:\n    - name: http\n      port: 80\n      targetPort: 30080\n    - name: https\n      port: 443\n      targetPort: 30443\n  selector:\n    cluster.x-k8s.io/cluster-name: %s\n    cluster.x-k8s.io/role: worker\n' \
