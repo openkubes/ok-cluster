@@ -1,5 +1,5 @@
 # OpenKubes Cluster Templating — Makefile
-# Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu]
+# Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
 .PHONY: new render install kubeconfig install-cni install-storage install-ingress register-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
@@ -9,7 +9,9 @@ HA            ?= false
 WORKERS       ?= 1
 K8S_VERSION   ?=
 TALOS_VERSION ?=
-NODE_SELECTOR ?=
+# OK-82: NODE= is an accepted alias for NODE_SELECTOR= (explicit NODE_SELECTOR wins)
+NODE          ?=
+NODE_SELECTOR ?= $(NODE)
 START_IP      ?=
 DRY_RUN       ?= false
 
@@ -373,7 +375,7 @@ help:
 	@echo "  make kubeconfig CLUSTER=ok1-talos  # once nodes Running"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
-	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu] [START_IP=192.168.100.210]"
+	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"

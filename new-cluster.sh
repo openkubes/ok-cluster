@@ -25,7 +25,7 @@ CP_MEMORY="${CP_MEMORY:-4Gi}"
 WORKER_CORES="${WORKER_CORES:-2}"
 WORKER_MEMORY="${WORKER_MEMORY:-4Gi}"
 WORKER_DISK="${WORKER_DISK:-15Gi}"
-NODE_SELECTOR="${NODE_SELECTOR:-}"
+NODE_SELECTOR="${NODE_SELECTOR:-${NODE:-}}"   # OK-82: NODE= accepted as alias
 START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
 
 if [[ -z "$CLUSTER" ]]; then
