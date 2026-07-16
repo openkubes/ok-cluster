@@ -5,8 +5,10 @@ Reads cluster-config.yaml, resolves auto IP/CIDR, renders templates to manifests
 """
 import argparse
 import ipaddress
+import json
 import os
 import re
+import subprocess
 import sys
 import yaml
 from pathlib import Path
@@ -18,6 +20,11 @@ TEMPLATES_DIR = SCRIPT_DIR / "templates"
 
 METALLB_POOL_START = ipaddress.IPv4Address("192.168.100.200")
 METALLB_POOL_END   = ipaddress.IPv4Address("192.168.100.254")
+
+# Management cluster kubeconfig — source of truth for live MetalLB allocations (OK-83)
+OKB_KUBECONFIG = os.environ.get(
+    "OKB_KUBECONFIG", os.path.expanduser("~/.kube/ok-infra.yaml")
+)
 
 # ok-linux is the source of truth for this default.
 # See: https://github.com/openkubes/ok-linux/blob/main/profiles/kubevirt/profile.yaml
@@ -50,8 +57,63 @@ def allocated_svc_cidrs(clusters):
     return {c["config"]["network"]["serviceCIDR"] for c in clusters
             if c["config"].get("network", {}).get("serviceCIDR", "auto") != "auto"}
 
-def next_free_ip(used):
+def live_metallb_allocations(exclude_cluster=None):
+    """Query LoadBalancer IPs actually allocated by MetalLB on the management
+    cluster (OK-83). Returns {ip: "namespace/service"} or None if the cluster
+    is unreachable (caller falls back to local state with a warning).
+
+    Services in the namespace of `exclude_cluster` are skipped so that
+    re-rendering an existing cluster does not collide with its own IPs.
+    """
+    try:
+        out = subprocess.run(
+            ["kubectl", "--kubeconfig", OKB_KUBECONFIG,
+             "get", "svc", "-A", "-o", "json", "--request-timeout=10s"],
+            capture_output=True, text=True, timeout=20, check=True,
+        ).stdout
+        items = json.loads(out).get("items", [])
+    except (subprocess.SubprocessError, FileNotFoundError, OSError, ValueError):
+        return None
+    allocations = {}
+    for svc in items:
+        if svc.get("spec", {}).get("type") != "LoadBalancer":
+            continue
+        ns = svc["metadata"]["namespace"]
+        if exclude_cluster and ns == exclude_cluster:
+            continue
+        name = f'{ns}/{svc["metadata"]["name"]}'
+        for ing in (svc.get("status", {}).get("loadBalancer", {}) or {}).get("ingress", []) or []:
+            if ing.get("ip"):
+                allocations[ing["ip"]] = name
+        lb_ip = svc.get("spec", {}).get("loadBalancerIP")
+        if lb_ip:
+            allocations[lb_ip] = name
+    return allocations
+
+def effective_used_ips(others, exclude_cluster=None):
+    """Union of locally declared endpoints and live MetalLB allocations (OK-83)."""
+    used = dict.fromkeys(allocated_ips(others), "local cluster-config.yaml")
+    live = live_metallb_allocations(exclude_cluster=exclude_cluster)
+    if live is None:
+        print(
+            f"WARNING: management cluster unreachable via {OKB_KUBECONFIG} — "
+            "IP allocation based on local cluster-config state only. "
+            "Verify with: kubectl --kubeconfig ~/.kube/ok-infra.yaml get svc -A | grep LoadBalancer",
+            file=sys.stderr,
+        )
+    else:
+        used.update(live)
+    return used
+
+def next_free_ip(used, start_ip=None):
     ip = METALLB_POOL_START
+    if start_ip:
+        ip = ipaddress.IPv4Address(start_ip)
+        if not (METALLB_POOL_START <= ip <= METALLB_POOL_END):
+            raise SystemExit(
+                f"ERROR: START_IP {start_ip} outside MetalLB pool "
+                f"{METALLB_POOL_START}-{METALLB_POOL_END}"
+            )
     while ip <= METALLB_POOL_END:
         if str(ip) not in used:
             return str(ip)
@@ -75,8 +137,15 @@ def resolve_config(cfg: dict, cluster_name: str) -> dict:
     clusters = discover_clusters()
     others = [c for c in clusters if c["name"] != cluster_name]
     net = cfg.setdefault("network", {})
+    used = effective_used_ips(others, exclude_cluster=cluster_name)
     if net.get("endpoint", "auto") == "auto":
-        net["endpoint"] = next_free_ip(allocated_ips(others))
+        net["endpoint"] = next_free_ip(used, start_ip=os.environ.get("START_IP"))
+    elif net["endpoint"] in used:
+        # OK-83: collision must be an error, never a silent wrong assignment
+        raise SystemExit(
+            f"ERROR: endpoint {net['endpoint']} is already allocated "
+            f"({used[net['endpoint']]}). Next free IP: {next_free_ip(used)}"
+        )
     if net.get("podCIDR", "auto") == "auto":
         net["podCIDR"] = next_free_pod_cidr(allocated_pod_cidrs(others))
     if net.get("serviceCIDR", "auto") == "auto":
@@ -209,14 +278,16 @@ def cmd_list(args):
 def cmd_show_ip(args):
     clusters = discover_clusters()
     others = [c for c in clusters if c["name"] != args.cluster]
-    print(next_free_ip(allocated_ips(others)))
+    used = effective_used_ips(others, exclude_cluster=args.cluster)
+    start_ip = args.start_ip or os.environ.get("START_IP")
+    print(next_free_ip(used, start_ip=start_ip))
 
 def main():
     p = argparse.ArgumentParser(description="OpenKubes cluster manifest renderer")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("render"); r.add_argument("--cluster", required=True); r.set_defaults(func=cmd_render)
     l = sub.add_parser("list"); l.set_defaults(func=cmd_list)
-    ip = sub.add_parser("next-ip"); ip.add_argument("--cluster", default="__new__"); ip.set_defaults(func=cmd_show_ip)
+    ip = sub.add_parser("next-ip"); ip.add_argument("--cluster", default="__new__"); ip.add_argument("--start-ip", default=None); ip.set_defaults(func=cmd_show_ip)
     args = p.parse_args()
     args.func(args)
 

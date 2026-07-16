@@ -26,6 +26,7 @@ WORKER_CORES="${WORKER_CORES:-2}"
 WORKER_MEMORY="${WORKER_MEMORY:-4Gi}"
 WORKER_DISK="${WORKER_DISK:-15Gi}"
 NODE_SELECTOR="${NODE_SELECTOR:-}"
+START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
 
 if [[ -z "$CLUSTER" ]]; then
   echo "ERROR: CLUSTER is required."
@@ -51,7 +52,9 @@ mkdir -p "$CLUSTER_DIR"
 CP_REPLICAS=1
 [[ "$HA" == "true" ]] && CP_REPLICAS=3
 
-NEXT_IP=$(python3 "${SCRIPT_DIR}/render.py" next-ip --cluster "${CLUSTER}" 2>/dev/null || echo "auto")
+# OK-83: next-ip is MetalLB-aware (queries live LB allocations on the mgmt
+# cluster). Warnings on stderr stay visible; hard errors abort the scaffold.
+NEXT_IP=$(START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" next-ip --cluster "${CLUSTER}")
 NODE_DISPLAY="${NODE_SELECTOR:-any}"
 
 echo "Creating cluster: ${CLUSTER}"
@@ -108,7 +111,7 @@ YAML
 echo "  ✔ ${CFG}"
 echo ""
 echo "Rendering manifests..."
-python3 "${SCRIPT_DIR}/render.py" render --cluster "${CLUSTER}"
+START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" render --cluster "${CLUSTER}"
 
 echo ""
 echo "Done. Next steps:"

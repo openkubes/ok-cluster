@@ -10,6 +10,7 @@ WORKERS       ?= 1
 K8S_VERSION   ?=
 TALOS_VERSION ?=
 NODE_SELECTOR ?=
+START_IP      ?=
 DRY_RUN       ?= false
 
 SCRIPT_DIR    := $(shell pwd)
@@ -24,11 +25,11 @@ require-cluster:
 new: require-cluster
 	@CLUSTER=$(CLUSTER) TYPE=$(TYPE) HA=$(HA) WORKERS=$(WORKERS) \
 	 K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
-	 NODE_SELECTOR=$(NODE_SELECTOR) \
+	 NODE_SELECTOR=$(NODE_SELECTOR) START_IP=$(START_IP) \
 	 bash $(SCRIPT_DIR)/new-cluster.sh
 
 render: require-cluster
-	@python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
+	@START_IP=$(START_IP) python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-cluster
@@ -372,7 +373,7 @@ help:
 	@echo "  make kubeconfig CLUSTER=ok1-talos  # once nodes Running"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
-	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu]"
+	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu] [START_IP=192.168.100.210]"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"
