@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress register-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -257,6 +257,33 @@ register-cluster: require-cluster ## Register workload cluster with ok-mgmt (ADR
 	@echo "   Contract : secret crossplane-system/$(CLUSTER)-kubeconfig + ProviderConfig $(CLUSTER)"
 	@echo "   Re-run this target after every re-bootstrap of $(CLUSTER) (cluster owner's job)"
 
+unregister-cluster: require-cluster ## Deregister workload cluster from ok-mgmt (OK-62, ADR-Platform-013 follow-up): delete kubeconfig secret + ProviderConfig, idempotent
+	@echo "━━━ Deregistering $(CLUSTER) from $(MGMT_CLUSTER) (ADR-Platform-013 follow-up) ━━━"
+	@echo "  [1/3] Checking for Releases still using ProviderConfig $(CLUSTER)..."
+	@RELEASES=$$(kubectl --kubeconfig $(MGMT_KUBECONFIG) get releases.helm.crossplane.io \
+		-o jsonpath='{range .items[?(@.spec.providerConfigRef.name=="$(CLUSTER)")]}{.metadata.name}{"\n"}{end}' 2>/dev/null); \
+	if [ -n "$$RELEASES" ] && [ "$(FORCE)" != "true" ]; then \
+		echo "❌ Releases still reference providerConfigRef.name: $(CLUSTER):"; \
+		echo "$$RELEASES" | sed 's/^/     /'; \
+		echo "   Deleting the ProviderConfig now would leave Crossplane unable to reconcile or uninstall them."; \
+		echo "   Delete the claims/Releases first, or re-run with FORCE=true."; \
+		exit 1; \
+	fi; \
+	if [ -n "$$RELEASES" ]; then \
+		echo "⚠️  FORCE=true — proceeding despite active Releases (Crossplane usage protection"; \
+		echo "   will keep the ProviderConfig in Terminating until all Releases are gone):"; \
+		echo "$$RELEASES" | sed 's/^/     /'; \
+	fi
+	@echo "  [2/3] Deleting ProviderConfig $(CLUSTER)..."
+	@kubectl --kubeconfig $(MGMT_KUBECONFIG) delete providerconfig.helm.crossplane.io $(CLUSTER) \
+		--ignore-not-found --wait=false
+	@echo "  [3/3] Deleting secret $(CLUSTER)-kubeconfig..."
+	@kubectl --kubeconfig $(MGMT_KUBECONFIG) -n crossplane-system delete secret $(CLUSTER)-kubeconfig \
+		--ignore-not-found
+	@echo "✅ $(CLUSTER) deregistered from $(MGMT_CLUSTER)"
+	@echo "   Deliberately NOT part of 'make teardown' (ADR-013 trust boundary:"
+	@echo "   teardown acts on the workload cluster, unregister writes to the management plane)"
+
 teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-config.yaml)
 	@for cfg in $(CLUSTERS_DIR)/*/cluster-config.yaml; do \
 		[ -f "$$cfg" ] || continue; \
@@ -383,6 +410,7 @@ help:
 	@echo "  make install-storage CLUSTER=ok1-talos # local-path StorageClass (Talos)"
 	@echo "  make install-ingress CLUSTER=ok1-talos # ingress controller (Traefik) + IngressClass ok-ingress"
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
+	@echo "  make unregister-cluster CLUSTER=ok2-rmf [FORCE=true] [MGMT_CLUSTER=ok-mgmt]  # OK-62: delete secret + ProviderConfig from ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok1-talos  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok1-talos  # annotate PVCs manually"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
