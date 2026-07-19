@@ -284,7 +284,7 @@ ok-cluster/
 └── cluster-config.yaml.example      # example cluster config
 ```
 
-> Rendered cluster directories (`my-cluster/`) are git-ignored — they contain environment-specific IPs and are generated locally.
+> Rendered cluster directories (`my-cluster/`) contain only non-sensitive private IPs and may be committed deliberately. Secret material (Talos configs, kubeconfigs) is generated at runtime and never enters Git — the cluster instances themselves are reachable via VPN only.
 
 ---
 
