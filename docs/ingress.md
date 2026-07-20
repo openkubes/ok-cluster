@@ -35,14 +35,14 @@ The host-proxy pattern reuses the same mechanism as the CAPI-managed control-pla
 
 ```bash
 # Install Traefik + host proxy Service
-make install-ingress CLUSTER=ok1-talos
+make install-ingress CLUSTER=ok-ai
 
 # Output:
-# ✅ Ingress ready for ok1-talos
+# ✅ Ingress ready for ok-ai
 #    Entry point : 192.168.100.203
-#    Traffic path: client → 192.168.100.203:80 → virt-launcher:30080 → Traefik → <app>.ok1-talos.internal
-#    Contract    : ingressClassName: ok-ingress, hostname <app>.ok1-talos.internal
-#    Interim DNS : echo "192.168.100.203 <app>.ok1-talos.internal" | sudo tee -a /etc/hosts
+#    Traffic path: client → 192.168.100.203:80 → virt-launcher:30080 → Traefik → <app>.ok-ai.internal
+#    Contract    : ingressClassName: ok-ingress, hostname <app>.ok-ai.internal
+#    Interim DNS : echo "192.168.100.203 <app>.ok-ai.internal" | sudo tee -a /etc/hosts
 ```
 
 ## Deploying an application
@@ -58,7 +58,7 @@ metadata:
 spec:
   ingressClassName: ok-ingress
   rules:
-    - host: my-app.ok1-talos.internal
+    - host: my-app.ok-ai.internal
       http:
         paths:
           - path: /
@@ -76,10 +76,10 @@ Until `ok-dns` / dnsmasq on `ok-vpn` is set up (follow-up), resolve hostnames ma
 
 ```bash
 # Interim: /etc/hosts
-echo "192.168.100.203 my-app.ok1-talos.internal" | sudo tee -a /etc/hosts
+echo "192.168.100.203 my-app.ok-ai.internal" | sudo tee -a /etc/hosts
 ```
 
-Permanent solution: dnsmasq on `ok-vpn` (`167.233.52.138`) with `address=/.ok1-talos.internal/192.168.100.203`.
+Permanent solution: dnsmasq on `ok-vpn` (`167.233.52.138`) with `address=/.ok-ai.internal/192.168.100.203`.
 
 ## IP allocation
 

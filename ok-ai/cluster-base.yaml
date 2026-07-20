@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ok1-talos
+  name: ok-ai
 ---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
-  name: ok1-talos
-  namespace: ok1-talos
+  name: ok-ai
+  namespace: ok-ai
   labels:
     openkubes.io/type: talos
     openkubes.io/k8s-version: v1.34.1
@@ -24,17 +24,17 @@ spec:
   controlPlaneRef:
     apiGroup: controlplane.cluster.x-k8s.io
     kind: TalosControlPlane
-    name: ok1-talos-cp
+    name: ok-ai-cp
   infrastructureRef:
     apiGroup: infrastructure.cluster.x-k8s.io
     kind: KubevirtCluster
-    name: ok1-talos
+    name: ok-ai
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtCluster
 metadata:
-  name: ok1-talos
-  namespace: ok1-talos
+  name: ok-ai
+  namespace: ok-ai
 spec:
   controlPlaneServiceTemplate:
     spec:
@@ -43,16 +43,16 @@ spec:
 apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
 kind: TalosControlPlane
 metadata:
-  name: ok1-talos-cp
-  namespace: ok1-talos
+  name: ok-ai-cp
+  namespace: ok-ai
 spec:
   version: v1.34.1
   replicas: 1
   infrastructureTemplate:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
-    name: ok1-talos-cp
-    namespace: ok1-talos
+    name: ok-ai-cp
+    namespace: ok-ai
   controlPlaneConfig:
     controlplane:
       generateType: controlplane
@@ -74,8 +74,8 @@ spec:
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
 metadata:
-  name: ok1-talos-workers
-  namespace: ok1-talos
+  name: ok-ai-workers
+  namespace: ok-ai
 spec:
   template:
     spec:
@@ -98,39 +98,39 @@ spec:
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment
 metadata:
-  name: ok1-talos-workers
-  namespace: ok1-talos
+  name: ok-ai-workers
+  namespace: ok-ai
 spec:
-  clusterName: ok1-talos
-  replicas: 1
+  clusterName: ok-ai
+  replicas: 3
   selector:
     matchLabels:
-      cluster.x-k8s.io/cluster-name: ok1-talos
+      cluster.x-k8s.io/cluster-name: ok-ai
   template:
     spec:
-      clusterName: ok1-talos
+      clusterName: ok-ai
       version: v1.34.1
       bootstrap:
         configRef:
           apiGroup: bootstrap.cluster.x-k8s.io
           kind: TalosConfigTemplate
-          name: ok1-talos-workers
+          name: ok-ai-workers
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
-        name: ok1-talos-workers
+        name: ok-ai-workers
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ok1-talos-cp
-  namespace: ok1-talos
+  name: ok-ai-cp
+  namespace: ok-ai
 spec:
   template:
     spec:
       virtualMachineTemplate:
         metadata:
-          namespace: ok1-talos
+          namespace: ok-ai
         spec:
           runStrategy: Always
           template:
@@ -151,12 +151,12 @@ spec:
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ok1-talos-cp-disk
+                  name: ok-ai-cp-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ok1-talos-cp-disk
-              namespace: ok1-talos
+              name: ok-ai-cp-disk
+              namespace: ok-ai
             spec:
               pvc:
                 accessModes:
@@ -172,14 +172,14 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ok1-talos-workers
-  namespace: ok1-talos
+  name: ok-ai-workers
+  namespace: ok-ai
 spec:
   template:
     spec:
       virtualMachineTemplate:
         metadata:
-          namespace: ok1-talos
+          namespace: ok-ai
         spec:
           runStrategy: Always
           template:
@@ -200,12 +200,12 @@ spec:
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ok1-talos-worker-disk
+                  name: ok-ai-worker-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ok1-talos-worker-disk
-              namespace: ok1-talos
+              name: ok-ai-worker-disk
+              namespace: ok-ai
             spec:
               pvc:
                 accessModes:

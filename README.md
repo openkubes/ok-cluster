@@ -81,7 +81,7 @@ To let Crossplane on the management cluster (ok-mgmt) deploy into a workload clu
 
 ```bash
 # Standard case: kubeconfig at ~/.kube/<cluster>.yaml (written by make bootstrap)
-make register-cluster CLUSTER=ok1-talos
+make register-cluster CLUSTER=ok-ai
 
 # Externally provided kubeconfig (e.g. handed over by another cluster owner)
 make register-cluster CLUSTER=ok2-rmf KUBECONFIG_SRC=~/incoming/ok2-rmf.yaml
@@ -178,8 +178,8 @@ make list                                            # list all defined clusters
 Uses [Talos Linux](https://www.talos.dev/) via the OpenStack-compatible qcow2 image from [Talos Image Factory](https://factory.talos.dev/). No SSH, no package manager — fully declarative and immutable. Talos version and schematic ID come from [ok-linux](https://github.com/openkubes/ok-linux) — see [OS Layer Integration](#os-layer-integration).
 
 ```bash
-make new CLUSTER=ok1-talos TYPE=talos WORKERS=2
-make bootstrap CLUSTER=ok1-talos
+make new CLUSTER=ok-ai TYPE=talos WORKERS=2
+make bootstrap CLUSTER=ok-ai
 ```
 
 ### Ubuntu (kubeadm, flexible)
