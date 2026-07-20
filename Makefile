@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
-# Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu]
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress register-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
+# Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -9,7 +9,10 @@ HA            ?= false
 WORKERS       ?= 1
 K8S_VERSION   ?=
 TALOS_VERSION ?=
-NODE_SELECTOR ?=
+# OK-82: NODE= is an accepted alias for NODE_SELECTOR= (explicit NODE_SELECTOR wins)
+NODE          ?=
+NODE_SELECTOR ?= $(NODE)
+START_IP      ?=
 DRY_RUN       ?= false
 
 SCRIPT_DIR    := $(shell pwd)
@@ -24,11 +27,11 @@ require-cluster:
 new: require-cluster
 	@CLUSTER=$(CLUSTER) TYPE=$(TYPE) HA=$(HA) WORKERS=$(WORKERS) \
 	 K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
-	 NODE_SELECTOR=$(NODE_SELECTOR) \
+	 NODE_SELECTOR=$(NODE_SELECTOR) START_IP=$(START_IP) \
 	 bash $(SCRIPT_DIR)/new-cluster.sh
 
 render: require-cluster
-	@python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
+	@START_IP=$(START_IP) python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-cluster
@@ -99,7 +102,7 @@ install-storage: require-cluster kubeconfig ## Install local-path StorageClass (
 		--overwrite
 	@echo "✅ local-path StorageClass installed and set as default on $(CLUSTER)"
 
-install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + IngressClass ok-ingress + host-cluster LB proxy
+install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + IngressClass ok-ingress + allowCrossNamespace + host-cluster LB proxy
 	@echo "Installing Traefik ingress controller on $(CLUSTER)..."
 	@helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true
 	@helm repo update traefik 2>/dev/null
@@ -114,7 +117,8 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 		--set ingressClass.enabled=true \
 		--set ingressClass.name=ok-ingress \
 		--set ingressClass.isDefaultClass=false \
-		--set providers.kubernetesIngress.ingressClass=ok-ingress
+		--set providers.kubernetesIngress.ingressClass=ok-ingress \
+		--set providers.kubernetesCRD.allowCrossNamespace=true
 	@echo "  Traefik deployed as NodePort (30080/30443) in $(CLUSTER)"
 	@echo "  Creating host-cluster LoadBalancer proxy service on RKE2 (MetalLB)..."
 	@printf 'apiVersion: v1\nkind: Service\nmetadata:\n  name: %s-ingress\n  namespace: %s\n  labels:\n    ok-cluster/ingress-proxy: "true"\n    ok-cluster/cluster: %s\nspec:\n  type: LoadBalancer\n  ports:\n    - name: http\n      port: 80\n      targetPort: 30080\n    - name: https\n      port: 443\n      targetPort: 30443\n  selector:\n    cluster.x-k8s.io/cluster-name: %s\n    cluster.x-k8s.io/role: worker\n' \
@@ -255,6 +259,33 @@ register-cluster: require-cluster ## Register workload cluster with ok-mgmt (ADR
 	@echo "   Contract : secret crossplane-system/$(CLUSTER)-kubeconfig + ProviderConfig $(CLUSTER)"
 	@echo "   Re-run this target after every re-bootstrap of $(CLUSTER) (cluster owner's job)"
 
+unregister-cluster: require-cluster ## Deregister workload cluster from ok-mgmt (OK-62, ADR-Platform-013 follow-up): delete kubeconfig secret + ProviderConfig, idempotent
+	@echo "━━━ Deregistering $(CLUSTER) from $(MGMT_CLUSTER) (ADR-Platform-013 follow-up) ━━━"
+	@echo "  [1/3] Checking for Releases still using ProviderConfig $(CLUSTER)..."
+	@RELEASES=$$(kubectl --kubeconfig $(MGMT_KUBECONFIG) get releases.helm.crossplane.io \
+		-o jsonpath='{range .items[?(@.spec.providerConfigRef.name=="$(CLUSTER)")]}{.metadata.name}{"\n"}{end}' 2>/dev/null); \
+	if [ -n "$$RELEASES" ] && [ "$(FORCE)" != "true" ]; then \
+		echo "❌ Releases still reference providerConfigRef.name: $(CLUSTER):"; \
+		echo "$$RELEASES" | sed 's/^/     /'; \
+		echo "   Deleting the ProviderConfig now would leave Crossplane unable to reconcile or uninstall them."; \
+		echo "   Delete the claims/Releases first, or re-run with FORCE=true."; \
+		exit 1; \
+	fi; \
+	if [ -n "$$RELEASES" ]; then \
+		echo "⚠️  FORCE=true — proceeding despite active Releases (Crossplane usage protection"; \
+		echo "   will keep the ProviderConfig in Terminating until all Releases are gone):"; \
+		echo "$$RELEASES" | sed 's/^/     /'; \
+	fi
+	@echo "  [2/3] Deleting ProviderConfig $(CLUSTER)..."
+	@kubectl --kubeconfig $(MGMT_KUBECONFIG) delete providerconfig.helm.crossplane.io $(CLUSTER) \
+		--ignore-not-found --wait=false
+	@echo "  [3/3] Deleting secret $(CLUSTER)-kubeconfig..."
+	@kubectl --kubeconfig $(MGMT_KUBECONFIG) -n crossplane-system delete secret $(CLUSTER)-kubeconfig \
+		--ignore-not-found
+	@echo "✅ $(CLUSTER) deregistered from $(MGMT_CLUSTER)"
+	@echo "   Deliberately NOT part of 'make teardown' (ADR-013 trust boundary:"
+	@echo "   teardown acts on the workload cluster, unregister writes to the management plane)"
+
 teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-config.yaml)
 	@for cfg in $(CLUSTERS_DIR)/*/cluster-config.yaml; do \
 		[ -f "$$cfg" ] || continue; \
@@ -389,7 +420,7 @@ help:
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
-	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu]"
+	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"
@@ -399,6 +430,7 @@ help:
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok-ai  # annotate PVCs manually"
+	@echo "  make unregister-cluster CLUSTER=ok2-rmf [FORCE=true] [MGMT_CLUSTER=ok-mgmt]  # OK-62: delete secret + ProviderConfig from ok-mgmt"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
 	@echo "  make clean         CLUSTER=ok1"
 	@echo "  make teardown      CLUSTER=ok-ai"

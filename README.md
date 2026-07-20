@@ -89,7 +89,15 @@ make register-cluster CLUSTER=ok2-rmf KUBECONFIG_SRC=~/incoming/ok2-rmf.yaml
 
 The target validates the source kubeconfig first (fail fast) and uses **replace semantics** — the same command handles first registration and re-registration. **Re-run it after every re-bootstrap of the cluster** (cluster owner's responsibility); this retires the stale-secret trap.
 
-Registration is deliberately **not** part of `make bootstrap`: bootstrap acts on the workload cluster, registration writes to the management plane — two different trust boundaries. Deregistration after teardown is a planned follow-up (OK-62).
+Registration is deliberately **not** part of `make bootstrap`: bootstrap acts on the workload cluster, registration writes to the management plane — two different trust boundaries.
+
+Deregistration is the explicit counterpart (OK-62). After `make teardown`, the kubeconfig secret and ProviderConfig remain orphaned in ok-mgmt by design — remove them with:
+
+```bash
+make unregister-cluster CLUSTER=ok1-talos
+```
+
+The target refuses if Releases still reference `providerConfigRef.name: <cluster>` (deleting the ProviderConfig under active Releases leaves Crossplane unable to reconcile or uninstall them) — delete the claims first, or override with `FORCE=true` (Crossplane usage protection then keeps the ProviderConfig in Terminating until all Releases are gone). Idempotent; deliberately **not** part of `make teardown` — same trust-boundary argument as registration.
 
 > Contract: [ADR-Platform-013 — Workload cluster registration contract](https://github.com/openkubes/openkubes/blob/main/architecture/decisions/ADR-Platform-013-workload-cluster-registration.md). The Make target is its non-normative reference implementation.
 
@@ -148,6 +156,7 @@ make install-cni   CLUSTER=<name>                    # install Cilium (manual)
 make install-storage CLUSTER=<name>                  # install local-path-provisioner *inside* the workload cluster
 make install-ingress CLUSTER=<name>                  # Traefik + IngressClass ok-ingress + host-cluster LB proxy
 make register-cluster CLUSTER=<name> [KUBECONFIG_SRC=<path>] [MGMT_CLUSTER=ok-mgmt]  # register with ok-mgmt (ADR-013)
+make unregister-cluster CLUSTER=<name> [FORCE=true] [MGMT_CLUSTER=ok-mgmt]           # deregister from ok-mgmt (OK-62)
 make annotate-pvcs CLUSTER=<name>                    # annotate PVCs for node binding
 make upgrade       CLUSTER=<name> K8S_VERSION=v1.x.y [TALOS_VERSION=v1.x.y]
 make status        CLUSTER=<name>                    # show cluster, machines, VMs
@@ -275,7 +284,7 @@ ok-cluster/
 └── cluster-config.yaml.example      # example cluster config
 ```
 
-> Rendered cluster directories (`my-cluster/`) are git-ignored — they contain environment-specific IPs and are generated locally.
+> Rendered cluster directories (`my-cluster/`) contain only non-sensitive private IPs and may be committed deliberately. Secret material (Talos configs, kubeconfigs) is generated at runtime and never enters Git — the cluster instances themselves are reachable via VPN only.
 
 ---
 
