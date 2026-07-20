@@ -1,4 +1,4 @@
-# OpenClaw on ok1-talos — operational folder
+# OpenClaw on ok-ai — operational folder
 
 The **canonical component** (Helm chart, kubectl image, CI workflow, full
 docs) lives in the platform repo:
@@ -8,9 +8,12 @@ operations here).
 
 This folder contains only:
 
-- `Makefile` — operational targets against `ok1-talos`, with the **private
+- `Makefile` — operational targets against `ok-ai`, with the **private
   provider values** (Ollama endpoint `192.168.100.202:11434`) that don't
   belong in the public platform repo
+- `claim-ok-ai.yaml` — OpenClaw Crossplane Claim with the real provider
+  values (platform install path, same as Open WebUI; see the component's
+  `crossplane/` folder for setup)
 - `.token` — generated gateway token (gitignored)
 
 ```bash
