@@ -1,4 +1,6 @@
-# OpenClaw on ok1-talos — operational wrapper (OK-15 Phase 1)
+# OpenClaw on ok-ai — operational wrapper (OK-15 Phase 1)
+# OWNER: openkubes/platform/ai/openclaw/Makefile is the canonical Makefile;
+# this is a deliberate PoC copy (private provider values) — sync from there.
 #
 # Canonical component (chart, image, CI, docs):
 #   ../openkubes/platform/ai/openclaw/          (referenced relatively, same
@@ -13,7 +15,7 @@
         verify-kubectl
 .DEFAULT_GOAL := help
 
-CLUSTER     ?= ok1-talos
+CLUSTER     ?= ok-ai
 KUBECONFIG  ?= $(HOME)/.kube/$(CLUSTER).yaml
 KUBECTL     := kubectl --kubeconfig $(KUBECONFIG)
 NS          ?= openclaw
