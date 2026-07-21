@@ -2,7 +2,7 @@ controlPlane:
   cores: 2
   memory: 4Gi
   replicas: 1
-name: ok1-talos
+name: ok-ai
 network:
   endpoint: 192.168.100.201
   podCIDR: 10.33.0.0/16
@@ -23,6 +23,6 @@ versions:
   talos: v1.9.5
 workers:
   cores: 2
-  disk: 15Gi
+  disk: 60Gi
   memory: 4Gi
-  replicas: 1
+  replicas: 3

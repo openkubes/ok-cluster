@@ -5,7 +5,7 @@
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubeVirtMachineTemplate
 metadata:
-  name: ok1-talos-cp-v2
+  name: ok-ai-cp-v2
   namespace: default
   annotations:
     openkubes.io/talos-schematic: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
@@ -26,12 +26,12 @@ spec:
               volumes:
                 - name: bootvolume
                   dataVolume:
-                    name: ok1-talos-cp-v2-boot
+                    name: ok-ai-cp-v2-boot
                 - name: cloudinitdisk
                   cloudInitConfigDrive: {}
               dataVolumeTemplates:
                 - metadata:
-                    name: ok1-talos-cp-v2-boot
+                    name: ok-ai-cp-v2-boot
                   spec:
                     pvc:
                       accessModes: [ReadWriteOnce]

@@ -227,6 +227,7 @@ MGMT_NODE_SELECTOR ?= ok-infra
 WORKLOAD_CLUSTER   ?= ok-ai
 WORKLOAD_WORKERS   ?= 1
 OPENWEBUI_CLAIM    ?= $(SCRIPT_DIR)/../openkubes/platform/ai/open-webui/crossplane/examples/$(WORKLOAD_CLUSTER).yaml
+OPENCLAW_CLAIM     ?= $(SCRIPT_DIR)/openclaw/claim-$(WORKLOAD_CLUSTER).yaml
 OLLAMA_URL         ?=
 CONFIRM            ?= false
 
@@ -355,6 +356,19 @@ e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/crea
 		echo "  (skipped — claim not found at $(OPENWEBUI_CLAIM); override with OPENWEBUI_CLAIM=...)"; \
 	fi
 	@echo ""
+	@echo "━━━ E2E [5a/5]: OpenClaw claim ━━━"
+	@if [ -f "$(OPENCLAW_CLAIM)" ]; then \
+		kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml apply -f $(OPENCLAW_CLAIM); \
+		kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml wait --for=condition=Ready \
+			openclawclaim/$(WORKLOAD_CLUSTER) -n openkubes-system --timeout=300s || \
+			(echo "  WARN: OpenClaw claim not Ready — is the chart published? (make -C ../openkubes/platform/ai/openclaw chart-release)"; \
+			 kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml get release.helm.crossplane.io openclaw-$(WORKLOAD_CLUSTER) 2>/dev/null || true); \
+		kubectl --kubeconfig ~/.kube/$(WORKLOAD_CLUSTER).yaml -n openclaw \
+			get pods 2>/dev/null || true; \
+	else \
+		echo "  (skipped — claim not found at $(OPENCLAW_CLAIM); override with OPENCLAW_CLAIM=...)"; \
+	fi
+	@echo ""
 	@echo "━━━ E2E [5b/5]: install-ingress + update OpenWebUI claim ━━━"
 	@$(MAKE) --no-print-directory install-ingress CLUSTER=$(WORKLOAD_CLUSTER)
 	@echo "  Updating OpenWebUI claim with ingress: true..."
@@ -416,9 +430,9 @@ help:
 	@echo "  make install CLUSTER=ok1   # apply + wait for Ready + install Cilium"
 	@echo ""
 	@echo "── Talos Workflow ───────────────────────────────────────────────────"
-	@echo "  make new       CLUSTER=ok1-talos TYPE=talos [WORKERS=2] [K8S_VERSION=v1.36.2] [TALOS_VERSION=v1.13.4]"
-	@echo "  make bootstrap CLUSTER=ok1-talos   # apply + annotate PVCs + Cilium CNI"
-	@echo "  make kubeconfig CLUSTER=ok1-talos  # once nodes Running"
+	@echo "  make new       CLUSTER=ok-ai TYPE=talos [WORKERS=2] [K8S_VERSION=v1.36.2] [TALOS_VERSION=v1.13.4]"
+	@echo "  make bootstrap CLUSTER=ok-ai   # apply + annotate PVCs + Cilium CNI"
+	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
 	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]"
@@ -426,15 +440,15 @@ help:
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"
 	@echo "  make install-cni   CLUSTER=ok1        # cilium only (manual)"
-	@echo "  make install-storage CLUSTER=ok1-talos # local-path StorageClass (Talos)"
-	@echo "  make install-ingress CLUSTER=ok1-talos # ingress controller (Traefik) + IngressClass ok-ingress"
+	@echo "  make install-storage CLUSTER=ok-ai # local-path StorageClass (Talos)"
+	@echo "  make install-ingress CLUSTER=ok-ai # ingress controller (Traefik) + IngressClass ok-ingress"
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
+	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"
+	@echo "  make annotate-pvcs CLUSTER=ok-ai  # annotate PVCs manually"
 	@echo "  make unregister-cluster CLUSTER=ok2-rmf [FORCE=true] [MGMT_CLUSTER=ok-mgmt]  # OK-62: delete secret + ProviderConfig from ok-mgmt"
-	@echo "  make bootstrap     CLUSTER=ok1-talos  # talos: apply + annotate PVCs + cilium"
-	@echo "  make annotate-pvcs CLUSTER=ok1-talos  # annotate PVCs manually"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
 	@echo "  make clean         CLUSTER=ok1"
-	@echo "  make teardown      CLUSTER=ok1-talos"
+	@echo "  make teardown      CLUSTER=ok-ai"
 	@echo "  make teardown-all                      # tear down ALL rendered clusters"
 	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434] [CONFIRM=yes]  # asks for confirmation; rebuilds mgmt only; reuse/create WORKLOAD_CLUSTER; verify (OK-102)"
 	@echo "  make e2e-verify                        # verification matrix only"
