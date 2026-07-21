@@ -228,6 +228,7 @@ WORKLOAD_CLUSTER   ?= ok1-talos
 WORKLOAD_WORKERS   ?= 1
 OPENWEBUI_CLAIM    ?= $(SCRIPT_DIR)/../openkubes/platform/ai/open-webui/crossplane/examples/$(WORKLOAD_CLUSTER).yaml
 OLLAMA_URL         ?=
+CONFIRM            ?= false
 
 # ── registration (ADR-Platform-013) ──────────────────────────────────────────
 # Contract: secret <cluster>-kubeconfig in crossplane-system + ProviderConfig
@@ -292,7 +293,20 @@ teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-confi
 		$(MAKE) --no-print-directory teardown CLUSTER=$$c; \
 	done
 
-e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/create workload cluster → Crossplane wiring → OpenWebUI claim → verify (scope limited to mgmt, see OK-102)
+e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/create workload cluster → Crossplane wiring → OpenWebUI claim → verify (scope limited to mgmt, see OK-102) [CONFIRM=yes to skip prompt]
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+		echo "⚠️  This will TEAR DOWN and RECREATE $(MGMT_CLUSTER)."; \
+		echo "   $(WORKLOAD_CLUSTER) itself is kept (reused, not deleted)."; \
+		echo "   Every OTHER cluster registered with $(MGMT_CLUSTER) (e.g. ok-shared, ok-robotics,"; \
+		echo "   ok2-rmf) will need 'make register-cluster CLUSTER=<name>' run again afterward,"; \
+		echo "   since $(MGMT_CLUSTER)'s Crossplane state (secrets/ProviderConfigs) is wiped."; \
+		printf "   Are you sure you need to re-create %s? [y/N] " "$(MGMT_CLUSTER)"; \
+		if [ -t 0 ]; then read -r ans; else read -r ans < /dev/tty || ans=n; fi; \
+		case "$$ans" in \
+			[yY]|[yY][eE][sS]) ;; \
+			*) echo "Aborted. Re-run with CONFIRM=yes to skip this prompt (e.g. in CI)."; exit 1 ;; \
+		esac; \
+	fi
 	@echo "━━━ E2E [0/5]: teardown $(MGMT_CLUSTER) only (scope limited to mgmt — see OK-102) ━━━"
 	@echo "  Removing OpenWebUI claim before teardown (prevents Crossplane finalizer hang)..."
 	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml \
@@ -422,7 +436,7 @@ help:
 	@echo "  make clean         CLUSTER=ok1"
 	@echo "  make teardown      CLUSTER=ok1-talos"
 	@echo "  make teardown-all                      # tear down ALL rendered clusters"
-	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434]  # rebuild mgmt only; reuse/create WORKLOAD_CLUSTER; verify (OK-102)"
+	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434] [CONFIRM=yes]  # asks for confirmation; rebuilds mgmt only; reuse/create WORKLOAD_CLUSTER; verify (OK-102)"
 	@echo "  make e2e-verify                        # verification matrix only"
 	@echo "  make list"
 	@echo "  make status        CLUSTER=ok1"
