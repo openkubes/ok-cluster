@@ -229,6 +229,7 @@ WORKLOAD_WORKERS   ?= 1
 OPENWEBUI_CLAIM    ?= $(SCRIPT_DIR)/../openkubes/platform/ai/open-webui/crossplane/examples/$(WORKLOAD_CLUSTER).yaml
 OPENCLAW_CLAIM     ?= $(SCRIPT_DIR)/openclaw/claim-$(WORKLOAD_CLUSTER).yaml
 OLLAMA_URL         ?=
+CONFIRM            ?= false
 
 # ── registration (ADR-Platform-013) ──────────────────────────────────────────
 # Contract: secret <cluster>-kubeconfig in crossplane-system + ProviderConfig
@@ -293,16 +294,26 @@ teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-confi
 		$(MAKE) --no-print-directory teardown CLUSTER=$$c; \
 	done
 
-e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster → Crossplane wiring → OpenWebUI claim → verify
-	@echo "━━━ E2E [0/5]: teardown all clusters ━━━"
-	@echo "  Removing OpenWebUI/OpenClaw claims before teardown (prevents Crossplane finalizer hang)..."
+e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/create workload cluster → Crossplane wiring → OpenWebUI claim → verify (scope limited to mgmt, see OK-102) [CONFIRM=yes to skip prompt]
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+		echo "⚠️  This will TEAR DOWN and RECREATE $(MGMT_CLUSTER)."; \
+		echo "   $(WORKLOAD_CLUSTER) itself is kept (reused, not deleted)."; \
+		echo "   Every OTHER cluster registered with $(MGMT_CLUSTER) (e.g. ok-shared, ok-robotics,"; \
+		echo "   ok2-rmf) will need 'make register-cluster CLUSTER=<name>' run again afterward,"; \
+		echo "   since $(MGMT_CLUSTER)'s Crossplane state (secrets/ProviderConfigs) is wiped."; \
+		printf "   Are you sure you need to re-create %s? [y/N] " "$(MGMT_CLUSTER)"; \
+		if [ -t 0 ]; then read -r ans; else read -r ans < /dev/tty || ans=n; fi; \
+		case "$$ans" in \
+			[yY]|[yY][eE][sS]) ;; \
+			*) echo "Aborted. Re-run with CONFIRM=yes to skip this prompt (e.g. in CI)."; exit 1 ;; \
+		esac; \
+	fi
+	@echo "━━━ E2E [0/5]: teardown $(MGMT_CLUSTER) only (scope limited to mgmt — see OK-102) ━━━"
+	@echo "  Removing OpenWebUI claim before teardown (prevents Crossplane finalizer hang)..."
 	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml \
 		delete openwebuiclaim $(WORKLOAD_CLUSTER) -n openkubes-system \
 		--ignore-not-found 2>/dev/null || true
-	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml \
-		delete openclawclaim $(WORKLOAD_CLUSTER) -n openkubes-system \
-		--ignore-not-found 2>/dev/null || true
-	@$(MAKE) --no-print-directory teardown-all
+	@$(MAKE) --no-print-directory teardown CLUSTER=$(MGMT_CLUSTER)
 	@echo ""
 	@echo "━━━ E2E [1/5]: $(MGMT_CLUSTER) (TYPE=talos-mgmt) ━━━"
 	@$(MAKE) --no-print-directory new CLUSTER=$(MGMT_CLUSTER) TYPE=talos-mgmt WORKERS=$(MGMT_WORKERS) NODE_SELECTOR=$(MGMT_NODE_SELECTOR)
@@ -315,7 +326,11 @@ e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster →
 		bash $(CLUSTERS_DIR)/$(MGMT_CLUSTER)/bootstrap-mgmt.sh
 	@echo ""
 	@echo "━━━ E2E [3/5]: $(WORKLOAD_CLUSTER) (TYPE=talos) ━━━"
-	@$(MAKE) --no-print-directory new CLUSTER=$(WORKLOAD_CLUSTER) TYPE=talos WORKERS=$(WORKLOAD_WORKERS)
+	@if [ -d "$(CLUSTERS_DIR)/$(WORKLOAD_CLUSTER)" ]; then \
+		echo "  $(WORKLOAD_CLUSTER) already rendered locally (not torn down — e2e scope is mgmt-only) — reusing existing manifests"; \
+	else \
+		$(MAKE) --no-print-directory new CLUSTER=$(WORKLOAD_CLUSTER) TYPE=talos WORKERS=$(WORKLOAD_WORKERS); \
+	fi
 	@$(MAKE) --no-print-directory bootstrap CLUSTER=$(WORKLOAD_CLUSTER)
 	@$(MAKE) --no-print-directory install-storage CLUSTER=$(WORKLOAD_CLUSTER)
 	@echo ""
@@ -435,7 +450,7 @@ help:
 	@echo "  make clean         CLUSTER=ok1"
 	@echo "  make teardown      CLUSTER=ok-ai"
 	@echo "  make teardown-all                      # tear down ALL rendered clusters"
-	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434]  # full clean rebuild + verify"
+	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434] [CONFIRM=yes]  # asks for confirmation; rebuilds mgmt only; reuse/create WORKLOAD_CLUSTER; verify (OK-102)"
 	@echo "  make e2e-verify                        # verification matrix only"
 	@echo "  make list"
 	@echo "  make status        CLUSTER=ok1"
