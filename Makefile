@@ -287,10 +287,26 @@ unregister-cluster: require-cluster ## Deregister workload cluster from ok-mgmt 
 	@echo "   Deliberately NOT part of 'make teardown' (ADR-013 trust boundary:"
 	@echo "   teardown acts on the workload cluster, unregister writes to the management plane)"
 
-teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-config.yaml)
-	@for cfg in $(CLUSTERS_DIR)/*/cluster-config.yaml; do \
+teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-config.yaml) [CONFIRM=yes to skip prompt]
+	@CLUSTERS=$$(for cfg in $(CLUSTERS_DIR)/*/cluster-config.yaml; do \
 		[ -f "$$cfg" ] || continue; \
-		c=$$(basename $$(dirname $$cfg)); \
+		basename $$(dirname $$cfg); \
+	done); \
+	if [ -z "$$CLUSTERS" ]; then \
+		echo "(no rendered clusters found under $(CLUSTERS_DIR))"; \
+		exit 0; \
+	fi; \
+	if [ "$(CONFIRM)" != "yes" ]; then \
+		echo "⚠️  This will TEAR DOWN ALL of the following rendered clusters:"; \
+		echo "$$CLUSTERS" | sed 's/^/   - /'; \
+		printf "Are you sure you want to tear down ALL of these clusters? [y/N] "; \
+		if [ -t 0 ]; then read -r ans; else read -r ans < /dev/tty || ans=n; fi; \
+		case "$$ans" in \
+			[yY]|[yY][eE][sS]) ;; \
+			*) echo "Aborted. Re-run with CONFIRM=yes to skip this prompt (e.g. in CI)."; exit 1 ;; \
+		esac; \
+	fi; \
+	for c in $$CLUSTERS; do \
 		$(MAKE) --no-print-directory teardown CLUSTER=$$c; \
 	done
 

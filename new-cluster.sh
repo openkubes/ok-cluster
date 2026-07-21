@@ -47,6 +47,30 @@ if [[ -d "$CLUSTER_DIR" ]]; then
   exit 1
 fi
 
+# OK-102 follow-up: the check above only looks at the local render directory.
+# On a checkout that never received a previous 'make e2e' post-commit push
+# (or after a fresh clone), the directory can be absent while the Cluster
+# object still exists live in the API -- scaffolding a new one in that case
+# would re-render fresh values (e.g. a new MetalLB IP via render.py next-ip)
+# and re-apply them against an already-running cluster. Refuse in that case.
+INFRA_KUBECONFIG="${INFRA_KUBECONFIG:-$HOME/.kube/ok-infra.yaml}"
+if command -v kubectl >/dev/null 2>&1 && [[ -f "$INFRA_KUBECONFIG" ]]; then
+  if kubectl --kubeconfig "$INFRA_KUBECONFIG" get cluster "${CLUSTER}" -n "${CLUSTER}" >/dev/null 2>&1; then
+    echo "ERROR: Cluster '${CLUSTER}' already exists in the API (namespace ${CLUSTER} on"
+    echo "       $INFRA_KUBECONFIG), even though no local render directory was found."
+    echo "       This usually means another checkout rendered it and its manifests were"
+    echo "       never pushed/committed here. Refusing to scaffold a new one to avoid"
+    echo "       re-rendering colliding values (e.g. a different MetalLB IP) against a"
+    echo "       live cluster."
+    echo "       Fix: pull/sync the missing render directory from wherever it was"
+    echo "       created, or run 'make teardown CLUSTER=${CLUSTER}' first if it should"
+    echo "       genuinely be destroyed and recreated."
+    exit 1
+  fi
+else
+  echo "  WARN: kubectl or $INFRA_KUBECONFIG not available -- skipping live-cluster existence check."
+fi
+
 mkdir -p "$CLUSTER_DIR"
 
 CP_REPLICAS=1
