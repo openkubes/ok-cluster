@@ -198,12 +198,26 @@ clean: require-cluster
 	rm -rf $(CLUSTERS_DIR)/$(CLUSTER)
 	@echo "✅ Cluster $(CLUSTER) removed."
 
-teardown: require-cluster
+teardown: require-cluster ## Tear down a single cluster (Cluster object, namespace, Retain-policy PVs/Longhorn volumes) [CONFIRM=yes to skip prompt]
 	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
 	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
 	if [ -n "$$PVS" ]; then \
 		echo "  VM disks use ok-storage-* (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
 		echo "$$PVS" | sed 's/^/    /'; \
+	fi; \
+	if [ "$(CONFIRM)" != "yes" ]; then \
+		printf "⚠️  This will TEAR DOWN %s: Cluster object, namespace, local render directory" "$(CLUSTER)"; \
+		if [ -n "$$PVS" ]; then \
+			PVCOUNT=$$(echo "$$PVS" | grep -c .); \
+			printf ", and %s Retain-policy PV(s)/Longhorn volume(s)" "$$PVCOUNT"; \
+		fi; \
+		echo "."; \
+		printf "Are you sure you want to tear down %s? [y/N] " "$(CLUSTER)"; \
+		if [ -t 0 ]; then read -r ans; else read -r ans < /dev/tty || ans=n; fi; \
+		case "$$ans" in \
+			[yY]|[yY][eE][sS]) ;; \
+			*) echo "Aborted. Re-run with CONFIRM=yes to skip this prompt (e.g. in CI)."; exit 1 ;; \
+		esac; \
 	fi; \
 	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
 	$(OKB) delete namespace $(CLUSTER) --ignore-not-found; \
@@ -307,7 +321,7 @@ teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-confi
 		esac; \
 	fi; \
 	for c in $$CLUSTERS; do \
-		$(MAKE) --no-print-directory teardown CLUSTER=$$c; \
+		$(MAKE) --no-print-directory teardown CLUSTER=$$c CONFIRM=yes; \
 	done
 
 e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/create workload cluster → Crossplane wiring → OpenWebUI claim → verify (scope limited to mgmt, see OK-102) [CONFIRM=yes to skip prompt]
@@ -329,7 +343,7 @@ e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/crea
 	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml \
 		delete openwebuiclaim $(WORKLOAD_CLUSTER) -n openkubes-system \
 		--ignore-not-found 2>/dev/null || true
-	@$(MAKE) --no-print-directory teardown CLUSTER=$(MGMT_CLUSTER)
+	@$(MAKE) --no-print-directory teardown CLUSTER=$(MGMT_CLUSTER) CONFIRM=yes
 	@echo ""
 	@echo "━━━ E2E [1/5]: $(MGMT_CLUSTER) (TYPE=talos-mgmt) ━━━"
 	@$(MAKE) --no-print-directory new CLUSTER=$(MGMT_CLUSTER) TYPE=talos-mgmt WORKERS=$(MGMT_WORKERS) NODE_SELECTOR=$(MGMT_NODE_SELECTOR)
