@@ -224,7 +224,7 @@ teardown: require-cluster
 MGMT_CLUSTER       ?= ok-mgmt
 MGMT_WORKERS       ?= 2
 MGMT_NODE_SELECTOR ?= ok-infra
-WORKLOAD_CLUSTER   ?= ok1-talos
+WORKLOAD_CLUSTER   ?= ok-ai
 WORKLOAD_WORKERS   ?= 1
 OPENWEBUI_CLAIM    ?= $(SCRIPT_DIR)/../openkubes/platform/ai/open-webui/crossplane/examples/$(WORKLOAD_CLUSTER).yaml
 OLLAMA_URL         ?=
