@@ -292,13 +292,13 @@ teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-confi
 		$(MAKE) --no-print-directory teardown CLUSTER=$$c; \
 	done
 
-e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster → Crossplane wiring → OpenWebUI claim → verify
-	@echo "━━━ E2E [0/5]: teardown all clusters ━━━"
+e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/create workload cluster → Crossplane wiring → OpenWebUI claim → verify (scope limited to mgmt, see OK-102)
+	@echo "━━━ E2E [0/5]: teardown $(MGMT_CLUSTER) only (scope limited to mgmt — see OK-102) ━━━"
 	@echo "  Removing OpenWebUI claim before teardown (prevents Crossplane finalizer hang)..."
 	@kubectl --kubeconfig ~/.kube/$(MGMT_CLUSTER).yaml \
 		delete openwebuiclaim $(WORKLOAD_CLUSTER) -n openkubes-system \
 		--ignore-not-found 2>/dev/null || true
-	@$(MAKE) --no-print-directory teardown-all
+	@$(MAKE) --no-print-directory teardown CLUSTER=$(MGMT_CLUSTER)
 	@echo ""
 	@echo "━━━ E2E [1/5]: $(MGMT_CLUSTER) (TYPE=talos-mgmt) ━━━"
 	@$(MAKE) --no-print-directory new CLUSTER=$(MGMT_CLUSTER) TYPE=talos-mgmt WORKERS=$(MGMT_WORKERS) NODE_SELECTOR=$(MGMT_NODE_SELECTOR)
@@ -311,7 +311,11 @@ e2e: ## Full clean rebuild: teardown-all → mgmt stack → workload cluster →
 		bash $(CLUSTERS_DIR)/$(MGMT_CLUSTER)/bootstrap-mgmt.sh
 	@echo ""
 	@echo "━━━ E2E [3/5]: $(WORKLOAD_CLUSTER) (TYPE=talos) ━━━"
-	@$(MAKE) --no-print-directory new CLUSTER=$(WORKLOAD_CLUSTER) TYPE=talos WORKERS=$(WORKLOAD_WORKERS)
+	@if [ -d "$(CLUSTERS_DIR)/$(WORKLOAD_CLUSTER)" ]; then \
+		echo "  $(WORKLOAD_CLUSTER) already rendered locally (not torn down — e2e scope is mgmt-only) — reusing existing manifests"; \
+	else \
+		$(MAKE) --no-print-directory new CLUSTER=$(WORKLOAD_CLUSTER) TYPE=talos WORKERS=$(WORKLOAD_WORKERS); \
+	fi
 	@$(MAKE) --no-print-directory bootstrap CLUSTER=$(WORKLOAD_CLUSTER)
 	@$(MAKE) --no-print-directory install-storage CLUSTER=$(WORKLOAD_CLUSTER)
 	@echo ""
@@ -418,7 +422,7 @@ help:
 	@echo "  make clean         CLUSTER=ok1"
 	@echo "  make teardown      CLUSTER=ok1-talos"
 	@echo "  make teardown-all                      # tear down ALL rendered clusters"
-	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434]  # full clean rebuild + verify"
+	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434]  # rebuild mgmt only; reuse/create WORKLOAD_CLUSTER; verify (OK-102)"
 	@echo "  make e2e-verify                        # verification matrix only"
 	@echo "  make list"
 	@echo "  make status        CLUSTER=ok1"
