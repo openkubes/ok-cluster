@@ -11,7 +11,6 @@
 #   6. XRDs + Compositions (cluster-management)
 #   7. RBAC for Crossplane provider ServiceAccounts
 #   8. OpenWebUI XRD + Composition (platform/ai)
-#   9. OpenClaw XRD + Composition + gateway-token secret (platform/ai, OK-15)
 #
 # Run after: make bootstrap CLUSTER=ok-mgmt
 # Context:   KUBECONFIG must point to the management cluster
@@ -246,36 +245,6 @@ else
 fi
 echo ""
 
-# ── Step 9: OpenClaw XRD + Composition + gateway-token Secret (OK-15) ─────────
-log "Step 9: Applying OpenClaw platform contracts (XRD, Composition)..."
-
-OPENCLAW_DIR="${OPENKUBES_REPO}/platform/ai/openclaw/crossplane"
-
-if [[ ! -d "$OPENCLAW_DIR" ]]; then
-  log "WARNING: platform/ai/openclaw not found at $OPENCLAW_DIR — skipping OpenClaw setup"
-else
-  kubectl apply -f "$OPENCLAW_DIR/xrd.yaml"
-  kubectl apply -f "$OPENCLAW_DIR/composition.yaml"
-
-  kubectl wait xrd/openclawinstances.platform.openkubes.ai \
-    --for=condition=Established --timeout=60s
-
-  # Gateway token: operational state, never in git. Idempotent — an existing
-  # secret is kept (helm upgrades must not rotate the token unnoticed).
-  if kubectl -n openkubes-system get secret openclaw-gateway-token >/dev/null 2>&1; then
-    log "  openclaw-gateway-token secret exists — kept"
-  else
-    kubectl -n openkubes-system create secret generic openclaw-gateway-token \
-      --from-literal=gateway-token="$(openssl rand -hex 24)"
-    log "  openclaw-gateway-token secret created"
-  fi
-
-  ok "OpenClaw XRD + Composition ready on ok-mgmt"
-  log "  Deploy with: kubectl apply -f <infra-repo>/openclaw/claim-<cluster>.yaml"
-  log "  Prereq: chart published once via 'make chart-release' (platform/ai/openclaw)"
-fi
-echo ""
-
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "Management cluster 'ok-mgmt' is fully operational!"
@@ -287,6 +256,5 @@ echo ""
 echo "  Next steps:"
 echo "    1. Add workload cluster kubeconfig as secret in ok-mgmt"
 echo "    2. Deploy Open WebUI: kubectl apply -f platform/ai/open-webui/crossplane/examples/<cluster>.yaml"
-echo "    3. Deploy OpenClaw: kubectl apply -f <infra-repo>/openclaw/claim-<cluster>.yaml"
-echo "    4. Submit a KubeVirtClusterClaim: kubectl apply -f crossplane/examples/ok-ai.yaml"
+echo "    3. Submit a KubeVirtClusterClaim: kubectl apply -f crossplane/examples/ok1-talos.yaml"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
