@@ -288,6 +288,14 @@ ok-cluster/
 
 ---
 
+## Platform Architecture (v0.11.0)
+
+![OpenKubes platform architecture — ok-platform contracts, ok-mgmt control plane, and the ok-ai / ok-shared / ok-robotics workload clusters](docs/architecture/ok-platform-architecture.svg)
+
+> A Kubernetes Distribution Framework — Not a Distribution. See [ADR-Platform-013](https://github.com/openkubes/openkubes/blob/main/architecture/decisions/ADR-Platform-013-workload-cluster-registration.md) (cluster registration) and [ADR-Platform-015](https://github.com/openkubes/openkubes/blob/main/architecture/decisions/ADR-Platform-015-agentic-ai.md) (agentic AI, multi-cluster addendum) for the underlying contracts.
+
+---
+
 ## Part of OpenKubes
 
 OK-Cluster is the cluster lifecycle layer of the OpenKubes platform. It owns *how* a cluster is created, scaled, and upgraded — never *which* OS image runs on its nodes:

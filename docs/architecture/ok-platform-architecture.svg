@@ -1,0 +1,113 @@
+<svg viewBox="0 0 1040 800" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>OpenKubes v0.11.0 platform architecture</title>
+  <desc>OpenKubes: a Kubernetes distribution framework, not a distribution. v0.11.0: ok-platform defines contracts. The ok-cluster repo supplies cluster-specific claims and provider values, feeding ok-mgmt, the Crossplane control plane that registers and reconciles the workload clusters ok-ai, ok-shared, and ok-robotics. ok-ai runs Open WebUI and OpenClaw today; a kagent evaluation is happening separately and is not a platform offering. ok-shared and ok-robotics run a single, still in-progress agent backend profile combining OpenClaw with a kagent integration. ok-robotics also runs OpenRMF. OpenClaw backends consume a single shared Ollama inference service hosted on ok-infra, per ADR-Platform-005; only ok-ai's connection is live today. Cross-cluster Agent Backend Registration is planned, not yet implemented.</desc>
+
+  <rect x="0" y="0" width="1040" height="800" fill="#FAFAF8"/>
+
+  <!-- header -->
+  <text x="50" y="46" font-size="30" font-weight="700" fill="#1B2A4A" font-family="Arial, Helvetica, sans-serif" letter-spacing="0.3">OpenKubes v0.11.0</text>
+  <text x="50" y="70" font-size="14.5" fill="#5B6472" font-family="Georgia, serif">Rebuildable management. Declarative AI and robotics capabilities.</text>
+  <text x="50" y="90" font-size="12.5" font-style="italic" fill="#8A5636" font-family="Georgia, serif">A Kubernetes Distribution Framework — Not a Distribution</text>
+
+  <!-- ok-platform -->
+  <rect x="60" y="110" width="880" height="70" rx="10" fill="#FFFFFF" stroke="#1B2A4A" stroke-width="2"/>
+  <text x="500" y="140" text-anchor="middle" font-size="18" font-weight="700" fill="#1B2A4A" font-family="Georgia, serif">ok-platform (OpenKubes framework)</text>
+  <text x="500" y="162" text-anchor="middle" font-size="12.5" fill="#5B6472" font-family="Georgia, serif">Contracts, not components — ADRs / XRDs / Compositions</text>
+
+  <!-- ok-cluster tooling note, side annotation -->
+  <rect x="720" y="196" width="220" height="52" rx="8" fill="#FFF6EE" stroke="#E8632A" stroke-width="1.25"/>
+  <text x="830" y="217" text-anchor="middle" font-size="12" font-weight="700" fill="#B44A1C">ok-cluster (repo)</text>
+  <text x="830" y="233" text-anchor="middle" font-size="10" fill="#8A5636">Claims &amp; provider values — tooling, not a cluster</text>
+  <line x1="830" y1="196" x2="830" y2="180" stroke="#E8632A" stroke-width="1.5" stroke-dasharray="4 3"/>
+
+  <!-- arrow platform -> mgmt -->
+  <line x1="500" y1="180" x2="500" y2="230" stroke="#1B2A4A" stroke-width="2"/>
+  <polygon points="500,242 493,228 507,228" fill="#1B2A4A"/>
+
+  <!-- ok-mgmt -->
+  <rect x="330" y="246" width="340" height="68" rx="10" fill="#EAF2FB" stroke="#1B2A4A" stroke-width="2"/>
+  <text x="500" y="275" text-anchor="middle" font-size="15.5" font-weight="700" fill="#1B2A4A" font-family="Georgia, serif">ok-mgmt</text>
+  <text x="500" y="296" text-anchor="middle" font-size="11.5" fill="#3E4C61">Crossplane control plane · registers &amp; reconciles clusters</text>
+
+  <!-- arrows mgmt -> 3 clusters -->
+  <line x1="500" y1="314" x2="500" y2="334" stroke="#1B2A4A" stroke-width="2"/>
+  <line x1="160" y1="334" x2="840" y2="334" stroke="#1B2A4A" stroke-width="2"/>
+  <line x1="160" y1="334" x2="160" y2="356" stroke="#1B2A4A" stroke-width="2"/>
+  <polygon points="160,368 153,354 167,354" fill="#1B2A4A"/>
+  <line x1="500" y1="334" x2="500" y2="356" stroke="#1B2A4A" stroke-width="2"/>
+  <polygon points="500,368 493,354 507,354" fill="#1B2A4A"/>
+  <line x1="840" y1="334" x2="840" y2="356" stroke="#1B2A4A" stroke-width="2"/>
+  <polygon points="840,368 833,354 847,354" fill="#1B2A4A"/>
+
+  <!-- ok-ai -->
+  <rect x="40" y="372" width="240" height="230" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="160" y="398" text-anchor="middle" font-size="16" font-weight="700" fill="#1B2A4A" font-family="Georgia, serif">ok-ai</text>
+  <text x="160" y="415" text-anchor="middle" font-size="11.5" fill="#6B7280">workload cluster</text>
+
+  <rect x="58" y="428" width="204" height="42" rx="8" fill="#E8632A"/>
+  <text x="160" y="446" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">Open WebUI</text>
+  <text x="160" y="460" text-anchor="middle" font-size="9.5" fill="#FFE8DC">self-service frontend</text>
+
+  <rect x="58" y="478" width="204" height="42" rx="8" fill="#1B2A4A"/>
+  <text x="160" y="496" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">OpenClaw</text>
+  <text x="160" y="510" text-anchor="middle" font-size="9.5" fill="#C7D0DE">agent backend</text>
+
+  <line x1="58" y1="528" x2="262" y2="528" stroke="#D8D6CE" stroke-width="1"/>
+  <rect x="58" y="534" width="204" height="32" rx="6" fill="#F1F0EA" stroke="#C4C2B8" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="160" y="548" text-anchor="middle" font-size="10.5" font-weight="700" fill="#7A7A70">kagent evaluation</text>
+  <text x="160" y="560" text-anchor="middle" font-size="9" fill="#8A8A80">not a platform offering</text>
+
+  <!-- ok-shared -->
+  <rect x="380" y="372" width="240" height="230" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="500" y="398" text-anchor="middle" font-size="16" font-weight="700" fill="#1B2A4A" font-family="Georgia, serif">ok-shared</text>
+  <text x="500" y="415" text-anchor="middle" font-size="11.5" fill="#6B7280">workload cluster</text>
+
+  <rect x="398" y="428" width="204" height="106" rx="8" fill="#FFFFFF" stroke="#1B2A4A" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="500" y="452" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1B2A4A">Agent backend profile</text>
+  <text x="500" y="472" text-anchor="middle" font-size="10.5" fill="#3E4C61">OpenClaw + kagent integration</text>
+  <text x="500" y="490" text-anchor="middle" font-size="10" fill="#5B6472" font-style="italic">(in progress)</text>
+
+  <!-- ok-robotics -->
+  <rect x="720" y="372" width="240" height="230" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="840" y="398" text-anchor="middle" font-size="16" font-weight="700" fill="#1B2A4A" font-family="Georgia, serif">ok-robotics</text>
+  <text x="840" y="415" text-anchor="middle" font-size="11.5" fill="#6B7280">workload cluster</text>
+
+  <rect x="738" y="428" width="204" height="94" rx="8" fill="#FFFFFF" stroke="#1B2A4A" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="840" y="450" text-anchor="middle" font-size="12" font-weight="700" fill="#1B2A4A">Agent backend profile</text>
+  <text x="840" y="468" text-anchor="middle" font-size="9.5" fill="#3E4C61">OpenClaw + kagent integration</text>
+  <text x="840" y="485" text-anchor="middle" font-size="9.5" fill="#5B6472" font-style="italic">(in progress)</text>
+
+  <rect x="738" y="534" width="204" height="52" rx="8" fill="#1B7A5A"/>
+  <text x="840" y="556" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">OpenRMF</text>
+  <text x="840" y="572" text-anchor="middle" font-size="9.5" fill="#D6F0E5">simulation profile</text>
+
+  <!-- ok-infra / Ollama, separate from workload clusters -->
+  <rect x="330" y="634" width="340" height="82" rx="10" fill="#F1EDFB" stroke="#6C4FB6" stroke-width="1.75"/>
+  <text x="500" y="660" text-anchor="middle" font-size="14.5" font-weight="700" fill="#432F82" font-family="Georgia, serif">ok-infra / GPU host</text>
+  <text x="500" y="682" text-anchor="middle" font-size="12.5" font-weight="700" fill="#432F82">Ollama — shared inference (ADR-Platform-005)</text>
+  <text x="500" y="700" text-anchor="middle" font-size="10" fill="#5F4B96">one shared instance, consumed through a stable internal endpoint</text>
+
+  <!-- connections: OpenClaw (ok-ai) -> Ollama, the only live path -->
+  <path d="M 160 520 L 160 676 L 330 675" fill="none" stroke="#1B2A4A" stroke-width="2"/>
+  <polygon points="330,675 316,669 316,681" fill="#1B2A4A"/>
+
+  <!-- ok-shared agent backend profile -> Ollama, planned -->
+  <path d="M 500 534 L 500 634" fill="none" stroke="#8B7BB8" stroke-width="1.75" stroke-dasharray="6 4"/>
+  <polygon points="500,634 494,620 506,620" fill="#8B7BB8"/>
+
+  <!-- ok-robotics agent backend profile -> Ollama, routed around OpenRMF, planned -->
+  <path d="M 942 475 L 998 475 L 998 675 L 670 675" fill="none" stroke="#8B7BB8" stroke-width="1.75" stroke-dasharray="6 4"/>
+  <polygon points="670,675 682,669 683,681" fill="#8B7BB8"/>
+
+  <!-- legend -->
+  <rect x="40" y="732" width="18" height="14" rx="3" fill="#FFFFFF" stroke="#1B2A4A" stroke-width="1.5"/>
+  <text x="64" y="743" font-size="12" fill="#3E4C61">Solid = deployed today</text>
+  <rect x="230" y="732" width="18" height="14" rx="3" fill="#FFFFFF" stroke="#1B2A4A" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="254" y="743" font-size="12" fill="#3E4C61">Dashed = intended / in progress / gated by validation</text>
+
+  <!-- honest boundary callout -->
+  <text x="40" y="768" font-size="12.5" font-weight="700" fill="#B44A1C">Cross-cluster Agent Backend Registration is planned, not yet implemented.</text>
+
+  <!-- footer tagline -->
+  <text x="1000" y="766" text-anchor="end" font-size="12" font-style="italic" fill="#8A93A3">OpenKubes owns the contracts, not the components.</text>
+</svg>
