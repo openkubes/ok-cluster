@@ -1,17 +1,15 @@
-# OpenClaw Claim for ok-ai — real provider values (this repo is their home;
+# OpenWebUI Claim for ok-ai — real provider values (this repo is their home;
 # ok-cluster is public, like openkubes — the split is generic component vs.
 # concrete deployment values, not access control). Submit to ok-mgmt:
 #   kubectl --kubeconfig ~/.kube/ok-mgmt.yaml apply -f claim-ok-ai.yaml
-# Prereqs (once): make token-secret + make setup in
-#   openkubes/platform/ai/openclaw/crossplane/
+# Prereqs (once): make setup in openkubes/platform/ai/open-webui/crossplane/
 apiVersion: platform.openkubes.ai/v1alpha1
-kind: OpenClawClaim
+kind: OpenWebUIClaim
 metadata:
   name: ok-ai
   namespace: openkubes-system
 spec:
   clusterRef: ok-ai
   ollamaEndpoint: http://192.168.100.202:11434
-  namespace: openclaw
-  model: gpt-oss:20b
-  numCtx: 65536
+  namespace: open-webui
+  ingress: true  # → open-webui.ok-ai.internal via ok-ingress (ADR-Platform-010)
