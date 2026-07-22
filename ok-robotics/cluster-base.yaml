@@ -17,10 +17,10 @@ spec:
   clusterNetwork:
     pods:
       cidrBlocks:
-      - 10.36.0.0/16
+      - 10.34.0.0/16
     services:
       cidrBlocks:
-      - 10.96.64.0/20
+      - 10.96.32.0/20
   controlPlaneRef:
     apiGroup: controlplane.cluster.x-k8s.io
     kind: TalosControlPlane

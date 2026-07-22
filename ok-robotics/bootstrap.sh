@@ -4,7 +4,7 @@
 set -euo pipefail
 
 CLUSTER="ok-robotics"
-ENDPOINT="192.168.100.208"
+ENDPOINT="192.168.100.205"
 K8S_VERSION="v1.34.1"
 TALOS_VERSION="v1.9.5"
 TALOSCONFIG="${HOME}/.talos/config"

@@ -4,9 +4,9 @@ controlPlane:
   replicas: 1
 name: ok-robotics
 network:
-  endpoint: 192.168.100.208
-  podCIDR: 10.36.0.0/16
-  serviceCIDR: 10.96.64.0/20
+  endpoint: 192.168.100.205
+  podCIDR: 10.34.0.0/16
+  serviceCIDR: 10.96.32.0/20
 nodeSelector: ok-infra
 os:
   distribution: ok-linux
