@@ -11,6 +11,8 @@
 #   6. XRDs + Compositions (cluster-management)
 #   7. RBAC for Crossplane provider ServiceAccounts
 #   8. OpenWebUI XRD + Composition (platform/ai)
+#   8b. OpenClaw XRD + Composition (platform/ai)
+#   8c. OpenRMF XRD + Composition + Role (platform/robotics)
 #
 # Run after: make bootstrap CLUSTER=${CLUSTER_NAME}
 # Context:   KUBECONFIG must point to the management cluster
@@ -245,16 +247,59 @@ else
 fi
 echo ""
 
+# ── Step 8b: OpenClaw XRD + Composition ──────────────────────────────────────
+log "Step 8b: Applying OpenClaw platform contracts (XRD, Composition)..."
+
+OPENKUBES_OPENCLAW_DIR="${OPENKUBES_REPO}/platform/ai/openclaw/crossplane"
+
+if [[ ! -d "$$OPENKUBES_OPENCLAW_DIR" ]]; then
+  log "WARNING: platform/ai/openclaw not found at $$OPENKUBES_OPENCLAW_DIR — skipping OpenClaw setup"
+else
+  kubectl apply -f "$$OPENKUBES_OPENCLAW_DIR/xrd.yaml"
+  kubectl apply -f "$$OPENKUBES_OPENCLAW_DIR/composition.yaml"
+
+  kubectl wait xrd/openclawinstances.platform.openkubes.ai \
+    --for=condition=Established --timeout=60s
+
+  ok "OpenClaw XRD + Composition ready on ok-mgmt"
+  log "  Deploy with: kubectl apply -f platform/ai/openclaw/crossplane/examples/<cluster>.yaml"
+fi
+echo ""
+
+# ── Step 8c: OpenRMF XRD + Composition + Role ─────────────────────────────────
+log "Step 8c: Applying OpenRMF platform contracts (XRD, Composition, Role)..."
+
+OPENKUBES_OPENRMF_DIR="${OPENKUBES_REPO}/platform/robotics/open-rmf/crossplane"
+
+if [[ ! -d "$$OPENKUBES_OPENRMF_DIR" ]]; then
+  log "WARNING: platform/robotics/open-rmf not found at $$OPENKUBES_OPENRMF_DIR — skipping OpenRMF setup"
+else
+  kubectl apply -f "$$OPENKUBES_OPENRMF_DIR/xrd.yaml"
+  kubectl apply -f "$$OPENKUBES_OPENRMF_DIR/composition.yaml"
+  kubectl apply -f "$$OPENKUBES_OPENRMF_DIR/rbac/claim-editor-role.yaml"
+
+  kubectl wait xrd/openrmfinstances.platform.openkubes.ai \
+    --for=condition=Established --timeout=60s
+
+  ok "OpenRMF XRD + Composition + Role ready on ok-mgmt"
+  log "  NOTE: rmf-credentials Secret in crossplane-system must be created separately before applying a Claim"
+  log "  Deploy with: kubectl apply -f platform/robotics/open-rmf/crossplane/examples/<cluster>.yaml"
+fi
+echo ""
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "Management cluster '${CLUSTER_NAME}' is fully operational!"
 echo ""
 echo "  Crossplane:      $$(kubectl get deployment crossplane -n crossplane-system -o jsonpath='{.status.readyReplicas}')/1 ready"
 echo "  CAPI providers:  $$(kubectl get deployments -A --field-selector metadata.namespace!=kube-system -o name | grep -cE 'capi|capk|cacppt|cabpt') running"
-echo "  XRDs:            $$(kubectl get xrd --no-headers 2>/dev/null | wc -l | tr -d ' ') established (cluster-management + AI)"
+echo "  XRDs:            $$(kubectl get xrd --no-headers 2>/dev/null | wc -l | tr -d ' ') established (cluster-management + AI + Robotics)"
 echo ""
 echo "  Next steps:"
 echo "    1. Add workload cluster kubeconfig as secret in ok-mgmt"
 echo "    2. Deploy Open WebUI: kubectl apply -f platform/ai/open-webui/crossplane/examples/<cluster>.yaml"
 echo "    3. Submit a KubeVirtClusterClaim: kubectl apply -f crossplane/examples/ok1-talos.yaml"
+echo "    4. Register workload clusters: make register-cluster CLUSTER=<name>"
+echo "    5. Apply OpenClawClaim where required: kubectl apply -f platform/ai/openclaw/crossplane/examples/<cluster>.yaml"
+echo "    6. Create rmf-credentials Secret, then apply OpenRMFClaim: kubectl apply -f platform/robotics/open-rmf/crossplane/examples/<cluster>.yaml"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
