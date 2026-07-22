@@ -186,6 +186,7 @@ def build_context(cfg: dict) -> dict:
     return {
         "CLUSTER_NAME":       cfg["name"],
         "CLUSTER_TYPE":       cfg.get("type", "ubuntu"),
+        "INFRA_PROVIDER":     cfg.get("provider", "kubevirt"),
         "CP_REPLICAS":        cp.get("replicas", 1),
         "CP_CORES":           cp.get("cores", 2),
         "CP_MEMORY":          cp.get("memory", "4Gi"),
@@ -224,6 +225,15 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
     tpl_dirs = [TEMPLATES_DIR / cluster_type]
     if cluster_type == "talos-mgmt":
         tpl_dirs = [TEMPLATES_DIR / "talos", TEMPLATES_DIR / "talos-mgmt"]
+        # Provider profile: select the infra-provider fragment dir the same way
+        # cluster_type selects its dir. Only the selected provider's fragment is
+        # rendered, so provider-specific blocks never leak into the other's output.
+        provider = cfg.get("provider", "kubevirt")
+        prov_dir = TEMPLATES_DIR / "talos-mgmt" / "providers" / provider
+        if not prov_dir.is_dir():
+            raise SystemExit(f"ERROR: unknown provider profile '{provider}' "
+                             f"(expected templates/talos-mgmt/providers/{provider}/)")
+        tpl_dirs.append(prov_dir)
     out_dir = output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 

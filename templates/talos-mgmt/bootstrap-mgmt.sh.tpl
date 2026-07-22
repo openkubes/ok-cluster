@@ -6,9 +6,9 @@
 #   1. Crossplane
 #   2. Crossplane Providers (kubernetes, helm)
 #   3. Crossplane Functions (patch-and-transform, go-templating)
-#   4. CAPI + CAPK + Talos providers (via clusterctl)
-#   5. XRDs + Compositions (from openkubes/openkubes)
-#   6. XRDs + Compositions (cluster-management)
+#   4. CAPI core + Talos + selected infrastructure provider (via clusterctl)
+#   5. Provider-specific infra preparation (providers/<provider>/provider-infra.sh)
+#   6. XRDs + Compositions (from openkubes/openkubes)
 #   7. RBAC for Crossplane provider ServiceAccounts
 #   8. OpenWebUI XRD + Composition (platform/ai)
 #   8b. OpenClaw XRD + Composition (platform/ai)
@@ -17,14 +17,19 @@
 # Run after: make bootstrap CLUSTER=${CLUSTER_NAME}
 # Context:   KUBECONFIG must point to the management cluster
 #
+# Infrastructure provider is selected by the Implementation Profile
+# (cluster-config.yaml `provider:`) — rendered here as INFRA_PROVIDER=${INFRA_PROVIDER}.
+#
 # See: ok-cluster ADR-Platform-008 — TYPE=talos-mgmt
 #      ok-cluster ADR-Platform-007 — CAPI responsibility split
+#      OK-106 — CAPO as second infrastructure-provider consumer (Proof A: provider selection)
 
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-${CLUSTER_NAME}}"
 KUBECONFIG_PATH="${KUBECONFIG:-$$HOME/.kube/${CLUSTER_NAME}.yaml}"
 OPENKUBES_REPO="${OPENKUBES_PATH:-$$(dirname "$$0")/../../openkubes}"
+INFRA_PROVIDER="${INFRA_PROVIDER}"
 
 log()  { echo "[mgmt-bootstrap] $$*"; }
 ok()   { echo "[mgmt-bootstrap] ✅ $$*"; }
@@ -32,7 +37,7 @@ fail() { echo "[mgmt-bootstrap] ❌ $$*" >&2; exit 1; }
 
 export KUBECONFIG="$$KUBECONFIG_PATH"
 
-log "Bootstrapping OpenKubes management stack on cluster '${CLUSTER_NAME}'..."
+log "Bootstrapping OpenKubes management stack on cluster '${CLUSTER_NAME}' (provider: $$INFRA_PROVIDER)..."
 log "KUBECONFIG: $$KUBECONFIG_PATH"
 echo ""
 
@@ -112,41 +117,33 @@ kubectl wait function/function-go-templating \
 ok "Functions installed and healthy"
 echo ""
 
-# ── Step 4: CAPI + Talos + KubeVirt providers ────────────────────────────────
-log "Step 4: Installing CAPI providers (core, talos, kubevirt)..."
+# ── Step 4: CAPI core + Talos + selected infrastructure provider ──────────────
+# Provider selection is driven by the Implementation Profile. INFRA_PROVIDER is
+# substituted at render time (kubevirt|openstack). The provider-specific controller
+# wait and infrastructure preparation live in providers/<provider>/provider-infra.sh
+# (Step 5), keeping this file provider-neutral except for the --infrastructure flag.
+log "Step 4: Installing CAPI providers (core, talos, $$INFRA_PROVIDER)..."
 
 clusterctl init \
-  --infrastructure kubevirt \
+  --infrastructure ${INFRA_PROVIDER} \
   --bootstrap talos \
   --control-plane talos
 
-log "Waiting for CAPI pods to be ready..."
+log "Waiting for provider-neutral CAPI pods to be ready..."
 kubectl wait deployment/capi-controller-manager \
   -n capi-system --for=condition=Available --timeout=300s
-kubectl wait deployment/capk-controller-manager \
-  -n capk-system --for=condition=Available --timeout=300s
 kubectl wait deployment/cacppt-controller-manager \
   -n cacppt-system --for=condition=Available --timeout=300s
 
-ok "CAPI providers installed"
+ok "CAPI core + Talos control-plane providers installed"
 echo ""
 
-# ── Step 5: ok-infra kubeconfig secret for CAPK ───────────────────────────────
-log "Step 5: Creating ok-infra kubeconfig secret for CAPK..."
-INFRA_KUBECONFIG="${INFRA_KUBECONFIG_PATH:-$$HOME/.kube/ok-infra.yaml}"
-
-if [[ ! -f "$$INFRA_KUBECONFIG" ]]; then
-  fail "ok-infra kubeconfig not found at $$INFRA_KUBECONFIG — set INFRA_KUBECONFIG_PATH"
-fi
-
-kubectl -n capk-system create secret generic external-infra-kubeconfig \
-  --from-file=kubeconfig="$$INFRA_KUBECONFIG" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl -n capk-system rollout restart deployment/capk-controller-manager
-kubectl -n capk-system rollout status deployment/capk-controller-manager --timeout=120s
-
-ok "ok-infra kubeconfig secret created"
+# ── Step 5: provider-specific controller wait + infrastructure preparation ────
+# Sourced from the rendered provider profile. Runs in this shell (set -euo and the
+# log/ok/fail helpers are inherited). CAPK prepares the external-infra kubeconfig
+# secret; CAPO asserts OpenStack credentials. See providers/<provider>/provider-infra.sh.
+log "Step 5: Provider-specific infrastructure preparation ($$INFRA_PROVIDER)..."
+source "$$(dirname "$$0")/provider-infra.sh"
 echo ""
 
 # ── Step 6: XRDs + Compositions + RBAC ────────────────────────────────────────
@@ -292,13 +289,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 ok "Management cluster '${CLUSTER_NAME}' is fully operational!"
 echo ""
 echo "  Crossplane:      $$(kubectl get deployment crossplane -n crossplane-system -o jsonpath='{.status.readyReplicas}')/1 ready"
-echo "  CAPI providers:  $$(kubectl get deployments -A --field-selector metadata.namespace!=kube-system -o name | grep -cE 'capi|capk|cacppt|cabpt') running"
+echo "  CAPI providers:  $$(kubectl get deployments -A --field-selector metadata.namespace!=kube-system -o name | grep -cE 'capi|capk|capo|cacppt|cabpt') running"
 echo "  XRDs:            $$(kubectl get xrd --no-headers 2>/dev/null | wc -l | tr -d ' ') established (cluster-management + AI + Robotics)"
 echo ""
 echo "  Next steps:"
 echo "    1. Add workload cluster kubeconfig as secret in ok-mgmt"
 echo "    2. Deploy Open WebUI: kubectl apply -f platform/ai/open-webui/crossplane/examples/<cluster>.yaml"
-echo "    3. Submit a KubeVirtClusterClaim: kubectl apply -f crossplane/examples/ok1-talos.yaml"
+echo "    3. Submit a cluster claim: kubectl apply -f platform/cluster-management/crossplane/examples/<cluster>.yaml"
 echo "    4. Register workload clusters: make register-cluster CLUSTER=<name>"
 echo "    5. Apply OpenClawClaim where required: kubectl apply -f platform/ai/openclaw/crossplane/examples/<cluster>.yaml"
 echo "    6. Create rmf-credentials Secret, then apply OpenRMFClaim: kubectl apply -f platform/robotics/open-rmf/crossplane/examples/<cluster>.yaml"
