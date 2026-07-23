@@ -1,0 +1,27 @@
+# Facade Helm values for ok-ai (OK-92). Real provider values live here (private
+# repo convention). Install:
+#   helm upgrade --install platform-diagnostics-facade \
+#     ../../../openkubes/platform/ai/platform-diagnostics/profiles/kagent/charts/platform-diagnostics-facade \
+#     --kubeconfig ~/.kube/ok-ai.yaml -n platform-diagnostics --create-namespace \
+#     -f facade-values.yaml
+#
+# (the Makefile in this folder wraps it as `make deploy-facade`.)
+
+image:
+  repository: ghcr.io/openkubes/platform-diagnostics-facade
+  tag: "0.1.0"
+
+kagent:
+  # in-cluster kagent controller installed by ../Makefile (`make install`)
+  baseUrl: "http://kagent.kagent.svc.cluster.local:8083"
+  agent: "openkubes-platform-agent"
+  # token: "" — kagent UI/API auth not enabled in the eval install; set if hardened.
+
+# ok-ai runs Talos: no host journal / node shell. This is a capability delta,
+# reported via EvidenceRef.status=unavailable — never a contract delta (ADR-021).
+providerCapabilities:
+  workload_events: true
+  workload_logs: true
+  cilium_diagnostics: true
+  host_journal: false
+  node_shell: false
