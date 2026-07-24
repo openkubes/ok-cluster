@@ -23,7 +23,7 @@ metadata:
   namespace: ${CLUSTER_NAME}
   labels:
     openkubes.io/type: talos
-    openkubes.io/provider: openstack
+    openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/k8s-version: ${K8S_VERSION}
     openkubes.io/talos-version: ${TALOS_VERSION}
 spec:
