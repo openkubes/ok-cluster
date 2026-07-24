@@ -8,7 +8,7 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 
 ---
 
-## Platform Architecture (v0.11.0)
+## Platform Architecture (v0.12.0)
 
 ![OpenKubes platform architecture — ok-platform contracts, ok-mgmt control plane, and the ok-ai / ok-shared / ok-robotics workload clusters](docs/architecture/ok-platform-architecture.svg)
 
