@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -18,6 +18,13 @@ DRY_RUN       ?= false
 SCRIPT_DIR    := $(shell pwd)
 CLUSTERS_DIR  := $(SCRIPT_DIR)
 OKB           := kubectl --kubeconfig ~/.kube/ok-infra.yaml
+
+# ── observability (OK-79) ─────────────────────────────────────────────────────
+# ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
+# sibling repo checkout. Provider Values (passwords) live in a git-ignored file,
+# per cluster; override the path with OBSERVABILITY_VALUES=... if it lives elsewhere.
+OK_OBSERVABILITY_PATH ?= $(SCRIPT_DIR)/../ok-observability
+OBSERVABILITY_VALUES  ?= $(OK_OBSERVABILITY_PATH)/$(CLUSTER).provider-values.yaml
 
 # ── guard helper ──────────────────────────────────────────────────────────────
 require-cluster:
@@ -141,6 +148,14 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 	done; \
 	echo "⚠️  No LoadBalancer IP after 60s — check MetalLB pool ok-pool on RKE2 host cluster"; exit 1
 
+install-observability: require-cluster kubeconfig ## Install ok-observability-standard profile + run the gated Contract Test (OK-79). Vars: OK_OBSERVABILITY_PATH, OBSERVABILITY_VALUES
+	@CLUSTER=$(CLUSTER) \
+	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
+	 OK_OBSERVABILITY_PATH=$(OK_OBSERVABILITY_PATH) \
+	 OBSERVABILITY_VALUES=$(OBSERVABILITY_VALUES) \
+	 OBSERVABILITY_HELM_VALUES=$(OBSERVABILITY_HELM_VALUES) \
+	 bash $(SCRIPT_DIR)/install-observability.sh
+
 bootstrap: require-cluster
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
 	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
@@ -160,9 +175,10 @@ bootstrap: require-cluster
 	@kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml wait --for=condition=Ready nodes --all --timeout=300s
 	@echo ""
 	@echo "✅ Talos cluster $(CLUSTER) bootstrapped with Cilium. Next steps:"
-	@echo "   make install-storage CLUSTER=$(CLUSTER)"
-	@echo "   make install-ingress CLUSTER=$(CLUSTER)"
-	@echo "   make status          CLUSTER=$(CLUSTER)"
+	@echo "   make install-storage       CLUSTER=$(CLUSTER)"
+	@echo "   make install-ingress       CLUSTER=$(CLUSTER)"
+	@echo "   make install-observability CLUSTER=$(CLUSTER)   # OK-79: deploy + gated contract test"
+	@echo "   make status                CLUSTER=$(CLUSTER)"
 
 annotate-pvcs: require-cluster
 	@$(eval NODE := $(shell python3 -c "import yaml; cfg=yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')); print(cfg.get('nodeSelector','ok-gpu'))"))
@@ -472,6 +488,7 @@ help:
 	@echo "  make install-cni   CLUSTER=ok1        # cilium only (manual)"
 	@echo "  make install-storage CLUSTER=ok-ai # local-path StorageClass (Talos)"
 	@echo "  make install-ingress CLUSTER=ok-ai # ingress controller (Traefik) + IngressClass ok-ingress"
+	@echo "  make install-observability CLUSTER=ok-ai [OBSERVABILITY_VALUES=<path>] # OK-79: ok-observability-standard + gated contract test"
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok-ai  # annotate PVCs manually"

@@ -64,6 +64,11 @@ make kubeconfig CLUSTER=my-cluster
 # Check status
 make status CLUSTER=my-cluster
 
+# Install workload-cluster storage, then observability (observability is GATED:
+# the command fails unless the Contract Test Gate passes — see below)
+make install-storage       CLUSTER=my-cluster
+make install-observability CLUSTER=my-cluster
+
 # Optional: register with the ok-mgmt management plane (Crossplane)
 make register-cluster CLUSTER=my-cluster
 ```
@@ -163,6 +168,7 @@ make kubeconfig    CLUSTER=<name>                    # save kubeconfig to ~/.kub
 make install-cni   CLUSTER=<name>                    # install Cilium (manual)
 make install-storage CLUSTER=<name>                  # install local-path-provisioner *inside* the workload cluster
 make install-ingress CLUSTER=<name>                  # Traefik + IngressClass ok-ingress + host-cluster LB proxy
+make install-observability CLUSTER=<name> [OBSERVABILITY_VALUES=<path>]  # OK-79: deploy ok-observability-standard + run the GATED contract test
 make register-cluster CLUSTER=<name> [KUBECONFIG_SRC=<path>] [MGMT_CLUSTER=ok-mgmt]  # register with ok-mgmt (ADR-013)
 make unregister-cluster CLUSTER=<name> [FORCE=true] [MGMT_CLUSTER=ok-mgmt]           # deregister from ok-mgmt (OK-62)
 make annotate-pvcs CLUSTER=<name>                    # annotate PVCs for node binding
@@ -185,6 +191,26 @@ make list                                            # list all defined clusters
 > replication or RWX. Don't confuse workload-cluster `local-path` with the
 > host cluster's `ok-storage-local` contract class — same underlying
 > provisioner, different cluster, different guarantees.
+
+> **`install-observability` is a GATED target (OK-79, ADR-Platform-018).**
+> ok-cluster *installs* the capability; it does not *own* it — all assets
+> (the `ok-observability-standard` profile, alerting rules, dashboards, and the
+> contract test) come from the [ok-observability](https://github.com/openkubes/ok-observability)
+> repo checkout at `$(OK_OBSERVABILITY_PATH)` (default `../ok-observability`).
+> The target: labels the namespace for privileged Pod Security, creates the
+> Kubernetes Secret `ok-observability-credentials` from a git-ignored
+> provider-values file (`OBSERVABILITY_VALUES`, default
+> `../ok-observability/<cluster>.provider-values.yaml`, schema:
+> `grafanaAdminPassword` / `opensearchAdminPassword`), `helm install`s the
+> profile, applies rules + dashboards, and finally runs
+> `ok-observability/tests/contract-test.sh`. **The command exits non-zero unless
+> all five contract guarantees pass** (metric ingestion, Grafana datasource,
+> OpenSearch log search, alert firing, declarative registration) — i.e. a
+> cluster is "observability-ready" only when the gate is green. The charts read
+> the admin passwords from the Secret (Grafana `admin.existingSecret`, OpenSearch
+> `secretKeyRef`, Fluent Bit `${OPENSEARCH_PASSWORD}`); no plaintext password is
+> passed to helm. A later phase replaces the Secret-creation step with an
+> External-Secrets sync from the ok-shared Vault, with no chart change.
 
 ---
 
