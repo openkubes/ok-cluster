@@ -57,9 +57,9 @@
   <text x="160" y="548" text-anchor="middle" font-size="10.5" font-weight="700" fill="#7A7A70">kagent evaluation</text>
   <text x="160" y="560" text-anchor="middle" font-size="9" fill="#8A8A80">not a platform offering</text>
 
-  <rect x="58" y="568" width="204" height="28" rx="7" fill="#0E7490"/>
-  <text x="160" y="581" text-anchor="middle" font-size="10.5" font-weight="700" fill="#FFFFFF">Observability (ADR-018)</text>
-  <text x="160" y="591" text-anchor="middle" font-size="8.5" fill="#CDEEF5">Prometheus · Grafana · OpenSearch</text>
+  <rect x="58" y="568" width="204" height="30" rx="7" fill="#0E7490"/>
+  <text x="160" y="582" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">Observability</text>
+  <text x="160" y="594" text-anchor="middle" font-size="10.5" fill="#CDEEF5">Prometheus · Grafana · OpenSearch</text>
 
   <!-- ok-shared -->
   <rect x="380" y="372" width="240" height="230" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
@@ -71,9 +71,9 @@
   <text x="500" y="472" text-anchor="middle" font-size="10.5" fill="#3E4C61">OpenClaw + kagent integration</text>
   <text x="500" y="490" text-anchor="middle" font-size="10" fill="#5B6472" font-style="italic">(in progress)</text>
 
-  <rect x="398" y="568" width="204" height="28" rx="7" fill="#0E7490"/>
-  <text x="500" y="581" text-anchor="middle" font-size="10.5" font-weight="700" fill="#FFFFFF">Observability (ADR-018)</text>
-  <text x="500" y="591" text-anchor="middle" font-size="8.5" fill="#CDEEF5">Prometheus · Grafana · OpenSearch</text>
+  <rect x="398" y="568" width="204" height="30" rx="7" fill="#0E7490"/>
+  <text x="500" y="582" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">Observability</text>
+  <text x="500" y="594" text-anchor="middle" font-size="10.5" fill="#CDEEF5">Prometheus · Grafana · OpenSearch</text>
 
   <!-- ok-robotics -->
   <rect x="720" y="372" width="240" height="230" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
@@ -89,9 +89,9 @@
   <text x="840" y="551" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">OpenRMF</text>
   <text x="840" y="562" text-anchor="middle" font-size="9" fill="#D6F0E5">simulation profile</text>
 
-  <rect x="738" y="568" width="204" height="28" rx="7" fill="#0E7490"/>
-  <text x="840" y="581" text-anchor="middle" font-size="10.5" font-weight="700" fill="#FFFFFF">Observability (ADR-018)</text>
-  <text x="840" y="591" text-anchor="middle" font-size="8.5" fill="#CDEEF5">Prometheus · Grafana · OpenSearch</text>
+  <rect x="738" y="568" width="204" height="30" rx="7" fill="#0E7490"/>
+  <text x="840" y="582" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">Observability</text>
+  <text x="840" y="594" text-anchor="middle" font-size="10.5" fill="#CDEEF5">Prometheus · Grafana · OpenSearch</text>
 
   <!-- ok-infra / Ollama, separate from workload clusters -->
   <rect x="330" y="634" width="340" height="82" rx="10" fill="#F1EDFB" stroke="#6C4FB6" stroke-width="1.75"/>
