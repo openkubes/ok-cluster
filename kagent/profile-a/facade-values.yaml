@@ -8,14 +8,18 @@
 # (the Makefile in this folder wraps it as `make deploy-facade`.)
 
 image:
-  # GHCR (ghcr.io/openkubes/...) is the primary registry (OK-15). Until a CI push
-  # lands there, use the manually built Docker Hub bootstrap — same pattern as
-  # openclaw-kubectl. Build+push once:
-  #   cd ../../../openkubes/platform/ai/platform-diagnostics/profiles/kagent/facade
-  #   docker build  -t kubernautslabs/platform-diagnostics-facade:0.1.0 .
-  #   docker push   kubernautslabs/platform-diagnostics-facade:0.1.0
-  repository: kubernautslabs/platform-diagnostics-facade
+  # GHCR is the primary registry (OK-15). Pushed manually here:
+  #   docker build -t ghcr.io/openkubes/platform-diagnostics-facade:0.1.0 .
+  #   docker push  ghcr.io/openkubes/platform-diagnostics-facade:0.1.0
+  repository: ghcr.io/openkubes/platform-diagnostics-facade
   tag: "0.1.0"
+
+# If the GHCR package is private, ok-ai needs pull creds. Either make the package
+# public (it is a public repo anyway), or create a pull secret and name it here:
+#   kubectl -n platform-diagnostics create secret docker-registry ghcr-pull \
+#     --docker-server=ghcr.io --docker-username=<user> --docker-password=<PAT-with-read:packages>
+imagePullSecrets: []
+#  - name: ghcr-pull
 
 kagent:
   # in-cluster kagent controller installed by ../Makefile (`make install`)
