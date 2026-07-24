@@ -8,9 +8,11 @@
 # (the Makefile in this folder wraps it as `make deploy-facade`.)
 
 image:
-  # GHCR is the primary registry (OK-15). Pushed manually here:
-  #   docker build -t ghcr.io/openkubes/platform-diagnostics-facade:0.1.0 .
-  #   docker push  ghcr.io/openkubes/platform-diagnostics-facade:0.1.0
+  # GHCR is the primary registry (OK-15). Build MULTI-ARCH (amd64 nodes reject an
+  # arm64-only image built on Apple Silicon with "no match for platform"):
+  #   docker buildx build --platform linux/amd64,linux/arm64 --provenance=false \
+  #     -t ghcr.io/openkubes/platform-diagnostics-facade:0.1.0 --push .
+  # NOTE: set the GHCR package visibility to Public (per-package, not inherited).
   repository: ghcr.io/openkubes/platform-diagnostics-facade
   tag: "0.1.0"
 
