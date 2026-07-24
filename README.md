@@ -332,6 +332,7 @@ OpenKubes
 ├── ok-cluster    — Cluster Lifecycle Engine  ← you are here
 ├── ok-linux      — OS profiles, Image Factory, MachineConfig (source of truth for Talos)
 ├── ok-storage    — Persistent Storage Contract (Longhorn v1)
+├── ok-observability — Per-cluster Observability Contract (Prometheus/Grafana/OpenSearch, ADR-018)
 ├── ok-gitops     — GitOps bootstrap (ArgoCD)
 └── ok-apps       — Platform applications
 ```
@@ -342,6 +343,7 @@ OpenKubes
 - [OpenKubes](https://github.com/openkubes/openkubes)
 - [OK-Linux](https://github.com/openkubes/ok-linux)
 - [OK-Storage](https://github.com/openkubes/ok-storage)
+- [OK-Observability](https://github.com/openkubes/ok-observability)
 - [OK-Local](https://github.com/openkubes/ok-local)
 
 ---
