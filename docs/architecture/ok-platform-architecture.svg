@@ -1,11 +1,11 @@
 <svg viewBox="0 0 1040 800" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>OpenKubes v0.11.0 platform architecture</title>
-  <desc>OpenKubes: a Kubernetes distribution framework, not a distribution. v0.11.0: ok-platform defines contracts. The ok-cluster repo supplies cluster-specific claims and provider values, feeding ok-mgmt, the Crossplane control plane that registers and reconciles the workload clusters ok-ai, ok-shared, and ok-robotics. ok-ai runs Open WebUI and OpenClaw today; a kagent evaluation is happening separately and is not a platform offering. ok-shared and ok-robotics run a single, still in-progress agent backend profile combining OpenClaw with a kagent integration. ok-robotics also runs OpenRMF. OpenClaw backends consume a single shared Ollama inference service hosted on ok-infra, per ADR-Platform-005; only ok-ai's connection is live today. Cross-cluster Agent Backend Registration is planned, not yet implemented.</desc>
+  <title>OpenKubes v0.12.0 platform architecture</title>
+  <desc>OpenKubes: a Kubernetes distribution framework, not a distribution. v0.12.0: ok-platform defines contracts. The ok-cluster repo supplies cluster-specific claims and provider values, feeding ok-mgmt, the Crossplane control plane that registers and reconciles the workload clusters ok-ai, ok-shared, and ok-robotics. ok-ai runs Open WebUI and OpenClaw today; a kagent evaluation is happening separately and is not a platform offering. ok-shared and ok-robotics run a single, still in-progress agent backend profile combining OpenClaw with a kagent integration. ok-robotics also runs OpenRMF. OpenClaw backends consume a single shared Ollama inference service hosted on ok-infra, per ADR-Platform-005; only ok-ai's connection is live today. Cross-cluster Agent Backend Registration is planned, not yet implemented.</desc>
 
   <rect x="0" y="0" width="1040" height="800" fill="#FAFAF8"/>
 
   <!-- header -->
-  <text x="50" y="46" font-size="30" font-weight="700" fill="#1B2A4A" font-family="Arial, Helvetica, sans-serif" letter-spacing="0.3">OpenKubes v0.11.0</text>
+  <text x="50" y="46" font-size="30" font-weight="700" fill="#1B2A4A" font-family="Arial, Helvetica, sans-serif" letter-spacing="0.3">OpenKubes v0.12.0</text>
   <text x="50" y="70" font-size="14.5" fill="#5B6472" font-family="Georgia, serif">Rebuildable management. Declarative AI and robotics capabilities.</text>
   <text x="50" y="90" font-size="12.5" font-style="italic" fill="#8A5636" font-family="Georgia, serif">A Kubernetes Distribution Framework — Not a Distribution</text>
 
