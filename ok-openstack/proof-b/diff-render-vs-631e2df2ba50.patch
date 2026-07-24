@@ -1,0 +1,43 @@
+diff --git a/render.py b/render.py
+index 40ed961..c1e573c 100755
+--- a/render.py
++++ b/render.py
+@@ -183,10 +183,20 @@ def build_context(cfg: dict) -> dict:
+     net = cfg.get("network", {})
+     ver = cfg.get("versions", {})
+     upg = cfg.get("upgrade", {})
++    _osp = cfg.get("openstack", {})
+     return {
+         "CLUSTER_NAME":       cfg["name"],
+         "CLUSTER_TYPE":       cfg.get("type", "ubuntu"),
+         "INFRA_PROVIDER":     cfg.get("provider", "kubevirt"),
++        "OS_IMAGE_NAME":      _osp.get("image", "talos-openstack-amd64"),
++        "OS_CP_FLAVOR":       _osp.get("controlPlaneFlavor", "m1.large"),
++        "OS_NODE_FLAVOR":     _osp.get("nodeFlavor", "m1.large"),
++        "OS_EXTERNAL_NETWORK": _osp.get("externalNetwork", "public"),
++        "OS_CLOUD_NAME":      _osp.get("cloud", "openstack"),
++        "OS_SSH_KEY":         _osp.get("sshKeyName", "ok-cluster"),
++        "OS_DNS":             _osp.get("dnsNameserver", "8.8.8.8"),
++        "OS_SUBNET_CIDR":     _osp.get("subnetCIDR", "10.6.0.0/24"),
++        "OS_CREDENTIALS_SECRET": _osp.get("credentialsSecret", cfg["name"] + "-cloud-config"),
+         "CP_REPLICAS":        cp.get("replicas", 1),
+         "CP_CORES":           cp.get("cores", 2),
+         "CP_MEMORY":          cp.get("memory", "4Gi"),
+@@ -234,6 +244,17 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
+             raise SystemExit(f"ERROR: unknown provider profile '{provider}' "
+                              f"(expected templates/talos-mgmt/providers/{provider}/)")
+         tpl_dirs.append(prov_dir)
++    elif cluster_type == "talos":
++        # Workload provider selection (OK-106 Proof B). Default kubevirt keeps the
++        # existing templates/talos manifest set untouched; a non-kubevirt provider
++        # renders its self-contained manifest set from templates/talos/providers/<p>.
++        provider = cfg.get("provider", "kubevirt")
++        if provider != "kubevirt":
++            prov_dir = TEMPLATES_DIR / "talos" / "providers" / provider
++            if not prov_dir.is_dir():
++                raise SystemExit(f"ERROR: unknown talos provider profile '{provider}' "
++                                 f"(expected templates/talos/providers/{provider}/)")
++            tpl_dirs = [prov_dir]
+     out_dir = output_dir
+     out_dir.mkdir(parents=True, exist_ok=True)
+ 

@@ -14,11 +14,11 @@
 #   8b. OpenClaw XRD + Composition (platform/ai)
 #   8c. OpenRMF XRD + Composition + Role (platform/robotics)
 #
-# Run after: make bootstrap CLUSTER=${CLUSTER_NAME}
+# Run after: make bootstrap CLUSTER=ok-mgmt-os
 # Context:   KUBECONFIG must point to the management cluster
 #
 # Infrastructure provider is selected by the Implementation Profile
-# (cluster-config.yaml `provider:`) — rendered here as INFRA_PROVIDER=${INFRA_PROVIDER}.
+# (cluster-config.yaml `provider:`) — rendered here as INFRA_PROVIDER=openstack.
 #
 # See: ok-cluster ADR-Platform-008 — TYPE=talos-mgmt
 #      ok-cluster ADR-Platform-007 — CAPI responsibility split
@@ -26,19 +26,19 @@
 
 set -euo pipefail
 
-CLUSTER_NAME="${CLUSTER_NAME:-${CLUSTER_NAME}}"
-KUBECONFIG_PATH="${KUBECONFIG:-$$HOME/.kube/${CLUSTER_NAME}.yaml}"
-OPENKUBES_REPO="${OPENKUBES_PATH:-$$(dirname "$$0")/../../openkubes}"
-INFRA_PROVIDER="${INFRA_PROVIDER}"
+CLUSTER_NAME="${CLUSTER_NAME:-ok-mgmt-os}"
+KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/ok-mgmt-os.yaml}"
+OPENKUBES_REPO="${OPENKUBES_PATH:-$(dirname "$0")/../../openkubes}"
+INFRA_PROVIDER="openstack"
 
-log()  { echo "[mgmt-bootstrap] $$*"; }
-ok()   { echo "[mgmt-bootstrap] ✅ $$*"; }
-fail() { echo "[mgmt-bootstrap] ❌ $$*" >&2; exit 1; }
+log()  { echo "[mgmt-bootstrap] $*"; }
+ok()   { echo "[mgmt-bootstrap] ✅ $*"; }
+fail() { echo "[mgmt-bootstrap] ❌ $*" >&2; exit 1; }
 
-export KUBECONFIG="$$KUBECONFIG_PATH"
+export KUBECONFIG="$KUBECONFIG_PATH"
 
-log "Bootstrapping OpenKubes management stack on cluster '${CLUSTER_NAME}' (provider: $$INFRA_PROVIDER)..."
-log "KUBECONFIG: $$KUBECONFIG_PATH"
+log "Bootstrapping OpenKubes management stack on cluster 'ok-mgmt-os' (provider: $INFRA_PROVIDER)..."
+log "KUBECONFIG: $KUBECONFIG_PATH"
 echo ""
 
 # ── Verify cluster is reachable ───────────────────────────────────────────────
@@ -58,7 +58,7 @@ helm upgrade --install crossplane crossplane-stable/crossplane \
   --wait \
   --timeout 300s
 
-ok "Crossplane installed (version: $$(helm list -n crossplane-system -o json | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["app_version"])' 2>/dev/null || echo 'unknown'))"
+ok "Crossplane installed (version: $(helm list -n crossplane-system -o json | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["app_version"])' 2>/dev/null || echo 'unknown'))"
 echo ""
 
 # ── Step 2: Crossplane Providers ──────────────────────────────────────────────
@@ -122,10 +122,10 @@ echo ""
 # substituted at render time (kubevirt|openstack). The provider-specific controller
 # wait and infrastructure preparation live in providers/<provider>/provider-infra.sh
 # (Step 5), keeping this file provider-neutral except for the --infrastructure flag.
-log "Step 4: Installing CAPI providers (core, talos, $$INFRA_PROVIDER)..."
+log "Step 4: Installing CAPI providers (core, talos, $INFRA_PROVIDER)..."
 
 clusterctl init \
-  --infrastructure ${INFRA_PROVIDER} \
+  --infrastructure openstack \
   --bootstrap talos \
   --control-plane talos
 
@@ -142,8 +142,8 @@ echo ""
 # Sourced from the rendered provider profile. Runs in this shell (set -euo and the
 # log/ok/fail helpers are inherited). CAPK prepares the external-infra kubeconfig
 # secret; CAPO asserts OpenStack credentials. See providers/<provider>/provider-infra.sh.
-log "Step 5: Provider-specific infrastructure preparation ($$INFRA_PROVIDER)..."
-source "$$(dirname "$$0")/provider-infra.sh"
+log "Step 5: Provider-specific infrastructure preparation ($INFRA_PROVIDER)..."
+source "$(dirname "$0")/provider-infra.sh"
 echo ""
 
 # ── Step 6: XRDs + Compositions + RBAC ────────────────────────────────────────
@@ -151,18 +151,18 @@ log "Step 6: Applying OpenKubes platform contracts (XRDs, Compositions, RBAC)...
 
 PLATFORM_DIR="${OPENKUBES_REPO}/platform/cluster-management"
 
-if [[ ! -d "$$PLATFORM_DIR" ]]; then
-  fail "openkubes/openkubes not found at $$OPENKUBES_REPO — set OPENKUBES_PATH"
+if [[ ! -d "$PLATFORM_DIR" ]]; then
+  fail "openkubes/openkubes not found at $OPENKUBES_REPO — set OPENKUBES_PATH"
 fi
 
-kubectl apply -f "$$PLATFORM_DIR/crossplane/namespace.yaml"
-kubectl apply -f "$$PLATFORM_DIR/crossplane/rbac.yaml"
-kubectl apply -f "$$PLATFORM_DIR/crossplane/xrd.yaml"
-kubectl apply -f "$$PLATFORM_DIR/crossplane/xrd-cleanup.yaml"
-kubectl apply -f "$$PLATFORM_DIR/crossplane/xrd-upgrade.yaml"
-kubectl apply -f "$$PLATFORM_DIR/crossplane/composition.yaml"
-kubectl apply -f "$$PLATFORM_DIR/crossplane/composition-cleanup.yaml"
-kubectl apply -f "$$PLATFORM_DIR/crossplane/composition-upgrade.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/namespace.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/rbac.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/xrd.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/xrd-cleanup.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/xrd-upgrade.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/composition.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/composition-cleanup.yaml"
+kubectl apply -f "$PLATFORM_DIR/crossplane/composition-upgrade.yaml"
 
 ok "Platform contracts applied"
 echo ""
@@ -171,15 +171,15 @@ echo ""
 log "Step 7: Configuring RBAC for Crossplane provider..."
 
 # Resolve the dynamic ServiceAccount name for provider-kubernetes
-PROVIDER_SA=$$(kubectl get serviceaccount -n crossplane-system \
+PROVIDER_SA=$(kubectl get serviceaccount -n crossplane-system \
   -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | \
   grep "crossplane-contrib-provider-kubernetes" | head -1)
 
-if [[ -z "$$PROVIDER_SA" ]]; then
+if [[ -z "$PROVIDER_SA" ]]; then
   fail "Cannot find provider-kubernetes ServiceAccount in crossplane-system"
 fi
 
-log "Provider ServiceAccount: $$PROVIDER_SA"
+log "Provider ServiceAccount: $PROVIDER_SA"
 
 kubectl apply -f - <<YAML
 apiVersion: rbac.authorization.k8s.io/v1
@@ -207,7 +207,7 @@ roleRef:
   name: crossplane-provider-kubernetes-jobs
 subjects:
   - kind: ServiceAccount
-    name: $$PROVIDER_SA
+    name: $PROVIDER_SA
     namespace: crossplane-system
 YAML
 
@@ -230,11 +230,11 @@ log "Step 8: Applying OpenWebUI platform contracts (XRD, Composition)..."
 
 OPENKUBES_AI_DIR="${OPENKUBES_REPO}/platform/ai/open-webui/crossplane"
 
-if [[ ! -d "$$OPENKUBES_AI_DIR" ]]; then
-  log "WARNING: platform/ai not found at $$OPENKUBES_AI_DIR — skipping OpenWebUI setup"
+if [[ ! -d "$OPENKUBES_AI_DIR" ]]; then
+  log "WARNING: platform/ai not found at $OPENKUBES_AI_DIR — skipping OpenWebUI setup"
 else
-  kubectl apply -f "$$OPENKUBES_AI_DIR/xrd.yaml"
-  kubectl apply -f "$$OPENKUBES_AI_DIR/composition.yaml"
+  kubectl apply -f "$OPENKUBES_AI_DIR/xrd.yaml"
+  kubectl apply -f "$OPENKUBES_AI_DIR/composition.yaml"
 
   kubectl wait xrd/openwebuiinstances.platform.openkubes.ai \
     --for=condition=Established --timeout=60s
@@ -249,11 +249,11 @@ log "Step 8b: Applying OpenClaw platform contracts (XRD, Composition)..."
 
 OPENKUBES_OPENCLAW_DIR="${OPENKUBES_REPO}/platform/ai/openclaw/crossplane"
 
-if [[ ! -d "$$OPENKUBES_OPENCLAW_DIR" ]]; then
-  log "WARNING: platform/ai/openclaw not found at $$OPENKUBES_OPENCLAW_DIR — skipping OpenClaw setup"
+if [[ ! -d "$OPENKUBES_OPENCLAW_DIR" ]]; then
+  log "WARNING: platform/ai/openclaw not found at $OPENKUBES_OPENCLAW_DIR — skipping OpenClaw setup"
 else
-  kubectl apply -f "$$OPENKUBES_OPENCLAW_DIR/xrd.yaml"
-  kubectl apply -f "$$OPENKUBES_OPENCLAW_DIR/composition.yaml"
+  kubectl apply -f "$OPENKUBES_OPENCLAW_DIR/xrd.yaml"
+  kubectl apply -f "$OPENKUBES_OPENCLAW_DIR/composition.yaml"
 
   kubectl wait xrd/openclawinstances.platform.openkubes.ai \
     --for=condition=Established --timeout=60s
@@ -268,12 +268,12 @@ log "Step 8c: Applying OpenRMF platform contracts (XRD, Composition, Role)..."
 
 OPENKUBES_OPENRMF_DIR="${OPENKUBES_REPO}/platform/robotics/open-rmf/crossplane"
 
-if [[ ! -d "$$OPENKUBES_OPENRMF_DIR" ]]; then
-  log "WARNING: platform/robotics/open-rmf not found at $$OPENKUBES_OPENRMF_DIR — skipping OpenRMF setup"
+if [[ ! -d "$OPENKUBES_OPENRMF_DIR" ]]; then
+  log "WARNING: platform/robotics/open-rmf not found at $OPENKUBES_OPENRMF_DIR — skipping OpenRMF setup"
 else
-  kubectl apply -f "$$OPENKUBES_OPENRMF_DIR/xrd.yaml"
-  kubectl apply -f "$$OPENKUBES_OPENRMF_DIR/composition.yaml"
-  kubectl apply -f "$$OPENKUBES_OPENRMF_DIR/rbac/claim-editor-role.yaml"
+  kubectl apply -f "$OPENKUBES_OPENRMF_DIR/xrd.yaml"
+  kubectl apply -f "$OPENKUBES_OPENRMF_DIR/composition.yaml"
+  kubectl apply -f "$OPENKUBES_OPENRMF_DIR/rbac/claim-editor-role.yaml"
 
   kubectl wait xrd/openrmfinstances.platform.openkubes.ai \
     --for=condition=Established --timeout=60s
@@ -286,11 +286,11 @@ echo ""
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-ok "Management cluster '${CLUSTER_NAME}' is fully operational!"
+ok "Management cluster 'ok-mgmt-os' is fully operational!"
 echo ""
-echo "  Crossplane:      $$(kubectl get deployment crossplane -n crossplane-system -o jsonpath='{.status.readyReplicas}')/1 ready"
-echo "  CAPI providers:  $$(kubectl get deployments -A --field-selector metadata.namespace!=kube-system -o name | grep -cE 'capi|capk|capo|cacppt|cabpt') running"
-echo "  XRDs:            $$(kubectl get xrd --no-headers 2>/dev/null | wc -l | tr -d ' ') established (cluster-management + AI + Robotics)"
+echo "  Crossplane:      $(kubectl get deployment crossplane -n crossplane-system -o jsonpath='{.status.readyReplicas}')/1 ready"
+echo "  CAPI providers:  $(kubectl get deployments -A --field-selector metadata.namespace!=kube-system -o name | grep -cE 'capi|capk|capo|cacppt|cabpt') running"
+echo "  XRDs:            $(kubectl get xrd --no-headers 2>/dev/null | wc -l | tr -d ' ') established (cluster-management + AI + Robotics)"
 echo ""
 echo "  Next steps:"
 echo "    1. Add workload cluster kubeconfig as secret in ok-mgmt"
