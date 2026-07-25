@@ -12,8 +12,10 @@
 # Kubernetes Secret `ok-observability-credentials`. The charts consume that
 # Secret (Grafana admin.existingSecret, OpenSearch secretKeyRef, Fluent Bit
 # ${OPENSEARCH_PASSWORD}) — no plaintext password is ever passed to helm.
-# Phase 2 will replace the "create Secret" step with an External-Secrets sync
-# from the ok-shared Vault, with NO chart change.
+# Phase 2 will replace the "create Secret" step with a Vault sync from ok-shared
+# — a VaultStaticSecret via the Vault Secrets Operator (ADR-Platform-025) — with
+# NO chart change. That is the datacenter-envelope profile; edge/air-gapped
+# clusters keep this file-based profile (Secret Contract, ADR-Platform-011).
 #
 # Required env (set by the Makefile target):
 #   CLUSTER                cluster name (kubeconfig at $KUBECONFIG_PATH)
@@ -108,7 +110,8 @@ kubectl label namespace "$NAMESPACE" \
 
 # --- [2/6] credentials Secret (idempotent) --------------------------------
 # Charts read from this Secret; it must exist BEFORE the pods start. Later a
-# Vault sync (External Secrets) will produce the SAME Secret with no chart change.
+# Vault sync (Vault Secrets Operator, ADR-Platform-025) will produce the SAME
+# Secret with no chart change.
 #
 # Credential-handling invariant (ADR-Platform-024): secret values MUST NOT be
 # exposed via process arguments, shell tracing, stdout/stderr, logs, or temp
