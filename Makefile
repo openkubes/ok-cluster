@@ -25,6 +25,10 @@ OKB           := kubectl --kubeconfig ~/.kube/ok-infra.yaml
 # per cluster; override the path with OBSERVABILITY_VALUES=... if it lives elsewhere.
 OK_OBSERVABILITY_PATH ?= $(SCRIPT_DIR)/../ok-observability
 OBSERVABILITY_VALUES  ?= $(OK_OBSERVABILITY_PATH)/$(CLUSTER).provider-values.yaml
+# Optional pin: assert WHICH ok-observability revision a run may consume (branch,
+# tag or sha). Empty = consume whatever the checkout is on — transitional, and the
+# resolved sha is printed as gate evidence either way (ADR-024, OK-109).
+OK_OBSERVABILITY_REF  ?=
 
 # ── guard helper ──────────────────────────────────────────────────────────────
 require-cluster:
@@ -148,12 +152,15 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 	done; \
 	echo "⚠️  No LoadBalancer IP after 60s — check MetalLB pool ok-pool on RKE2 host cluster"; exit 1
 
-install-observability: require-cluster kubeconfig ## Install ok-observability-standard profile + run the gated Contract Test (OK-79). Vars: OK_OBSERVABILITY_PATH, OBSERVABILITY_VALUES
+install-observability: require-cluster kubeconfig ## Install ok-observability-standard profile + run the gated Contract Test (OK-79). Vars: OK_OBSERVABILITY_PATH, OK_OBSERVABILITY_REF, OBSERVABILITY_VALUES, CONTRACT_TEST_TIMEOUT, CONTRACT_TEST_RECEIVER_CAPTURE_URL
 	@CLUSTER=$(CLUSTER) \
 	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
 	 OK_OBSERVABILITY_PATH=$(OK_OBSERVABILITY_PATH) \
+	 OK_OBSERVABILITY_REF=$(OK_OBSERVABILITY_REF) \
 	 OBSERVABILITY_VALUES=$(OBSERVABILITY_VALUES) \
 	 OBSERVABILITY_HELM_VALUES=$(OBSERVABILITY_HELM_VALUES) \
+	 CONTRACT_TEST_TIMEOUT=$(CONTRACT_TEST_TIMEOUT) \
+	 CONTRACT_TEST_RECEIVER_CAPTURE_URL=$(CONTRACT_TEST_RECEIVER_CAPTURE_URL) \
 	 bash $(SCRIPT_DIR)/install-observability.sh
 
 bootstrap: require-cluster
