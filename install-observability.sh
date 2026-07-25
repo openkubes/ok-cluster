@@ -70,12 +70,27 @@ kubectl label namespace "$NAMESPACE" \
 # --- [2/6] credentials Secret (idempotent) --------------------------------
 # Charts read from this Secret; it must exist BEFORE the pods start. Later a
 # Vault sync (External Secrets) will produce the SAME Secret with no chart change.
+#
+# Credential-handling invariant (ADR-Platform-024): secret values MUST NOT be
+# exposed via process arguments, shell tracing, stdout/stderr, logs, or temp
+# files with unsafe perms. So NOT `--from-literal=<key>=<value>` (that puts the
+# value in kubectl's argv, visible in `ps`/`set -x`). Instead: write values to
+# 0600 files in a umask-077 temp dir and feed them via `--from-file`; wipe the
+# dir immediately and on any exit. The rendered Secret YAML is piped straight to
+# `kubectl apply` and never echoed/tee'd/logged.
 echo "  [2/6] Secret ${SECRET_NAME} (grafana-admin-user/password, opensearch-admin-password)"
+_old_umask="$(umask)"; umask 077
+_cred_dir="$(mktemp -d)"
+trap 'rm -rf "$_cred_dir"' EXIT INT TERM
+printf '%s' "admin"                 > "$_cred_dir/grafana-admin-user"
+printf '%s' "$GRAFANA_PASSWORD"     > "$_cred_dir/grafana-admin-password"
+printf '%s' "$OPENSEARCH_PASSWORD"  > "$_cred_dir/opensearch-admin-password"
 kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
-  --from-literal=grafana-admin-user=admin \
-  --from-literal=grafana-admin-password="$GRAFANA_PASSWORD" \
-  --from-literal=opensearch-admin-password="$OPENSEARCH_PASSWORD" \
+  --from-file=grafana-admin-user="$_cred_dir/grafana-admin-user" \
+  --from-file=grafana-admin-password="$_cred_dir/grafana-admin-password" \
+  --from-file=opensearch-admin-password="$_cred_dir/opensearch-admin-password" \
   --dry-run=client -o yaml | kubectl apply -f -
+rm -rf "$_cred_dir"; trap - EXIT INT TERM; umask "$_old_umask"
 
 # --- [3/6] helm dependency build + install ---------------------------------
 # `build` reuses the existing Chart.lock and does NOT refresh every configured
