@@ -209,8 +209,11 @@ make list                                            # list all defined clusters
 > cluster is "observability-ready" only when the gate is green. The charts read
 > the admin passwords from the Secret (Grafana `admin.existingSecret`, OpenSearch
 > `secretKeyRef`, Fluent Bit `${OPENSEARCH_PASSWORD}`); no plaintext password is
-> passed to helm. A later phase replaces the Secret-creation step with an
-> External-Secrets sync from the ok-shared Vault, with no chart change.
+> passed to helm. This file-based step is the offline-reconcilable profile;
+> datacenter-envelope clusters have the same Secret populated from Vault on
+> ok-shared by a `VaultStaticSecret` via the Vault Secrets Operator
+> (ADR-Platform-025) instead, with no chart change. The two profiles coexist by
+> envelope rather than in sequence (Secret Contract, ADR-Platform-011).
 
 ---
 
