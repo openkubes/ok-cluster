@@ -12,10 +12,13 @@
 # Kubernetes Secret `ok-observability-credentials`. The charts consume that
 # Secret (Grafana admin.existingSecret, OpenSearch secretKeyRef, Fluent Bit
 # ${OPENSEARCH_PASSWORD}) — no plaintext password is ever passed to helm.
-# Phase 2 will replace the "create Secret" step with a Vault sync from ok-shared
-# — a VaultStaticSecret via the Vault Secrets Operator (ADR-Platform-025) — with
-# NO chart change. That is the datacenter-envelope profile; edge/air-gapped
-# clusters keep this file-based profile (Secret Contract, ADR-Platform-011).
+# This file-based step is the OFFLINE-RECONCILABLE profile (edge/air-gapped, and
+# any cluster with no Vault mount yet). Datacenter-envelope clusters instead have
+# the Secret populated from Vault on ok-shared by a VaultStaticSecret — see
+# ok-observability/implementations/vault-secrets-operator/ (ADR-Platform-025) —
+# with NO chart change; only who populates the Secret differs. The two profiles
+# coexist by envelope, they are not sequential phases (Secret Contract,
+# ADR-Platform-011). Skip this step where VSO owns the Secret.
 #
 # Required env (set by the Makefile target):
 #   CLUSTER                cluster name (kubeconfig at $KUBECONFIG_PATH)
@@ -109,9 +112,9 @@ kubectl label namespace "$NAMESPACE" \
   --overwrite
 
 # --- [2/6] credentials Secret (idempotent) --------------------------------
-# Charts read from this Secret; it must exist BEFORE the pods start. Later a
-# Vault sync (Vault Secrets Operator, ADR-Platform-025) will produce the SAME
-# Secret with no chart change.
+# Charts read from this Secret; it must exist BEFORE the pods start. On
+# datacenter clusters a Vault sync (Vault Secrets Operator, ADR-Platform-025)
+# produces the SAME Secret with the same keys instead of this step.
 #
 # Credential-handling invariant (ADR-Platform-024): secret values MUST NOT be
 # exposed via process arguments, shell tracing, stdout/stderr, logs, or temp
