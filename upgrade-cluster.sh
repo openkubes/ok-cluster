@@ -4,7 +4,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLUSTERS_DIR="${SCRIPT_DIR}/ok-workload-clusters"
+# Cluster render directories live at the repo root (see render.py CLUSTERS_DIR /
+# Makefile CLUSTERS_DIR), not in a separate ok-workload-clusters/ subdir (OK-84).
+CLUSTERS_DIR="${SCRIPT_DIR}"
+# Post-upgrade blue-cluster archives are kept OUTSIDE CLUSTERS_DIR so render.py's
+# discover_clusters() (used by `make list`, IP/CIDR allocation, `teardown-all`)
+# never treats a torn-down archive as a live cluster (OK-84).
+ARCHIVE_DIR="${SCRIPT_DIR}/archived-clusters"
 
 CLUSTER="${CLUSTER:-}"
 K8S_VERSION="${K8S_VERSION:-}"
@@ -128,9 +134,11 @@ else
   run "make clean CLUSTER='${BLUE_CLUSTER}'"
 fi
 
-# Rename green → blue (manifest level)
-run "mv '${CLUSTERS_DIR}/${GREEN_CLUSTER}' '${CLUSTERS_DIR}/${BLUE_CLUSTER}-upgraded-$(date +%Y%m%d)'"
+# Rename green → blue, moved OUT of CLUSTERS_DIR into ARCHIVE_DIR so it's never
+# picked up by render.py's discover_clusters() (OK-84).
+run "mkdir -p '${ARCHIVE_DIR}'"
+run "mv '${CLUSTERS_DIR}/${GREEN_CLUSTER}' '${ARCHIVE_DIR}/${BLUE_CLUSTER}-upgraded-$(date +%Y%m%d)'"
 
 echo ""
 echo "✅ Upgrade complete: ${CLUSTER} is now running ${K8S_VERSION}"
-echo "   Green cluster manifests archived at: ${CLUSTER}-upgraded-$(date +%Y%m%d)"
+echo "   Green cluster manifests archived at: archived-clusters/${CLUSTER}-upgraded-$(date +%Y%m%d)"
