@@ -24,8 +24,9 @@ imagePullSecrets: []
 #  - name: ghcr-pull
 
 kagent:
-  # in-cluster kagent controller installed by ../Makefile (`make install`)
-  baseUrl: "http://kagent.kagent.svc.cluster.local:8083"
+  # kagent CONTROLLER service serves A2A on 8083 (confirmed from `get svc`).
+  baseUrl: "http://kagent-controller.kagent.svc.cluster.local:8083"
+  namespace: "platform-diagnostics"
   agent: "openkubes-platform-agent"
   # token: "" — kagent UI/API auth not enabled in the eval install; set if hardened.
 
