@@ -25,10 +25,15 @@ OKB           := kubectl --kubeconfig ~/.kube/ok-infra.yaml
 # per cluster; override the path with OBSERVABILITY_VALUES=... if it lives elsewhere.
 OK_OBSERVABILITY_PATH ?= $(SCRIPT_DIR)/../ok-observability
 OBSERVABILITY_VALUES  ?= $(OK_OBSERVABILITY_PATH)/$(CLUSTER).provider-values.yaml
-# Optional pin: assert WHICH ok-observability revision a run may consume (branch,
-# tag or sha). Empty = consume whatever the checkout is on — transitional, and the
-# resolved sha is printed as gate evidence either way (ADR-024, OK-109).
-OK_OBSERVABILITY_REF  ?=
+# Pin: WHICH ok-observability revision a run may consume. The consumer declares
+# what it consumes, so the value lives here rather than in the capability repo — a
+# file inside ok-observability would be self-referential (a checkout always reports
+# its own revision, so it could never detect drift, and a re-runner needs the
+# revision *before* they have a checkout to read). One line, tag or sha; bumping it
+# is a visible diff. Override on the command line for a one-off. Empty/missing file
+# = unpinned, and the resolved sha is printed as gate evidence either way
+# (ADR-Platform-024 open item 1, OK-109).
+OK_OBSERVABILITY_REF  ?= $(shell cat $(SCRIPT_DIR)/ok-observability.ref 2>/dev/null)
 
 # ── guard helper ──────────────────────────────────────────────────────────────
 require-cluster:
