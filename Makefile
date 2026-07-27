@@ -1,6 +1,6 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all e2e e2e-verify list status help
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -352,6 +352,13 @@ teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-confi
 		$(MAKE) --no-print-directory teardown CLUSTER=$$c CONFIRM=yes; \
 	done
 
+## reap-orphaned-volumes: list (dry-run) or delete orphaned Longhorn volumes left
+## behind by CDI import artifacts that `make teardown` never sees (OK-118).
+## Vars: MIN_AGE_HOURS (default 24), EXCLUDE_NAMESPACES, CONFIRM=yes to delete.
+## See docs/longhorn-orphaned-volumes.md.
+reap-orphaned-volumes:
+	@./longhorn-orphan-reaper.sh
+
 e2e: ## Full clean rebuild of ok-mgmt only: teardown+rebuild mgmt → reuse/create workload cluster → Crossplane wiring → OpenWebUI claim → verify (scope limited to mgmt, see OK-102) [CONFIRM=yes to skip prompt]
 	@if [ "$(CONFIRM)" != "yes" ]; then \
 		echo "⚠️  This will TEAR DOWN and RECREATE $(MGMT_CLUSTER)."; \
@@ -509,6 +516,7 @@ help:
 	@echo "  make clean         CLUSTER=ok1"
 	@echo "  make teardown      CLUSTER=ok-ai"
 	@echo "  make teardown-all                      # tear down ALL rendered clusters"
+	@echo "  make reap-orphaned-volumes [MIN_AGE_HOURS=24] [EXCLUDE_NAMESPACES=ok-x] [CONFIRM=yes] # clean orphaned Longhorn volumes (OK-118)"
 	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434] [CONFIRM=yes]  # asks for confirmation; rebuilds mgmt only; reuse/create WORKLOAD_CLUSTER; verify (OK-102)"
 	@echo "  make e2e-verify                        # verification matrix only"
 	@echo "  make list"
