@@ -14,7 +14,7 @@ image:
   #     -t ghcr.io/openkubes/platform-diagnostics-facade:0.1.0 --push .
   # NOTE: set the GHCR package visibility to Public (per-package, not inherited).
   repository: ghcr.io/openkubes/platform-diagnostics-facade
-  tag: "0.1.0"
+  tag: "0.1.1"     # bump on each facade image change (IfNotPresent won't re-pull same tag)
 
 # If the GHCR package is private, ok-ai needs pull creds. Either make the package
 # public (it is a public repo anyway), or create a pull secret and name it here:
