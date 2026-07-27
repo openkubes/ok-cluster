@@ -78,8 +78,8 @@ validate:
 		-d '{"cluster":"ok-ai","namespace":"kube-system","workload":"coredns"}' \
 		$(SVC_URL)/v1/investigate_workload
 	@echo ""
-	@echo "NOTE: until the facade's kagent mapping lands (OK-92 TODO), these return"
-	@echo "schema-valid STUB results — enough for contract tests 1/3/5/6."
+	@echo "NOTE: these call the openkubes-platform-agent over A2A — a real diagnosis"
+	@echo "takes 30-120s (gpt-oss:20b + read-only tool calls). Output is ADR-021 schema."
 
 # ── ADR-021 contract test 2: RBAC audit on the provider SA ────────────────────
 verify-rbac:
