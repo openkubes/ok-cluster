@@ -26,6 +26,18 @@
 #   OK_OBSERVABILITY_PATH  path to the ok-observability repo checkout
 #   OBSERVABILITY_VALUES   path to the provider-values file (see schema below)
 #
+# Secret source (OK-117) — which mechanism populates the credentials Secret:
+#   OBSERVABILITY_SECRET_SOURCE  file (default) | vault
+#     file  — this script writes the Secret from OBSERVABILITY_VALUES. The
+#             offline-reconcilable profile; required env is OBSERVABILITY_VALUES.
+#     vault — a VaultStaticSecret (VSO) syncs it from the central Vault, applied and
+#             waited on BEFORE the helm release. Requires VSO installed
+#             (`make install-vso`) and, per cluster, the Vault auth mount/role, the
+#             ServiceAccount and the CA secret. No provider-values file is used;
+#             the gate's passwords are read back from the materialised Secret.
+#     Vault-path env: VAULT_ADDR, VAULT_TLS_SERVER_NAME, VAULT_CA_SECRET, KV_MOUNT,
+#     KV_PATH, VAULT_ROLE, VSO_SERVICE_ACCOUNT, REFRESH_AFTER, VSS_SYNC_TIMEOUT.
+#
 # Optional env (forwarded to the gate; unset => the gate's own default):
 #   OK_OBSERVABILITY_REF              assert which ok-observability revision may
 #                                     be consumed (see "provenance" below)
@@ -50,13 +62,40 @@ done
 [ -n "${CLUSTER:-}" ]              || { echo "❌ CLUSTER is required"; exit 2; }
 [ -f "${KUBECONFIG_PATH:-}" ]      || { echo "❌ kubeconfig not found: ${KUBECONFIG_PATH:-<unset>} — run 'make kubeconfig CLUSTER=${CLUSTER}' first"; exit 2; }
 [ -d "$PROFILE" ]                  || { echo "❌ profile not found: $PROFILE — set OK_OBSERVABILITY_PATH to your ok-observability checkout"; exit 2; }
-if [ ! -f "${OBSERVABILITY_VALUES:-}" ]; then
+# OK-117: which mechanism populates the credentials Secret. Validated against the
+# allowed set so a typo fails loudly instead of silently selecting a profile — the
+# same class of defect as OK-119's TYPE default.
+SECRET_SOURCE="${OBSERVABILITY_SECRET_SOURCE:-file}"
+case " ${OBSERVABILITY_SECRET_SOURCES:-file vault} " in
+  *" $SECRET_SOURCE "*) ;;
+  *) echo "❌ OBSERVABILITY_SECRET_SOURCE='$SECRET_SOURCE' is not one of: ${OBSERVABILITY_SECRET_SOURCES:-file vault}"; exit 2 ;;
+esac
+
+# The provider-values file is a precondition of the FILE profile only. Requiring it
+# on the vault path would force a datacenter cluster to supply passwords it never
+# uses — the Secret comes from Vault there.
+if [ "$SECRET_SOURCE" = file ] && [ ! -f "${OBSERVABILITY_VALUES:-}" ]; then
   echo "❌ provider-values file not found: ${OBSERVABILITY_VALUES:-<unset>}"
   echo "   Create a git-ignored file with:"
   echo "     grafanaAdminPassword: \"...\""
   echo "     opensearchAdminPassword: \"...\""
   echo "   and pass it via OBSERVABILITY_VALUES=<path> (or place it at the default path)."
+  echo "   Or select the datacenter profile: OBSERVABILITY_SECRET_SOURCE=vault"
   exit 2
+fi
+
+if [ "$SECRET_SOURCE" = vault ]; then
+  VSS_TEMPLATE="${OK_OBSERVABILITY_PATH}/implementations/vault-secrets-operator/vault-secret-sync.template.yaml"
+  [ -f "$VSS_TEMPLATE" ] || {
+    echo "❌ VaultStaticSecret template not found: $VSS_TEMPLATE"
+    echo "   The capability repo checkout predates OK-117. Update ok-observability, or"
+    echo "   use OBSERVABILITY_SECRET_SOURCE=file."
+    exit 2
+  }
+  command -v envsubst >/dev/null 2>&1 || {
+    echo "❌ envsubst is required to render the VaultStaticSecret template (gettext package)"
+    exit 2
+  }
 fi
 
 export KUBECONFIG="$KUBECONFIG_PATH"
@@ -100,12 +139,25 @@ echo "  consumed ok-observability: ${OBSERVABILITY_SHA} (${OBSERVABILITY_STATE})
 [ "$OK_CLUSTER_STATE" = clean ] && [ "$OBSERVABILITY_STATE" = clean ] || \
   echo "  ⚠️  a consumed checkout is DIRTY — this run is not reproducible conformance evidence"
 
-# --- read passwords from provider-values ----------------------------------
-read_val() { python3 -c "import sys,yaml; print(yaml.safe_load(open('$OBSERVABILITY_VALUES')).get('$1',''))"; }
-GRAFANA_PASSWORD="$(read_val grafanaAdminPassword)"
-OPENSEARCH_PASSWORD="$(read_val opensearchAdminPassword)"
-[ -n "$GRAFANA_PASSWORD" ]    || { echo "❌ grafanaAdminPassword empty in $OBSERVABILITY_VALUES"; exit 2; }
-[ -n "$OPENSEARCH_PASSWORD" ] || { echo "❌ opensearchAdminPassword empty in $OBSERVABILITY_VALUES"; exit 2; }
+# --- read passwords from provider-values (FILE profile only) ---------------
+# On the vault path the Secret is authored by VSO, so the values are read back
+# from the materialised Secret after it syncs (see [2/6]) — there is no
+# provider-values file to read.
+if [ "$SECRET_SOURCE" = file ]; then
+  read_val() { python3 -c "import sys,yaml; print(yaml.safe_load(open('$OBSERVABILITY_VALUES')).get('$1',''))"; }
+  GRAFANA_PASSWORD="$(read_val grafanaAdminPassword)"
+  OPENSEARCH_PASSWORD="$(read_val opensearchAdminPassword)"
+  [ -n "$GRAFANA_PASSWORD" ]    || { echo "❌ grafanaAdminPassword empty in $OBSERVABILITY_VALUES"; exit 2; }
+  [ -n "$OPENSEARCH_PASSWORD" ] || { echo "❌ opensearchAdminPassword empty in $OBSERVABILITY_VALUES"; exit 2; }
+else
+  # VSO's CRDs must be registered before we can apply its resources. Checking here
+  # turns "no matches for kind VaultStaticSecret" into an actionable instruction.
+  kubectl get crd vaultstaticsecrets.secrets.hashicorp.com >/dev/null 2>&1 || {
+    echo "❌ VaultStaticSecret CRD not registered on ${CLUSTER}."
+    echo "   Run: make install-vso CLUSTER=${CLUSTER}"
+    exit 2
+  }
+fi
 
 # --- [1/6] namespace + Pod Security Admission labels ----------------------
 echo "  [1/6] namespace ${NAMESPACE} + PSA privileged labels (node-exporter/fluent-bit need host access)"
@@ -128,7 +180,8 @@ kubectl label namespace "$NAMESPACE" \
 # 0600 files in a umask-077 temp dir and feed them via `--from-file`; wipe the
 # dir immediately and on any exit. The rendered Secret YAML is piped straight to
 # `kubectl apply` and never echoed/tee'd/logged.
-echo "  [2/6] Secret ${SECRET_NAME} (grafana-admin-user/password, opensearch-admin-password)"
+if [ "$SECRET_SOURCE" = file ]; then
+echo "  [2/6] Secret ${SECRET_NAME} from provider-values (offline profile)"
 _old_umask="$(umask)"; umask 077
 _cred_dir="$(mktemp -d)"
 trap 'rm -rf "$_cred_dir"' EXIT INT TERM
@@ -141,6 +194,56 @@ kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
   --from-file=opensearch-admin-password="$_cred_dir/opensearch-admin-password" \
   --dry-run=client -o yaml | kubectl apply -f -
 rm -rf "$_cred_dir"; trap - EXIT INT TERM; umask "$_old_umask"
+else
+# Datacenter profile: VSO authors the Secret from Vault. The template is owned by
+# the capability repo (ok-cluster installs, does not own) and rendered per cluster.
+# The explicit envsubst variable list is required, not stylistic: a bare envsubst
+# substitutes every ${VAR} in the input and would blank unrelated placeholders.
+# VAULT_ROLE may be unused by an older template — a listed-but-absent variable is a
+# harmless no-op, so this works against both template revisions.
+echo "  [2/6] Secret ${SECRET_NAME} via VaultStaticSecret (VSO, datacenter profile)"
+echo "        vault=${VAULT_ADDR} mount=kubernetes/${CLUSTER} kv=${KV_MOUNT}/${KV_PATH}"
+CLUSTER="$CLUSTER" \
+OBS_NAMESPACE="$NAMESPACE" \
+SECRET_NAME="$SECRET_NAME" \
+VAULT_ADDR="${VAULT_ADDR}" \
+VAULT_TLS_SERVER_NAME="${VAULT_TLS_SERVER_NAME}" \
+VAULT_CA_SECRET="${VAULT_CA_SECRET}" \
+KV_MOUNT="${KV_MOUNT}" \
+KV_PATH="${KV_PATH}" \
+VAULT_ROLE="${VAULT_ROLE:-$VSO_SERVICE_ACCOUNT}" \
+VSO_SERVICE_ACCOUNT="${VSO_SERVICE_ACCOUNT}" \
+REFRESH_AFTER="${REFRESH_AFTER}" \
+  envsubst '$CLUSTER $OBS_NAMESPACE $SECRET_NAME $VAULT_ADDR $VAULT_TLS_SERVER_NAME $VAULT_CA_SECRET $KV_MOUNT $KV_PATH $VAULT_ROLE $VSO_SERVICE_ACCOUNT $REFRESH_AFTER' \
+  < "$VSS_TEMPLATE" | kubectl apply -f -
+
+# ORDERING IS THE DELIVERABLE (ADR-025 criterion 7): the Secret must exist before
+# the Helm release, because OpenSearch 2.12+ refuses to start without the admin
+# password at first boot. Waiting here — not after helm — is what makes this
+# fresh-install ordering rather than a migration.
+echo "        waiting for VaultStaticSecret to report SecretSynced (before helm)"
+kubectl -n "$NAMESPACE" wait --for=condition=SecretSynced \
+  "vaultstaticsecret/${SECRET_NAME}" --timeout="${VSS_SYNC_TIMEOUT:-120}s" || {
+    echo "❌ VaultStaticSecret did not sync. Common causes:"
+    echo "   - Vault auth mount kubernetes/${CLUSTER} or role ${VAULT_ROLE:-$VSO_SERVICE_ACCOUNT} missing (VaultConfig XR)"
+    echo "   - ServiceAccount ${VSO_SERVICE_ACCOUNT} absent in ${NAMESPACE}"
+    echo "   - CA secret ${VAULT_CA_SECRET} absent in ${NAMESPACE}, or ${VAULT_ADDR} unreachable"
+    echo "   - no credentials at ${KV_MOUNT}/${KV_PATH}"
+    kubectl -n "$NAMESPACE" get vaultstaticsecret "${SECRET_NAME}" -o wide 2>/dev/null || true
+    exit 1
+  }
+
+# The gate needs the admin passwords to query Grafana and OpenSearch. On this path
+# Vault is the source of truth, so read them back from the materialised Secret.
+# Captured into shell variables — never argv, never echoed (ADR-024 invariant).
+GRAFANA_PASSWORD="$(kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" -o jsonpath='{.data.grafana-admin-password}' | base64 -d)"
+OPENSEARCH_PASSWORD="$(kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" -o jsonpath='{.data.opensearch-admin-password}' | base64 -d)"
+[ -n "$GRAFANA_PASSWORD" ] && [ -n "$OPENSEARCH_PASSWORD" ] || {
+  echo "❌ Secret ${SECRET_NAME} synced but a password key is empty — check the Vault KV payload keys"
+  exit 1
+}
+echo "        ✅ ${SECRET_NAME} materialised by VSO"
+fi
 
 # --- [3/6] helm dependency build + install ---------------------------------
 # `build` reuses the existing Chart.lock and does NOT refresh every configured

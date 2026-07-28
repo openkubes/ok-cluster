@@ -35,6 +35,38 @@ OBSERVABILITY_VALUES  ?= $(OK_OBSERVABILITY_PATH)/$(CLUSTER).provider-values.yam
 # (ADR-Platform-024 open item 1, OK-109).
 OK_OBSERVABILITY_REF  ?= $(shell cat $(SCRIPT_DIR)/ok-observability.ref 2>/dev/null)
 
+# ── datacenter secret profile: Vault + VSO (ADR-Platform-025, OK-117) ─────────
+# Which mechanism populates ok-observability-credentials:
+#   file  — ok-cluster writes it from a git-ignored provider-values file. The
+#           offline-reconcilable profile: edge/air-gapped, and any cluster with no
+#           Vault mount yet. Default, and it stays — not a phase to be replaced.
+#   vault — a VaultStaticSecret (VSO) syncs it from the central Vault on ok-shared.
+#           The datacenter-envelope profile.
+# The two coexist by envelope (Secret Contract, ADR-Platform-011).
+OBSERVABILITY_SECRET_SOURCE ?= file
+OBSERVABILITY_SECRET_SOURCES := file vault
+
+# VSO add-on, pinned and versioned as ADR-025 §Implementation & placement requires.
+# 1.5.0 is the version proven on ok-robotics — pinned to the proven one, not to latest.
+VSO_CHART_VERSION ?= 1.5.0
+VSO_NAMESPACE     ?= vault-secrets-operator
+
+# Provider Values for the vault path. Defaults match the ok-robotics evidence and
+# ADR-025 Path A; VAULT_ADDR is environment-specific (the stable host-level LB for
+# ok-shared ingress, MetalLB on ok-infra — not a VM node IP).
+VAULT_ADDR            ?= https://192.168.100.207:443
+VAULT_TLS_SERVER_NAME ?= vault.ok-shared.internal
+VAULT_CA_SECRET       ?= vault-ca
+KV_MOUNT              ?= secret
+KV_PATH               ?= $(CLUSTER)/obs/observability-credentials
+# The Vault role and the Kubernetes ServiceAccount are distinct identities that
+# coincide by convention (the VaultConfig composition derives roleName from
+# role.name). Kept separate on purpose — the role is *bound to* the SA, which is
+# not the same as being named after it.
+VAULT_ROLE            ?= sa-obs
+VSO_SERVICE_ACCOUNT   ?= sa-obs
+REFRESH_AFTER         ?= 60s
+
 # ── guard helper ──────────────────────────────────────────────────────────────
 require-cluster:
 	@test -n "$(CLUSTER)" || (echo "ERROR: CLUSTER is required, e.g. make $(MAKECMDGOALS) CLUSTER=ok3"; exit 1)
@@ -157,13 +189,37 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 	done; \
 	echo "⚠️  No LoadBalancer IP after 60s — check MetalLB pool ok-pool on RKE2 host cluster"; exit 1
 
-install-observability: require-cluster kubeconfig ## Install ok-observability-standard profile + run the gated Contract Test (OK-79). Vars: OK_OBSERVABILITY_PATH, OK_OBSERVABILITY_REF, OBSERVABILITY_VALUES, CONTRACT_TEST_TIMEOUT, CONTRACT_TEST_RECEIVER_CAPTURE_URL
+install-vso: require-cluster kubeconfig ## Install the pinned Vault Secrets Operator (datacenter envelope, ADR-025). Vars: VSO_CHART_VERSION, VSO_NAMESPACE
+	@echo "Installing Vault Secrets Operator $(VSO_CHART_VERSION) on $(CLUSTER) (ns $(VSO_NAMESPACE))..."
+	@helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
+	@helm repo update hashicorp 2>/dev/null
+	@# --version pins it (ADR-025 wants explicit + versioned, not latest);
+	@# upgrade --install makes it idempotent; --wait so the CRDs are established
+	@# before anything applies a VaultConnection/VaultAuth/VaultStaticSecret.
+	helm upgrade --install vault-secrets-operator hashicorp/vault-secrets-operator \
+		--version $(VSO_CHART_VERSION) \
+		--kubeconfig $(HOME)/.kube/$(CLUSTER).yaml \
+		--namespace $(VSO_NAMESPACE) --create-namespace \
+		--wait --timeout 5m
+	@echo "✅ Vault Secrets Operator $(VSO_CHART_VERSION) installed on $(CLUSTER)"
+
+install-observability: require-cluster kubeconfig ## Install ok-observability-standard profile + run the gated Contract Test (OK-79). Vars: OBSERVABILITY_SECRET_SOURCE=file|vault, OK_OBSERVABILITY_PATH, OK_OBSERVABILITY_REF, OBSERVABILITY_VALUES, CONTRACT_TEST_TIMEOUT, CONTRACT_TEST_RECEIVER_CAPTURE_URL
 	@CLUSTER=$(CLUSTER) \
 	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
 	 OK_OBSERVABILITY_PATH=$(OK_OBSERVABILITY_PATH) \
 	 OK_OBSERVABILITY_REF=$(OK_OBSERVABILITY_REF) \
 	 OBSERVABILITY_VALUES=$(OBSERVABILITY_VALUES) \
 	 OBSERVABILITY_HELM_VALUES=$(OBSERVABILITY_HELM_VALUES) \
+	 OBSERVABILITY_SECRET_SOURCE=$(OBSERVABILITY_SECRET_SOURCE) \
+	 OBSERVABILITY_SECRET_SOURCES="$(OBSERVABILITY_SECRET_SOURCES)" \
+	 VAULT_ADDR=$(VAULT_ADDR) \
+	 VAULT_TLS_SERVER_NAME=$(VAULT_TLS_SERVER_NAME) \
+	 VAULT_CA_SECRET=$(VAULT_CA_SECRET) \
+	 KV_MOUNT=$(KV_MOUNT) \
+	 KV_PATH=$(KV_PATH) \
+	 VAULT_ROLE=$(VAULT_ROLE) \
+	 VSO_SERVICE_ACCOUNT=$(VSO_SERVICE_ACCOUNT) \
+	 REFRESH_AFTER=$(REFRESH_AFTER) \
 	 CONTRACT_TEST_TIMEOUT=$(CONTRACT_TEST_TIMEOUT) \
 	 CONTRACT_TEST_RECEIVER_CAPTURE_URL=$(CONTRACT_TEST_RECEIVER_CAPTURE_URL) \
 	 bash $(SCRIPT_DIR)/install-observability.sh
