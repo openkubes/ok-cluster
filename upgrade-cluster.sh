@@ -3,6 +3,9 @@
 # Strategy: deploy new cluster, migrate workloads, teardown old cluster.
 set -euo pipefail
 
+# Keep in sync with the Makefile's CLUSTER_TYPES (OK-119).
+CLUSTER_TYPES="ubuntu talos talos-mgmt"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Cluster render directories live at the repo root (see render.py CLUSTERS_DIR /
 # Makefile CLUSTERS_DIR), not in a separate ok-workload-clusters/ subdir (OK-84).
@@ -30,7 +33,20 @@ if [[ ! -f "$CFG" ]]; then
   exit 1
 fi
 
-CLUSTER_TYPE=$(python3 -c "import yaml,sys; c=yaml.safe_load(open('${CFG}')); print(c.get('type','ubuntu'))")
+# OK-119: no silent default. `.get('type','ubuntu')` turned a missing key into
+# `ubuntu`, which here selects the whole provisioning AND teardown path below —
+# a worse place to guess than install-cni. Abort instead, and validate the value
+# so a typo cannot masquerade as a known type.
+CLUSTER_TYPE=$(python3 -c "import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; print(d.get('type') or '')" "${CFG}")
+if [[ -z "$CLUSTER_TYPE" ]]; then
+  echo "ERROR: no 'type' key in ${CFG} — refusing to guess the provisioning path."
+  echo "  Expected one of: ${CLUSTER_TYPES}. See OK-119."
+  exit 1
+fi
+case " ${CLUSTER_TYPES} " in
+  *" ${CLUSTER_TYPE} "*) ;;
+  *) echo "ERROR: type='${CLUSTER_TYPE}' in ${CFG} is not one of: ${CLUSTER_TYPES}"; exit 1 ;;
+esac
 BLUE_CLUSTER="${CLUSTER}"
 GREEN_CLUSTER="${CLUSTER}-green"
 
@@ -74,7 +90,7 @@ PYEOF
 
 run "python3 '${SCRIPT_DIR}/render.py' render --cluster '${GREEN_CLUSTER}'"
 
-if [[ "$CLUSTER_TYPE" == "talos" ]]; then
+if [[ "$CLUSTER_TYPE" == talos* ]]; then
   run "make bootstrap CLUSTER='${GREEN_CLUSTER}'"
 else
   run "make install CLUSTER='${GREEN_CLUSTER}'"
@@ -128,7 +144,7 @@ PYEOF"
 # ── Phase 5: Teardown blue ────────────────────────────────────────────────────
 echo ""
 echo "── Phase 5: Teardown old blue cluster ──"
-if [[ "$CLUSTER_TYPE" == "talos" ]]; then
+if [[ "$CLUSTER_TYPE" == talos* ]]; then
   run "make teardown CLUSTER='${BLUE_CLUSTER}'"
 else
   run "make clean CLUSTER='${BLUE_CLUSTER}'"
