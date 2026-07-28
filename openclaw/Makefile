@@ -84,6 +84,7 @@ install: $(TOKEN_FILE)
 		--namespace $(NS) --create-namespace \
 		--set gateway.token=$$(cat $(TOKEN_FILE)) \
 		--set ollama.baseUrl=$(OLLAMA_URL) \
+		--set diagnostics.defaultCluster=$(CLUSTER) \
 		$(if $(MODEL),--set ollama.model=$(MODEL))
 	@$(KUBECTL) -n $(NS) rollout status deploy/$(RELEASE) --timeout=180s
 
