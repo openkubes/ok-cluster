@@ -1,10 +1,17 @@
 # OpenKubes Cluster Templating — Makefile
-# Usage: make new CLUSTER=ok3 TYPE=ubuntu [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
+# Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
+#        TYPE is REQUIRED — no silent default (OK-119).
 .PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
-TYPE          ?= ubuntu
+# No default on purpose (OK-119). TYPE decides both the VM OS and, via
+# cluster-config.yaml, which Cilium value set install-cni applies. A silent
+# default to `ubuntu` on a Talos cluster produced a config mismatched with the
+# actual VM OS and a CNI that Talos rejects (SYS_MODULE). `new` requires it
+# explicitly; both internal callers (e2e) already pass it.
+TYPE          ?=
+CLUSTER_TYPES := ubuntu talos talos-mgmt
 HA            ?= false
 WORKERS       ?= 1
 K8S_VERSION   ?=
@@ -39,8 +46,25 @@ OK_OBSERVABILITY_REF  ?= $(shell cat $(SCRIPT_DIR)/ok-observability.ref 2>/dev/n
 require-cluster:
 	@test -n "$(CLUSTER)" || (echo "ERROR: CLUSTER is required, e.g. make $(MAKECMDGOALS) CLUSTER=ok3"; exit 1)
 
+# OK-119: TYPE must be explicit. It decides the VM OS *and* the Cilium value set
+# install-cni later selects via cluster-config.yaml, so a wrong/implied value is
+# not a cosmetic mismatch — it installs a CNI the OS rejects.
+require-type:
+	@if [ -z "$(TYPE)" ]; then \
+		echo "ERROR: TYPE is required — it sets the VM OS and the CNI profile."; \
+		echo "  make $(MAKECMDGOALS) CLUSTER=$(CLUSTER) TYPE=<$(shell echo '$(CLUSTER_TYPES)' | tr ' ' '|')> [WORKERS=3] [NODE_SELECTOR=ok-gpu]"; \
+		echo "  It used to default to 'ubuntu' silently, which writes type: ubuntu into"; \
+		echo "  cluster-config.yaml even on a Talos cluster — install-cni then applies the"; \
+		echo "  non-Talos Cilium values and the agent fails on SYS_MODULE (OK-119)."; \
+		exit 1; \
+	fi
+	@case " $(CLUSTER_TYPES) " in \
+		*" $(TYPE) "*) ;; \
+		*) echo "ERROR: TYPE='$(TYPE)' is not one of: $(CLUSTER_TYPES)"; exit 1 ;; \
+	esac
+
 # ── scaffold + render ─────────────────────────────────────────────────────────
-new: require-cluster
+new: require-cluster require-type
 	@CLUSTER=$(CLUSTER) TYPE=$(TYPE) HA=$(HA) WORKERS=$(WORKERS) \
 	 K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
 	 NODE_SELECTOR=$(NODE_SELECTOR) START_IP=$(START_IP) \
@@ -67,11 +91,52 @@ kubeconfig: require-cluster
 
 install-cni: require-cluster kubeconfig
 	@echo "Installing Cilium CNI on $(CLUSTER)..."
-	@$(eval CLUSTER_TYPE := $(shell python3 -c "import yaml; print(yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')).get('type','ubuntu'))"))
-	@echo "  Cluster type: $(CLUSTER_TYPE)"
-	@helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true
-	@helm repo update cilium 2>/dev/null
-	@if [ "$(CLUSTER_TYPE)" = "talos" ] || [ "$(CLUSTER_TYPE)" = "talos-mgmt" ]; then \
+	@# OK-119: resolve the cluster type INSIDE the recipe shell. The previous
+	@# `$$(eval ... $$(shell python3 ...))` had two silent defaults: a missing
+	@# cluster-config.yaml made python throw while $$(shell) discarded the exit
+	@# status, leaving the variable empty; and `.get('type','ubuntu')` turned a
+	@# missing key into `ubuntu`. Either way the recipe fell through to the
+	@# non-Talos branch and installed a CNI Talos rejects. $$(shell) cannot fail
+	@# a recipe, so the read has to happen here to be able to abort.
+	@set -e; \
+	CFG="$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"; \
+	if [ ! -r "$$CFG" ]; then \
+		echo "❌ cluster-config.yaml not found or unreadable for $(CLUSTER):"; \
+		echo "     $$CFG"; \
+		echo "   Render directories are per-machine and not committed. Was"; \
+		echo "   'make new CLUSTER=$(CLUSTER) TYPE=...' run on THIS machine? Re-render or"; \
+		echo "   re-sync it before install-cni — refusing to guess the CNI profile (OK-119)."; \
+		exit 2; \
+	fi; \
+	CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; print(d.get("type") or "")' "$$CFG")" \
+		|| { echo "❌ could not parse $$CFG — fix the YAML before installing a CNI"; exit 2; }; \
+	if [ -z "$$CLUSTER_TYPE" ]; then \
+		echo "❌ no 'type' key in $$CFG — refusing to guess the CNI profile."; \
+		echo "   Expected one of: $(CLUSTER_TYPES). See OK-119."; \
+		exit 2; \
+	fi; \
+	echo "  Cluster type: $$CLUSTER_TYPE (from $$CFG)"; \
+	OS_IMG="$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes \
+		-o jsonpath='{.items[0].status.nodeInfo.osImage}' 2>/dev/null || true)"; \
+	if [ -z "$$OS_IMG" ]; then \
+		echo "  (node OS not readable yet — skipping declared-vs-actual cross-check)"; \
+	else \
+		echo "  Node OS: $$OS_IMG"; \
+		case "$$CLUSTER_TYPE" in \
+			talos*) echo "$$OS_IMG" | grep -qi talos || { \
+				echo "❌ cluster-config says '$$CLUSTER_TYPE' but the node OS is '$$OS_IMG'."; \
+				echo "   Refusing to apply Talos Cilium values to a non-Talos node (OK-119)."; exit 2; } ;; \
+			ubuntu) if echo "$$OS_IMG" | grep -qi talos; then \
+				echo "❌ cluster-config says 'ubuntu' but the node OS is '$$OS_IMG'."; \
+				echo "   This is exactly the OK-119 failure: the non-Talos Cilium values include"; \
+				echo "   SYS_MODULE, which Talos rejects, and omit ipam.mode=kubernetes."; \
+				echo "   Re-render with TYPE=talos (or TYPE=talos-mgmt) and retry."; exit 2; \
+			fi ;; \
+		esac; \
+	fi; \
+	helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true; \
+	helm repo update cilium 2>/dev/null; \
+	if [ "$$CLUSTER_TYPE" = "talos" ] || [ "$$CLUSTER_TYPE" = "talos-mgmt" ]; then \
 		echo "  Using Talos values (KubePrism localhost:7445, cgroup hostRoot, agent capabilities)"; \
 		helm upgrade --install cilium cilium/cilium \
 			--kubeconfig ~/.kube/$(CLUSTER).yaml \
@@ -500,7 +565,7 @@ help:
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
-	@echo "  make new           CLUSTER=ok1 [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]"
+	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"
