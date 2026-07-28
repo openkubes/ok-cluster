@@ -71,7 +71,12 @@ export KUBECONFIG="$KUBECONFIG_PATH"
 # worse than refusing to run.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sha_of()   { git -C "$1" rev-parse HEAD 2>/dev/null || echo "unknown"; }
-state_of() { [ -z "$(git -C "$1" status --porcelain 2>/dev/null)" ] && echo clean || echo DIRTY; }
+# --untracked-files=no on purpose: DIRTY must mean "tracked code was modified",
+# which is what threatens reproducibility. Counting untracked files made every
+# FRESH-cluster run report DIRTY, because `make new` renders an untracked
+# <cluster>/ directory — i.e. it fired exactly when the clean marker mattered
+# most (OK-109 Part 1 evidence, ok-cluster f67aa1a).
+state_of() { [ -z "$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null)" ] && echo clean || echo DIRTY; }
 OK_CLUSTER_SHA="$(sha_of "$_here")";               OK_CLUSTER_STATE="$(state_of "$_here")"
 OBSERVABILITY_SHA="$(sha_of "$OK_OBSERVABILITY_PATH")"; OBSERVABILITY_STATE="$(state_of "$OK_OBSERVABILITY_PATH")"
 
