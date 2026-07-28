@@ -191,6 +191,19 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 
 install-vso: require-cluster kubeconfig ## Install the pinned Vault Secrets Operator (datacenter envelope, ADR-025). Vars: VSO_CHART_VERSION, VSO_NAMESPACE
 	@echo "Installing Vault Secrets Operator $(VSO_CHART_VERSION) on $(CLUSTER) (ns $(VSO_NAMESPACE))..."
+	@# Namespace FIRST, labelled BEFORE any workload is admitted. The upstream chart sets
+	@# neither capabilities.drop=[ALL] nor a seccompProfile, so a cluster ENFORCING Pod
+	@# Security "restricted" rejects the install — including its pre-upgrade-crds hook Job.
+	@# Labelling after helm would be too late: the pods are admitted during helm, not after.
+	@# `baseline` is the least level that admits it; unlike node-exporter/fluent-bit, VSO's
+	@# manager needs no host access, so `privileged` would over-grant.
+	@kubectl --kubeconfig $(HOME)/.kube/$(CLUSTER).yaml create namespace $(VSO_NAMESPACE) \
+		--dry-run=client -o yaml | kubectl --kubeconfig $(HOME)/.kube/$(CLUSTER).yaml apply -f -
+	@kubectl --kubeconfig $(HOME)/.kube/$(CLUSTER).yaml label namespace $(VSO_NAMESPACE) \
+		pod-security.kubernetes.io/enforce=baseline \
+		pod-security.kubernetes.io/warn=baseline \
+		pod-security.kubernetes.io/audit=baseline \
+		--overwrite
 	@helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
 	@helm repo update hashicorp 2>/dev/null
 	@# --version pins it (ADR-025 wants explicit + versioned, not latest);
@@ -199,7 +212,7 @@ install-vso: require-cluster kubeconfig ## Install the pinned Vault Secrets Oper
 	helm upgrade --install vault-secrets-operator hashicorp/vault-secrets-operator \
 		--version $(VSO_CHART_VERSION) \
 		--kubeconfig $(HOME)/.kube/$(CLUSTER).yaml \
-		--namespace $(VSO_NAMESPACE) --create-namespace \
+		--namespace $(VSO_NAMESPACE) \
 		--wait --timeout 5m
 	@echo "✅ Vault Secrets Operator $(VSO_CHART_VERSION) installed on $(CLUSTER)"
 
