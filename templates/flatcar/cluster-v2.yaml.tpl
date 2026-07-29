@@ -235,6 +235,7 @@ spec:
                   [Service]
                   Type=oneshot
                   ExecStart=/bin/sh -c '/bin/systemctl show kubeadm.service --property=Result --property=ExecMainStatus >/dev/ttyS0'
+                  ExecStart=/bin/sh -c '/bin/journalctl -u kubeadm.service -b --no-pager -n 200 -o cat | /bin/grep -Ei "(\[ERROR |error execution phase|kubelet-check|control-plane|timed out|unable to|failed to|not found|unsupported|connection refused|deadline exceeded|CRI)" | /bin/grep -Eiv "(token|password|secret|certificate|private[ -]?key|client-key|key-data|discovery)" >/dev/ttyS0 || true'
               - name: kubelet.service
                 enabled: true
                 contents: |
@@ -386,6 +387,7 @@ spec:
                     [Service]
                     Type=oneshot
                     ExecStart=/bin/sh -c '/bin/systemctl show kubeadm.service --property=Result --property=ExecMainStatus >/dev/ttyS0'
+                    ExecStart=/bin/sh -c '/bin/journalctl -u kubeadm.service -b --no-pager -n 200 -o cat | /bin/grep -Ei "(\[ERROR |error execution phase|kubelet-check|control-plane|timed out|unable to|failed to|not found|unsupported|connection refused|deadline exceeded|CRI)" | /bin/grep -Eiv "(token|password|secret|certificate|private[ -]?key|client-key|key-data|discovery)" >/dev/ttyS0 || true'
                 - name: kubelet.service
                   enabled: true
                   contents: |

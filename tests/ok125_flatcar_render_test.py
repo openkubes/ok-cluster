@@ -213,9 +213,17 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
             and "OK125_KUBEADM_SUCCEEDED" in config
             and "name: ok125-kubeadm-failure.service" in config
             and "--property=ExecMainStatus" in config
+            and "journalctl -u kubeadm.service" in config
+            and "error execution phase" in config
+            and "grep -Eiv" in config
+            and "private[ -]?key" in config
+            and "StandardOutput=journal+console" not in config
             for config in additional_configs
         ),
-        "kubeadm has an unbounded first boot and redacted serial diagnostics",
+        (
+            "kubeadm has an unbounded first boot and failure-only, "
+            "redacted serial diagnostics"
+        ),
     )
     check(
         all(
