@@ -244,16 +244,16 @@ spec:
                   Wants=network-online.target
                   Requires=containerd.service
                   After=network-online.target containerd.service
+                  StartLimitIntervalSec=0
 
                   [Service]
-                  Environment=KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf
+                  Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
                   Environment=KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml
                   EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
                   EnvironmentFile=-/etc/default/kubelet
                   ExecStart=/opt/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
                   Restart=always
                   RestartSec=10
-                  StartLimitIntervalSec=0
 
                   [Install]
                   WantedBy=multi-user.target
@@ -396,16 +396,16 @@ spec:
                     Wants=network-online.target
                     Requires=containerd.service
                     After=network-online.target containerd.service
+                    StartLimitIntervalSec=0
 
                     [Service]
-                    Environment=KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf
+                    Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
                     Environment=KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml
                     EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
                     EnvironmentFile=-/etc/default/kubelet
                     ExecStart=/opt/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
                     Restart=always
                     RestartSec=10
-                    StartLimitIntervalSec=0
 
                     [Install]
                     WantedBy=multi-user.target

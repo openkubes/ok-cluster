@@ -231,8 +231,10 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
             "name: kubelet.service" in config
             and "ExecStart=/opt/bin/kubelet" in config
             and (
-                "--bootstrap-kubeconfig="
-                "/etc/kubernetes/bootstrap-kubelet.conf"
+                'Environment="KUBELET_KUBECONFIG_ARGS='
+                "--bootstrap-kubeconfig=/etc/kubernetes/"
+                "bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/"
+                'kubelet.conf"'
             )
             in config
             and "EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env"
