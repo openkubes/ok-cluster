@@ -62,9 +62,11 @@ metadata:
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
 spec:
   controlPlaneServiceTemplate:
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: ${ENDPOINT_IP}
     spec:
       type: LoadBalancer
-      loadBalancerIP: ${ENDPOINT_IP}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
@@ -166,7 +168,6 @@ spec:
         name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}
   kubeadmConfigSpec:
     format: ${BOOTSTRAP_FORMAT}
-    files: []
     ignition:
       containerLinuxConfig:
         additionalConfig: |
@@ -203,11 +204,6 @@ spec:
 
                   [Install]
                   WantedBy=multi-user.target
-    clusterConfiguration:
-      networking:
-        dnsDomain: cluster.local
-        podSubnet: ${POD_CIDR}
-        serviceSubnet: ${SERVICE_CIDR}
     initConfiguration:
       skipPhases:
         - addon/kube-proxy
@@ -310,7 +306,6 @@ spec:
   template:
     spec:
       format: ${BOOTSTRAP_FORMAT}
-      files: []
       ignition:
         containerLinuxConfig:
           additionalConfig: |

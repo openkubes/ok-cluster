@@ -842,26 +842,48 @@ def cleanup() -> int:
         or labels.get("openkubes.io/deployable") != "false"
     ):
         raise RuntimeValidationError("namespace ownership labels do not match")
-    progress("deleting only the disposable CAPI Cluster")
-    kubectl(
+    cluster = kubectl(
         kubectl_bin,
         kubeconfig,
-        [
-            "-n",
-            CLUSTER,
-            "delete",
-            "cluster",
-            CLUSTER,
-            "--cascade=foreground",
-            "--wait=true",
-            "--timeout=600s",
-        ],
+        ["-n", CLUSTER, "get", "cluster", CLUSTER, "-o", "json"],
+        expected=(0, 1),
     )
+    if cluster.returncode == 0:
+        cluster_object = json.loads(cluster.stdout)
+        cluster_labels = cluster_object["metadata"].get("labels", {})
+        if (
+            cluster_labels.get("openkubes.io/type") != "flatcar"
+            or cluster_labels.get("openkubes.io/deployable") != "false"
+        ):
+            raise RuntimeValidationError("Cluster ownership labels do not match")
+        progress("deleting only the disposable CAPI Cluster")
+        kubectl(
+            kubectl_bin,
+            kubeconfig,
+            [
+                "-n",
+                CLUSTER,
+                "delete",
+                "cluster",
+                CLUSTER,
+                "--cascade=foreground",
+                "--wait=true",
+                "--timeout=600s",
+            ],
+        )
+    else:
+        progress("no CAPI Cluster exists; cleaning the partial namespace")
     progress("deleting only the disposable namespace")
     kubectl(
         kubectl_bin,
         kubeconfig,
-        ["delete", "namespace", CLUSTER, "--wait=true", "--timeout=300s"],
+        [
+            "delete",
+            "namespace",
+            CLUSTER,
+            "--wait=true",
+            "--timeout=300s",
+        ],
     )
     absent = kubectl(
         kubectl_bin,
@@ -871,12 +893,19 @@ def cleanup() -> int:
     )
     if absent.returncode != 1:
         raise RuntimeValidationError("namespace still exists after cleanup")
-    pvs = kubectl_json(kubectl_bin, kubeconfig, ["get", "persistentvolume"])
-    leftovers = [
-        item["metadata"]["name"]
-        for item in pvs["items"]
-        if item.get("spec", {}).get("claimRef", {}).get("namespace") == CLUSTER
-    ]
+    deadline = time.monotonic() + 300
+    leftovers: list[str] = []
+    while time.monotonic() < deadline:
+        pvs = kubectl_json(kubectl_bin, kubeconfig, ["get", "persistentvolume"])
+        leftovers = [
+            item["metadata"]["name"]
+            for item in pvs["items"]
+            if item.get("spec", {}).get("claimRef", {}).get("namespace")
+            == CLUSTER
+        ]
+        if not leftovers:
+            break
+        time.sleep(5)
     if leftovers:
         raise RuntimeValidationError(f"orphan PVs remain: {leftovers}")
     if WORKLOAD_KUBECONFIG.exists():

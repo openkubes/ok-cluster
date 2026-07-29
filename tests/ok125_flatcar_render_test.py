@@ -256,11 +256,11 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
     )
     infrastructure = by_kind(docs, "KubevirtCluster")[0]
     check(
-        infrastructure["spec"]["controlPlaneServiceTemplate"]["spec"][
-            "loadBalancerIP"
-        ]
+        infrastructure["spec"]["controlPlaneServiceTemplate"]["metadata"][
+            "annotations"
+        ]["metallb.universe.tf/loadBalancerIPs"]
         == cfg["network"]["endpoint"],
-        "KubeVirt API endpoint is bound to the declared profile address",
+        "KubeVirt API endpoint uses the proven MetalLB address annotation",
     )
     check(
         control_plane["spec"]["kubeadmConfigSpec"]["initConfiguration"][
