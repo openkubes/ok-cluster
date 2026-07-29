@@ -184,6 +184,11 @@ def build_context(cfg: dict) -> dict:
     ver = cfg.get("versions", {})
     upg = cfg.get("upgrade", {})
     _osp = cfg.get("openstack", {})
+    os_cfg = cfg.get("os", {})
+    golden_image = os_cfg.get("goldenImage", {})
+    bootstrap = cfg.get("bootstrap", {})
+    identity = str(os_cfg.get("identity", ""))
+    identity_hex = identity.removeprefix("sha256:")
     return {
         "CLUSTER_NAME":       cfg["name"],
         "CLUSTER_TYPE":       cfg.get("type", "ubuntu"),
@@ -212,6 +217,28 @@ def build_context(cfg: dict) -> dict:
         "TALOS_VERSION":      ver.get("talos", OK_LINUX_DEFAULT_TALOS_VERSION),
         "UPGRADE_STRATEGY":   upg.get("strategy", "blue-green"),
         "NODE_SELECTOR":      cfg.get("nodeSelector", ""),
+        # Generic, explicit OS/profile inputs. The shared renderer does not
+        # assign Flatcar defaults; profile semantics stay in ok-linux and the
+        # selected templates/<type> directory.
+        "OS_DISTRIBUTION":    os_cfg.get("distribution", ""),
+        "OS_PROFILE":         os_cfg.get("profile", ""),
+        "OS_VERSION":         os_cfg.get("version", ""),
+        "OS_ARCHITECTURE":    os_cfg.get("architecture", ""),
+        "OS_IMAGE_DIGEST":    os_cfg.get("imageDigest", ""),
+        "OS_IDENTITY":        identity,
+        "OS_IDENTITY_SHORT":  identity_hex[:12],
+        "OS_CANDIDATE_STATUS": os_cfg.get("candidateStatus", ""),
+        "OS_DEPLOYABLE":      str(os_cfg.get("deployable", False)).lower(),
+        "OS_GOLDEN_IMAGE_NAMESPACE": golden_image.get("namespace", ""),
+        "OS_GOLDEN_IMAGE_CLAIM": golden_image.get("claim", ""),
+        "OS_GOLDEN_IMAGE_PUBLISHED": str(
+            golden_image.get("published", False)
+        ).lower(),
+        "OS_GOLDEN_IMAGE_STORAGE_CLASS": golden_image.get("storageClass", ""),
+        "BOOTSTRAP_FORMAT": bootstrap.get("format", ""),
+        "VM_BOOTSTRAP_CHECK_STRATEGY": bootstrap.get(
+            "virtualMachineBootstrapCheck", ""
+        ),
         "TALOS_SCHEMATIC_ID": (
             cfg.get("os", {}).get("schematic_id") or
             os.environ.get("TALOS_SCHEMATIC_ID") or

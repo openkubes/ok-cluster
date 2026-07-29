@@ -11,6 +11,10 @@ __MACOSX/
 # Python
 __pycache__/
 *.pyc
+.ok125-render-*/
+
+# Generated OK-125 evidence (reproducible, not source)
+docs/adoption/OK-125/.evidence/
 
 # Kubeconfigs — never commit
 *.yaml.bak

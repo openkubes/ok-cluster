@@ -1,0 +1,20 @@
+name: ok125-flatcar
+type: flatcar
+provider: kubevirt
+controlPlane:
+  replicas: 1
+  cores: 2
+  memory: 4Gi
+  disk: 20Gi
+workers:
+  replicas: 1
+  cores: 2
+  memory: 4Gi
+  disk: 20Gi
+network:
+  endpoint: 192.168.100.249
+  podCIDR: 10.47.0.0/16
+  serviceCIDR: 10.111.0.0/20
+nodeSelector: ok-infra
+providerProfile:
+  goldenImageStorageClass: local-path

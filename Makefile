@@ -25,6 +25,7 @@ DRY_RUN       ?= false
 SCRIPT_DIR    := $(shell pwd)
 CLUSTERS_DIR  := $(SCRIPT_DIR)
 OKB           := kubectl --kubeconfig ~/.kube/ok-infra.yaml
+OK_LINUX_PATH ?= $(SCRIPT_DIR)/../ok-linux
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -104,6 +105,14 @@ new: require-cluster require-type
 
 render: require-cluster
 	@START_IP=$(START_IP) python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
+
+# OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
+# It consumes ok-linux profile truth and never applies resources.
+.PHONY: ok125-render
+ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
+	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
+		--cluster "$(or $(CLUSTER),ok125-flatcar)"
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-cluster
