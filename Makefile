@@ -108,11 +108,20 @@ render: require-cluster
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render
+.PHONY: ok125-render ok125-management-test ok125-management-ignition
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
 		--cluster "$(or $(CLUSTER),ok125-flatcar)"
+
+ok125-management-test: ## Offline-test the pinned CABPK/KCP Ignition management path
+	@python3 $(SCRIPT_DIR)/tests/ok125_management_ignition_test.py
+
+ok125-management-ignition: ## Preflight/apply pinned CABPK/KCP Ignition gates
+	@OK125_KUBECONFIG="$(OK125_KUBECONFIG)" \
+	 OK125_APPLY="$(or $(OK125_APPLY),no)" \
+	 CLUSTERCTL_BIN="$(or $(CLUSTERCTL_BIN),clusterctl)" \
+	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/configure_management_ignition.py
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-cluster

@@ -117,25 +117,37 @@ kubectl wait function/function-go-templating \
 ok "Functions installed and healthy"
 echo ""
 
-# ── Step 4: CAPI core + Talos + selected infrastructure provider ──────────────
+# ── Step 4: CAPI core + bootstrap/control-plane + infrastructure providers ────
 # Provider selection is driven by the Implementation Profile. INFRA_PROVIDER is
 # substituted at render time (kubevirt|openstack). The provider-specific controller
 # wait and infrastructure preparation live in providers/<provider>/provider-infra.sh
 # (Step 5), keeping this file provider-neutral except for the --infrastructure flag.
-log "Step 4: Installing CAPI providers (core, talos, $$INFRA_PROVIDER)..."
+#
+# OK-125: Flatcar consumes CABPK-generated Ignition, while Talos continues to use
+# its existing bootstrap/control-plane providers. Keep both provider pairs and
+# enable the upstream CAPI v1.13.3 gate at render/install time. This is a
+# management-controller setting, not a shared OS-contract guarantee.
+export EXP_KUBEADM_BOOTSTRAP_FORMAT_IGNITION=true
+
+log "Step 4: Installing CAPI providers (core, talos, kubeadm, $$INFRA_PROVIDER)..."
 
 clusterctl init \
+  --core cluster-api:v1.13.3 \
   --infrastructure ${INFRA_PROVIDER} \
-  --bootstrap talos \
-  --control-plane talos
+  --bootstrap talos,kubeadm:v1.13.3 \
+  --control-plane talos,kubeadm:v1.13.3
 
 log "Waiting for provider-neutral CAPI pods to be ready..."
 kubectl wait deployment/capi-controller-manager \
   -n capi-system --for=condition=Available --timeout=300s
 kubectl wait deployment/cacppt-controller-manager \
   -n cacppt-system --for=condition=Available --timeout=300s
+kubectl wait deployment/capi-kubeadm-bootstrap-controller-manager \
+  -n capi-kubeadm-bootstrap-system --for=condition=Available --timeout=300s
+kubectl wait deployment/capi-kubeadm-control-plane-controller-manager \
+  -n capi-kubeadm-control-plane-system --for=condition=Available --timeout=300s
 
-ok "CAPI core + Talos control-plane providers installed"
+ok "CAPI core + Talos and kubeadm providers installed"
 echo ""
 
 # ── Step 5: provider-specific controller wait + infrastructure preparation ────
