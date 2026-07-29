@@ -64,6 +64,7 @@ spec:
   controlPlaneServiceTemplate:
     spec:
       type: LoadBalancer
+      loadBalancerIP: ${ENDPOINT_IP}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
@@ -208,6 +209,8 @@ spec:
         podSubnet: ${POD_CIDR}
         serviceSubnet: ${SERVICE_CIDR}
     initConfiguration:
+      skipPhases:
+        - addon/kube-proxy
       nodeRegistration:
         criSocket: /var/run/containerd/containerd.sock
     joinConfiguration:

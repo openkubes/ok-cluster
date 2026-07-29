@@ -108,7 +108,7 @@ render: require-cluster
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-cleanup
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -122,6 +122,27 @@ ok125-management-ignition: ## Preflight/apply pinned CABPK/KCP Ignition gates
 	 OK125_APPLY="$(or $(OK125_APPLY),no)" \
 	 CLUSTERCTL_BIN="$(or $(CLUSTERCTL_BIN),clusterctl)" \
 	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/configure_management_ignition.py
+
+ok125-runtime-test: ## Offline-test the bounded OK-125 runtime and cleanup guards
+	@python3 $(SCRIPT_DIR)/tests/ok125_runtime_test.py
+
+ok125-runtime-preflight: ## Read-only G1/G3 preflight for exactly ok125-flatcar
+	@CLUSTER="$(or $(CLUSTER),ok125-flatcar)" \
+	 OK125_KUBECONFIG="$(OK125_KUBECONFIG)" \
+	 OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/runtime.py --preflight
+
+ok125-node-ready: ## Run G1/G3 on the disposable ok125-flatcar cluster
+	@CLUSTER="$(or $(CLUSTER),ok125-flatcar)" \
+	 OK125_KUBECONFIG="$(OK125_KUBECONFIG)" \
+	 OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/runtime.py --node-ready
+
+ok125-cleanup: ## Delete only the owned disposable OK-125 runtime
+	@CLUSTER="$(or $(CLUSTER),ok125-flatcar)" \
+	 OK125_KUBECONFIG="$(OK125_KUBECONFIG)" \
+	 OK125_CLEANUP="$(OK125_CLEANUP)" \
+	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/runtime.py --cleanup
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-cluster

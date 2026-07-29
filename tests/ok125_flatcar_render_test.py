@@ -254,12 +254,48 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         and cluster["metadata"]["labels"]["openkubes.io/provider"] == "kubevirt",
         "provider label is derived consistently from the KubeVirt profile",
     )
+    infrastructure = by_kind(docs, "KubevirtCluster")[0]
+    check(
+        infrastructure["spec"]["controlPlaneServiceTemplate"]["spec"][
+            "loadBalancerIP"
+        ]
+        == cfg["network"]["endpoint"],
+        "KubeVirt API endpoint is bound to the declared profile address",
+    )
+    check(
+        control_plane["spec"]["kubeadmConfigSpec"]["initConfiguration"][
+            "skipPhases"
+        ]
+        == ["addon/kube-proxy"],
+        "Flatcar Cilium profile owns service routing without kube-proxy",
+    )
     machine_deployment = by_kind(docs, "MachineDeployment")[0]
     check(
         machine_deployment["spec"]["template"]["spec"]["infrastructureRef"][
             "name"
         ].endswith(identity_short),
         "worker lifecycle references the identity-bound infrastructure template",
+    )
+
+
+def validate_cilium_profile(path: Path, cfg: dict) -> None:
+    values = load_yaml(path)
+    check(
+        values["k8sServiceHost"] == cfg["network"]["endpoint"]
+        and values["k8sServicePort"] == 6443,
+        "Flatcar Cilium profile uses the declared KubeVirt API endpoint",
+    )
+    check(
+        values["ipam"]["mode"] == "kubernetes"
+        and values["kubeProxyReplacement"] is True
+        and values["routingMode"] == "tunnel"
+        and values["tunnelProtocol"] == "vxlan",
+        "Flatcar Cilium networking is explicit and profile-scoped",
+    )
+    check(
+        values["cgroup"]["autoMount"]["enabled"] is True
+        and values["cgroup"]["hostRoot"] == "/sys/fs/cgroup",
+        "Flatcar Cilium cgroup handling does not inherit Talos settings",
     )
 
 
@@ -386,6 +422,7 @@ def main() -> int:
 
         manifest = first / "cluster-v2.yaml"
         validate_manifest(manifest, cfg)
+        validate_cilium_profile(first / "cilium-values.yaml", cfg)
         manifest_digest = "sha256:" + hashlib.sha256(
             manifest.read_bytes()
         ).hexdigest()
