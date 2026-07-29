@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = (
     ROOT / "scripts" / "adoption" / "OK-125" / "runtime.py"
 )
+REPLACEMENT = (
+    ROOT / "scripts" / "adoption" / "OK-125" / "replacement.py"
+)
 
 
 def check(condition: bool, message: str) -> None:
@@ -55,6 +58,27 @@ def main() -> int:
         "condition_is_true(config, \"Ready\")" in source
         and 'get("status", {}).get("ready")' not in source,
         "bootstrap readiness uses CAPI v1beta2 Conditions",
+    )
+    replacement = subprocess.run(
+        ["python3", str(REPLACEMENT), "--self-test"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    check(
+        replacement.returncode == 0
+        and "PASS G2 identities and failure scope are pinned"
+        in replacement.stdout,
+        "replacement runtime is identity-bound and deliberately unhealthy",
+    )
+    replacement_source = REPLACEMENT.read_text(encoding="utf-8")
+    check(
+        "minimum_ready_nodes" in replacement_source
+        and "safety_revert_requested" in replacement_source
+        and "imperative_guest_mutation" in replacement_source
+        and "secret_values_captured" in replacement_source,
+        "G2 preserves healthy capacity and forbids guest mutation or secret evidence",
     )
     return 0
 

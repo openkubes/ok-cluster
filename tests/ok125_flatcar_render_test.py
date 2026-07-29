@@ -38,15 +38,27 @@ def load_yaml(path: Path):
         return yaml.safe_load(stream)
 
 
-def materialize_config(candidate: dict, fixture: dict) -> dict:
+def materialize_config(
+    candidate: dict,
+    fixture: dict,
+    profile_variant: str = "baseline",
+) -> dict:
     implementation = candidate["implementation"]
     boot = candidate["artifacts"]["boot_image"]
     kubernetes = candidate["artifacts"]["kubernetes_payload"]
     bootstrap = candidate["bootstrap"]
     provider_profile = fixture["providerProfile"]
+    replacement = candidate["g2_replacement_candidates"]
+    selected = (
+        replacement["baseline"]
+        if profile_variant == "baseline"
+        else replacement[profile_variant]
+    )
 
     cfg = dict(fixture)
     cfg.pop("providerProfile")
+    if profile_variant == "deliberately_unhealthy":
+        cfg["nodeSelector"] = "ok125-no-such-node"
     cfg["versions"] = {"kubernetes": kubernetes["version"]}
     cfg["os"] = {
         "contractRef": candidate["contract_ref"],
@@ -55,7 +67,8 @@ def materialize_config(candidate: dict, fixture: dict) -> dict:
         "version": str(implementation["version"]),
         "architecture": implementation["architecture"],
         "imageDigest": boot["digest"],
-        "identity": candidate["identity"]["digest"],
+        "identity": selected["identity"],
+        "profileRevision": selected["profile_revision"],
         "candidateStatus": candidate["metadata"]["status"],
         "deployable": candidate["metadata"]["deployable"],
         "goldenImage": {
@@ -156,9 +169,13 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         len(machine_templates) == 2
         and all(
             template["metadata"]["name"].endswith(identity_short)
+            and template["metadata"]["labels"][
+                "openkubes.io/profile-revision"
+            ]
+            == str(cfg["os"]["profileRevision"])
             for template in machine_templates
         ),
-        "immutable machine template names include the OS identity",
+        "immutable machine templates include the OS identity and profile revision",
     )
     check(
         all(
@@ -184,6 +201,15 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
 
     control_plane = by_kind(docs, "KubeadmControlPlane")[0]
     worker = by_kind(docs, "KubeadmConfigTemplate")[0]
+    machine_deployment = by_kind(docs, "MachineDeployment")[0]
+    check(
+        worker["metadata"]["name"].endswith(identity_short)
+        and machine_deployment["spec"]["template"]["spec"]["bootstrap"][
+            "configRef"
+        ]["name"]
+        == worker["metadata"]["name"],
+        "worker bootstrap template is immutable and identity-bound",
+    )
     bootstrap_specs = [
         control_plane["spec"]["kubeadmConfigSpec"],
         worker["spec"]["template"]["spec"],
@@ -195,6 +221,49 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
     check(
         all(spec["format"] == "ignition" for spec in bootstrap_specs),
         "control-plane and worker bootstrap use Ignition",
+    )
+    expected_node_labels = (
+        f"openkubes.io/os-identity={identity_short},"
+        f"openkubes.io/profile-revision={cfg['os']['profileRevision']}"
+    )
+    node_registrations = [
+        control_plane["spec"]["kubeadmConfigSpec"]["initConfiguration"][
+            "nodeRegistration"
+        ],
+        control_plane["spec"]["kubeadmConfigSpec"]["joinConfiguration"][
+            "nodeRegistration"
+        ],
+        worker["spec"]["template"]["spec"]["joinConfiguration"][
+            "nodeRegistration"
+        ],
+    ]
+    check(
+        all(
+            registration["kubeletExtraArgs"]
+            == [{"name": "node-labels", "value": expected_node_labels}]
+            for registration in node_registrations
+        ),
+        "bootstrap reports the declared profile identity on replacement Nodes",
+    )
+    check(
+        control_plane["spec"]["rollout"]
+        == {
+            "strategy": {
+                "type": "RollingUpdate",
+                "rollingUpdate": {"maxSurge": 1},
+            }
+        }
+        and machine_deployment["spec"]["rollout"]
+        == {
+            "strategy": {
+                "type": "RollingUpdate",
+                "rollingUpdate": {
+                    "maxSurge": 1,
+                    "maxUnavailable": 0,
+                },
+            }
+        },
+        "control-plane and worker rollout policies preserve healthy capacity",
     )
     check(
         all(
@@ -385,7 +454,12 @@ def validate_source_profile(ok_linux: Path) -> None:
         raise ValueError(f"ok-linux ok125-static failed:\n{detail}")
 
 
-def write_result(status: str, digest: str, files: list[str]) -> None:
+def write_result(
+    status: str,
+    digest: str,
+    files: list[str],
+    profile_variant: str,
+) -> None:
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     result = {
         "schema_version": 1,
@@ -393,11 +467,17 @@ def write_result(status: str, digest: str, files: list[str]) -> None:
         "status": status,
         "scope": "offline-render-only-not-runtime-adoption",
         "cluster": EXPECTED_CLUSTER,
+        "profile_variant": profile_variant,
         "manifest_digest": digest,
         "files": files,
         "checks": CHECKS,
     }
-    (EVIDENCE / "render.json").write_text(
+    result_name = (
+        "render.json"
+        if profile_variant == "baseline"
+        else f"replacement-{profile_variant}-render.json"
+    )
+    (EVIDENCE / result_name).write_text(
         json.dumps(result, indent=2) + "\n",
         encoding="utf-8",
     )
@@ -406,6 +486,11 @@ def write_result(status: str, digest: str, files: list[str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", default=EXPECTED_CLUSTER)
+    parser.add_argument(
+        "--profile-variant",
+        choices=("baseline", "healthy", "deliberately_unhealthy"),
+        default="baseline",
+    )
     args = parser.parse_args()
     if args.cluster != EXPECTED_CLUSTER:
         raise SystemExit(
@@ -440,7 +525,7 @@ def main() -> int:
         and candidate["metadata"]["deployable"] is False,
         "published artifact is consumed without production promotion",
     )
-    cfg = materialize_config(candidate, fixture)
+    cfg = materialize_config(candidate, fixture, args.profile_variant)
     check(
         cfg["os"]["contractRef"] == "ADR-Platform-016"
         and cfg["type"] == "flatcar"
@@ -475,7 +560,11 @@ def main() -> int:
             manifest.read_bytes()
         ).hexdigest()
 
-        rendered_evidence = EVIDENCE / "render"
+        rendered_evidence = EVIDENCE / (
+            "render"
+            if args.profile_variant == "baseline"
+            else f"replacement/{args.profile_variant}/render"
+        )
         if rendered_evidence.exists():
             shutil.rmtree(rendered_evidence)
         rendered_evidence.parent.mkdir(parents=True, exist_ok=True)
@@ -486,7 +575,12 @@ def main() -> int:
         if CHECKS and all(item["status"] == "PASS" for item in CHECKS)
         else "FAIL"
     )
-    write_result(status, manifest_digest, sorted(first_bytes))
+    write_result(
+        status,
+        manifest_digest,
+        sorted(first_bytes),
+        args.profile_variant,
+    )
     print(f"MANIFEST {manifest_digest}")
     print(f"EVIDENCE {EVIDENCE.relative_to(ROOT)}/")
     return 0 if status == "PASS" else 1
@@ -503,6 +597,6 @@ if __name__ == "__main__":
                 "detail": str(error),
             }
         )
-        write_result("FAIL", "", [])
+        write_result("FAIL", "", [], "unknown")
         print(f"FAIL {error}", file=sys.stderr)
         raise SystemExit(1)

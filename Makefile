@@ -108,11 +108,12 @@ render: require-cluster
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-cleanup
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
-		--cluster "$(or $(CLUSTER),ok125-flatcar)"
+		--cluster "$(or $(CLUSTER),ok125-flatcar)" \
+		--profile-variant "$(or $(OK125_PROFILE_VARIANT),baseline)"
 
 ok125-management-test: ## Offline-test the pinned CABPK/KCP Ignition management path
 	@python3 $(SCRIPT_DIR)/tests/ok125_management_ignition_test.py
@@ -137,6 +138,12 @@ ok125-node-ready: ## Run G1/G3 on the disposable ok125-flatcar cluster
 	 OK125_KUBECONFIG="$(OK125_KUBECONFIG)" \
 	 OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/runtime.py --node-ready
+
+ok125-replacement: ## Run healthy and failed G2 replacements on ok125-flatcar
+	@CLUSTER="$(or $(CLUSTER),ok125-flatcar)" \
+	 OK125_KUBECONFIG="$(OK125_KUBECONFIG)" \
+	 OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/replacement.py --run
 
 ok125-cleanup: ## Delete only the owned disposable OK-125 runtime
 	@CLUSTER="$(or $(CLUSTER),ok125-flatcar)" \

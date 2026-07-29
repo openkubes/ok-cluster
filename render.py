@@ -222,6 +222,7 @@ def build_context(cfg: dict) -> dict:
         # selected templates/<type> directory.
         "OS_DISTRIBUTION":    os_cfg.get("distribution", ""),
         "OS_PROFILE":         os_cfg.get("profile", ""),
+        "OS_PROFILE_REVISION": os_cfg.get("profileRevision", ""),
         "OS_VERSION":         os_cfg.get("version", ""),
         "OS_ARCHITECTURE":    os_cfg.get("architecture", ""),
         "OS_IMAGE_DIGEST":    os_cfg.get("imageDigest", ""),

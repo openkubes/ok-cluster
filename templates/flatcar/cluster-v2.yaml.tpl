@@ -7,6 +7,7 @@ metadata:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -63,6 +64,7 @@ metadata:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -96,6 +98,7 @@ metadata:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -116,6 +119,7 @@ metadata:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -135,6 +139,7 @@ spec:
             openkubes.io/type: flatcar
             openkubes.io/provider: ${INFRA_PROVIDER}
             openkubes.io/profile: ${OS_PROFILE}
+            openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
             openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
             openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
             openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -161,6 +166,7 @@ spec:
                 openkubes.io/type: flatcar
                 openkubes.io/provider: ${INFRA_PROVIDER}
                 openkubes.io/profile: ${OS_PROFILE}
+                openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
                 openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
                 openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
                 openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -193,13 +199,23 @@ metadata:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
 spec:
   replicas: ${CP_REPLICAS}
   version: ${K8S_VERSION}
+  rollout:
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
   machineTemplate:
+    metadata:
+      labels:
+        openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
+        openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     spec:
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
@@ -262,9 +278,15 @@ spec:
         - addon/kube-proxy
       nodeRegistration:
         criSocket: /var/run/containerd/containerd.sock
+        kubeletExtraArgs:
+          - name: node-labels
+            value: openkubes.io/os-identity=${OS_IDENTITY_SHORT},openkubes.io/profile-revision=${OS_PROFILE_REVISION}
     joinConfiguration:
       nodeRegistration:
         criSocket: /var/run/containerd/containerd.sock
+        kubeletExtraArgs:
+          - name: node-labels
+            value: openkubes.io/os-identity=${OS_IDENTITY_SHORT},openkubes.io/profile-revision=${OS_PROFILE_REVISION}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
@@ -275,6 +297,7 @@ metadata:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -294,6 +317,7 @@ spec:
             openkubes.io/type: flatcar
             openkubes.io/provider: ${INFRA_PROVIDER}
             openkubes.io/profile: ${OS_PROFILE}
+            openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
             openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
             openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
             openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -320,6 +344,7 @@ spec:
                 openkubes.io/type: flatcar
                 openkubes.io/provider: ${INFRA_PROVIDER}
                 openkubes.io/profile: ${OS_PROFILE}
+                openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
                 openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
                 openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
                 openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -346,12 +371,13 @@ spec:
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
 kind: KubeadmConfigTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers
+  name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
   namespace: ${CLUSTER_NAME}
   labels:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
@@ -412,6 +438,9 @@ spec:
       joinConfiguration:
         nodeRegistration:
           criSocket: /var/run/containerd/containerd.sock
+          kubeletExtraArgs:
+            - name: node-labels
+              value: openkubes.io/os-identity=${OS_IDENTITY_SHORT},openkubes.io/profile-revision=${OS_PROFILE_REVISION}
 ---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment
@@ -422,12 +451,19 @@ metadata:
     openkubes.io/type: flatcar
     openkubes.io/provider: ${INFRA_PROVIDER}
     openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
     openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
     openkubes.io/deployable: "${OS_DEPLOYABLE}"
 spec:
   clusterName: ${CLUSTER_NAME}
   replicas: ${WORKER_REPLICAS}
+  rollout:
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
@@ -436,6 +472,7 @@ spec:
       labels:
         cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
         openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
+        openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     spec:
       clusterName: ${CLUSTER_NAME}
       version: ${K8S_VERSION}
@@ -443,7 +480,7 @@ spec:
         configRef:
           apiGroup: bootstrap.cluster.x-k8s.io
           kind: KubeadmConfigTemplate
-          name: ${CLUSTER_NAME}-workers
+          name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
