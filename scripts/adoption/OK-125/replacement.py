@@ -50,6 +50,19 @@ def parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def transient_workload_api_error(detail: str) -> bool:
+    return any(
+        term in detail.lower()
+        for term in (
+            "connection refused",
+            "was refused",
+            "i/o timeout",
+            "context deadline exceeded",
+            "tls handshake timeout",
+        )
+    )
+
+
 def short(identity: str) -> str:
     return identity.removeprefix("sha256:")[:12]
 
@@ -562,15 +575,7 @@ def wait_for_healthy_replacement(
             latest_nodes = node_snapshot(kubectl_bin)
         except shared.RuntimeValidationError as error:
             detail = str(error)
-            if not any(
-                term in detail
-                for term in (
-                    "connection refused",
-                    "i/o timeout",
-                    "context deadline exceeded",
-                    "TLS handshake timeout",
-                )
-            ):
+            if not transient_workload_api_error(detail):
                 raise
             observed_at = utc_now()
             if active_api_outage is None:
@@ -1175,6 +1180,12 @@ def self_test() -> int:
     assert (
         VARIANTS["deliberately_unhealthy"]["node_selector"]
         == "ok125-no-such-node"
+    )
+    assert transient_workload_api_error(
+        "The connection to the server 192.168.100.249:6443 was refused"
+    )
+    assert not transient_workload_api_error(
+        "forbidden: user cannot list nodes"
     )
     print("PASS G2 identities and failure scope are pinned")
     return 0
