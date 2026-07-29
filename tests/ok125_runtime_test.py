@@ -79,6 +79,7 @@ def main() -> int:
         and "api_unavailable_windows" in replacement_source
         and "more than 120 seconds" in replacement_source
         and "transient_workload_api_error" in replacement_source
+        and "identity_from_infrastructure_ref" in replacement_source
         and "safety_revert_requested" in replacement_source
         and 'f"virt-launcher-{failed[0][\'name\']}-"' in replacement_source
         and "imperative_guest_mutation" in replacement_source

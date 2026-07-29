@@ -212,10 +212,6 @@ spec:
       rollingUpdate:
         maxSurge: 1
   machineTemplate:
-    metadata:
-      labels:
-        openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
-        openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     spec:
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
@@ -471,8 +467,6 @@ spec:
     metadata:
       labels:
         cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
-        openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
-        openkubes.io/profile-revision: "${OS_PROFILE_REVISION}"
     spec:
       clusterName: ${CLUSTER_NAME}
       version: ${K8S_VERSION}

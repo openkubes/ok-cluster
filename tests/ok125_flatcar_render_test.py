@@ -266,6 +266,12 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         "control-plane and worker rollout policies preserve healthy capacity",
     )
     check(
+        "metadata" not in control_plane["spec"]["machineTemplate"]
+        and set(machine_deployment["spec"]["template"]["metadata"]["labels"])
+        == {"cluster.x-k8s.io/cluster-name"},
+        "mutable Machine labels are not used as OS identity authority",
+    )
+    check(
         all(
             "kubeadm.service" in config
             and "Requires=containerd.service" in config

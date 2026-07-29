@@ -256,6 +256,26 @@ def machine_role(machine: dict) -> str:
     )
 
 
+def identity_from_infrastructure_ref(machine: dict) -> tuple[str, str]:
+    reference = machine["spec"].get("infrastructureRef", {}).get("name", "")
+    identities = {
+        short(BASE_IDENTITY): "1",
+        short(HEALTHY_IDENTITY): "2",
+        short(UNHEALTHY_IDENTITY): "3",
+    }
+    matches = [
+        (identity, revision)
+        for identity, revision in identities.items()
+        if reference.endswith(f"-{identity}")
+    ]
+    if len(matches) != 1:
+        raise shared.RuntimeValidationError(
+            f"Machine infrastructureRef is not identity-bound: "
+            f"{machine['metadata']['name']}"
+        )
+    return matches[0]
+
+
 def machine_snapshot(
     kubectl_bin: str,
     management_kubeconfig: Path,
@@ -265,25 +285,26 @@ def machine_snapshot(
         management_kubeconfig,
         ["-n", shared.CLUSTER, "get", "machine"],
     )["items"]
-    return [
-        {
+    result = []
+    for machine in machines:
+        identity, profile_revision = identity_from_infrastructure_ref(machine)
+        result.append({
             "name": machine["metadata"]["name"],
             "uid": machine["metadata"]["uid"],
             "created_at": machine["metadata"]["creationTimestamp"],
             "ready": shared.condition_is_true(machine, "Ready"),
             "available": shared.condition_is_true(machine, "Available"),
             "provider_id": machine["spec"].get("providerID", ""),
-            "identity": machine["metadata"]
+            "identity": identity,
+            "profile_revision": profile_revision,
+            "infrastructure_ref": machine["spec"]["infrastructureRef"]["name"],
+            "metadata_identity_label": machine["metadata"]
             .get("labels", {})
-            .get("openkubes.io/os-identity", ""),
-            "profile_revision": machine["metadata"]
-            .get("labels", {})
-            .get("openkubes.io/profile-revision", ""),
+            .get("openkubes.io/os-identity"),
             "role": machine_role(machine),
             "phase": machine.get("status", {}).get("phase", ""),
-        }
-        for machine in machines
-    ]
+        })
+    return result
 
 
 def machine_drain_event(
@@ -903,9 +924,15 @@ def delete_failure_scaffolding(
         ["-n", shared.CLUSTER, "get", "machineset"],
     )["items"]
     for machine_set in machine_sets:
-        labels = machine_set["metadata"].get("labels", {})
-        if labels.get("openkubes.io/os-identity") != short(
-            UNHEALTHY_IDENTITY
+        infrastructure_ref = (
+            machine_set.get("spec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("infrastructureRef", {})
+            .get("name", "")
+        )
+        if not infrastructure_ref.endswith(
+            f"-{short(UNHEALTHY_IDENTITY)}"
         ):
             continue
         if machine_set.get("spec", {}).get("replicas", 0) != 0:
