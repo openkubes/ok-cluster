@@ -20,6 +20,7 @@ KUBECTL    := kubectl --kubeconfig $(KUBECONFIG)
 HELM       := helm --kubeconfig $(KUBECONFIG)
 NS         ?= platform-diagnostics
 SA         ?= openkubes-platform-agent
+RBAC_ROLE  ?= platform-diagnostics-readonly
 SELF_DIR   := $(dir $(lastword $(MAKEFILE_LIST)))
 FACADE_CHART := $(SELF_DIR)../../../openkubes/platform/ai/platform-diagnostics/profiles/kagent/charts/platform-diagnostics-facade
 SVC_URL    := http://platform-diagnostics.$(NS).svc.cluster.local:8080
@@ -83,15 +84,39 @@ validate:
 
 # ── ADR-021 contract test 2: RBAC audit on the provider SA ────────────────────
 verify-rbac:
-	@echo "== positive: read is allowed =="
-	@$(KUBECTL) auth can-i list pods -A --as=system:serviceaccount:$(NS):$(SA)
-	@echo "== negative: secrets + writes must be DENIED =="
-	@$(KUBECTL) auth can-i get secrets -A --as=system:serviceaccount:$(NS):$(SA) \
-		| grep -qx no && echo "OK: secrets denied" \
-		|| (echo "FAIL: secrets readable — ADR-021 test 2 violation, STOP (Part C)"; exit 1)
-	@$(KUBECTL) auth can-i delete pods -A --as=system:serviceaccount:$(NS):$(SA) \
-		| grep -qx no && echo "OK: delete denied" \
-		|| (echo "FAIL: write verb allowed — STOP (Part C)"; exit 1)
+	@echo "== declared ClusterRole: only get/list/watch; no Secrets or wildcard resources =="
+	@$(KUBECTL) get clusterrole $(RBAC_ROLE) -o json | jq -e '\
+		([.rules[].verbs[] | select(. != "get" and . != "list" and . != "watch")] | length == 0) and \
+		([.rules[].resources[]? | select(. == "secrets" or . == "*")] | length == 0)' \
+		>/dev/null \
+		&& echo "OK: declared verbs are limited to get/list/watch; Secrets excluded" \
+		|| (echo "FAIL: ClusterRole contains a write verb, Secrets, or wildcard resources"; exit 1)
+	@$(KUBECTL) get clusterrolebinding $(RBAC_ROLE) -o json | jq -e '\
+		.roleRef.kind == "ClusterRole" and .roleRef.name == "$(RBAC_ROLE)" and \
+		any(.subjects[]?; .kind == "ServiceAccount" and .name == "$(SA)" and .namespace == "$(NS)")' \
+		>/dev/null \
+		&& echo "OK: $(NS)/$(SA) is bound to $(RBAC_ROLE)" \
+		|| (echo "FAIL: expected ServiceAccount binding is missing"; exit 1)
+	@echo "== effective positive checks: get/list/watch are allowed =="
+	@for verb in get list watch; do \
+		$(KUBECTL) auth can-i $$verb pods -A --as=system:serviceaccount:$(NS):$(SA) \
+			| grep -qx yes \
+			&& echo "OK: $$verb pods allowed" \
+			|| { echo "FAIL: $$verb pods denied"; exit 1; }; \
+	done
+	@echo "== effective negative checks: Secrets + mutating verbs are denied =="
+	@for verb in get list watch; do \
+		$(KUBECTL) auth can-i $$verb secrets -A --as=system:serviceaccount:$(NS):$(SA) \
+			| grep -qx no \
+			&& echo "OK: $$verb secrets denied" \
+			|| { echo "FAIL: $$verb secrets allowed — ADR-021 test 2 violation"; exit 1; }; \
+	done
+	@for verb in create update patch delete deletecollection; do \
+		$(KUBECTL) auth can-i $$verb pods -A --as=system:serviceaccount:$(NS):$(SA) \
+			| grep -qx no \
+			&& echo "OK: $$verb pods denied" \
+			|| { echo "FAIL: $$verb pods allowed — ADR-021 test 2 violation"; exit 1; }; \
+	done
 
 connect-openclaw-info:
 	@echo "OpenClaw is the CONSUMER (ADR-021) — it reaches diagnostics ONLY via the"
