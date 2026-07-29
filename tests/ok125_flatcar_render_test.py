@@ -109,6 +109,8 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         kinds
         == [
             "Namespace",
+            "Role",
+            "RoleBinding",
             "Cluster",
             "KubevirtCluster",
             "KubevirtMachineTemplate",
@@ -118,6 +120,33 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
             "MachineDeployment",
         ],
         "render contains the bounded CAPI/CAPK object set",
+    )
+    clone_role = by_kind(docs, "Role")[0]
+    clone_binding = by_kind(docs, "RoleBinding")[0]
+    check(
+        clone_role["metadata"]["namespace"]
+        == cfg["os"]["goldenImage"]["namespace"]
+        and clone_role["rules"]
+        == [
+            {
+                "apiGroups": ["cdi.kubevirt.io"],
+                "resources": ["datavolumes/source"],
+                "verbs": ["create"],
+            }
+        ],
+        "CDI clone authority is limited to the golden-image namespace",
+    )
+    check(
+        clone_binding["subjects"]
+        == [
+            {
+                "kind": "ServiceAccount",
+                "name": "default",
+                "namespace": EXPECTED_CLUSTER,
+            }
+        ]
+        and clone_binding["roleRef"]["kind"] == "Role",
+        "CDI clone authority binds only the disposable consumer identity",
     )
 
     identity = cfg["os"]["identity"]

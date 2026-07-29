@@ -15,6 +15,45 @@ metadata:
     openkubes.io/os-image-digest: ${OS_IMAGE_DIGEST}
     openkubes.io/golden-image-published: "${OS_GOLDEN_IMAGE_PUBLISHED}"
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${CLUSTER_NAME}-golden-image-cloner
+  namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
+  labels:
+    openkubes.io/type: flatcar
+    openkubes.io/provider: ${INFRA_PROVIDER}
+    openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
+    openkubes.io/deployable: "${OS_DEPLOYABLE}"
+rules:
+  - apiGroups:
+      - cdi.kubevirt.io
+    resources:
+      - datavolumes/source
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${CLUSTER_NAME}-golden-image-cloner
+  namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
+  labels:
+    openkubes.io/type: flatcar
+    openkubes.io/provider: ${INFRA_PROVIDER}
+    openkubes.io/profile: ${OS_PROFILE}
+    openkubes.io/adoption-status: ${OS_CANDIDATE_STATUS}
+    openkubes.io/deployable: "${OS_DEPLOYABLE}"
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: ${CLUSTER_NAME}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ${CLUSTER_NAME}-golden-image-cloner
+---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:

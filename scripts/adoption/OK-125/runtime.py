@@ -55,6 +55,7 @@ EXPECTED_GOLDEN_PVC = (
     "ok-images",
     "flatcar-stable-4593-2-4-amd64-kubevirt",
 )
+CLONE_AUTHORIZATION = f"{CLUSTER}-golden-image-cloner"
 GATE_DEPLOYMENTS = (
     (
         "capi-kubeadm-bootstrap-system",
@@ -304,6 +305,26 @@ def management_preflight(
         raise RuntimeValidationError(
             f"namespace {CLUSTER} already exists; inspect or run guarded cleanup"
         )
+    for kind in ("role", "rolebinding"):
+        authorization = kubectl(
+            kubectl_bin,
+            kubeconfig,
+            [
+                "-n",
+                EXPECTED_GOLDEN_PVC[0],
+                "get",
+                kind,
+                CLONE_AUTHORIZATION,
+                "-o",
+                "name",
+            ],
+            expected=(0, 1),
+        )
+        if authorization.returncode == 0:
+            raise RuntimeValidationError(
+                f"{kind} {CLONE_AUTHORIZATION} already exists in "
+                f"{EXPECTED_GOLDEN_PVC[0]}"
+            )
 
     golden = kubectl_json(
         kubectl_bin,
@@ -740,12 +761,48 @@ def collect_runtime_evidence(
     if "OK" not in cilium.stdout:
         raise RuntimeValidationError("Cilium brief health did not report OK")
 
+    role = kubectl_json(
+        kubectl_bin,
+        management_kubeconfig,
+        [
+            "-n",
+            EXPECTED_GOLDEN_PVC[0],
+            "get",
+            "role",
+            CLONE_AUTHORIZATION,
+        ],
+    )
+    role_binding = kubectl_json(
+        kubectl_bin,
+        management_kubeconfig,
+        [
+            "-n",
+            EXPECTED_GOLDEN_PVC[0],
+            "get",
+            "rolebinding",
+            CLONE_AUTHORIZATION,
+        ],
+    )
     return {
         "nodes": node_evidence,
         "machines": machine_evidence,
         "bootstrap": bootstrap,
         "virtualMachines": vm_evidence,
         "cilium": {"version": "1.19.6", "status": "PASS"},
+        "goldenImageCloneAuthorization": {
+            "namespace": EXPECTED_GOLDEN_PVC[0],
+            "role": {
+                "name": role["metadata"]["name"],
+                "uid": role["metadata"]["uid"],
+                "resource": "datavolumes/source",
+                "verb": "create",
+            },
+            "roleBinding": {
+                "name": role_binding["metadata"]["name"],
+                "uid": role_binding["metadata"]["uid"],
+                "subject": f"system:serviceaccount:{CLUSTER}:default",
+            },
+        },
         "lifecycle_authorities": {
             "ssh": False,
             "remote_shell": False,
@@ -842,6 +899,32 @@ def cleanup() -> int:
         or labels.get("openkubes.io/deployable") != "false"
     ):
         raise RuntimeValidationError("namespace ownership labels do not match")
+    for kind in ("role", "rolebinding"):
+        authorization = kubectl(
+            kubectl_bin,
+            kubeconfig,
+            [
+                "-n",
+                EXPECTED_GOLDEN_PVC[0],
+                "get",
+                kind,
+                CLONE_AUTHORIZATION,
+                "-o",
+                "json",
+            ],
+            expected=(0, 1),
+        )
+        if authorization.returncode == 0:
+            labels = json.loads(authorization.stdout)["metadata"].get(
+                "labels", {}
+            )
+            if (
+                labels.get("openkubes.io/type") != "flatcar"
+                or labels.get("openkubes.io/deployable") != "false"
+            ):
+                raise RuntimeValidationError(
+                    f"{kind} clone authorization ownership does not match"
+                )
     cluster = kubectl(
         kubectl_bin,
         kubeconfig,
@@ -908,6 +991,21 @@ def cleanup() -> int:
         time.sleep(5)
     if leftovers:
         raise RuntimeValidationError(f"orphan PVs remain: {leftovers}")
+    progress("removing the exact golden-image clone authorization")
+    for kind in ("rolebinding", "role"):
+        kubectl(
+            kubectl_bin,
+            kubeconfig,
+            [
+                "-n",
+                EXPECTED_GOLDEN_PVC[0],
+                "delete",
+                kind,
+                CLONE_AUTHORIZATION,
+                "--ignore-not-found",
+                "--wait=true",
+            ],
+        )
     if WORKLOAD_KUBECONFIG.exists():
         WORKLOAD_KUBECONFIG.unlink()
     progress("PASS exact-scope cleanup")
