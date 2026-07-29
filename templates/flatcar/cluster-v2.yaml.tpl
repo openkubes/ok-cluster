@@ -218,8 +218,9 @@ spec:
                   - name: 10-flatcar.conf
                     contents: |
                       [Unit]
-                      Requires=containerd.service kubelet.service
-                      After=containerd.service kubelet.service
+                      Requires=containerd.service
+                      Wants=kubelet.service
+                      After=containerd.service
                       OnFailure=ok125-kubeadm-failure.service
                       [Service]
                       Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
@@ -368,8 +369,9 @@ spec:
                     - name: 10-flatcar.conf
                       contents: |
                         [Unit]
-                        Requires=containerd.service kubelet.service
-                        After=containerd.service kubelet.service
+                        Requires=containerd.service
+                        Wants=kubelet.service
+                        After=containerd.service
                         OnFailure=ok125-kubeadm-failure.service
                         [Service]
                         Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin

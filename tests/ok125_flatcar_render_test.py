@@ -199,7 +199,9 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
     check(
         all(
             "kubeadm.service" in config
-            and "Requires=containerd.service kubelet.service" in config
+            and "Requires=containerd.service" in config
+            and "Wants=kubelet.service" in config
+            and "Requires=containerd.service kubelet.service" not in config
             and "OnFailure=ok125-kubeadm-failure.service" in config
             and (
                 "Environment=PATH=/opt/bin:/usr/local/sbin:"
