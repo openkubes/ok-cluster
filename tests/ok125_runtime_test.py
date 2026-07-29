@@ -75,6 +75,9 @@ def main() -> int:
     replacement_source = REPLACEMENT.read_text(encoding="utf-8")
     check(
         "minimum_ready_nodes" in replacement_source
+        and "SuccessfulDrainNode" in replacement_source
+        and "api_unavailable_windows" in replacement_source
+        and "more than 120 seconds" in replacement_source
         and "safety_revert_requested" in replacement_source
         and 'f"virt-launcher-{failed[0][\'name\']}-"' in replacement_source
         and "imperative_guest_mutation" in replacement_source

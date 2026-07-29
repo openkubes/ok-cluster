@@ -273,6 +273,46 @@ def machine_snapshot(
     ]
 
 
+def machine_drain_event(
+    kubectl_bin: str,
+    management_kubeconfig: Path,
+    machine_name: str,
+) -> dict:
+    events = shared.kubectl_json(
+        kubectl_bin,
+        management_kubeconfig,
+        ["-n", shared.CLUSTER, "get", "event"],
+    )["items"]
+    matching = [
+        event
+        for event in events
+        if event.get("involvedObject", {}).get("kind") == "Machine"
+        and event.get("involvedObject", {}).get("name") == machine_name
+        and event.get("reason") == "SuccessfulDrainNode"
+    ]
+    if not matching:
+        raise shared.RuntimeValidationError(
+            f"no SuccessfulDrainNode event for predecessor {machine_name}"
+        )
+    event = max(
+        matching,
+        key=lambda item: (
+            item.get("eventTime")
+            or item.get("lastTimestamp")
+            or item["metadata"]["creationTimestamp"]
+        ),
+    )
+    return {
+        "reason": "SuccessfulDrainNode",
+        "time": (
+            event.get("eventTime")
+            or event.get("lastTimestamp")
+            or event["metadata"]["creationTimestamp"]
+        ),
+        "event_uid": event["metadata"]["uid"],
+    }
+
+
 def annotate_test_pvcs(
     kubectl_bin: str,
     management_kubeconfig: Path,
@@ -508,15 +548,59 @@ def wait_for_healthy_replacement(
     old_uids = {item["uid"] for item in baseline["machines"]}
     removed_observed: dict[str, str] = {}
     minimum_ready = 2
+    api_unavailable_windows: list[dict] = []
+    active_api_outage: dict | None = None
     deadline = time.monotonic() + timeout
     latest_nodes: list[dict] = []
     latest_machines: list[dict] = []
     while time.monotonic() < deadline:
         annotate_test_pvcs(kubectl_bin, management_kubeconfig)
-        latest_nodes = node_snapshot(kubectl_bin)
         latest_machines = machine_snapshot(
             kubectl_bin, management_kubeconfig
         )
+        try:
+            latest_nodes = node_snapshot(kubectl_bin)
+        except shared.RuntimeValidationError as error:
+            detail = str(error)
+            if not any(
+                term in detail
+                for term in (
+                    "connection refused",
+                    "i/o timeout",
+                    "context deadline exceeded",
+                    "TLS handshake timeout",
+                )
+            ):
+                raise
+            observed_at = utc_now()
+            if active_api_outage is None:
+                active_api_outage = {
+                    "started_at": observed_at,
+                    "last_observed_at": observed_at,
+                    "samples": 1,
+                }
+            else:
+                active_api_outage["last_observed_at"] = observed_at
+                active_api_outage["samples"] += 1
+            if (
+                parse_time(observed_at)
+                - parse_time(active_api_outage["started_at"])
+            ).total_seconds() > 120:
+                raise shared.RuntimeValidationError(
+                    "workload API was unavailable for more than 120 seconds"
+                )
+            time.sleep(5)
+            continue
+        if active_api_outage is not None:
+            active_api_outage["recovered_at"] = utc_now()
+            active_api_outage["duration_seconds"] = int(
+                (
+                    parse_time(active_api_outage["recovered_at"])
+                    - parse_time(active_api_outage["started_at"])
+                ).total_seconds()
+            )
+            api_unavailable_windows.append(active_api_outage)
+            active_api_outage = None
         ready_nodes = [item for item in latest_nodes if item["ready"]]
         minimum_ready = min(minimum_ready, len(ready_nodes))
         if len(ready_nodes) < 2:
@@ -569,9 +653,15 @@ def wait_for_healthy_replacement(
                 )
                 node = by_provider[machine["provider_id"]]
                 removed_at = removed_observed[role]
+                drain_event = machine_drain_event(
+                    kubectl_bin,
+                    management_kubeconfig,
+                    old_by_role[role]["name"],
+                )
                 if not (
                     parse_time(machine["created_at"])
                     <= parse_time(node["ready_at"])
+                    <= parse_time(drain_event["time"])
                     <= parse_time(removed_at)
                 ):
                     raise shared.RuntimeValidationError(
@@ -583,6 +673,7 @@ def wait_for_healthy_replacement(
                         "predecessor": {
                             "name": old_by_role[role]["name"],
                             "uid": old_by_role[role]["uid"],
+                            "drain_event": drain_event,
                             "removed_observed_at": removed_at,
                         },
                         "replacement": {
@@ -593,6 +684,7 @@ def wait_for_healthy_replacement(
                 )
             return {
                 "minimum_ready_nodes": minimum_ready,
+                "api_unavailable_windows": api_unavailable_windows,
                 "timeline": timeline,
                 "nodes": target_nodes,
                 "machines": target_machines,
