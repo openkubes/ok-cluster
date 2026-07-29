@@ -76,6 +76,7 @@ def main() -> int:
     check(
         "minimum_ready_nodes" in replacement_source
         and "safety_revert_requested" in replacement_source
+        and 'f"virt-launcher-{failed[0][\'name\']}-"' in replacement_source
         and "imperative_guest_mutation" in replacement_source
         and "secret_values_captured" in replacement_source,
         "G2 preserves healthy capacity and forbids guest mutation or secret evidence",

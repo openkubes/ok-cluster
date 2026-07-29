@@ -665,8 +665,17 @@ def wait_for_expected_failure(
         matching_pods = [
             pod
             for pod in pods
-            if pod["metadata"].get("labels", {}).get("kubevirt.io/domain")
-            == failed[0]["name"]
+            if (
+                pod["metadata"].get("labels", {}).get("kubevirt.io/domain")
+                == failed[0]["name"]
+                or pod["metadata"]
+                .get("annotations", {})
+                .get("kubevirt.io/domain")
+                == failed[0]["name"]
+                or pod["metadata"]["name"].startswith(
+                    f"virt-launcher-{failed[0]['name']}-"
+                )
+            )
         ]
         if not any(pod_unschedulable(pod) for pod in matching_pods):
             time.sleep(5)
