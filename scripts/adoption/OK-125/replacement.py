@@ -256,8 +256,27 @@ def machine_role(machine: dict) -> str:
     )
 
 
-def identity_from_infrastructure_ref(machine: dict) -> tuple[str, str]:
+def identity_from_infrastructure_ref(
+    machine: dict,
+    infrastructure: dict[str, dict],
+) -> tuple[str, str, str]:
     reference = machine["spec"].get("infrastructureRef", {}).get("name", "")
+    concrete = infrastructure.get(reference)
+    if concrete is None:
+        raise shared.RuntimeValidationError(
+            f"Machine infrastructureRef is unresolved: "
+            f"{machine['metadata']['name']}"
+        )
+    annotations = concrete["metadata"].get("annotations", {})
+    if annotations.get("cluster.x-k8s.io/cloned-from-groupkind") != (
+        "KubevirtMachineTemplate.infrastructure.cluster.x-k8s.io"
+    ):
+        raise shared.RuntimeValidationError(
+            f"KubevirtMachine clone provenance is invalid: {reference}"
+        )
+    template_reference = annotations.get(
+        "cluster.x-k8s.io/cloned-from-name", ""
+    )
     identities = {
         short(BASE_IDENTITY): "1",
         short(HEALTHY_IDENTITY): "2",
@@ -266,14 +285,14 @@ def identity_from_infrastructure_ref(machine: dict) -> tuple[str, str]:
     matches = [
         (identity, revision)
         for identity, revision in identities.items()
-        if reference.endswith(f"-{identity}")
+        if template_reference.endswith(f"-{identity}")
     ]
     if len(matches) != 1:
         raise shared.RuntimeValidationError(
-            f"Machine infrastructureRef is not identity-bound: "
+            f"Machine clone source is not identity-bound: "
             f"{machine['metadata']['name']}"
         )
-    return matches[0]
+    return matches[0][0], matches[0][1], template_reference
 
 
 def machine_snapshot(
@@ -285,9 +304,21 @@ def machine_snapshot(
         management_kubeconfig,
         ["-n", shared.CLUSTER, "get", "machine"],
     )["items"]
+    infrastructure_items = shared.kubectl_json(
+        kubectl_bin,
+        management_kubeconfig,
+        ["-n", shared.CLUSTER, "get", "kubevirtmachine"],
+    )["items"]
+    infrastructure = {
+        item["metadata"]["name"]: item for item in infrastructure_items
+    }
     result = []
     for machine in machines:
-        identity, profile_revision = identity_from_infrastructure_ref(machine)
+        (
+            identity,
+            profile_revision,
+            template_reference,
+        ) = identity_from_infrastructure_ref(machine, infrastructure)
         result.append({
             "name": machine["metadata"]["name"],
             "uid": machine["metadata"]["uid"],
@@ -298,6 +329,7 @@ def machine_snapshot(
             "identity": identity,
             "profile_revision": profile_revision,
             "infrastructure_ref": machine["spec"]["infrastructureRef"]["name"],
+            "infrastructure_template_ref": template_reference,
             "metadata_identity_label": machine["metadata"]
             .get("labels", {})
             .get("openkubes.io/os-identity"),
@@ -1214,6 +1246,27 @@ def self_test() -> int:
     assert not transient_workload_api_error(
         "forbidden: user cannot list nodes"
     )
+    assert identity_from_infrastructure_ref(
+        {
+            "metadata": {"name": "machine-a"},
+            "spec": {"infrastructureRef": {"name": "concrete-a"}},
+        },
+        {
+            "concrete-a": {
+                "metadata": {
+                    "annotations": {
+                        "cluster.x-k8s.io/cloned-from-groupkind": (
+                            "KubevirtMachineTemplate."
+                            "infrastructure.cluster.x-k8s.io"
+                        ),
+                        "cluster.x-k8s.io/cloned-from-name": (
+                            "ok125-flatcar-workers-6030632e0a7c"
+                        ),
+                    }
+                }
+            }
+        },
+    ) == ("6030632e0a7c", "2", "ok125-flatcar-workers-6030632e0a7c")
     print("PASS G2 identities and failure scope are pinned")
     return 0
 
