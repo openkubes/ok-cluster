@@ -159,20 +159,42 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         control_plane["spec"]["kubeadmConfigSpec"],
         worker["spec"]["template"]["spec"],
     ]
+    additional_configs = [
+        spec["ignition"]["containerLinuxConfig"]["additionalConfig"]
+        for spec in bootstrap_specs
+    ]
     check(
         all(spec["format"] == "ignition" for spec in bootstrap_specs),
         "control-plane and worker bootstrap use Ignition",
     )
     check(
         all(
-            "kubeadm.service" in spec["ignition"]["containerLinuxConfig"][
-                "additionalConfig"
-            ]
-            and "Requires=containerd.service"
-            in spec["ignition"]["containerLinuxConfig"]["additionalConfig"]
-            for spec in bootstrap_specs
+            "kubeadm.service" in config
+            and "Requires=containerd.service kubelet.service" in config
+            and (
+                "Environment=PATH=/opt/bin:/usr/local/sbin:"
+                "/usr/local/bin:/usr/sbin:/usr/bin"
+            )
+            in config
+            for config in additional_configs
         ),
-        "kubeadm is declaratively ordered after containerd",
+        "kubeadm resolves the golden-image binary and waits for Flatcar services",
+    )
+    check(
+        all(
+            "name: kubelet.service" in config
+            and "ExecStart=/opt/bin/kubelet" in config
+            and (
+                "--bootstrap-kubeconfig="
+                "/etc/kubernetes/bootstrap-kubelet.conf"
+            )
+            in config
+            and "EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env"
+            in config
+            and "Restart=always" in config
+            for config in additional_configs
+        ),
+        "control-plane and worker declare the Flatcar kubelet service",
     )
 
     rendered_text = manifest.read_text(encoding="utf-8")
@@ -186,6 +208,12 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         "https://",
         "containerDisk:",
         "kind: Secret",
+        "apt-get ",
+        "dnf ",
+        "yum ",
+        "apk add",
+        "curl ",
+        "wget ",
     )
     check(
         "${" not in rendered_text

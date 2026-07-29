@@ -177,8 +177,31 @@ spec:
                   - name: 10-flatcar.conf
                     contents: |
                       [Unit]
-                      Requires=containerd.service
-                      After=containerd.service
+                      Requires=containerd.service kubelet.service
+                      After=containerd.service kubelet.service
+                      [Service]
+                      Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+              - name: kubelet.service
+                enabled: true
+                contents: |
+                  [Unit]
+                  Description=kubelet: Kubernetes Node Agent (Flatcar profile)
+                  Wants=network-online.target
+                  Requires=containerd.service
+                  After=network-online.target containerd.service
+
+                  [Service]
+                  Environment=KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf
+                  Environment=KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml
+                  EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
+                  EnvironmentFile=-/etc/default/kubelet
+                  ExecStart=/opt/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
+                  Restart=always
+                  RestartSec=10
+                  StartLimitIntervalSec=0
+
+                  [Install]
+                  WantedBy=multi-user.target
     clusterConfiguration:
       networking:
         dnsDomain: cluster.local
@@ -296,8 +319,31 @@ spec:
                     - name: 10-flatcar.conf
                       contents: |
                         [Unit]
-                        Requires=containerd.service
-                        After=containerd.service
+                        Requires=containerd.service kubelet.service
+                        After=containerd.service kubelet.service
+                        [Service]
+                        Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+                - name: kubelet.service
+                  enabled: true
+                  contents: |
+                    [Unit]
+                    Description=kubelet: Kubernetes Node Agent (Flatcar profile)
+                    Wants=network-online.target
+                    Requires=containerd.service
+                    After=network-online.target containerd.service
+
+                    [Service]
+                    Environment=KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf
+                    Environment=KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml
+                    EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
+                    EnvironmentFile=-/etc/default/kubelet
+                    ExecStart=/opt/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
+                    Restart=always
+                    RestartSec=10
+                    StartLimitIntervalSec=0
+
+                    [Install]
+                    WantedBy=multi-user.target
       joinConfiguration:
         nodeRegistration:
           criSocket: /var/run/containerd/containerd.sock
