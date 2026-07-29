@@ -415,6 +415,58 @@ def client_dry_run(
     )
 
 
+def wait_for_datavolumes(
+    kubectl_bin: str,
+    kubeconfig: Path,
+    expected_count: int,
+    timeout: int = 600,
+) -> None:
+    progress(
+        f"waiting for {expected_count} DataVolume(s); "
+        "annotating only test PVCs"
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pvcs = kubectl_json(
+            kubectl_bin,
+            kubeconfig,
+            ["-n", CLUSTER, "get", "pvc"],
+        )["items"]
+        for pvc in pvcs:
+            name = pvc["metadata"]["name"]
+            annotations = pvc["metadata"].get("annotations", {})
+            if annotations.get("volume.kubernetes.io/selected-node") != "ok-infra":
+                kubectl(
+                    kubectl_bin,
+                    kubeconfig,
+                    [
+                        "-n",
+                        CLUSTER,
+                        "annotate",
+                        "pvc",
+                        name,
+                        "volume.kubernetes.io/selected-node=ok-infra",
+                        "--overwrite",
+                    ],
+                )
+        datavolumes = kubectl_json(
+            kubectl_bin,
+            kubeconfig,
+            ["-n", CLUSTER, "get", "datavolume"],
+        )["items"]
+        phases = [item.get("status", {}).get("phase") for item in datavolumes]
+        if (
+            len(phases) == expected_count
+            and all(phase == "Succeeded" for phase in phases)
+        ):
+            return
+        time.sleep(10)
+    raise RuntimeValidationError(
+        f"{expected_count} DataVolume(s) did not reach Succeeded; "
+        f"observed {len(phases)} with phases {phases}"
+    )
+
+
 def create_runtime(
     kubectl_bin: str,
     helm_bin: str,
@@ -455,42 +507,7 @@ def create_runtime(
         ["create", "-f", str(resources_path)],
     )
 
-    progress("waiting for two DataVolumes; annotating only test PVCs")
-    deadline = time.monotonic() + 600
-    while time.monotonic() < deadline:
-        pvcs = kubectl_json(
-            kubectl_bin,
-            kubeconfig,
-            ["-n", CLUSTER, "get", "pvc"],
-        )["items"]
-        for pvc in pvcs:
-            name = pvc["metadata"]["name"]
-            annotations = pvc["metadata"].get("annotations", {})
-            if annotations.get("volume.kubernetes.io/selected-node") != "ok-infra":
-                kubectl(
-                    kubectl_bin,
-                    kubeconfig,
-                    [
-                        "-n",
-                        CLUSTER,
-                        "annotate",
-                        "pvc",
-                        name,
-                        "volume.kubernetes.io/selected-node=ok-infra",
-                        "--overwrite",
-                    ],
-                )
-        datavolumes = kubectl_json(
-            kubectl_bin,
-            kubeconfig,
-            ["-n", CLUSTER, "get", "datavolume"],
-        )["items"]
-        phases = [item.get("status", {}).get("phase") for item in datavolumes]
-        if len(phases) == 2 and all(phase == "Succeeded" for phase in phases):
-            break
-        time.sleep(10)
-    else:
-        raise RuntimeValidationError("DataVolumes did not reach Succeeded")
+    wait_for_datavolumes(kubectl_bin, kubeconfig, expected_count=1)
 
     progress("waiting for the workload kubeconfig Secret")
     deadline = time.monotonic() + 600
@@ -559,12 +576,33 @@ def create_runtime(
             "10m",
         ]
     )
+    wait_for_datavolumes(kubectl_bin, kubeconfig, expected_count=2)
     progress("waiting for exactly two Ready Nodes")
-    kubectl(
-        kubectl_bin,
-        WORKLOAD_KUBECONFIG,
-        ["wait", "--for=condition=Ready", "node", "--all", "--timeout=600s"],
-    )
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
+        nodes = kubectl_json(
+            kubectl_bin,
+            WORKLOAD_KUBECONFIG,
+            ["get", "node"],
+        )["items"]
+        readiness = [
+            next(
+                (
+                    condition["status"]
+                    for condition in node["status"].get("conditions", [])
+                    if condition["type"] == "Ready"
+                ),
+                "False",
+            )
+            for node in nodes
+        ]
+        if len(nodes) == 2 and readiness == ["True", "True"]:
+            break
+        time.sleep(10)
+    else:
+        raise RuntimeValidationError(
+            f"expected two Ready Nodes; observed {len(nodes)} with {readiness}"
+        )
 
 
 def secret_metadata(

@@ -220,8 +220,19 @@ spec:
                       [Unit]
                       Requires=containerd.service kubelet.service
                       After=containerd.service kubelet.service
+                      OnFailure=ok125-kubeadm-failure.service
                       [Service]
                       Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+                      StandardError=journal+console
+                      ExecStartPost=/bin/sh -c 'echo OK125_KUBEADM_SUCCEEDED >/dev/ttyS0'
+              - name: ok125-kubeadm-failure.service
+                contents: |
+                  [Unit]
+                  Description=OK-125 redacted kubeadm failure marker
+
+                  [Service]
+                  Type=oneshot
+                  ExecStart=/bin/sh -c '/bin/systemctl show kubeadm.service --property=Result --property=ExecMainStatus >/dev/ttyS0'
               - name: kubelet.service
                 enabled: true
                 contents: |
@@ -358,8 +369,19 @@ spec:
                         [Unit]
                         Requires=containerd.service kubelet.service
                         After=containerd.service kubelet.service
+                        OnFailure=ok125-kubeadm-failure.service
                         [Service]
                         Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+                        StandardError=journal+console
+                        ExecStartPost=/bin/sh -c 'echo OK125_KUBEADM_SUCCEEDED >/dev/ttyS0'
+                - name: ok125-kubeadm-failure.service
+                  contents: |
+                    [Unit]
+                    Description=OK-125 redacted kubeadm failure marker
+
+                    [Service]
+                    Type=oneshot
+                    ExecStart=/bin/sh -c '/bin/systemctl show kubeadm.service --property=Result --property=ExecMainStatus >/dev/ttyS0'
                 - name: kubelet.service
                   enabled: true
                   contents: |

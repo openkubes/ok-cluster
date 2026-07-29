@@ -200,14 +200,19 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         all(
             "kubeadm.service" in config
             and "Requires=containerd.service kubelet.service" in config
+            and "OnFailure=ok125-kubeadm-failure.service" in config
             and (
                 "Environment=PATH=/opt/bin:/usr/local/sbin:"
                 "/usr/local/bin:/usr/sbin:/usr/bin"
             )
             in config
+            and "StandardError=journal+console" in config
+            and "OK125_KUBEADM_SUCCEEDED" in config
+            and "name: ok125-kubeadm-failure.service" in config
+            and "--property=ExecMainStatus" in config
             for config in additional_configs
         ),
-        "kubeadm resolves the golden-image binary and waits for Flatcar services",
+        "kubeadm uses Flatcar services and redacted serial diagnostics",
     )
     check(
         all(
