@@ -51,6 +51,11 @@ def main() -> int:
         and "sensitive_stdout=True" in source,
         "Secret evidence is metadata-only and workload access stays ephemeral",
     )
+    check(
+        "condition_is_true(config, \"Ready\")" in source
+        and 'get("status", {}).get("ready")' not in source,
+        "bootstrap readiness uses CAPI v1beta2 Conditions",
+    )
     return 0
 
 

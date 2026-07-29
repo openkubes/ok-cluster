@@ -170,6 +170,22 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def condition_is_true(resource: dict, condition_type: str) -> bool:
+    """Read CAPI readiness from Conditions instead of removed status booleans."""
+    status = resource.get("status", {})
+    condition_sets = [status.get("conditions", [])]
+    v1beta2 = status.get("v1beta2", {})
+    if isinstance(v1beta2, dict):
+        condition_sets.append(v1beta2.get("conditions", []))
+    matches = [
+        condition.get("status")
+        for conditions in condition_sets
+        for condition in conditions
+        if condition.get("type") == condition_type
+    ]
+    return bool(matches) and all(value == "True" for value in matches)
+
+
 def render() -> dict:
     progress("rendering the deterministic Flatcar candidate")
     result = run(
@@ -739,7 +755,7 @@ def collect_runtime_evidence(
     bootstrap = []
     for config in configs:
         secret_name = config.get("status", {}).get("dataSecretName")
-        if not secret_name or not config.get("status", {}).get("ready"):
+        if not secret_name or not condition_is_true(config, "Ready"):
             raise RuntimeValidationError(
                 f"bootstrap config is not ready: {config['metadata']['name']}"
             )
@@ -1077,6 +1093,27 @@ def self_test() -> int:
     assert EXPECTED_CILIUM_CHART_SHA256 == (
         "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179"
     )
+    assert condition_is_true(
+        {
+            "status": {
+                "conditions": [
+                    {"type": "Ready", "status": "True", "reason": "Ready"}
+                ]
+            }
+        },
+        "Ready",
+    )
+    assert not condition_is_true(
+        {
+            "status": {
+                "conditions": [
+                    {"type": "Ready", "status": "False", "reason": "Pending"}
+                ]
+            }
+        },
+        "Ready",
+    )
+    assert not condition_is_true({"status": {}}, "Ready")
     print("PASS runtime scope, identity, and Cilium artifact are pinned")
     return 0
 
