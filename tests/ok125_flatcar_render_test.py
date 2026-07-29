@@ -244,8 +244,8 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
     namespace = by_kind(docs, "Namespace")[0]
     check(
         namespace["metadata"]["annotations"]["openkubes.io/golden-image-published"]
-        == "false",
-        "render preserves the unpublished golden-image blocker",
+        == "true",
+        "render consumes the recorded platform-owned golden image",
     )
 
     cluster = by_kind(docs, "Cluster")[0]
@@ -351,9 +351,10 @@ def main() -> int:
         candidate["artifacts"]["boot_image"]["runtime_distribution"][
             "published"
         ]
-        is False
-        and candidate["artifacts"]["kubernetes_payload"]["published"] is False,
-        "unpublished artifact blockers are consumed without promotion",
+        is True
+        and candidate["artifacts"]["kubernetes_payload"]["published"] is True
+        and candidate["metadata"]["deployable"] is False,
+        "published artifact is consumed without production promotion",
     )
     cfg = materialize_config(candidate, fixture)
     check(
