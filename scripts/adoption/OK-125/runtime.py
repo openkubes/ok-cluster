@@ -909,6 +909,16 @@ def node_ready() -> int:
         write_result(result)
         progress("PASS G1 Node Ready and G3 Secret boundary")
         return 0
+    except KeyboardInterrupt:
+        result = state["result"]
+        result["status"] = "ABORTED"
+        result["detail"] = "operator interrupted the runtime"
+        result["runtime_gates"] = {
+            "G1_kubernetes_node_ready": "NOT_TESTED",
+            "G3_provider_scoped_bootstrap_secret": "NOT_TESTED",
+        }
+        write_result(result)
+        raise
     except Exception as error:
         result = state["result"]
         result["status"] = "FAIL"
@@ -1093,6 +1103,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("ABORTED operator interrupted the runtime", file=sys.stderr)
+        raise SystemExit(130)
     except (
         KeyError,
         TypeError,

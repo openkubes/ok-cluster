@@ -223,6 +223,7 @@ spec:
                       OnFailure=ok125-kubeadm-failure.service
                       [Service]
                       Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+                      TimeoutStartSec=0
                       StandardError=journal+console
                       ExecStartPost=/bin/sh -c 'echo OK125_KUBEADM_SUCCEEDED >/dev/ttyS0'
               - name: ok125-kubeadm-failure.service
@@ -372,6 +373,7 @@ spec:
                         OnFailure=ok125-kubeadm-failure.service
                         [Service]
                         Environment=PATH=/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+                        TimeoutStartSec=0
                         StandardError=journal+console
                         ExecStartPost=/bin/sh -c 'echo OK125_KUBEADM_SUCCEEDED >/dev/ttyS0'
                 - name: ok125-kubeadm-failure.service

@@ -206,13 +206,14 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
                 "/usr/local/bin:/usr/sbin:/usr/bin"
             )
             in config
+            and "TimeoutStartSec=0" in config
             and "StandardError=journal+console" in config
             and "OK125_KUBEADM_SUCCEEDED" in config
             and "name: ok125-kubeadm-failure.service" in config
             and "--property=ExecMainStatus" in config
             for config in additional_configs
         ),
-        "kubeadm uses Flatcar services and redacted serial diagnostics",
+        "kubeadm has an unbounded first boot and redacted serial diagnostics",
     )
     check(
         all(
