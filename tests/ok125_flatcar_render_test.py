@@ -217,6 +217,7 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
             and "error execution phase" in config
             and "grep -Eiv" in config
             and "private[ -]?key" in config
+            and "\\[" not in config
             and "StandardOutput=journal+console" not in config
             for config in additional_configs
         ),
