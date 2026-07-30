@@ -34,6 +34,15 @@ kmcp:
 
 kagent-tools:
   enabled: true
+  tools:
+    enabledTools:
+      - k8s
+    args:
+      - --read-only
+  rbac:
+    create: true
+    readOnly: true
+    allowSecrets: false
 
 # Minimal profile: no demo agents or optional MCP integrations.
 k8s-agent:
