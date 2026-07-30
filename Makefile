@@ -241,7 +241,9 @@ talos-golden-runtime-evidence: require-cluster ## Record read-only warm provisio
 		--runtime-evidence \
 		--cluster "$(CLUSTER)" \
 		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
-		--ok-linux-path "$(OK_LINUX_PATH)"
+		--ok-linux-path "$(OK_LINUX_PATH)" \
+		--workload-kubeconfig "$(or $(TALOS_WORKLOAD_KUBECONFIG),$(HOME)/.kube/$(CLUSTER).yaml)" \
+		--cilium-chart "$(CILIUM_CHART)"
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-not-flatcar

@@ -38,10 +38,13 @@ namespace and verifies that the shared Golden PVC retains its UID, digest and
 identity.
 
 After an approved cluster run, `make talos-golden-runtime-evidence
-CLUSTER=<name>` records the namespace-to-CAPI-Available interval as
-`mode: warm-provisioning`. It also proves every runtime boot DataVolume cloned
-the same Golden PVC and records `public_import_count: 0`. This evidence is
-kept separate from `ok-linux`'s one-time `mode: cold-publication` timing.
+CLUSTER=<name>` records separate namespace-to-CAPI-Available,
+namespace-to-all-Nodes-Ready and end-to-end-Cilium-Ready intervals as
+`mode: warm-provisioning`. It verifies the local chart digest, Helm release,
+Talos/KubeVirt Node identity and every runtime boot DataVolume clone, then
+records `public_import_count: 0`. No Secret object or value is read into
+evidence. This evidence stays separate from `ok-linux`'s one-time
+`mode: cold-publication` timing.
 
 The pinned Cilium chart must be acquired before starting the comparable warm
 provisioning timer:

@@ -278,6 +278,14 @@ def main() -> int:
         "runtime evidence separates warm clone timing from publication",
     )
     check(
+        '"capi_available"' in lifecycle_source
+        and '"nodes_ready"' in lifecycle_source
+        and '"end_to_end_cilium_ready"' in lifecycle_source
+        and '"cilium-1.19.6"' in lifecycle_source
+        and 'provider_id.startswith("kubevirt://")' in lifecycle_source,
+        "warm evidence uses comparable CAPI, Node, Cilium milestones",
+    )
+    check(
         '["get", "node", "ok-infra"]' in lifecycle_source
         and "ok-infra is not Ready and schedulable" in lifecycle_source,
         "management preflight verifies the reviewed scheduling target",

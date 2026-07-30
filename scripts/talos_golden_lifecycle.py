@@ -7,7 +7,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -20,6 +20,11 @@ sys.path.insert(0, str(ROOT))
 from profile_resolvers.talos import (  # noqa: E402
     TalosProfileError,
     resolve_talos_config,
+)
+from scripts.prepare_cilium_chart import (  # noqa: E402
+    ChartAcquisitionError,
+    EXPECTED_SHA256 as CILIUM_CHART_SHA256,
+    verify as verify_cilium_chart,
 )
 
 
@@ -208,6 +213,115 @@ def parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def ready_nodes(workload_kubeconfig: Path, expected: int) -> tuple[list, str]:
+    nodes = kubectl_json(workload_kubeconfig, ["get", "nodes"]).get(
+        "items", []
+    )
+    if len(nodes) != expected:
+        raise TalosLifecycleError(
+            f"expected {expected} Nodes, observed {len(nodes)}"
+        )
+    evidence = []
+    ready_times = []
+    for node in nodes:
+        ready = next(
+            (
+                condition
+                for condition in node.get("status", {}).get(
+                    "conditions", []
+                )
+                if condition.get("type") == "Ready"
+            ),
+            None,
+        )
+        provider_id = node.get("spec", {}).get("providerID", "")
+        os_image = (
+            node.get("status", {}).get("nodeInfo", {}).get("osImage", "")
+        )
+        if (
+            ready is None
+            or ready.get("status") != "True"
+            or not ready.get("lastTransitionTime")
+            or not provider_id.startswith("kubevirt://")
+            or "talos" not in os_image.lower()
+        ):
+            raise TalosLifecycleError(
+                "runtime Node readiness/provider/OS identity is invalid"
+            )
+        ready_times.append(ready["lastTransitionTime"])
+        evidence.append(
+            {
+                "name": node["metadata"]["name"],
+                "uid": node["metadata"]["uid"],
+                "provider_id": provider_id,
+                "os_image": os_image,
+                "ready_at": ready["lastTransitionTime"],
+            }
+        )
+    return evidence, max(ready_times, key=parse_time)
+
+
+def cilium_runtime(
+    workload_kubeconfig: Path, chart_path: Path
+) -> dict:
+    digest = verify_cilium_chart(chart_path)
+    if digest != CILIUM_CHART_SHA256:
+        raise TalosLifecycleError("local Cilium chart identity is invalid")
+    daemonset = kubectl_json(
+        workload_kubeconfig,
+        ["-n", "kube-system", "get", "daemonset", "cilium"],
+    )
+    daemon_status = daemonset.get("status", {})
+    if (
+        daemon_status.get("desiredNumberScheduled", 0) < 1
+        or daemon_status.get("numberReady")
+        != daemon_status.get("desiredNumberScheduled")
+    ):
+        raise TalosLifecycleError("Cilium DaemonSet is not fully Ready")
+    operator = kubectl_json(
+        workload_kubeconfig,
+        ["-n", "kube-system", "get", "deployment", "cilium-operator"],
+    )
+    if operator.get("status", {}).get("readyReplicas", 0) < 1:
+        raise TalosLifecycleError("Cilium operator is not Ready")
+    releases = json.loads(
+        run(
+            [
+                "helm",
+                "list",
+                "--kubeconfig",
+                str(workload_kubeconfig),
+                "--namespace",
+                "kube-system",
+                "--output",
+                "json",
+            ]
+        ).stdout
+    )
+    release = next(
+        (item for item in releases if item.get("name") == "cilium"),
+        None,
+    )
+    if (
+        release is None
+        or release.get("chart") != "cilium-1.19.6"
+        or release.get("status") != "deployed"
+    ):
+        raise TalosLifecycleError("Cilium Helm release identity is invalid")
+    return {
+        "chart": "cilium-1.19.6",
+        "chart_sha256": f"sha256:{digest}",
+        "release_status": "deployed",
+        "daemonset_ready": daemon_status["numberReady"],
+        "daemonset_desired": daemon_status["desiredNumberScheduled"],
+        "operator_ready": operator["status"]["readyReplicas"],
+    }
+
+
 def runtime_evidence(args: argparse.Namespace) -> int:
     """Record a read-only warm-provisioning result, separate from publication."""
     config, manifest, kubeconfig = inputs(args)
@@ -252,6 +366,28 @@ def runtime_evidence(args: argparse.Namespace) -> int:
     duration = (parse_time(ready_at) - parse_time(started_at)).total_seconds()
     if duration < 0:
         raise TalosLifecycleError("cluster readiness predates its namespace")
+    workload_kubeconfig = Path(
+        args.workload_kubeconfig
+    ).expanduser().resolve()
+    if not workload_kubeconfig.is_file():
+        raise TalosLifecycleError(
+            f"explicit workload kubeconfig is absent: {workload_kubeconfig}"
+        )
+    expected_nodes = expected_count
+    nodes, nodes_ready_at = ready_nodes(
+        workload_kubeconfig, expected_nodes
+    )
+    chart_path = Path(args.cilium_chart).expanduser().resolve()
+    cilium = cilium_runtime(workload_kubeconfig, chart_path)
+    completed_at = now()
+    nodes_duration = (
+        parse_time(nodes_ready_at) - parse_time(started_at)
+    ).total_seconds()
+    end_to_end_duration = (
+        parse_time(completed_at) - parse_time(started_at)
+    ).total_seconds()
+    if nodes_duration < 0 or end_to_end_duration < 0:
+        raise TalosLifecycleError("runtime milestone predates its namespace")
     evidence = {
         "schema_version": 1,
         "suite": "OK-130-talos-golden-image",
@@ -262,9 +398,17 @@ def runtime_evidence(args: argparse.Namespace) -> int:
         "golden": golden,
         "scheduling": scheduling,
         "started_at": started_at,
-        "ready_at": ready_at,
-        "duration_seconds": round(duration, 3),
+        "capi_available_at": ready_at,
+        "nodes_ready_at": nodes_ready_at,
+        "completed_at": completed_at,
+        "timings_seconds": {
+            "capi_available": round(duration, 3),
+            "nodes_ready": round(nodes_duration, 3),
+            "end_to_end_cilium_ready": round(end_to_end_duration, 3),
+        },
         "boot_data_volumes": len(data_volumes),
+        "nodes": nodes,
+        "cilium": cilium,
         "public_import_count": 0,
         "secret_values_recorded": False,
         "mutation_attempted": False,
@@ -379,6 +523,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cluster", required=True)
     parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--ok-linux-path", required=True)
+    parser.add_argument("--workload-kubeconfig")
+    parser.add_argument("--cilium-chart")
     return parser.parse_args()
 
 
@@ -387,6 +533,11 @@ def main() -> int:
     if args.preflight:
         return preflight(args)
     if args.runtime_evidence:
+        if not args.workload_kubeconfig or not args.cilium_chart:
+            raise TalosLifecycleError(
+                "--runtime-evidence requires --workload-kubeconfig "
+                "and --cilium-chart"
+            )
         return runtime_evidence(args)
     return cleanup_authorization(args)
 
@@ -395,6 +546,7 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (
+        ChartAcquisitionError,
         TalosLifecycleError,
         TalosProfileError,
         KeyError,
