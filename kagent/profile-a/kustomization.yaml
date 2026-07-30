@@ -1,0 +1,24 @@
+# Profile A provider values for ok-ai (OK-92) — private-network endpoint patched
+# onto the generic manifests in openkubes. Requires the openkubes repo cloned
+# next to ok-cluster (same convention as ../../openclaw/Makefile CHART path).
+#
+#   kubectl --kubeconfig ~/.kube/ok-ai.yaml apply -k .
+#
+# The base is the generic Profile A (RBAC + kagent CRs). Here we only inject the
+# real, VPN-only Ollama endpoint (a Provider Value) — nothing structural.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: platform-diagnostics
+resources:
+  - ../../../openkubes/platform/ai/platform-diagnostics/profiles/kagent
+
+patches:
+  # Real shared Ollama endpoint (ADR-005, MetalLB on the infra cluster).
+  # Same value already used in ../../openclaw/claim-ok-ai.yaml and ../Makefile.
+  - target:
+      kind: ModelConfig
+      name: ollama-gpt-oss
+    patch: |
+      - op: replace
+        path: /spec/ollama/host
+        value: http://192.168.100.202:11434

@@ -23,6 +23,6 @@ versions:
   talos: v1.9.5
 workers:
   cores: 2
-  disk: 60Gi
+  disk: 50Gi
   memory: 4Gi
   replicas: 3
