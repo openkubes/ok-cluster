@@ -19,6 +19,11 @@ docs/adoption/OK-125/.evidence/
 # Kubeconfigs — never commit
 *.yaml.bak
 kubeconfig*
+*.kubeconfig
+*.kubeconfig.yaml
+.kube/
+ok-infra.yaml
+ok-flatcar.yaml
 
 # But keep the example and templates
 !cluster-config.yaml.example

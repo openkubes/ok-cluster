@@ -112,9 +112,41 @@ make install-flatcar \
 The guarded installer requires clean, pushed `ok-linux` and `ok-cluster`
 commits, verifies the exact CAPI/CABPK/KCP 1.13.3, CAPK 0.11.2, KubeVirt 1.8.1
 management envelope plus the Ignition gates and golden-image identity, and uses
-the digest-bound local Cilium 1.19.6 chart without a public artifact fetch. Generic
-`install`, `bootstrap`, `install-cni`, `upgrade`, `clean`, and `teardown`
-targets refuse Flatcar.
+the digest-bound local Cilium 1.19.6 chart without a public artifact fetch.
+Generic `install`, `bootstrap`, `install-cni`, `upgrade`, `clean`, and
+`teardown` targets refuse Flatcar.
+
+#### Verified runtime: `ok-flatcar` (2026-07-30)
+
+[`ok-flatcar/cluster-config.yaml`](ok-flatcar/cluster-config.yaml) is the first
+ordinary deployment of the production-constrained profile. It was reviewed in
+[PR #18](https://github.com/openkubes/ok-cluster/pull/18) and merged as
+`dcbc706`. The guarded install completed in an observed 3m13s; this duration is
+evidence from that run, not an availability or provisioning-time SLO.
+
+| Signal | Verified result |
+|---|---|
+| CAPI Cluster | `Provisioned`, `Available=True` |
+| Topology | one control-plane and one worker |
+| Nodes | 2/2 `Ready` |
+| OS | Flatcar Container Linux 4593.2.4 (Oklo), amd64 |
+| Kubernetes | kubelet v1.34.1 |
+| Provider identity | both ProviderIDs start with `kubevirt://` |
+| Cilium | DaemonSet 2/2 available, operator 1/1 available |
+| Lifecycle | Secret-backed Ignition; replacement-only; no SSH authority |
+
+Reproduce the post-install checks with explicit kubeconfig paths:
+
+```bash
+kubectl --kubeconfig ~/.kube/ok-flatcar.yaml get nodes
+kubectl --kubeconfig ~/.kube/ok-flatcar.yaml get pods -A
+kubectl --kubeconfig ~/.kube/ok-infra.yaml \
+  -n ok-flatcar get cluster ok-flatcar
+```
+
+Keep workload and management kubeconfigs under `~/.kube/`. Do not copy them
+into the repository, and prefer explicit `--kubeconfig` arguments over a
+long-lived `KUBECONFIG` export when recording operational evidence.
 
 ---
 
@@ -283,13 +315,8 @@ make install CLUSTER=ok1
 Consumes only the promoted `ok-linux` `flatcar-kubevirt` profile. The ordinary
 resolver is fail-closed to the exact amd64/KubeVirt envelope and uses
 replacement-only Day-2 convergence without SSH or guest mutation.
-
-```bash
-make new CLUSTER=ok-flatcar TYPE=flatcar
-make flatcar-preflight CLUSTER=ok-flatcar \
-  FLATCAR_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
-  FLATCAR_CILIUM_CHART=/path/to/cilium-1.19.6.tgz
-```
+See [Constrained Flatcar Cluster](#constrained-flatcar-cluster) for the
+canonical scaffold, preflight, install, and verified-runtime procedure.
 
 ---
 
