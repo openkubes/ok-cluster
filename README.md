@@ -4,7 +4,7 @@
 
 OK-Cluster is the cluster lifecycle engine for [OpenKubes](https://github.com/openkubes/openkubes) — declarative creation, operation and upgrade of Kubernetes clusters across KubeVirt, bare metal, edge and cloud.
 
-Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVirt)](https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt), [Talos Linux](https://www.talos.dev/) and [Ubuntu/kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/).
+Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVirt)](https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt), [Talos Linux](https://www.talos.dev/), constrained [Flatcar](https://www.flatcar.org/), and [Ubuntu/kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/).
 
 ---
 
@@ -19,7 +19,7 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 ## ✨ Features
 
 - **HA Kubernetes in ~3 minutes** — 3 control planes + N workers, fully declarative
-- **Two cluster types** — Talos (immutable, API-driven) and Ubuntu (kubeadm, flexible)
+- **Three OS paths** — Talos, constrained Flatcar/amd64/KubeVirt, and Ubuntu
 - **OS layer owned by [ok-linux](https://github.com/openkubes/ok-linux)** — Talos version and schematic ID are read from ok-linux profiles, not hardcoded here
 - **Auto IP/CIDR allocation** — MetalLB IPs and pod/service CIDRs allocated automatically
 - **Management plane registration** — `make register-cluster` wires any workload cluster into ok-mgmt/Crossplane per [ADR-Platform-013](https://github.com/openkubes/openkubes/blob/main/architecture/decisions/ADR-Platform-013-workload-cluster-registration.md)
@@ -40,7 +40,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   - Talos Bootstrap Provider (`cacppt`) — for Talos clusters
 - Tools: `clusterctl`, `helm`, `talosctl`, `kubectl`, `python3`, `make`
 - Kubeconfig at `~/.kube/<host-cluster>.yaml`
-- **For Talos clusters:** a sibling checkout of [ok-linux](https://github.com/openkubes/ok-linux) (see [OS Layer Integration](#os-layer-integration) below)
+- **For Talos and Flatcar clusters:** a sibling checkout of [ok-linux](https://github.com/openkubes/ok-linux) (see [OS Layer Integration](#os-layer-integration) below)
+- **For constrained Flatcar install:** an explicit management kubeconfig and a
+  local Cilium 1.19.6 chart matching the pinned OK-125 digest
 
 > See [OpenKubes Infrastructure](https://github.com/openkubes/openkubes/tree/main/platform/infrastructure) for host cluster setup.
 
@@ -86,6 +88,34 @@ make install CLUSTER=my-cluster
 make kubeconfig CLUSTER=my-cluster
 ```
 
+### Constrained Flatcar Cluster
+
+Flatcar is supported only inside the exact ADR-009 envelope: stable 4593.2.4,
+amd64, KubeVirt, Kubernetes v1.34.1, one control-plane and one worker. There is
+no fallback and unsupported overrides fail before rendering.
+
+```bash
+make new CLUSTER=my-flatcar TYPE=flatcar
+
+make flatcar-preflight \
+  CLUSTER=my-flatcar \
+  FLATCAR_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
+  FLATCAR_CILIUM_CHART=/path/to/cilium-1.19.6.tgz
+
+make install-flatcar \
+  CLUSTER=my-flatcar \
+  FLATCAR_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
+  FLATCAR_CILIUM_CHART=/path/to/cilium-1.19.6.tgz \
+  FLATCAR_APPLY=yes
+```
+
+The guarded installer requires clean, pushed `ok-linux` and `ok-cluster`
+commits, verifies the exact CAPI/CABPK/KCP 1.13.3, CAPK 0.11.2, KubeVirt 1.8.1
+management envelope plus the Ignition gates and golden-image identity, and uses
+the digest-bound local Cilium 1.19.6 chart without a public artifact fetch. Generic
+`install`, `bootstrap`, `install-cni`, `upgrade`, `clean`, and `teardown`
+targets refuse Flatcar.
+
 ---
 
 ## Management Plane Registration (ADR-Platform-013)
@@ -118,7 +148,8 @@ The target refuses if Releases still reference `providerConfigRef.name: <cluster
 
 ## OS Layer Integration
 
-ok-cluster does not own Talos version numbers or schematic IDs. **[ok-linux](https://github.com/openkubes/ok-linux) is the source of truth.**
+ok-cluster does not own OS identity or verified image inputs.
+**[ok-linux](https://github.com/openkubes/ok-linux) is the source of truth.**
 
 ```
 ok-linux/profiles/kubevirt/profile.yaml
@@ -131,6 +162,11 @@ cluster-v2.yaml        openkubes.io/talos-schematic annotation
         ↓
 Running cluster
 ```
+
+For Flatcar, the isolated resolver consumes
+`ok-linux/profiles/flatcar-kubevirt/profile.yaml` and rejects any value outside
+ADR-009. KubeVirt transport, target storage, scheduling, and CAPI lifecycle
+remain owned by ok-cluster.
 
 **Expected directory layout:**
 
@@ -147,7 +183,9 @@ export OK_LINUX_PATH=/path/to/ok-linux
 make render CLUSTER=my-cluster
 ```
 
-If `ok-linux` cannot be found at all, `render.py` falls back to hardcoded defaults and prints a `WARNING` — this is a signal to fix the path, not normal operation.
+The legacy Talos path retains its existing defaults. Flatcar has no fallback:
+if the exact ok-linux production profile cannot be loaded and validated,
+rendering stops.
 
 To change which OS profile a cluster uses, set `OS_PROFILE` when scaffolding:
 
@@ -160,10 +198,13 @@ OS_PROFILE=baremetal make new CLUSTER=my-cluster TYPE=talos
 ## All Makefile Targets
 
 ```
-make new           CLUSTER=<name> [TYPE=ubuntu|talos] [HA=true] [WORKERS=2] [NODE_SELECTOR=<node>]
+make new           CLUSTER=<name> TYPE=ubuntu|talos|talos-mgmt|flatcar
 make render        CLUSTER=<name>                    # re-render manifests from config
 make install       CLUSTER=<name>                    # ubuntu: apply + wait + cilium
 make bootstrap     CLUSTER=<name>                    # talos: apply + annotate PVCs + cilium
+make flatcar-preflight CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<path>
+make install-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<path> FLATCAR_APPLY=yes
+make teardown-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes
 make kubeconfig    CLUSTER=<name>                    # save kubeconfig to ~/.kube/<name>.yaml
 make install-cni   CLUSTER=<name>                    # install Cilium (manual)
 make install-storage CLUSTER=<name>                  # install local-path-provisioner *inside* the workload cluster
@@ -237,6 +278,19 @@ make new CLUSTER=ok1 TYPE=ubuntu HA=true WORKERS=2
 make install CLUSTER=ok1
 ```
 
+### Flatcar (constrained, immutable)
+
+Consumes only the promoted `ok-linux` `flatcar-kubevirt` profile. The ordinary
+resolver is fail-closed to the exact amd64/KubeVirt envelope and uses
+replacement-only Day-2 convergence without SSH or guest mutation.
+
+```bash
+make new CLUSTER=ok-flatcar TYPE=flatcar
+make flatcar-preflight CLUSTER=ok-flatcar \
+  FLATCAR_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
+  FLATCAR_CILIUM_CHART=/path/to/cilium-1.19.6.tgz
+```
+
 ---
 
 ## Templating System
@@ -245,13 +299,17 @@ make install CLUSTER=ok1
 cluster-config.yaml  →  render.py  →  CAPI manifests  →  make install/bootstrap
 ```
 
-`render.py` reads `cluster-config.yaml`, resolves `auto` values for IPs and CIDRs, resolves OS defaults from ok-linux (Talos clusters only), and renders the CAPI manifest templates. All resolved values are written back to `cluster-config.yaml` for reproducibility.
+`render.py` reads `cluster-config.yaml`, resolves `auto` values for IPs and
+CIDRs, dispatches selected OS-profile resolution, and renders the CAPI manifest
+templates. Flatcar resolution is isolated and fail-closed; it does not add
+Flatcar defaults to shared or Talos semantics. All resolved values are written
+back to `cluster-config.yaml` for reproducibility.
 
 ### cluster-config.yaml
 
 ```yaml
 name: my-cluster
-type: talos          # or ubuntu
+  type: talos          # or ubuntu / talos-mgmt / constrained flatcar
 
 controlPlane:
   replicas: 3        # 1 = single, 3 = HA
@@ -307,9 +365,16 @@ upgrade:
 ok-cluster/
 ├── Makefile                  # all lifecycle targets
 ├── render.py                 # template engine, auto IP/CIDR allocation, ok-linux integration
+├── profile_resolvers/
+│   └── flatcar.py            # exact ADR-009 consumer boundary
+├── scripts/
+│   └── flatcar_lifecycle.py  # guarded preflight/install/teardown
 ├── new-cluster.sh            # cluster scaffolding
 ├── upgrade-cluster.sh        # blue/green upgrade
 ├── templates/
+│   ├── flatcar/
+│   │   ├── cluster-v2.yaml.tpl      # Ignition + identity-bound templates
+│   │   └── cilium-values.yaml.tpl   # pinned Flatcar CNI profile
 │   ├── talos/
 │   │   ├── cluster-base.yaml.tpl    # CAPI + CAPK + Talos manifests
 │   │   ├── cluster-v2.yaml.tpl

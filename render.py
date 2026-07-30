@@ -14,6 +14,8 @@ import yaml
 from pathlib import Path
 from string import Template
 
+from profile_resolvers.flatcar import resolve_flatcar_config
+
 SCRIPT_DIR = Path(__file__).parent
 CLUSTERS_DIR = SCRIPT_DIR
 TEMPLATES_DIR = SCRIPT_DIR / "templates"
@@ -32,6 +34,9 @@ OKB_KUBECONFIG = os.environ.get(
 OK_LINUX_DEFAULT_PROFILE = "kubevirt"
 OK_LINUX_DEFAULT_SCHEMATIC_ID = "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 OK_LINUX_DEFAULT_TALOS_VERSION = "v1.9.5"
+OK_LINUX_PATH = Path(
+    os.environ.get("OK_LINUX_PATH", SCRIPT_DIR.parent / "ok-linux")
+).resolve()
 
 def load_yaml(path: Path) -> dict:
     with open(path) as f:
@@ -174,6 +179,11 @@ def resolve_config(cfg: dict, cluster_name: str) -> dict:
         os_cfg.setdefault("distribution", "ok-linux")
         os_cfg.setdefault("profile", OK_LINUX_DEFAULT_PROFILE)
         os_cfg.setdefault("schematic_id", OK_LINUX_DEFAULT_SCHEMATIC_ID)
+    elif cfg.get("type") == "flatcar":
+        # Flatcar defaults and support constraints are owned by the selected
+        # ok-linux implementation profile. The shared renderer only dispatches
+        # to its isolated resolver.
+        cfg = resolve_flatcar_config(cfg, OK_LINUX_PATH)
 
     return cfg
 
@@ -228,7 +238,9 @@ def build_context(cfg: dict) -> dict:
         "OS_IMAGE_DIGEST":    os_cfg.get("imageDigest", ""),
         "OS_IDENTITY":        identity,
         "OS_IDENTITY_SHORT":  identity_hex[:12],
-        "OS_CANDIDATE_STATUS": os_cfg.get("candidateStatus", ""),
+        "OS_CANDIDATE_STATUS": os_cfg.get(
+            "status", os_cfg.get("candidateStatus", "")
+        ),
         "OS_DEPLOYABLE":      str(os_cfg.get("deployable", False)).lower(),
         "OS_GOLDEN_IMAGE_NAMESPACE": golden_image.get("namespace", ""),
         "OS_GOLDEN_IMAGE_CLAIM": golden_image.get("claim", ""),

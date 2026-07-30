@@ -422,7 +422,7 @@ def validate_cilium_profile(path: Path, cfg: dict) -> None:
     )
 
 
-def validate_ordinary_path_is_closed() -> None:
+def validate_ordinary_path_is_promoted() -> None:
     result = subprocess.run(
         [
             "make",
@@ -438,8 +438,8 @@ def validate_ordinary_path_is_closed() -> None:
         check=False,
     )
     check(
-        result.returncode != 0 and "not one of" in (result.stdout + result.stderr),
-        "ordinary make new type allowlist still rejects Flatcar",
+        result.returncode == 0,
+        "ordinary make type allowlist accepts the separately promoted profile",
     )
 
 
@@ -521,7 +521,7 @@ def main() -> int:
         candidate["metadata"]["deployable"] is False
         and candidate["metadata"]["status"] == "constrained-approved"
         and candidate["metadata"]["promotion_eligible"] is True,
-        "ok-linux source records constrained approval without deployment promotion",
+        "historical candidate records approval without itself granting deployment",
     )
     check(
         candidate["artifacts"]["boot_image"]["runtime_distribution"][
@@ -530,7 +530,7 @@ def main() -> int:
         is True
         and candidate["artifacts"]["kubernetes_payload"]["published"] is True
         and candidate["metadata"]["deployable"] is False,
-        "published artifact is consumed without production promotion",
+        "historical candidate consumes the artifact without being a production profile",
     )
     cfg = materialize_config(candidate, fixture, args.profile_variant)
     check(
@@ -540,7 +540,7 @@ def main() -> int:
         "shared contract reference and profile-specific selection stay separate",
     )
 
-    validate_ordinary_path_is_closed()
+    validate_ordinary_path_is_promoted()
 
     with tempfile.TemporaryDirectory(
         prefix=".ok125-render-a-",

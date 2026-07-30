@@ -1,5 +1,5 @@
 # OpenKubes Cluster Templating — Makefile
-# Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
+# Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
 #        TYPE is REQUIRED — no silent default (OK-119).
 .PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help
 .DEFAULT_GOAL := help
@@ -11,11 +11,13 @@ CLUSTER       ?=
 # actual VM OS and a CNI that Talos rejects (SYS_MODULE). `new` requires it
 # explicitly; both internal callers (e2e) already pass it.
 TYPE          ?=
-CLUSTER_TYPES := ubuntu talos talos-mgmt
+CLUSTER_TYPES := ubuntu talos talos-mgmt flatcar
 HA            ?= false
 WORKERS       ?= 1
 K8S_VERSION   ?=
 TALOS_VERSION ?=
+PROVIDER      ?= kubevirt
+ARCHITECTURE  ?= amd64
 # OK-82: NODE= is an accepted alias for NODE_SELECTOR= (explicit NODE_SELECTOR wins)
 NODE          ?=
 NODE_SELECTOR ?= $(NODE)
@@ -26,6 +28,11 @@ SCRIPT_DIR    := $(shell pwd)
 CLUSTERS_DIR  := $(SCRIPT_DIR)
 OKB           := kubectl --kubeconfig ~/.kube/ok-infra.yaml
 OK_LINUX_PATH ?= $(SCRIPT_DIR)/../ok-linux
+FLATCAR_INFRA_KUBECONFIG ?=
+FLATCAR_CILIUM_CHART     ?=
+FLATCAR_APPLY            ?= no
+FLATCAR_TEARDOWN         ?= no
+FLATCAR_WORKLOAD_KUBECONFIG ?=
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -79,6 +86,17 @@ REFRESH_AFTER         ?= 60s
 require-cluster:
 	@test -n "$(CLUSTER)" || (echo "ERROR: CLUSTER is required, e.g. make $(MAKECMDGOALS) CLUSTER=ok3"; exit 1)
 
+.PHONY: require-not-flatcar
+require-not-flatcar: require-cluster
+	@if [ -r "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml" ]; then \
+		CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; print(d.get("type") or "")' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
+		if [ "$$CLUSTER_TYPE" = "flatcar" ]; then \
+			echo "ERROR: generic target '$(MAKECMDGOALS)' is not a supported Flatcar lifecycle authority."; \
+			echo "       Use make flatcar-preflight/install-flatcar/teardown-flatcar with explicit inputs."; \
+			exit 2; \
+		fi; \
+	fi
+
 # OK-119: TYPE must be explicit. It decides the VM OS *and* the Cilium value set
 # install-cni later selects via cluster-config.yaml, so a wrong/implied value is
 # not a cosmetic mismatch — it installs a CNI the OS rejects.
@@ -100,7 +118,9 @@ require-type:
 new: require-cluster require-type
 	@CLUSTER=$(CLUSTER) TYPE=$(TYPE) HA=$(HA) WORKERS=$(WORKERS) \
 	 K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
+	 PROVIDER=$(PROVIDER) ARCHITECTURE=$(ARCHITECTURE) \
 	 NODE_SELECTOR=$(NODE_SELECTOR) START_IP=$(START_IP) \
+	 OK_LINUX_PATH=$(OK_LINUX_PATH) \
 	 bash $(SCRIPT_DIR)/new-cluster.sh
 
 render: require-cluster
@@ -108,7 +128,7 @@ render: require-cluster
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -151,8 +171,40 @@ ok125-cleanup: ## Delete only the owned disposable OK-125 runtime
 	 OK125_CLEANUP="$(OK125_CLEANUP)" \
 	 python3 $(SCRIPT_DIR)/scripts/adoption/OK-125/runtime.py --cleanup
 
+flatcar-promotion-test: ## Offline-test the exact ordinary Flatcar profile
+	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+		python3 $(SCRIPT_DIR)/tests/flatcar_promotion_test.py
+
+flatcar-preflight: require-cluster ## Read-only production Flatcar preflight
+	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+		python3 $(SCRIPT_DIR)/scripts/flatcar_lifecycle.py \
+		--preflight \
+		--cluster "$(CLUSTER)" \
+		--management-kubeconfig "$(FLATCAR_INFRA_KUBECONFIG)" \
+		--cilium-chart "$(FLATCAR_CILIUM_CHART)" \
+		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
+
+install-flatcar: require-cluster ## Install constrained Flatcar (requires explicit paths and FLATCAR_APPLY=yes)
+	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+	 FLATCAR_APPLY="$(FLATCAR_APPLY)" \
+		python3 $(SCRIPT_DIR)/scripts/flatcar_lifecycle.py \
+		--install \
+		--cluster "$(CLUSTER)" \
+		--management-kubeconfig "$(FLATCAR_INFRA_KUBECONFIG)" \
+		--cilium-chart "$(FLATCAR_CILIUM_CHART)" \
+		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
+
+teardown-flatcar: require-cluster ## Tear down only an owned constrained Flatcar cluster
+	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+	 FLATCAR_TEARDOWN="$(FLATCAR_TEARDOWN)" \
+		python3 $(SCRIPT_DIR)/scripts/flatcar_lifecycle.py \
+		--teardown \
+		--cluster "$(CLUSTER)" \
+		--management-kubeconfig "$(FLATCAR_INFRA_KUBECONFIG)" \
+		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
+
 # ── deploy ────────────────────────────────────────────────────────────────────
-install: require-cluster
+install: require-not-flatcar
 	@echo "Applying Ubuntu cluster manifests for $(CLUSTER)..."
 	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-v2.yaml
 	@echo "⏳ Waiting for control plane to be Ready (this may take ~3 min)..."
@@ -193,7 +245,12 @@ install-cni: require-cluster kubeconfig
 		echo "   Expected one of: $(CLUSTER_TYPES). See OK-119."; \
 		exit 2; \
 	fi; \
-	echo "  Cluster type: $$CLUSTER_TYPE (from $$CFG)"; \
+		echo "  Cluster type: $$CLUSTER_TYPE (from $$CFG)"; \
+	if [ "$$CLUSTER_TYPE" = "flatcar" ]; then \
+		echo "❌ generic install-cni is not a Flatcar lifecycle authority."; \
+		echo "   Use install-flatcar with the local digest-pinned Cilium chart."; \
+		exit 2; \
+	fi; \
 	OS_IMG="$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes \
 		-o jsonpath='{.items[0].status.nodeInfo.osImage}' 2>/dev/null || true)"; \
 	if [ -z "$$OS_IMG" ]; then \
@@ -348,7 +405,7 @@ install-observability: require-cluster kubeconfig ## Install ok-observability-st
 	 CONTRACT_TEST_RECEIVER_CAPTURE_URL=$(CONTRACT_TEST_RECEIVER_CAPTURE_URL) \
 	 bash $(SCRIPT_DIR)/install-observability.sh
 
-bootstrap: require-cluster
+bootstrap: require-not-flatcar
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
 	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
 	@echo ""
@@ -392,13 +449,13 @@ annotate-pvcs: require-cluster
 	done
 
 # ── upgrade ───────────────────────────────────────────────────────────────────
-upgrade: require-cluster
+upgrade: require-not-flatcar
 	@test -n "$(K8S_VERSION)" || (echo "ERROR: K8S_VERSION is required"; exit 1)
 	@CLUSTER=$(CLUSTER) K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
 	 DRY_RUN=$(DRY_RUN) bash $(SCRIPT_DIR)/upgrade-cluster.sh
 
 # ── teardown ──────────────────────────────────────────────────────────────────
-clean: require-cluster
+clean: require-not-flatcar
 	@echo "Deleting CAPI cluster $(CLUSTER)..."
 	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground
 	$(OKB) delete namespace $(CLUSTER) --ignore-not-found
@@ -406,7 +463,7 @@ clean: require-cluster
 	rm -rf $(CLUSTERS_DIR)/$(CLUSTER)
 	@echo "✅ Cluster $(CLUSTER) removed."
 
-teardown: require-cluster ## Tear down a single cluster (Cluster object, namespace, Retain-policy PVs/Longhorn volumes) [CONFIRM=yes to skip prompt]
+teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses teardown-flatcar)
 	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
 	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
 	if [ -n "$$PVS" ]; then \
@@ -517,6 +574,16 @@ teardown-all: ## Tear down ALL rendered clusters (every dir with a cluster-confi
 	if [ -z "$$CLUSTERS" ]; then \
 		echo "(no rendered clusters found under $(CLUSTERS_DIR))"; \
 		exit 0; \
+	fi; \
+	FLATCAR_CLUSTERS=$$(for c in $$CLUSTERS; do \
+		CLUSTER_TYPE=$$(python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; print(d.get("type") or "")' "$(CLUSTERS_DIR)/$$c/cluster-config.yaml"); \
+		[ "$$CLUSTER_TYPE" = "flatcar" ] && echo "$$c"; \
+	done); \
+	if [ -n "$$FLATCAR_CLUSTERS" ]; then \
+		echo "ERROR: teardown-all cannot own constrained Flatcar lifecycle:"; \
+		echo "$$FLATCAR_CLUSTERS" | sed 's/^/   - /'; \
+		echo "       Run teardown-flatcar explicitly for each listed cluster first."; \
+		exit 2; \
 	fi; \
 	if [ "$(CONFIRM)" != "yes" ]; then \
 		echo "⚠️  This will TEAR DOWN ALL of the following rendered clusters:"; \
@@ -679,8 +746,15 @@ help:
 	@echo "  make bootstrap CLUSTER=ok-ai   # apply + annotate PVCs + Cilium CNI"
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo ""
+	@echo "── Constrained Flatcar Workflow (ADR-009) ───────────────────────────"
+	@echo "  make new CLUSTER=ok-flatcar TYPE=flatcar"
+	@echo "  make flatcar-preflight CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<local-chart>"
+	@echo "  make install-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<local-chart> FLATCAR_APPLY=yes"
+	@echo "  make teardown-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes"
+	@echo "  Envelope: Flatcar 4593.2.4, amd64, KubeVirt, Kubernetes v1.34.1, 1 CP + 1 worker"
+	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
-	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
+	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
 	@echo "  make kubeconfig    CLUSTER=ok1"
