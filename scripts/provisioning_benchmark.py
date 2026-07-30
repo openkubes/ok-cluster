@@ -921,12 +921,35 @@ def compare_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def validate_expected_pvs(values: list[str]) -> list[str]:
+    if not values:
+        raise BenchmarkError(
+            "at least one exact cluster-owned PV is required for cleanup evidence"
+        )
+    if len(values) != len(set(values)) or any(
+        not re.fullmatch(
+            r"pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            r"[0-9a-f]{4}-[0-9a-f]{12}",
+            value,
+        )
+        for value in values
+    ):
+        raise BenchmarkError("expected PV identities are duplicate or invalid")
+    return values
+
+
 def verify_cleanup(args: argparse.Namespace) -> int:
     management = Path(args.management_kubeconfig).expanduser().resolve()
+    workload = Path(args.workload_kubeconfig).expanduser().resolve()
     if not management.is_file():
         raise BenchmarkError(
             f"management kubeconfig does not exist: {management}"
         )
+    if workload.exists():
+        raise BenchmarkError(
+            f"workload kubeconfig remains after cleanup: {workload}"
+        )
+    expected_pvs = validate_expected_pvs(args.expected_pv)
     namespace = kubectl_json_strict_optional(
         management, ["get", "namespace", args.cluster]
     )
@@ -973,13 +996,39 @@ def verify_cleanup(args: argparse.Namespace) -> int:
     )
     if snapshots is not None and snapshots.get("items"):
         raise BenchmarkError("cluster-owned CDI snapshots remain after cleanup")
+    for pv_name in expected_pvs:
+        if kubectl_json_strict_optional(
+            management, ["get", "persistentvolume", pv_name]
+        ) is not None:
+            raise BenchmarkError(
+                f"cluster-owned retained PV remains after cleanup: {pv_name}"
+            )
+        if kubectl_json_strict_optional(
+            management,
+            [
+                "-n",
+                args.longhorn_namespace,
+                "get",
+                "volumes.longhorn.io",
+                pv_name,
+            ],
+        ) is not None:
+            raise BenchmarkError(
+                f"cluster-owned Longhorn volume remains after cleanup: {pv_name}"
+            )
     evidence = {
-        "schema": "openkubes.ok128.cleanup-verification/v1",
+        "schema": "openkubes.ok128.cleanup-verification/v2",
         "observed_at": utc_now(),
         "cluster": args.cluster,
         "cluster_namespace_absent": True,
         "clone_rbac_absent": True,
         "cluster_owned_snapshots_absent": True,
+        "workload_kubeconfig_absent": True,
+        "cluster_owned_storage": {
+            "persistent_volumes_absent": expected_pvs,
+            "longhorn_namespace": args.longhorn_namespace,
+            "longhorn_volumes_absent": expected_pvs,
+        },
         "golden_image": {
             "namespace": args.golden_namespace,
             "claim": args.golden_claim,
@@ -1032,9 +1081,12 @@ def parser() -> argparse.ArgumentParser:
     cleanup = subcommands.add_parser("verify-cleanup")
     cleanup.add_argument("--cluster", required=True)
     cleanup.add_argument("--management-kubeconfig", required=True)
+    cleanup.add_argument("--workload-kubeconfig", required=True)
     cleanup.add_argument("--golden-namespace", default="ok-images")
     cleanup.add_argument("--golden-claim", required=True)
     cleanup.add_argument("--golden-uid", required=True)
+    cleanup.add_argument("--expected-pv", action="append", default=[])
+    cleanup.add_argument("--longhorn-namespace", default="longhorn-system")
     cleanup.add_argument("--run-id", required=True)
     cleanup.add_argument("--output-dir", default=DEFAULT_EVIDENCE)
     cleanup.set_defaults(function=verify_cleanup)

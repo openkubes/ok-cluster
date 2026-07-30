@@ -239,6 +239,22 @@ def main() -> int:
         lambda: benchmark.validate_timeline(outside),
         "milestones outside command bounds fail closed",
     )
+    expected_pvs = [
+        "pvc-75590c3f-90d5-4c34-9fc5-c769719c6538",
+        "pvc-7a05362d-357d-4b7f-8d28-28612104cff3",
+    ]
+    check(
+        benchmark.validate_expected_pvs(expected_pvs) == expected_pvs,
+        "cleanup evidence accepts exact unique CSI PV identities",
+    )
+    expect_failure(
+        lambda: benchmark.validate_expected_pvs([]),
+        "cleanup evidence refuses an unbounded empty PV inventory",
+    )
+    expect_failure(
+        lambda: benchmark.validate_expected_pvs(["not-an-owned-pv"]),
+        "cleanup evidence rejects invalid PV identities",
+    )
 
     flatcar = fixture("flatcar", 1, 0)
     talos = fixture("talos", 2, 2)

@@ -116,10 +116,12 @@ FLATCAR_TEARDOWN=yes make teardown-flatcar CLUSTER=ok128-flatcar \
 
 make ok128-benchmark-cleanup-verify CLUSTER=ok128-flatcar \
   OK128_MANAGEMENT_KUBECONFIG="$HOME/.kube/ok-infra.yaml" \
+  OK128_WORKLOAD_KUBECONFIG="$HOME/.kube/ok128-flatcar.yaml" \
   OK128_OUTPUT_DIR=/private/tmp/ok128-benchmark \
   OK128_RUN_ID=flatcar-1 \
   OK128_GOLDEN_CLAIM=<recorded-claim> \
-  OK128_GOLDEN_UID=<recorded-uid>
+  OK128_GOLDEN_UID=<recorded-uid> \
+  OK128_EXPECTED_PVS="<recorded-cp-pv> <recorded-worker-pv>"
 ```
 
 Only after Flatcar cleanup is verified, run Talos:

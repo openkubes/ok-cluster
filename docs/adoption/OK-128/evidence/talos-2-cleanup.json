@@ -3,6 +3,17 @@
   "cluster": "ok128-talos",
   "cluster_namespace_absent": true,
   "cluster_owned_snapshots_absent": true,
+  "cluster_owned_storage": {
+    "longhorn_namespace": "longhorn-system",
+    "longhorn_volumes_absent": [
+      "pvc-b859b2bd-e82c-45e4-afa2-ad30e3ad8f24",
+      "pvc-272d0a5d-29f3-4302-96d3-1d1140670615"
+    ],
+    "persistent_volumes_absent": [
+      "pvc-b859b2bd-e82c-45e4-afa2-ad30e3ad8f24",
+      "pvc-272d0a5d-29f3-4302-96d3-1d1140670615"
+    ]
+  },
   "golden_image": {
     "claim": "talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64",
     "namespace": "ok-images",
@@ -10,6 +21,7 @@
     "preserved": true,
     "uid": "004796a1-0d2f-4775-ae71-b0ef79ee04a0"
   },
-  "observed_at": "2026-07-30T17:25:10Z",
-  "schema": "openkubes.ok128.cleanup-verification/v1"
+  "observed_at": "2026-07-30T17:52:06Z",
+  "schema": "openkubes.ok128.cleanup-verification/v2",
+  "workload_kubeconfig_absent": true
 }

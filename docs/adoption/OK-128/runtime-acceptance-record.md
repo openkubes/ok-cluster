@@ -97,14 +97,24 @@ After each final run:
 
 - the cluster namespace and cluster-owned clone RBAC were absent;
 - no cluster-owned CDI snapshot remained;
-- clone PVCs, retained PVs and their underlying volumes were removed;
+- the exact retained PV identities recorded during each run and their
+  same-named Longhorn volumes were absent;
 - the shared Golden PVC remained `Bound` with its original UID.
 
-The active workload kubeconfig paths were removed after cleanup. Generated
-kubeconfigs and bootstrap Secrets were never added to Git. Both sanitized
-command logs, both raw JSON records, cleanup JSON, Markdown and CSV passed the
-observer's fail-closed secret scan and a second independent scan before
-publication.
+The cleanup v2 verifier machine-checked these identities:
+
+- Flatcar:
+  `pvc-75590c3f-90d5-4c34-9fc5-c769719c6538` and
+  `pvc-7a05362d-357d-4b7f-8d28-28612104cff3`
+- Talos:
+  `pvc-b859b2bd-e82c-45e4-afa2-ad30e3ad8f24` and
+  `pvc-272d0a5d-29f3-4302-96d3-1d1140670615`
+
+It also verified that the active workload kubeconfig paths were absent after
+cleanup. Generated kubeconfigs and bootstrap Secrets were never added to Git.
+Both sanitized command logs, both raw JSON records, cleanup JSON, Markdown and
+CSV passed the observer's fail-closed secret scan and a second independent
+scan before publication.
 
 Three earlier executions were excluded from the comparison: one transport
 interruption and two observer-validation failures exposed assumptions about

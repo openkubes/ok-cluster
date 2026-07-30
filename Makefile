@@ -49,6 +49,7 @@ OK128_TALOS_EVIDENCE ?=
 OK128_GOLDEN_NAMESPACE ?= ok-images
 OK128_GOLDEN_CLAIM ?=
 OK128_GOLDEN_UID ?=
+OK128_EXPECTED_PVS ?=
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -317,17 +318,21 @@ ok128-benchmark-compare: ## Emit observed-only Markdown/CSV from two sanitized r
 
 ok128-benchmark-cleanup-verify: require-cluster ## Read-only cleanup/Golden-PVC preservation evidence
 	@test -n "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		-a -n "$(OK128_WORKLOAD_KUBECONFIG)" \
 		-a -n "$(OK128_OUTPUT_DIR)" \
 		-a -n "$(OK128_RUN_ID)" \
 		-a -n "$(OK128_GOLDEN_CLAIM)" \
-		-a -n "$(OK128_GOLDEN_UID)" || \
-		(echo "ERROR: explicit management, output, run ID, Golden claim and UID are required"; exit 1)
+		-a -n "$(OK128_GOLDEN_UID)" \
+		-a -n "$(OK128_EXPECTED_PVS)" || \
+		(echo "ERROR: explicit kubeconfigs, output, run ID, Golden identity and expected PVs are required"; exit 1)
 	@python3 $(SCRIPT_DIR)/scripts/provisioning_benchmark.py verify-cleanup \
 		--cluster "$(CLUSTER)" \
 		--management-kubeconfig "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		--workload-kubeconfig "$(OK128_WORKLOAD_KUBECONFIG)" \
 		--golden-namespace "$(OK128_GOLDEN_NAMESPACE)" \
 		--golden-claim "$(OK128_GOLDEN_CLAIM)" \
 		--golden-uid "$(OK128_GOLDEN_UID)" \
+		$(foreach pv,$(OK128_EXPECTED_PVS),--expected-pv "$(pv)") \
 		--run-id "$(OK128_RUN_ID)" \
 		--output-dir "$(OK128_OUTPUT_DIR)"
 
