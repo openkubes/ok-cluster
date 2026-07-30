@@ -1,0 +1,7 @@
+[flatcar] validating exact profile, manifest, and local Cilium artifact
+[flatcar] checking source state and management-cluster preconditions
+[flatcar] PASS constrained Flatcar production preflight
+[flatcar] creating the exact namespace and CAPI/CAPK resource set
+[flatcar] waiting for the control-plane Node before installing Cilium
+[flatcar] installing digest-verified local Cilium 1.19.6
+[flatcar] PASS ok128-flatcar: constrained Flatcar profile reached Node Ready

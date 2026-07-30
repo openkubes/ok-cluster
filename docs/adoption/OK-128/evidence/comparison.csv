@@ -1,0 +1,17 @@
+milestone,flatcar_seconds,talos_seconds
+command_started,0,0
+capi_cluster_created,7,3
+api_reachable_control_plane_registered,96,212
+first_node_ready,129,255
+all_nodes_ready,180,264
+cilium_daemonset_available,185,259
+cilium_operator_available,119,250
+capi_cluster_available,181,265
+command_completed,189,265
+operator_real,188.22,264.04
+management_scheduled_pods_before,66,66
+management_scheduled_pods_after,68,68
+management_running_vmis_before,22,22
+management_running_vmis_after,24,24
+management_total_vmis_before,22,22
+management_total_vmis_after,24,24
