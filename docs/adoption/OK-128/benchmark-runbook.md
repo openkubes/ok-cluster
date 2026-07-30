@@ -10,7 +10,8 @@ Results are single-run observations and must not be presented as an SLO.
 - KubeVirt, `amd64`, Kubernetes `v1.34.1`
 - one control-plane and one worker VM
 - 2 vCPU, 4 GiB RAM, and 20 GiB disk per VM
-- scheduling node `ok-infra`; each OS retains its validated storage semantics:
+- scheduling node `ok-infra`; the shared Golden PVCs are on
+  `ok-storage-block`. Each OS retains its validated clone-target semantics:
   Flatcar `local-path`, Talos `ok-storage-block`
 - Cilium chart `1.19.6`, SHA-256
   `21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179`

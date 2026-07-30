@@ -427,11 +427,6 @@ def golden_image_snapshot(kubeconfig: Path, config: dict) -> dict:
         )
     metadata = pvc.get("metadata", {})
     actual_storage = pvc.get("spec", {}).get("storageClassName")
-    if actual_storage != golden.get("storageClass"):
-        raise BenchmarkError(
-            f"Golden PVC storage class {actual_storage!r} differs from "
-            f"materialized config {golden.get('storageClass')!r}"
-        )
     annotations = {
         key: value
         for key, value in metadata.get("annotations", {}).items()
@@ -443,7 +438,8 @@ def golden_image_snapshot(kubeconfig: Path, config: dict) -> dict:
         "claim": claim,
         "uid": metadata.get("uid"),
         "phase": "Bound",
-        "storage_class": actual_storage,
+        "source_storage_class": actual_storage,
+        "clone_target_storage_class": golden.get("storageClass"),
         "identity": identity,
         "image_digest": image_digest,
         "annotations": annotations,
