@@ -1,0 +1,47 @@
+controlPlane:
+  cores: 2
+  disk: 20Gi
+  memory: 4Gi
+  replicas: 1
+name: ok128-flatcar
+network:
+  endpoint: 192.168.100.212
+  podCIDR: 10.36.0.0/16
+  serviceCIDR: 10.96.64.0/20
+nodeSelector: ok-infra
+os:
+  architecture: amd64
+  profile: flatcar-kubevirt
+  contractRef: ADR-Platform-016
+  distribution: flatcar
+  version: 4593.2.4
+  imageDigest: sha256:49b72cf26d27d4747d6252c64582f17fdbd7d629993beebbcf997794333a978a
+  identity: sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb
+  profileRevision: 1
+  status: production-constrained
+  deployable: true
+  supportDecision: docs/adr/ADR-009-flatcar-kubevirt-constrained-support.md
+  goldenImage:
+    namespace: ok-images
+    claim: flatcar-stable-4593-2-4-amd64-kubevirt
+    published: true
+    storageClass: local-path
+provider: kubevirt
+providerProfile:
+  goldenImageStorageClass: local-path
+type: flatcar
+upgrade:
+  strategy: blue-green
+  workloadMigration:
+    stateless: gitops
+    stateful: app-native
+versions:
+  kubernetes: v1.34.1
+workers:
+  cores: 2
+  disk: 20Gi
+  memory: 4Gi
+  replicas: 1
+bootstrap:
+  format: ignition
+  virtualMachineBootstrapCheck: none
