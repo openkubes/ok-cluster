@@ -64,6 +64,12 @@ records `public_import_count: 0`. No Secret object or value is read into
 evidence. This evidence stays separate from `ok-linux`'s one-time
 `mode: cold-publication` timing.
 
+The guarded Flatcar `ok125-node-ready` evidence records the same
+namespace-to-CAPI-Available, namespace-to-all-Nodes-Ready and
+end-to-end-Cilium-Ready fields. Both warm timers begin only after the shared
+chart has been verified locally, so the two OS paths can be compared without
+including chart acquisition or either Golden Image's one-time publication.
+
 The pinned Cilium chart must be acquired before starting the comparable warm
 provisioning timer:
 

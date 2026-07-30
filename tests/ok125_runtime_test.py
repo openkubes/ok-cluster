@@ -59,6 +59,14 @@ def main() -> int:
         and 'get("status", {}).get("ready")' not in source,
         "bootstrap readiness uses CAPI v1beta2 Conditions",
     )
+    check(
+        '"mode": "warm-provisioning"' in source
+        and '"capi_available"' in source
+        and '"nodes_ready"' in source
+        and '"end_to_end_cilium_ready"' in source
+        and '"public_import_count": 0' in source,
+        "Flatcar records the same warm milestones as Talos",
+    )
     replacement = subprocess.run(
         ["python3", str(REPLACEMENT), "--self-test"],
         cwd=ROOT,
