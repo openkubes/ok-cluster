@@ -217,6 +217,28 @@ def main() -> int:
         and milestones["all_nodes_ready"].endswith("40Z"),
         "all eight observable Kubernetes milestones are extracted",
     )
+    reordered = {
+        "command_started": "2026-07-30T10:00:00Z",
+        "capi_cluster_created": "2026-07-30T10:00:01Z",
+        "api_reachable_control_plane_registered": "2026-07-30T10:00:30Z",
+        "first_node_ready": "2026-07-30T10:00:25Z",
+        "all_nodes_ready": "2026-07-30T10:00:40Z",
+        "cilium_daemonset_available": "2026-07-30T10:00:55Z",
+        "cilium_operator_available": "2026-07-30T10:00:54Z",
+        "capi_cluster_available": "2026-07-30T10:00:35Z",
+        "command_completed": "2026-07-30T10:01:00Z",
+    }
+    benchmark.validate_timeline(reordered)
+    check(
+        True,
+        "server transitions and observer milestones need not follow list order",
+    )
+    outside = dict(reordered)
+    outside["capi_cluster_created"] = "2026-07-30T09:59:59Z"
+    expect_failure(
+        lambda: benchmark.validate_timeline(outside),
+        "milestones outside command bounds fail closed",
+    )
 
     flatcar = fixture("flatcar", 1, 0)
     talos = fixture("talos", 2, 2)

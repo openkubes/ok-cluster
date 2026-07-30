@@ -21,6 +21,7 @@ from profile_resolvers.flatcar import (  # noqa: E402
     FlatcarProfileError,
     resolve_flatcar_config,
 )
+from scripts.flatcar_lifecycle import workload_kubeconfig_owned  # noqa: E402
 
 
 OK_LINUX = Path(
@@ -136,6 +137,30 @@ def negative_cases() -> None:
 
 
 def main() -> int:
+    generated_kubeconfig_shape = {
+        "current-context": (
+            "flatcar-production-test-admin@flatcar-production-test"
+        ),
+        "contexts": [
+            {
+                "name": (
+                    "flatcar-production-test-admin@"
+                    "flatcar-production-test"
+                ),
+                "context": {"cluster": "flatcar-production-test"},
+            }
+        ],
+        "clusters": [{"name": "flatcar-production-test"}],
+    }
+    check(
+        workload_kubeconfig_owned(
+            generated_kubeconfig_shape, "flatcar-production-test"
+        )
+        and not workload_kubeconfig_owned(
+            generated_kubeconfig_shape, "another-cluster"
+        ),
+        "teardown accepts clusterctl context names but remains cluster-bound",
+    )
     source = subprocess.run(
         ["make", "--no-print-directory", "-s", "ok125-static"],
         cwd=OK_LINUX,

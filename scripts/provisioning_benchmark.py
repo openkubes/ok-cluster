@@ -459,6 +459,28 @@ def parse_posix_time(text: str) -> dict[str, float]:
     return values
 
 
+def validate_timeline(timeline: dict[str, str]) -> None:
+    if set(timeline) != set(MILESTONES):
+        raise BenchmarkError("milestone timeline is incomplete")
+    started = parse_time(timeline["command_started"])
+    completed = parse_time(timeline["command_completed"])
+    if completed < started:
+        raise BenchmarkError("command completion predates command start")
+    outside = [
+        name
+        for name, value in timeline.items()
+        if parse_time(value) < started or parse_time(value) > completed
+    ]
+    if outside:
+        raise BenchmarkError(
+            f"milestones outside command bounds: {outside}"
+        )
+    if parse_time(timeline["first_node_ready"]) > parse_time(
+        timeline["all_nodes_ready"]
+    ):
+        raise BenchmarkError("first Node Ready follows all Nodes Ready")
+
+
 def manifest_identities(cluster_dir: Path) -> list[dict]:
     result = []
     for name in (
@@ -665,9 +687,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
             f"run is incomplete: exit={process.returncode}, missing={missing}; "
             f"sanitized failure evidence was retained in {output}"
         )
-    ordered = [parse_time(milestones[name]) for name in MILESTONES]
-    if any(next_value < value for value, next_value in zip(ordered, ordered[1:])):
-        raise BenchmarkError("milestone timeline is not monotonic")
+    validate_timeline(milestones)
     nodes = workload_snapshot(workload_kubeconfig).get("nodes") or {}
     observed_nodes = nodes.get("items", [])
     if len(observed_nodes) != EXPECTED_NODES:
@@ -768,6 +788,12 @@ def compare_results(flatcar: dict, talos: dict) -> tuple[str, str]:
             raise BenchmarkError(f"{name} lifecycle command did not succeed")
         if set(result.get("timeline", {})) != set(MILESTONES):
             raise BenchmarkError(f"{name} timeline is incomplete")
+        validate_timeline(
+            {
+                milestone: result["timeline"][milestone]["timestamp"]
+                for milestone in MILESTONES
+            }
+        )
         if (
             result.get("classification") != "observed-single-run-no-slo"
             or result.get("inputs", {})
