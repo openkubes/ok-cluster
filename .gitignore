@@ -13,6 +13,10 @@ __pycache__/
 *.pyc
 .ok125-render-*/
 
+# Verified local tool/artifact cache
+.tools/*
+!.tools/.gitkeep
+
 # Generated OK-125 evidence (reproducible, not source)
 docs/adoption/OK-125/.evidence/
 

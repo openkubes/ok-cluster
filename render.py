@@ -15,6 +15,7 @@ from pathlib import Path
 from string import Template
 
 from profile_resolvers.flatcar import resolve_flatcar_config
+from profile_resolvers.talos import resolve_talos_config
 
 SCRIPT_DIR = Path(__file__).parent
 CLUSTERS_DIR = SCRIPT_DIR
@@ -179,6 +180,8 @@ def resolve_config(cfg: dict, cluster_name: str) -> dict:
         os_cfg.setdefault("distribution", "ok-linux")
         os_cfg.setdefault("profile", OK_LINUX_DEFAULT_PROFILE)
         os_cfg.setdefault("schematic_id", OK_LINUX_DEFAULT_SCHEMATIC_ID)
+        if cfg.get("provider", "kubevirt") == "kubevirt":
+            cfg = resolve_talos_config(cfg, OK_LINUX_PATH)
     elif cfg.get("type") == "flatcar":
         # Flatcar defaults and support constraints are owned by the selected
         # ok-linux implementation profile. The shared renderer only dispatches
@@ -285,15 +288,17 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
                              f"(expected templates/talos-mgmt/providers/{provider}/)")
         tpl_dirs.append(prov_dir)
     elif cluster_type == "talos":
-        # Workload provider selection (OK-106 Proof B). Default kubevirt keeps the
-        # existing templates/talos manifest set untouched; a non-kubevirt provider
-        # renders its self-contained manifest set from templates/talos/providers/<p>.
+        # Workload provider selection (OK-106 Proof B). KubeVirt overlays only
+        # its provider-specific manifests while retaining common Talos scripts;
+        # other providers render their self-contained manifest set.
         provider = cfg.get("provider", "kubevirt")
-        if provider != "kubevirt":
-            prov_dir = TEMPLATES_DIR / "talos" / "providers" / provider
-            if not prov_dir.is_dir():
-                raise SystemExit(f"ERROR: unknown talos provider profile '{provider}' "
-                                 f"(expected templates/talos/providers/{provider}/)")
+        prov_dir = TEMPLATES_DIR / "talos" / "providers" / provider
+        if not prov_dir.is_dir():
+            raise SystemExit(f"ERROR: unknown talos provider profile '{provider}' "
+                             f"(expected templates/talos/providers/{provider}/)")
+        if provider == "kubevirt":
+            tpl_dirs.append(prov_dir)
+        else:
             tpl_dirs = [prov_dir]
     out_dir = output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -303,16 +308,19 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
     print(f"  ✔ {resolved_cfg_path.relative_to(SCRIPT_DIR)}")
 
+    templates = {}
     for tpl_dir in tpl_dirs:
-        for tpl in sorted(tpl_dir.glob("*.tpl")):
-            rendered = Template(tpl.read_text()).safe_substitute(ctx)
-            rendered = apply_node_selector(rendered, ctx["NODE_SELECTOR"])
-            out_name = tpl.stem
-            out_path = out_dir / out_name
-            out_path.write_text(rendered)
-            if out_path.suffix == ".sh":
-                out_path.chmod(0o755)
-            print(f"  ✔ {out_path.relative_to(SCRIPT_DIR)}")
+        for tpl in tpl_dir.glob("*.tpl"):
+            templates[tpl.name] = tpl
+    for tpl in sorted(templates.values(), key=lambda value: value.name):
+        rendered = Template(tpl.read_text()).safe_substitute(ctx)
+        rendered = apply_node_selector(rendered, ctx["NODE_SELECTOR"])
+        out_name = tpl.stem
+        out_path = out_dir / out_name
+        out_path.write_text(rendered)
+        if out_path.suffix == ".sh":
+            out_path.chmod(0o755)
+        print(f"  ✔ {out_path.relative_to(SCRIPT_DIR)}")
 
 def cmd_render(args):
     cluster_name = args.cluster

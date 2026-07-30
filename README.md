@@ -41,8 +41,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - Tools: `clusterctl`, `helm`, `talosctl`, `kubectl`, `python3`, `make`
 - Kubeconfig at `~/.kube/<host-cluster>.yaml`
 - **For Talos and Flatcar clusters:** a sibling checkout of [ok-linux](https://github.com/openkubes/ok-linux) (see [OS Layer Integration](#os-layer-integration) below)
-- **For constrained Flatcar install:** an explicit management kubeconfig and a
-  local Cilium 1.19.6 chart matching the pinned OK-125 digest
+- **For Talos and constrained Flatcar:** Python 3 with HTTPS access to
+  `helm.cilium.io`, or a pre-downloaded Cilium 1.19.6 chart for offline
+  acquisition. Flatcar additionally requires an explicit management
+  kubeconfig.
 
 > See [OpenKubes Infrastructure](https://github.com/openkubes/openkubes/tree/main/platform/infrastructure) for host cluster setup.
 
@@ -53,6 +55,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 ### Talos Cluster (recommended)
 
 ```bash
+# Acquire once, before measuring provisioning time. A valid cache is reused.
+make prepare-cilium-chart
+
 # Scaffold a new HA Talos cluster
 # Talos version and schematic ID are read from ../ok-linux automatically
 make new CLUSTER=my-cluster TYPE=talos WORKERS=2
@@ -95,19 +100,38 @@ amd64, KubeVirt, Kubernetes v1.34.1, one control-plane and one worker. There is
 no fallback and unsupported overrides fail before rendering.
 
 ```bash
+# Online acquisition from the authoritative Helm repository:
+make prepare-cilium-chart
+
+# Or offline/pre-downloaded acquisition:
+make prepare-cilium-chart \
+  CILIUM_CHART_SOURCE=/media/artifacts/cilium-1.19.6.tgz
+
+# Both commands atomically publish the verified chart here:
+#   $(pwd)/.tools/cilium-1.19.6.tgz
+
 make new CLUSTER=my-flatcar TYPE=flatcar
 
 make flatcar-preflight \
   CLUSTER=my-flatcar \
   FLATCAR_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
-  FLATCAR_CILIUM_CHART=/path/to/cilium-1.19.6.tgz
+  FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz"
 
 make install-flatcar \
   CLUSTER=my-flatcar \
   FLATCAR_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
-  FLATCAR_CILIUM_CHART=/path/to/cilium-1.19.6.tgz \
+  FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz" \
   FLATCAR_APPLY=yes
 ```
+
+`prepare-cilium-chart` downloads only
+`https://helm.cilium.io/cilium-1.19.6.tgz` and requires SHA-256
+`21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179`.
+The `.tools/` cache is git-ignored. A valid cached file is reused without
+network access; an invalid cache or pre-downloaded file fails closed and is
+never silently replaced. Move an invalid cached file aside before deliberately
+acquiring it again. `make verify-cilium-chart` performs verification only and
+never downloads.
 
 The guarded installer requires clean, pushed `ok-linux` and `ok-cluster`
 commits, verifies the exact CAPI/CABPK/KCP 1.13.3, CAPK 0.11.2, KubeVirt 1.8.1
@@ -235,10 +259,12 @@ OS_PROFILE=baremetal make new CLUSTER=my-cluster TYPE=talos
 ```
 make new           CLUSTER=<name> TYPE=ubuntu|talos|talos-mgmt|flatcar
 make render        CLUSTER=<name>                    # re-render manifests from config
+make prepare-cilium-chart                            # acquire/reuse pinned Cilium chart
+make verify-cilium-chart                             # offline digest verification
 make install       CLUSTER=<name>                    # ubuntu: apply + wait + cilium
 make bootstrap     CLUSTER=<name>                    # talos: apply + annotate PVCs + cilium
-make flatcar-preflight CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<path>
-make install-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<path> FLATCAR_APPLY=yes
+make flatcar-preflight CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz"
+make install-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz" FLATCAR_APPLY=yes
 make teardown-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes
 make kubeconfig    CLUSTER=<name>                    # save kubeconfig to ~/.kube/<name>.yaml
 make install-cni   CLUSTER=<name>                    # install Cilium (manual)
@@ -298,6 +324,17 @@ make list                                            # list all defined clusters
 ### Talos (immutable, API-driven)
 
 Uses [Talos Linux](https://www.talos.dev/) via the OpenStack-compatible qcow2 image from [Talos Image Factory](https://factory.talos.dev/). No SSH, no package manager — fully declarative and immutable. Talos version and schematic ID come from [ok-linux](https://github.com/openkubes/ok-linux) — see [OS Layer Integration](#os-layer-integration).
+
+For KubeVirt workload clusters, OK-130 separates image publication from
+cluster provisioning. The exact digest-pinned qcow2 is published once by
+`ok-linux` to an immutable PVC in `ok-images`; control-plane and worker disks
+are local CDI clones on `ok-storage-block`. `make bootstrap` runs a read-only
+KubeVirt `ExpandDisks`, Golden-PVC and clone-RBAC preflight before applying the
+existing Talos CAPI objects. `ExpandDisks` is required because filesystem
+snapshot clones retain the Golden `disk.img` virtual size; KubeVirt expands it
+to the requested boot-PVC capacity before Talos starts. Talos machine
+configuration and credentials remain dynamically generated by the Talos CAPI
+providers.
 
 ```bash
 make new CLUSTER=ok-ai TYPE=talos WORKERS=2

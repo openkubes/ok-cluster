@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -66,6 +67,13 @@ GATE_DEPLOYMENTS = (
         "capi-kubeadm-control-plane-controller-manager",
     ),
 )
+EXPECTED_OWNERSHIP_LABELS = {
+    "openkubes.io/type": "flatcar",
+    "openkubes.io/provider": "kubevirt",
+    "openkubes.io/profile": "flatcar-kubevirt-adoption",
+    "openkubes.io/adoption-status": "constrained-approved",
+    "openkubes.io/deployable": "false",
+}
 
 
 class RuntimeValidationError(RuntimeError):
@@ -184,6 +192,46 @@ def condition_is_true(resource: dict, condition_type: str) -> bool:
         if condition.get("type") == condition_type
     ]
     return bool(matches) and all(value == "True" for value in matches)
+
+
+def ownership_labels_match(labels: dict, *, identity_bound: bool) -> bool:
+    expected = dict(EXPECTED_OWNERSHIP_LABELS)
+    if identity_bound:
+        expected.update(
+            {
+                "openkubes.io/profile-revision": "1",
+                "openkubes.io/os-identity": (
+                    EXPECTED_OS_IDENTITY.removeprefix("sha256:")[:12]
+                ),
+            }
+        )
+    return all(labels.get(key) == value for key, value in expected.items())
+
+
+def true_condition(resource: dict, *condition_types: str) -> dict | None:
+    status = resource.get("status", {})
+    condition_sets = [status.get("conditions", [])]
+    if isinstance(status.get("v1beta2"), dict):
+        condition_sets.append(status["v1beta2"].get("conditions", []))
+    return next(
+        (
+            condition
+            for conditions in condition_sets
+            for condition in conditions
+            if condition.get("type") in condition_types
+            and condition.get("status") == "True"
+            and condition.get("lastTransitionTime")
+        ),
+        None,
+    )
+
+
+def parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def render() -> dict:
@@ -489,7 +537,7 @@ def create_runtime(
     kubeconfig: Path,
     namespace: dict,
     resources: list[dict],
-) -> None:
+) -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     namespace_path = RUNTIME_DIR / "namespace.yaml"
     resources_path = RUNTIME_DIR / "resources.yaml"
@@ -502,6 +550,11 @@ def create_runtime(
         kubeconfig,
         ["create", "-f", str(namespace_path)],
     )
+    started_at = kubectl_json(
+        kubectl_bin,
+        kubeconfig,
+        ["get", "namespace", CLUSTER],
+    )["metadata"]["creationTimestamp"]
     progress("running server-side dry-run in the created namespace")
     kubectl(
         kubectl_bin,
@@ -619,6 +672,7 @@ def create_runtime(
         raise RuntimeValidationError(
             f"expected two Ready Nodes; observed {len(nodes)} with {readiness}"
         )
+    return started_at
 
 
 def secret_metadata(
@@ -670,6 +724,7 @@ def secret_metadata(
 def collect_runtime_evidence(
     kubectl_bin: str,
     management_kubeconfig: Path,
+    started_at: str,
 ) -> dict:
     progress("collecting redacted G1/G3 evidence")
     nodes = kubectl_json(
@@ -690,8 +745,19 @@ def collect_runtime_evidence(
             "False",
         )
         info = node["status"]["nodeInfo"]
+        ready_condition = next(
+            (
+                condition
+                for condition in node["status"]["conditions"]
+                if condition["type"] == "Ready"
+                and condition["status"] == "True"
+            ),
+            None,
+        )
         if (
             ready != "True"
+            or ready_condition is None
+            or not ready_condition.get("lastTransitionTime")
             or "Flatcar" not in info["osImage"]
             or info["kubeletVersion"] != EXPECTED_VERSION
             or not node["spec"].get("providerID", "").startswith("kubevirt://")
@@ -708,6 +774,7 @@ def collect_runtime_evidence(
                 "kubeletVersion": info["kubeletVersion"],
                 "containerRuntimeVersion": info["containerRuntimeVersion"],
                 "providerID": node["spec"]["providerID"],
+                "readyAt": ready_condition["lastTransitionTime"],
                 "controlPlane": (
                     "node-role.kubernetes.io/control-plane"
                     in node["metadata"].get("labels", {})
@@ -815,6 +882,37 @@ def collect_runtime_evidence(
     if "OK" not in cilium.stdout:
         raise RuntimeValidationError("Cilium brief health did not report OK")
 
+    cluster = kubectl_json(
+        kubectl_bin,
+        management_kubeconfig,
+        ["-n", CLUSTER, "get", "cluster", CLUSTER],
+    )
+    available = true_condition(cluster, "Available", "Ready")
+    if available is None:
+        raise RuntimeValidationError("Flatcar CAPI Cluster is not Available")
+    capi_available_at = available["lastTransitionTime"]
+    nodes_ready_at = max(
+        (item["readyAt"] for item in node_evidence),
+        key=parse_time,
+    )
+    completed_at = now()
+    started = parse_time(started_at)
+    timings = {
+        "capi_available": round(
+            (parse_time(capi_available_at) - started).total_seconds(), 3
+        ),
+        "nodes_ready": round(
+            (parse_time(nodes_ready_at) - started).total_seconds(), 3
+        ),
+        "end_to_end_cilium_ready": round(
+            (parse_time(completed_at) - started).total_seconds(), 3
+        ),
+    }
+    if any(value < 0 for value in timings.values()):
+        raise RuntimeValidationError(
+            "Flatcar runtime milestone predates its namespace"
+        )
+
     role = kubectl_json(
         kubectl_bin,
         management_kubeconfig,
@@ -838,6 +936,16 @@ def collect_runtime_evidence(
         ],
     )
     return {
+        "milestones": {
+            "mode": "warm-provisioning",
+            "started_at": started_at,
+            "capi_available_at": capi_available_at,
+            "nodes_ready_at": nodes_ready_at,
+            "completed_at": completed_at,
+            "timings_seconds": timings,
+            "public_import_count": 0,
+            "secret_values_recorded": False,
+        },
         "nodes": node_evidence,
         "machines": machine_evidence,
         "bootstrap": bootstrap,
@@ -907,16 +1015,19 @@ def preflight() -> tuple[str, str, Path, dict]:
 def node_ready() -> int:
     kubectl_bin, helm_bin, kubeconfig, state = preflight()
     try:
-        create_runtime(
+        started_at = create_runtime(
             kubectl_bin,
             helm_bin,
             kubeconfig,
             state["namespace"],
             state["resources"],
         )
-        runtime = collect_runtime_evidence(kubectl_bin, kubeconfig)
+        runtime = collect_runtime_evidence(
+            kubectl_bin, kubeconfig, started_at
+        )
         result = state["result"]
         result["status"] = "PASS"
+        result.update(runtime.pop("milestones"))
         result["runtime"] = runtime
         result["runtime_gates"] = {
             "G1_kubernetes_node_ready": "PASS",
@@ -957,11 +1068,7 @@ def cleanup() -> int:
         ["get", "namespace", CLUSTER],
     )
     labels = namespace["metadata"].get("labels", {})
-    if (
-        labels.get("openkubes.io/type") != "flatcar"
-        or labels.get("openkubes.io/adoption-status") != "adoption-gated"
-        or labels.get("openkubes.io/deployable") != "false"
-    ):
+    if not ownership_labels_match(labels, identity_bound=True):
         raise RuntimeValidationError("namespace ownership labels do not match")
     for kind in ("role", "rolebinding"):
         authorization = kubectl(
@@ -982,10 +1089,7 @@ def cleanup() -> int:
             labels = json.loads(authorization.stdout)["metadata"].get(
                 "labels", {}
             )
-            if (
-                labels.get("openkubes.io/type") != "flatcar"
-                or labels.get("openkubes.io/deployable") != "false"
-            ):
+            if not ownership_labels_match(labels, identity_bound=False):
                 raise RuntimeValidationError(
                     f"{kind} clone authorization ownership does not match"
                 )
@@ -998,9 +1102,8 @@ def cleanup() -> int:
     if cluster.returncode == 0:
         cluster_object = json.loads(cluster.stdout)
         cluster_labels = cluster_object["metadata"].get("labels", {})
-        if (
-            cluster_labels.get("openkubes.io/type") != "flatcar"
-            or cluster_labels.get("openkubes.io/deployable") != "false"
+        if not ownership_labels_match(
+            cluster_labels, identity_bound=True
         ):
             raise RuntimeValidationError("Cluster ownership labels do not match")
         progress("deleting only the disposable CAPI Cluster")
@@ -1093,6 +1196,17 @@ def self_test() -> int:
     assert EXPECTED_CILIUM_CHART_SHA256 == (
         "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179"
     )
+    expected_labels = {
+        **EXPECTED_OWNERSHIP_LABELS,
+        "openkubes.io/profile-revision": "1",
+        "openkubes.io/os-identity": "afd862491620",
+    }
+    assert ownership_labels_match(expected_labels, identity_bound=True)
+    stale_labels = {
+        **expected_labels,
+        "openkubes.io/adoption-status": "adoption-gated",
+    }
+    assert not ownership_labels_match(stale_labels, identity_bound=True)
     assert condition_is_true(
         {
             "status": {

@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -33,6 +33,10 @@ FLATCAR_CILIUM_CHART     ?=
 FLATCAR_APPLY            ?= no
 FLATCAR_TEARDOWN         ?= no
 FLATCAR_WORKLOAD_KUBECONFIG ?=
+TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
+CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
+CILIUM_CHART_SOURCE ?=
+KUBEVIRT_EXPAND_DISKS_APPLY ?= no
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -126,9 +130,23 @@ new: require-cluster require-type
 render: require-cluster
 	@START_IP=$(START_IP) python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
 
+prepare-cilium-chart: ## Download/verify pinned Cilium 1.19.6 into .tools
+	@python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
+		--cache "$(CILIUM_CHART)" \
+		$(if $(CILIUM_CHART_SOURCE),--source "$(CILIUM_CHART_SOURCE)")
+
+verify-cilium-chart: ## Offline-verify an existing pinned Cilium chart
+	@python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
+		--verify-only \
+		--cache "$(CILIUM_CHART)"
+
+cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
+	@PYTHONDONTWRITEBYTECODE=1 \
+		python3 $(SCRIPT_DIR)/tests/cilium_chart_tool_test.py
+
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok130-test talos-golden-preflight talos-golden-runtime-evidence
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -203,6 +221,40 @@ teardown-flatcar: require-cluster ## Tear down only an owned constrained Flatcar
 		--management-kubeconfig "$(FLATCAR_INFRA_KUBECONFIG)" \
 		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
 
+ok130-test: ## Offline-test the Talos Golden-Image resolver/render/lifecycle
+	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+		python3 $(SCRIPT_DIR)/tests/ok130_talos_golden_test.py
+
+configure-kubevirt-expand-disks: ## Guardedly enable ExpandDisks on ok-infra (requires APPLY=yes)
+	@if [ "$(KUBEVIRT_EXPAND_DISKS_APPLY)" != "yes" ]; then \
+		echo "Refusing mutation: set KUBEVIRT_EXPAND_DISKS_APPLY=yes after approval."; \
+		exit 1; \
+	fi
+	@python3 $(SCRIPT_DIR)/scripts/configure_kubevirt_expand_disks.py \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--apply
+
+talos-golden-preflight: require-cluster ## Read-only Golden-PVC/RBAC preflight
+	@CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; print((yaml.safe_load(open(sys.argv[1])) or {}).get("type",""))' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
+	if [ "$$CLUSTER_TYPE" = "talos" ]; then \
+		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+			--preflight \
+			--cluster "$(CLUSTER)" \
+			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+			--ok-linux-path "$(OK_LINUX_PATH)"; \
+	else \
+		echo "Skipping workload Talos Golden preflight for type=$$CLUSTER_TYPE"; \
+	fi
+
+talos-golden-runtime-evidence: require-cluster ## Record read-only warm provisioning evidence
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--runtime-evidence \
+		--cluster "$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" \
+		--workload-kubeconfig "$(or $(TALOS_WORKLOAD_KUBECONFIG),$(HOME)/.kube/$(CLUSTER).yaml)" \
+		--cilium-chart "$(CILIUM_CHART)"
+
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-not-flatcar
 	@echo "Applying Ubuntu cluster manifests for $(CLUSTER)..."
@@ -269,11 +321,11 @@ install-cni: require-cluster kubeconfig
 			fi ;; \
 		esac; \
 	fi; \
-	helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true; \
-	helm repo update cilium 2>/dev/null; \
 	if [ "$$CLUSTER_TYPE" = "talos" ] || [ "$$CLUSTER_TYPE" = "talos-mgmt" ]; then \
+		python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
+			--verify-only --cache "$(CILIUM_CHART)"; \
 		echo "  Using Talos values (KubePrism localhost:7445, cgroup hostRoot, agent capabilities)"; \
-		helm upgrade --install cilium cilium/cilium \
+		helm upgrade --install cilium "$(CILIUM_CHART)" \
 			--kubeconfig ~/.kube/$(CLUSTER).yaml \
 			--namespace kube-system \
 			--set operator.replicas=1 \
@@ -289,6 +341,8 @@ install-cni: require-cluster kubeconfig
 			--set cgroup.autoMount.enabled=false \
 			--set cgroup.hostRoot=/sys/fs/cgroup; \
 	else \
+		helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true; \
+		helm repo update cilium 2>/dev/null; \
 		CLUSTER_CP_IP=$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'); \
 		echo "  Control plane IP: $$CLUSTER_CP_IP"; \
 		helm upgrade --install cilium cilium/cilium \
@@ -407,6 +461,7 @@ install-observability: require-cluster kubeconfig ## Install ok-observability-st
 
 bootstrap: require-not-flatcar
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
+	@$(MAKE) --no-print-directory talos-golden-preflight CLUSTER=$(CLUSTER)
 	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
 	@echo ""
 	@$(MAKE) --no-print-directory annotate-pvcs CLUSTER=$(CLUSTER)
@@ -466,6 +521,7 @@ clean: require-not-flatcar
 teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses teardown-flatcar)
 	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
 	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
+	DV_UIDS=$$($(OKB) get datavolumes -n $(CLUSTER) -o jsonpath='{range .items[*]}{.metadata.uid}{","}{end}' 2>/dev/null); \
 	if [ -n "$$PVS" ]; then \
 		echo "  VM disks use ok-storage-* (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
 		echo "$$PVS" | sed 's/^/    /'; \
@@ -486,6 +542,15 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 	fi; \
 	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
 	$(OKB) delete namespace $(CLUSTER) --ignore-not-found; \
+	HAS_TALOS_GOLDEN=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])) or {}; print(str(c.get("type") == "talos" and bool(c.get("os",{}).get("goldenImage"))).lower())' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"); \
+	if [ "$$HAS_TALOS_GOLDEN" = "true" ]; then \
+		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+			--cleanup-authorization \
+			--cluster "$(CLUSTER)" \
+			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+			--ok-linux-path "$(OK_LINUX_PATH)" \
+			--data-volume-uids "$$DV_UIDS"; \
+	fi; \
 	echo "Removing local cluster directory..."; \
 	rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
 	if [ -n "$$PVS" ]; then \
@@ -742,18 +807,22 @@ help:
 	@echo "  make install CLUSTER=ok1   # apply + wait for Ready + install Cilium"
 	@echo ""
 	@echo "── Talos Workflow ───────────────────────────────────────────────────"
+	@echo "  make prepare-cilium-chart       # pinned .tools/cilium-1.19.6.tgz"
 	@echo "  make new       CLUSTER=ok-ai TYPE=talos [WORKERS=2] [K8S_VERSION=v1.36.2] [TALOS_VERSION=v1.13.4]"
 	@echo "  make bootstrap CLUSTER=ok-ai   # apply + annotate PVCs + Cilium CNI"
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo ""
 	@echo "── Constrained Flatcar Workflow (ADR-009) ───────────────────────────"
+	@echo "  make prepare-cilium-chart"
 	@echo "  make new CLUSTER=ok-flatcar TYPE=flatcar"
-	@echo "  make flatcar-preflight CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<local-chart>"
-	@echo "  make install-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<local-chart> FLATCAR_APPLY=yes"
+	@echo "  make flatcar-preflight CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=$(CILIUM_CHART)"
+	@echo "  make install-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=$(CILIUM_CHART) FLATCAR_APPLY=yes"
 	@echo "  make teardown-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes"
 	@echo "  Envelope: Flatcar 4593.2.4, amd64, KubeVirt, Kubernetes v1.34.1, 1 CP + 1 worker"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
+	@echo "  make prepare-cilium-chart [CILIUM_CHART_SOURCE=<predownloaded.tgz>]"
+	@echo "  make verify-cilium-chart"
 	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"
