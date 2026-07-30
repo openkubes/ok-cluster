@@ -33,7 +33,9 @@ def transient_workload_api_error(detail: str) -> bool:
     )
 
 
-def kubectl_json(kubeconfig: Path, arguments: list[str]) -> dict:
+def kubectl_json(
+    kubeconfig: Path, arguments: list[str], source: str
+) -> dict:
     result = subprocess.run(
         ["kubectl", "--kubeconfig", str(kubeconfig), *arguments, "-o", "json"],
         capture_output=True,
@@ -42,7 +44,8 @@ def kubectl_json(kubeconfig: Path, arguments: list[str]) -> dict:
     )
     if result.returncode:
         raise ReplacementError(
-            f"kubectl read failed: {result.stderr.strip() or result.returncode}"
+            f"{source} API read failed: "
+            f"{result.stderr.strip() or result.returncode}"
         )
     return json.loads(result.stdout)
 
@@ -67,9 +70,13 @@ def ready(node: dict) -> bool:
 def snapshot(
     management: Path, workload: Path, cluster: str
 ) -> dict:
-    nodes = kubectl_json(workload, ["get", "nodes"]).get("items", [])
+    nodes = kubectl_json(
+        workload, ["get", "nodes"], "workload"
+    ).get("items", [])
     machines = kubectl_json(
-        management, ["-n", cluster, "get", "machines"]
+        management,
+        ["-n", cluster, "get", "machines"],
+        "management",
     ).get("items", [])
     return {
         "observed_at": now(),
@@ -111,6 +118,7 @@ def verify_timeline(
     old_version: str,
     new_version: str,
     new_identity_short: str,
+    api_unavailable_windows: list[dict] | None = None,
 ) -> dict:
     if not observations:
         raise ReplacementError("replacement timeline is empty")
@@ -157,11 +165,15 @@ def verify_timeline(
         or {node["uid"] for node in final} & set(old)
     ):
         raise ReplacementError("final 1+1 new Talos state is invalid")
+    continuously_observed = not api_unavailable_windows
     return {
         "old_node_uids": sorted(old),
         "new_node_uids": sorted(node["uid"] for node in final),
         "control_plane_ready_in_every_observation": True,
-        "role_replacement_ready_before_old_absent": True,
+        "workload_api_continuously_observed": continuously_observed,
+        "role_replacement_ready_before_old_absent": (
+            True if continuously_observed else None
+        ),
     }
 
 
@@ -174,6 +186,82 @@ def write_evidence(path: Path, evidence: dict) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def close_api_window(active: dict, *, incomplete: bool = False) -> dict:
+    ended_monotonic = time.monotonic()
+    return {
+        "started_at": active["started_at"],
+        "ended_at": now(),
+        "duration_seconds": round(
+            ended_monotonic - active["started_monotonic"],
+            3,
+        ),
+        "samples": active["samples"],
+        "last_error": active["last_error"],
+        "incomplete": incomplete,
+    }
+
+
+def api_continuity(
+    windows: list[dict], maximum_allowed_seconds: float
+) -> dict:
+    maximum_observed = max(
+        (window["duration_seconds"] for window in windows),
+        default=0,
+    )
+    return {
+        "passed": not windows,
+        "maximum_allowed_unavailable_seconds": maximum_allowed_seconds,
+        "maximum_observed_unavailable_seconds": maximum_observed,
+        "within_guard": maximum_observed <= maximum_allowed_seconds,
+        "windows": windows,
+    }
+
+
+def terminate_process(process: subprocess.Popen | None) -> bool:
+    if process is None or process.poll() is not None:
+        return False
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
+    return True
+
+
+def evidence_record(
+    *,
+    args: argparse.Namespace,
+    status: str,
+    observations: list[dict],
+    api_unavailable_windows: list[dict],
+    proof: dict | None,
+    failure: str | None = None,
+    lifecycle_terminated: bool = False,
+) -> dict:
+    evidence = {
+        "schema": "openkubes.ok130.talos-replacement/v3",
+        "status": status,
+        "cluster": args.cluster,
+        "old_version": args.old_version,
+        "new_version": args.new_version,
+        "new_identity_short": args.new_identity_short,
+        "command": args.command,
+        "completed_at": now(),
+        "proof": proof,
+        "api_continuity": api_continuity(
+            api_unavailable_windows,
+            args.max_api_unavailable_seconds,
+        ),
+        "observations": observations,
+        "failure": failure,
+        "lifecycle_terminated": lifecycle_terminated,
+        "public_import_count": 0,
+        "secret_values_recorded": False,
+    }
+    return evidence
 
 
 def main() -> int:
@@ -193,131 +281,141 @@ def main() -> int:
         args.command = args.command[1:]
     if not args.command:
         raise ReplacementError("lifecycle command is required")
+    if (
+        args.timeout_seconds <= 0
+        or args.max_api_unavailable_seconds < 0
+    ):
+        raise ReplacementError("timeouts must be positive")
     management = Path(args.management_kubeconfig).expanduser().resolve()
     workload = Path(args.workload_kubeconfig).expanduser().resolve()
-    if not management.is_file() or not workload.is_file():
-        raise ReplacementError("explicit kubeconfigs are required")
-
-    observations = [snapshot(management, workload, args.cluster)]
+    output = Path(args.output)
+    observations: list[dict] = []
     api_unavailable_windows: list[dict] = []
     active_api_window: dict | None = None
-    process = subprocess.Popen(args.command)
-    deadline = time.monotonic() + args.timeout_seconds
-    last = signature(observations[-1])
-    while time.monotonic() < deadline:
-        try:
-            current = snapshot(management, workload, args.cluster)
-        except ReplacementError as error:
-            detail = str(error)
-            if not transient_workload_api_error(detail):
-                process.terminate()
-                raise
-            if active_api_window is None:
-                active_api_window = {
-                    "started_at": now(),
-                    "started_monotonic": time.monotonic(),
-                    "samples": 0,
-                    "last_error": detail,
-                }
-            active_api_window["samples"] += 1
-            active_api_window["last_error"] = detail
+    process: subprocess.Popen | None = None
+    try:
+        if not management.is_file() or not workload.is_file():
+            raise ReplacementError("explicit kubeconfigs are required")
+        observations = [snapshot(management, workload, args.cluster)]
+        process = subprocess.Popen(args.command)
+        deadline = time.monotonic() + args.timeout_seconds
+        last = signature(observations[-1])
+        while time.monotonic() < deadline:
+            try:
+                current = snapshot(management, workload, args.cluster)
+            except ReplacementError as error:
+                detail = str(error)
+                if (
+                    not detail.startswith("workload API read failed:")
+                    or not transient_workload_api_error(detail)
+                ):
+                    raise
+                if active_api_window is None:
+                    active_api_window = {
+                        "started_at": now(),
+                        "started_monotonic": time.monotonic(),
+                        "samples": 0,
+                        "last_error": detail,
+                    }
+                active_api_window["samples"] += 1
+                active_api_window["last_error"] = detail
+                if process.poll() not in (None, 0):
+                    raise ReplacementError(
+                        f"lifecycle command exited {process.returncode}"
+                    )
+                time.sleep(2)
+                continue
+            if active_api_window is not None:
+                api_unavailable_windows.append(
+                    close_api_window(active_api_window)
+                )
+                active_api_window = None
+            current_signature = signature(current)
+            if current_signature != last:
+                observations.append(current)
+                last = current_signature
+            final_nodes = current["nodes"]
+            converged = (
+                len(final_nodes) == 2
+                and all(node["ready"] for node in final_nodes)
+                and all(
+                    args.new_version in node["os_image"]
+                    for node in final_nodes
+                )
+                and all(
+                    args.new_identity_short in node["name"]
+                    for node in final_nodes
+                )
+            )
+            if process.poll() is not None and converged:
+                break
             if process.poll() not in (None, 0):
                 raise ReplacementError(
                     f"lifecycle command exited {process.returncode}"
                 )
             time.sleep(2)
-            continue
-        if active_api_window is not None:
-            ended_monotonic = time.monotonic()
-            api_unavailable_windows.append(
-                {
-                    "started_at": active_api_window["started_at"],
-                    "ended_at": now(),
-                    "duration_seconds": round(
-                        ended_monotonic
-                        - active_api_window["started_monotonic"],
-                        3,
-                    ),
-                    "samples": active_api_window["samples"],
-                    "last_error": active_api_window["last_error"],
-                }
-            )
-            active_api_window = None
-        current_signature = signature(current)
-        if current_signature != last:
-            observations.append(current)
-            last = current_signature
-        final_nodes = current["nodes"]
-        converged = (
-            len(final_nodes) == 2
-            and all(node["ready"] for node in final_nodes)
-            and all(args.new_version in node["os_image"] for node in final_nodes)
-            and all(
-                args.new_identity_short in node["name"] for node in final_nodes
-            )
-        )
-        if process.poll() is not None and converged:
-            break
-        if process.poll() not in (None, 0):
+        else:
+            raise ReplacementError("replacement timed out")
+        if process.wait() != 0:
             raise ReplacementError(
                 f"lifecycle command exited {process.returncode}"
             )
-        time.sleep(2)
-    else:
-        raise ReplacementError("replacement timed out")
-    if process.wait() != 0:
-        raise ReplacementError(f"lifecycle command exited {process.returncode}")
-    if signature(observations[-1]) != current_signature:
-        observations.append(current)
-    proof = verify_timeline(
-        observations,
-        args.old_version,
-        args.new_version,
-        args.new_identity_short,
-    )
-    max_api_unavailable = max(
-        (
-            window["duration_seconds"]
-            for window in api_unavailable_windows
-        ),
-        default=0,
-    )
-    continuity_passed = not api_unavailable_windows
-    within_guard = max_api_unavailable <= args.max_api_unavailable_seconds
-    evidence = {
-        "schema": "openkubes.ok130.talos-replacement/v2",
-        "status": (
+        if signature(observations[-1]) != current_signature:
+            observations.append(current)
+        proof = verify_timeline(
+            observations,
+            args.old_version,
+            args.new_version,
+            args.new_identity_short,
+            api_unavailable_windows,
+        )
+        continuity = api_continuity(
+            api_unavailable_windows,
+            args.max_api_unavailable_seconds,
+        )
+        status = (
             "PASS"
-            if continuity_passed
+            if continuity["passed"]
             else (
                 "PASS_WITH_TRANSIENT_API_INTERRUPTION"
-                if within_guard
+                if continuity["within_guard"]
                 else "FAIL_API_UNAVAILABLE_TOO_LONG"
             )
-        ),
-        "cluster": args.cluster,
-        "old_version": args.old_version,
-        "new_version": args.new_version,
-        "new_identity_short": args.new_identity_short,
-        "command": args.command,
-        "completed_at": now(),
-        "proof": proof,
-        "api_continuity": {
-            "passed": continuity_passed,
-            "maximum_allowed_unavailable_seconds": (
-                args.max_api_unavailable_seconds
-            ),
-            "maximum_observed_unavailable_seconds": max_api_unavailable,
-            "windows": api_unavailable_windows,
-        },
-        "observations": observations,
-        "public_import_count": 0,
-        "secret_values_recorded": False,
-    }
-    output = Path(args.output)
-    write_evidence(output, evidence)
-    print(f"{evidence['status']} Talos replacement evidence: {output.resolve()}")
-    return 0 if within_guard else 1
+        )
+        evidence = evidence_record(
+            args=args,
+            status=status,
+            observations=observations,
+            api_unavailable_windows=api_unavailable_windows,
+            proof=proof,
+        )
+        write_evidence(output, evidence)
+        print(
+            f"{status} Talos replacement evidence: {output.resolve()}"
+        )
+        return 0 if continuity["within_guard"] else 1
+    except (
+        ReplacementError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as error:
+        if active_api_window is not None:
+            api_unavailable_windows.append(
+                close_api_window(active_api_window, incomplete=True)
+            )
+        terminated = terminate_process(process)
+        evidence = evidence_record(
+            args=args,
+            status="FAIL",
+            observations=observations,
+            api_unavailable_windows=api_unavailable_windows,
+            proof=None,
+            failure=str(error),
+            lifecycle_terminated=terminated,
+        )
+        write_evidence(output, evidence)
+        raise
 
 
 if __name__ == "__main__":

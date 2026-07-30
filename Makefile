@@ -382,22 +382,13 @@ talos-golden-replacement-apply: require-cluster ## Apply identity-bound Talos re
 	@test "$(OK130_REPLACEMENT_APPLY)" = "yes" || \
 		(echo "ERROR: replacement requires OK130_REPLACEMENT_APPLY=yes"; exit 1)
 	@$(MAKE) --no-print-directory talos-golden-replacement-preflight CLUSTER="$(CLUSTER)"
-	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
-	@IDENTITY_SHORT=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])); print(c["os"]["identity"].removeprefix("sha256:")[:12])' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"); \
-	EXPECTED=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])); print(int(c["controlPlane"]["replicas"])+int(c["workers"]["replicas"]))' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"); \
-	for i in $$(seq 1 40); do \
-		for pvc in $$($(OKB) get pvc -n "$(CLUSTER)" --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null | grep "$$IDENTITY_SHORT" || true); do \
-			$(OKB) annotate pvc "$$pvc" -n "$(CLUSTER)" volume.kubernetes.io/selected-node=ok-infra --overwrite >/dev/null; \
-		done; \
-		DONE=$$($(OKB) get dv -n "$(CLUSTER)" --no-headers 2>/dev/null | grep "$$IDENTITY_SHORT" | grep -c Succeeded | tr -d ' '); \
-		if [ "$$DONE" -ge "$$EXPECTED" ]; then \
-			echo "PASS $$DONE/$$EXPECTED replacement DataVolumes succeeded"; \
-			exit 0; \
-		fi; \
-		echo "  replacement DataVolumes $$DONE/$$EXPECTED; retry $$i/40"; \
-		sleep 15; \
-	done; \
-	echo "ERROR: replacement DataVolumes did not succeed"; exit 1
+	kubectl --kubeconfig "$(TALOS_INFRA_KUBECONFIG)" apply \
+		-f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--replacement-wait \
+		--cluster "$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-not-flatcar

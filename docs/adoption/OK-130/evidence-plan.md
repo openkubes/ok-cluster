@@ -74,7 +74,10 @@ Talos versions and identity-bound names while the guarded replacement target
 runs. Workload API interruptions are retained as bounded time windows in the
 result. A converged replacement with such a window is explicitly
 `PASS_WITH_TRANSIENT_API_INTERRUPTION`, never a claim of continuous API
-availability; a window over the 120-second guard fails the run.
+availability; role replacement ordering is recorded as unknown across the
+blind window, and a window over the 120-second guard fails the run. Every
+terminal failure writes atomic negative evidence and terminates a still-running
+wrapped lifecycle.
 
 The guarded Flatcar `ok125-node-ready` evidence records the same
 namespace-to-CAPI-Available, namespace-to-all-Nodes-Ready and

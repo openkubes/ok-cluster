@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -26,8 +28,16 @@ from profile_resolvers.talos import (  # noqa: E402
     identity_material,
     resolve_talos_config,
 )
-from scripts.talos_golden_lifecycle import validate_manifest  # noqa: E402
-from scripts.talos_replacement_runtime import verify_timeline  # noqa: E402
+from scripts.talos_golden_lifecycle import (  # noqa: E402
+    TalosLifecycleError,
+    replacement_data_volume_state,
+    validate_manifest,
+)
+from scripts import talos_replacement_runtime  # noqa: E402
+from scripts.talos_replacement_runtime import (  # noqa: E402
+    ReplacementError,
+    verify_timeline,
+)
 
 
 CHECKS: list[tuple[bool, str]] = []
@@ -262,6 +272,126 @@ def main() -> int:
         validate_manifest(resolved, base)
         check(True, "lifecycle local manifest guard accepts the render")
 
+        templates = {
+            item["kind"]: (
+                item["spec"]["infrastructureTemplate"]["name"]
+                if item["kind"] == "TalosControlPlane"
+                else item["spec"]["template"]["spec"]["infrastructureRef"][
+                    "name"
+                ]
+            )
+            for item in resources
+            if item["kind"] in {"TalosControlPlane", "MachineDeployment"}
+        }
+        infrastructure_machines = [
+            {
+                "metadata": {
+                    "name": "current-cp",
+                    "uid": "current-cp-infra-uid",
+                    "annotations": {
+                        "cluster.x-k8s.io/cloned-from-name": templates[
+                            "TalosControlPlane"
+                        ]
+                    },
+                }
+            },
+            {
+                "metadata": {
+                    "name": "current-worker",
+                    "uid": "current-worker-infra-uid",
+                    "annotations": {
+                        "cluster.x-k8s.io/cloned-from-name": templates[
+                            "MachineDeployment"
+                        ]
+                    },
+                }
+            },
+        ]
+        expected_source = {
+            "pvc": {
+                "namespace": resolved["os"]["goldenImage"]["namespace"],
+                "name": resolved["os"]["goldenImage"]["claim"],
+            }
+        }
+        replacement_virtual_machines = [
+            {
+                "metadata": {
+                    "name": owner,
+                    "uid": f"{owner}-vm-uid",
+                }
+            }
+            for owner in ("current-cp", "current-worker")
+        ]
+        replacement_data_volumes = [
+            {
+                "metadata": {
+                    "name": f"{owner}-disk",
+                    "uid": f"{owner}-uid",
+                    "ownerReferences": [
+                        {
+                            "kind": "VirtualMachine",
+                            "name": owner,
+                            "uid": f"{owner}-vm-uid",
+                        }
+                    ],
+                },
+                "spec": {"source": expected_source},
+                "status": {"phase": "Succeeded"},
+            }
+            for owner in ("current-cp", "current-worker")
+        ]
+        replacement_data_volumes.append(
+            {
+                "metadata": {
+                    "name": "stale-disk",
+                    "uid": "stale-uid",
+                    "ownerReferences": [
+                        {
+                            "kind": "VirtualMachine",
+                            "name": "deleted-machine",
+                            "uid": "deleted-machine-vm-uid",
+                        }
+                    ],
+                },
+                "spec": {"source": expected_source},
+                "status": {"phase": "Succeeded"},
+            }
+        )
+        volume_state = replacement_data_volume_state(
+            resolved,
+            base,
+            infrastructure_machines,
+            replacement_virtual_machines,
+            replacement_data_volumes,
+        )
+        check(
+            volume_state["ready"]
+            and volume_state["data_volume_uids"]
+            == ["current-cp-uid", "current-worker-uid"],
+            "replacement wait ignores stale DVs and binds exact VM owners",
+        )
+        try:
+            replacement_data_volume_state(
+                resolved,
+                base,
+                [
+                    *infrastructure_machines,
+                    copy.deepcopy(infrastructure_machines[0]),
+                ],
+                replacement_virtual_machines,
+                replacement_data_volumes,
+            )
+        except TalosLifecycleError:
+            check(
+                True,
+                "replacement wait rejects excess current-template machines",
+            )
+        else:
+            check(
+                False,
+                "replacement wait rejects excess current-template machines",
+            )
+
     profile_test = subprocess.run(
         ["make", "--no-print-directory", "-s", "ok130-profile-test"],
         cwd=OK_LINUX,
@@ -352,16 +482,99 @@ def main() -> int:
         and replacement_proof["role_replacement_ready_before_old_absent"],
         "replacement observer proves role-safe Talos blue-green convergence",
     )
-    replacement_source = (
-        ROOT / "scripts" / "talos_replacement_runtime.py"
-    ).read_text(encoding="utf-8")
-    check(
-        "PASS_WITH_TRANSIENT_API_INTERRUPTION" in replacement_source
-        and '"api_continuity"' in replacement_source
-        and "max-api-unavailable-seconds" in replacement_source
-        and "transient_workload_api_error" in replacement_source,
-        "replacement evidence records bounded workload API interruptions",
+    interrupted_proof = verify_timeline(
+        replacement_timeline,
+        "v1.9.5",
+        "v1.9.6",
+        "7f5dd4276432",
+        [{"duration_seconds": 2.0}],
     )
+    check(
+        interrupted_proof["workload_api_continuously_observed"] is False
+        and interrupted_proof[
+            "role_replacement_ready_before_old_absent"
+        ]
+        is None,
+        "API-blind windows make role-safe replacement ordering unknown",
+    )
+
+    class FakeProcess:
+        returncode = None
+        terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    with tempfile.TemporaryDirectory(prefix=".ok130-failure-", dir=ROOT) as temp:
+        temp_path = Path(temp)
+        management = temp_path / "management.yaml"
+        workload = temp_path / "workload.yaml"
+        output = temp_path / "failure.json"
+        management.write_text("management", encoding="utf-8")
+        workload.write_text("workload", encoding="utf-8")
+        fake_process = FakeProcess()
+        initial = copy.deepcopy(replacement_timeline[0])
+        initial["machines"] = []
+        initial["observed_at"] = "2026-07-30T00:00:00Z"
+        argv = [
+            "talos_replacement_runtime.py",
+            "--cluster",
+            "ok130-test",
+            "--management-kubeconfig",
+            str(management),
+            "--workload-kubeconfig",
+            str(workload),
+            "--old-version",
+            "v1.9.5",
+            "--new-version",
+            "v1.9.6",
+            "--new-identity-short",
+            "7f5dd4276432",
+            "--output",
+            str(output),
+            "--",
+            "fake-lifecycle",
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(
+                talos_replacement_runtime,
+                "snapshot",
+                side_effect=[
+                    initial,
+                    ReplacementError("management API read failed: boom"),
+                ],
+            ),
+            mock.patch.object(
+                talos_replacement_runtime.subprocess,
+                "Popen",
+                return_value=fake_process,
+            ),
+        ):
+            try:
+                talos_replacement_runtime.main()
+            except ReplacementError:
+                pass
+            else:
+                check(False, "replacement failure propagates to the caller")
+        failed_evidence = json.loads(output.read_text(encoding="utf-8"))
+        check(
+            fake_process.terminated
+            and failed_evidence["status"] == "FAIL"
+            and failed_evidence["lifecycle_terminated"] is True
+            and "management API read failed" in failed_evidence["failure"],
+            "replacement failures terminate lifecycle and persist evidence",
+        )
 
     lifecycle_source = (
         ROOT / "scripts" / "talos_golden_lifecycle.py"
@@ -379,6 +592,17 @@ def main() -> int:
             ROOT / "Makefile"
         ).read_text(encoding="utf-8"),
         "cleanup binds temporary CDI snapshots to exact DataVolume UIDs",
+    )
+    makefile_source = (ROOT / "Makefile").read_text(encoding="utf-8")
+    replacement_target = makefile_source.split(
+        "talos-golden-replacement-apply:", 1
+    )[1].split("\n# ", 1)[0]
+    check(
+        'kubectl --kubeconfig "$(TALOS_INFRA_KUBECONFIG)" apply'
+        in replacement_target
+        and "$(OKB)" not in replacement_target
+        and "--replacement-wait" in replacement_target,
+        "replacement mutation is bound to the preflighted kubeconfig",
     )
     check(
         '"mode": "warm-provisioning"' in lifecycle_source
