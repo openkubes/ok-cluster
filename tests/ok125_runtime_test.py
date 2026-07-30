@@ -44,9 +44,10 @@ def main() -> int:
     )
     check(
         "OK125_CLEANUP" in source
-        and "openkubes.io/adoption-status" in source
-        and "openkubes.io/deployable" in source,
-        "cleanup requires explicit confirmation and ownership labels",
+        and '"openkubes.io/adoption-status": "constrained-approved"'
+        in source
+        and "ownership_labels_match" in source,
+        "cleanup requires explicit confirmation and current exact ownership",
     )
     check(
         "dataKeys" in source

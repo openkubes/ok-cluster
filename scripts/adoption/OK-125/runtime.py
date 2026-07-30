@@ -67,6 +67,13 @@ GATE_DEPLOYMENTS = (
         "capi-kubeadm-control-plane-controller-manager",
     ),
 )
+EXPECTED_OWNERSHIP_LABELS = {
+    "openkubes.io/type": "flatcar",
+    "openkubes.io/provider": "kubevirt",
+    "openkubes.io/profile": "flatcar-kubevirt-adoption",
+    "openkubes.io/adoption-status": "constrained-approved",
+    "openkubes.io/deployable": "false",
+}
 
 
 class RuntimeValidationError(RuntimeError):
@@ -185,6 +192,20 @@ def condition_is_true(resource: dict, condition_type: str) -> bool:
         if condition.get("type") == condition_type
     ]
     return bool(matches) and all(value == "True" for value in matches)
+
+
+def ownership_labels_match(labels: dict, *, identity_bound: bool) -> bool:
+    expected = dict(EXPECTED_OWNERSHIP_LABELS)
+    if identity_bound:
+        expected.update(
+            {
+                "openkubes.io/profile-revision": "1",
+                "openkubes.io/os-identity": (
+                    EXPECTED_OS_IDENTITY.removeprefix("sha256:")[:12]
+                ),
+            }
+        )
+    return all(labels.get(key) == value for key, value in expected.items())
 
 
 def true_condition(resource: dict, *condition_types: str) -> dict | None:
@@ -1047,11 +1068,7 @@ def cleanup() -> int:
         ["get", "namespace", CLUSTER],
     )
     labels = namespace["metadata"].get("labels", {})
-    if (
-        labels.get("openkubes.io/type") != "flatcar"
-        or labels.get("openkubes.io/adoption-status") != "adoption-gated"
-        or labels.get("openkubes.io/deployable") != "false"
-    ):
+    if not ownership_labels_match(labels, identity_bound=True):
         raise RuntimeValidationError("namespace ownership labels do not match")
     for kind in ("role", "rolebinding"):
         authorization = kubectl(
@@ -1072,10 +1089,7 @@ def cleanup() -> int:
             labels = json.loads(authorization.stdout)["metadata"].get(
                 "labels", {}
             )
-            if (
-                labels.get("openkubes.io/type") != "flatcar"
-                or labels.get("openkubes.io/deployable") != "false"
-            ):
+            if not ownership_labels_match(labels, identity_bound=False):
                 raise RuntimeValidationError(
                     f"{kind} clone authorization ownership does not match"
                 )
@@ -1088,9 +1102,8 @@ def cleanup() -> int:
     if cluster.returncode == 0:
         cluster_object = json.loads(cluster.stdout)
         cluster_labels = cluster_object["metadata"].get("labels", {})
-        if (
-            cluster_labels.get("openkubes.io/type") != "flatcar"
-            or cluster_labels.get("openkubes.io/deployable") != "false"
+        if not ownership_labels_match(
+            cluster_labels, identity_bound=True
         ):
             raise RuntimeValidationError("Cluster ownership labels do not match")
         progress("deleting only the disposable CAPI Cluster")
@@ -1183,6 +1196,17 @@ def self_test() -> int:
     assert EXPECTED_CILIUM_CHART_SHA256 == (
         "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179"
     )
+    expected_labels = {
+        **EXPECTED_OWNERSHIP_LABELS,
+        "openkubes.io/profile-revision": "1",
+        "openkubes.io/os-identity": "afd862491620",
+    }
+    assert ownership_labels_match(expected_labels, identity_bound=True)
+    stale_labels = {
+        **expected_labels,
+        "openkubes.io/adoption-status": "adoption-gated",
+    }
+    assert not ownership_labels_match(stale_labels, identity_bound=True)
     assert condition_is_true(
         {
             "status": {
