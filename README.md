@@ -118,11 +118,14 @@ Generic `install`, `bootstrap`, `install-cni`, `upgrade`, `clean`, and
 
 #### Verified runtime: `ok-flatcar` (2026-07-30)
 
-[`ok-flatcar/cluster-config.yaml`](ok-flatcar/cluster-config.yaml) is the first
-ordinary deployment of the production-constrained profile. It was reviewed in
-[PR #18](https://github.com/openkubes/ok-cluster/pull/18) and merged as
-`dcbc706`. The guarded install completed in an observed 3m13s; this duration is
-evidence from that run, not an availability or provisioning-time SLO.
+The historical
+[`ok-flatcar/cluster-config.yaml`](https://github.com/openkubes/ok-cluster/blob/dcbc706f4b027743d765cedd8848d5e1837b2a1f/ok-flatcar/cluster-config.yaml)
+was the first ordinary deployment of the production-constrained profile. It
+was reviewed in [PR #18](https://github.com/openkubes/ok-cluster/pull/18) and
+merged as `dcbc706`. The guarded install completed in an observed 3m13s; this
+duration is evidence from that run, not an availability or provisioning-time
+SLO. The disposable cluster was subsequently torn down and its active
+declaration removed after verification.
 
 | Signal | Verified result |
 |---|---|
@@ -135,7 +138,7 @@ evidence from that run, not an availability or provisioning-time SLO.
 | Cilium | DaemonSet 2/2 available, operator 1/1 available |
 | Lifecycle | Secret-backed Ignition; replacement-only; no SSH authority |
 
-Reproduce the post-install checks with explicit kubeconfig paths:
+The post-install checks were recorded with explicit kubeconfig paths:
 
 ```bash
 kubectl --kubeconfig ~/.kube/ok-flatcar.yaml get nodes
