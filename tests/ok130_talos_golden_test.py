@@ -248,6 +248,17 @@ def main() -> int:
             and not [item for item in resources if item["kind"] == "Secret"],
             "Talos machine configuration and secrets remain dynamic",
         )
+        check(
+            worker["metadata"]["name"].endswith(short)
+            and [
+                item
+                for item in resources
+                if item["kind"] == "MachineDeployment"
+            ][0]["spec"]["template"]["spec"]["bootstrap"]["configRef"][
+                "name"
+            ].endswith(short),
+            "worker bootstrap template is immutable and identity-bound",
+        )
         validate_manifest(resolved, base)
         check(True, "lifecycle local manifest guard accepts the render")
 

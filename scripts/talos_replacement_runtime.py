@@ -101,7 +101,11 @@ def verify_timeline(
     if not observations:
         raise ReplacementError("replacement timeline is empty")
     initial = observations[0]["nodes"]
-    old = {node["uid"]: node for node in initial}
+    old = {
+        node["uid"]: node
+        for node in initial
+        if old_version in node["os_image"]
+    }
     if (
         len(old) != 2
         or {node["role"] for node in old.values()}
