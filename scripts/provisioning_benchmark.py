@@ -589,6 +589,13 @@ def run_benchmark(args: argparse.Namespace) -> int:
     time_binary = Path(args.time_binary)
     if not time_binary.is_file():
         raise BenchmarkError(f"POSIX time binary does not exist: {time_binary}")
+    output = Path(args.output_dir).resolve()
+    conflicts = sorted(output.glob(f"{args.run_id}.*")) if output.exists() else []
+    if conflicts:
+        raise BenchmarkError(
+            f"run ID {args.run_id!r} already has evidence; refusing overwrite: "
+            f"{[path.name for path in conflicts]}"
+        )
     state = benchmark_preflight(args)
     management_kubeconfig = state["management_kubeconfig"]
     workload_kubeconfig = state["workload_kubeconfig"]
@@ -629,6 +636,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
     reader = threading.Thread(target=consume, daemon=True)
     reader.start()
     deadline_after_completion: float | None = None
+    lifecycle_completed_at: str | None = None
     while True:
         observed = utc_now()
         cluster = kubectl_json(
@@ -643,13 +651,16 @@ def run_benchmark(args: argparse.Namespace) -> int:
         )
         returncode = process.poll()
         if returncode is not None and deadline_after_completion is None:
-            milestones["command_completed"] = observed
+            lifecycle_completed_at = observed
             deadline_after_completion = time.monotonic() + args.post_command_timeout
-        if returncode is not None and (
-            all(name in milestones for name in MILESTONES)
-            or time.monotonic() >= deadline_after_completion
-        ):
-            break
+        if returncode is not None:
+            observable = all(
+                name in milestones for name in MILESTONES[:-1]
+            )
+            timed_out = time.monotonic() >= deadline_after_completion
+            if observable or timed_out:
+                milestones["command_completed"] = observed
+                break
         time.sleep(1)
     reader.join(timeout=10)
     timing = parse_posix_time(time_file.read_text(encoding="utf-8"))
@@ -668,6 +679,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
             "command": args.command,
             "exit_code": process.returncode,
             "operator_timing_seconds": timing,
+            "lifecycle_command_completed": lifecycle_completed_at,
             "observed_timeline": milestones,
             "missing_milestones": missing,
             "envelope": envelope,
@@ -713,6 +725,12 @@ def run_benchmark(args: argparse.Namespace) -> int:
         "command": args.command,
         "exit_code": process.returncode,
         "operator_timing_seconds": timing,
+        "lifecycle_command_completed": {
+            "timestamp": lifecycle_completed_at,
+            "elapsed_seconds": int(
+                (parse_time(lifecycle_completed_at) - started).total_seconds()
+            ),
+        },
         "timeline": {
             name: {
                 "timestamp": milestones[name],

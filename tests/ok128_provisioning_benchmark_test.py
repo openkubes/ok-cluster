@@ -282,6 +282,15 @@ def main() -> int:
         and "OK128_BENCHMARK_APPLY=yes" in runbook,
         "read-only preflight and guarded OS lifecycle wrappers are documented",
     )
+    observer = (
+        ROOT / "scripts" / "provisioning_benchmark.py"
+    ).read_text(encoding="utf-8")
+    check(
+        '"lifecycle_command_completed"' in observer
+        and "MILESTONES[:-1]" in observer
+        and "refusing overwrite" in observer,
+        "wrapper completion is distinct and run evidence is immutable",
+    )
     return 0
 
 

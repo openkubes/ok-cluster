@@ -21,7 +21,10 @@ Results are single-run observations and must not be presented as an SLO.
 The benchmark records the exact repository revisions, input file digests,
 Golden-Image identity, node versions, management load before/after, command
 exit status, full sanitized command output, POSIX `real/user/sys`, and all nine
-ticket milestones at one-second resolution.
+ticket milestones at one-second resolution. POSIX time and
+`lifecycle_command_completed` describe the wrapped Make lifecycle. The ninth
+ticket milestone, `command_completed`, is the common wrapper completion after
+all asynchronous Kubernetes milestones have been observed.
 
 ## Offline preparation
 
