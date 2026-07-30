@@ -359,10 +359,10 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
         and all(
             doc["metadata"]["labels"].get("openkubes.io/deployable") == "false"
             and doc["metadata"]["labels"].get("openkubes.io/adoption-status")
-            == "adoption-gated"
+            == "constrained-approved"
             for doc in labelled
         ),
-        "every candidate lifecycle object remains visibly non-deployable",
+        "the constrained-approved candidate remains visibly non-deployable",
     )
     namespace = by_kind(docs, "Namespace")[0]
     check(
@@ -519,8 +519,9 @@ def main() -> int:
 
     check(
         candidate["metadata"]["deployable"] is False
-        and candidate["metadata"]["status"] == "adoption-gated",
-        "ok-linux source profile is still adoption-gated",
+        and candidate["metadata"]["status"] == "constrained-approved"
+        and candidate["metadata"]["promotion_eligible"] is True,
+        "ok-linux source records constrained approval without deployment promotion",
     )
     check(
         candidate["artifacts"]["boot_image"]["runtime_distribution"][
