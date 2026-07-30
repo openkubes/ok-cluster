@@ -23,7 +23,7 @@
 # Required env (set by the Makefile target):
 #   CLUSTER                cluster name (kubeconfig at $KUBECONFIG_PATH)
 #   KUBECONFIG_PATH        path to the target cluster's kubeconfig
-#   OK_OBSERVABILITY_PATH  path to the ok-observability repo checkout
+#   OK_OBSERVABILITY_PATH  path to the ok-observability repo checkout/object store
 #   OBSERVABILITY_VALUES   path to the provider-values file (see schema below)
 #
 # Secret source (OK-117) — which mechanism populates the credentials Secret:
@@ -38,9 +38,13 @@
 #     Vault-path env: VAULT_ADDR, VAULT_TLS_SERVER_NAME, VAULT_CA_SECRET, KV_MOUNT,
 #     KV_PATH, VAULT_ROLE, VSO_SERVICE_ACCOUNT, REFRESH_AFTER, VSS_SYNC_TIMEOUT.
 #
-# Optional env (forwarded to the gate; unset => the gate's own default):
-#   OK_OBSERVABILITY_REF              assert which ok-observability revision may
-#                                     be consumed (see "provenance" below)
+# Optional env:
+#   OK_OBSERVABILITY_REF              revision to materialise and consume
+#   OK_OBSERVABILITY_MODE             pinned (default) | worktree
+#   OK_OBSERVABILITY_CACHE            materialised-tree cache root (default:
+#                                     ${XDG_CACHE_HOME:-$HOME/.cache}/ok-cluster/
+#                                     ok-observability)
+# Forwarded to the gate (unset => the gate's own default):
 #   CONTRACT_TEST_TIMEOUT             per-check async timeout, seconds
 #   CONTRACT_TEST_RECEIVER_CAPTURE_URL  capture endpoint that upgrades the alert
 #                                     check from "fired" to "delivered"
@@ -53,15 +57,36 @@ set -euo pipefail
 NAMESPACE="${OBSERVABILITY_NAMESPACE:-ok-observability}"
 RELEASE="${OBSERVABILITY_RELEASE:-ok-observability-standard}"
 SECRET_NAME="${OBSERVABILITY_SECRET:-ok-observability-credentials}"
-PROFILE="${OK_OBSERVABILITY_PATH}/profiles/ok-observability-standard"
+OBSERVABILITY_SOURCE_PATH="${OK_OBSERVABILITY_PATH:-}"
+OBSERVABILITY_MODE="${OK_OBSERVABILITY_MODE:-pinned}"
+_materialise_tmp=""
+_cred_dir=""
+
+cleanup() {
+  [ -z "$_materialise_tmp" ] || rm -rf -- "$_materialise_tmp"
+  [ -z "$_cred_dir" ] || rm -rf -- "$_cred_dir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- preconditions --------------------------------------------------------
-for bin in kubectl helm python3; do
+for bin in kubectl helm python3 git make tar flock; do
   command -v "$bin" >/dev/null 2>&1 || { echo "❌ required binary '$bin' not on PATH"; exit 2; }
 done
 [ -n "${CLUSTER:-}" ]              || { echo "❌ CLUSTER is required"; exit 2; }
 [ -f "${KUBECONFIG_PATH:-}" ]      || { echo "❌ kubeconfig not found: ${KUBECONFIG_PATH:-<unset>} — run 'make kubeconfig CLUSTER=${CLUSTER}' first"; exit 2; }
-[ -d "$PROFILE" ]                  || { echo "❌ profile not found: $PROFILE — set OK_OBSERVABILITY_PATH to your ok-observability checkout"; exit 2; }
+[ -d "$OBSERVABILITY_SOURCE_PATH" ] || { echo "❌ ok-observability checkout not found: ${OBSERVABILITY_SOURCE_PATH:-<unset>} — set OK_OBSERVABILITY_PATH"; exit 2; }
+case "$OBSERVABILITY_MODE" in
+  pinned|worktree) ;;
+  *) echo "❌ OK_OBSERVABILITY_MODE='$OBSERVABILITY_MODE' is not one of: pinned worktree"; exit 2 ;;
+esac
+if [ "$OBSERVABILITY_MODE" = pinned ] && [ -z "${OK_OBSERVABILITY_REF:-}" ]; then
+  echo "❌ OK_OBSERVABILITY_REF is required in pinned mode"
+  echo "   Set it to a locally available commit/tag, or explicitly opt into the"
+  echo "   non-reproducible working tree with OK_OBSERVABILITY_MODE=worktree."
+  exit 2
+fi
 # OK-117: which mechanism populates the credentials Secret. Validated against the
 # allowed set so a typo fails loudly instead of silently selecting a profile — the
 # same class of defect as OK-119's TYPE default.
@@ -85,13 +110,6 @@ if [ "$SECRET_SOURCE" = file ] && [ ! -f "${OBSERVABILITY_VALUES:-}" ]; then
 fi
 
 if [ "$SECRET_SOURCE" = vault ]; then
-  VSS_TEMPLATE="${OK_OBSERVABILITY_PATH}/implementations/vault-secrets-operator/vault-secret-sync.template.yaml"
-  [ -f "$VSS_TEMPLATE" ] || {
-    echo "❌ VaultStaticSecret template not found: $VSS_TEMPLATE"
-    echo "   The capability repo checkout predates OK-117. Update ok-observability, or"
-    echo "   use OBSERVABILITY_SECRET_SOURCE=file."
-    exit 2
-  }
   command -v envsubst >/dev/null 2>&1 || {
     echo "❌ envsubst is required to render the VaultStaticSecret template (gettext package)"
     exit 2
@@ -101,13 +119,15 @@ fi
 export KUBECONFIG="$KUBECONFIG_PATH"
 
 # --- provenance: consumed revisions (ADR-Platform-024) --------------------
-# A readiness result is only reproducible if the revisions it consumed are
-# known, so both are resolved and printed as gate evidence. The sibling-checkout
-# mechanism is TRANSITIONAL until a real pin lands (OK-109): setting
-# OK_OBSERVABILITY_REF asserts which ok-observability revision this run may
-# consume and fails loudly on mismatch. It deliberately does NOT check the
-# sibling repo out — silently mutating someone's working tree mid-install is
-# worse than refusing to run.
+# A pinned run resolves the requested commit in the sibling repository, archives
+# that object into a SHA-keyed cache, builds its chart dependencies there once,
+# and consumes only that materialised tree. The source checkout's HEAD and dirty
+# state are informational: neither can alter the pinned render.
+#
+# The cache is per-user state rather than repo state: dependencies are derived
+# build products, not source, and a stable XDG cache survives repeated installs.
+# flock serialises builders for a SHA; the completed tree is renamed into place
+# atomically, and an interrupted builder leaves only a trap-cleaned temp dir.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sha_of()   { git -C "$1" rev-parse HEAD 2>/dev/null || echo "unknown"; }
 # --untracked-files=no on purpose: DIRTY must mean "tracked code was modified",
@@ -115,29 +135,125 @@ sha_of()   { git -C "$1" rev-parse HEAD 2>/dev/null || echo "unknown"; }
 # FRESH-cluster run report DIRTY, because `make new` renders an untracked
 # <cluster>/ directory — i.e. it fired exactly when the clean marker mattered
 # most (OK-109 Part 1 evidence, ok-cluster f67aa1a).
-state_of() { [ -z "$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null)" ] && echo clean || echo DIRTY; }
-OK_CLUSTER_SHA="$(sha_of "$_here")";               OK_CLUSTER_STATE="$(state_of "$_here")"
-OBSERVABILITY_SHA="$(sha_of "$OK_OBSERVABILITY_PATH")"; OBSERVABILITY_STATE="$(state_of "$OK_OBSERVABILITY_PATH")"
+tracked_state_of() {
+  local status
+  status="$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null)" || { echo unknown; return; }
+  [ -z "$status" ] && echo clean || echo DIRTY
+}
+worktree_state_of() {
+  local status
+  status="$(git -C "$1" status --porcelain 2>/dev/null)" || { echo unknown; return; }
+  [ -z "$status" ] && echo clean || echo DIRTY
+}
+build_observability_deps() {
+  local tree="$1"
+  local profile="$tree/profiles/ok-observability-standard"
+  if make -C "$tree" -n deps >/dev/null 2>&1; then
+    make -C "$tree" deps
+  else
+    echo "    (no 'make deps' in the capability revision — falling back to single-level build)"
+    helm dependency build "$profile" 2>/dev/null || helm dependency update --skip-refresh "$profile"
+  fi
+}
 
-if [ -n "${OK_OBSERVABILITY_REF:-}" ]; then
+OK_CLUSTER_SHA="$(sha_of "$_here")"
+OK_CLUSTER_STATE="$(tracked_state_of "$_here")"
+SOURCE_OBSERVABILITY_SHA="$(sha_of "$OBSERVABILITY_SOURCE_PATH")"
+SOURCE_OBSERVABILITY_STATE="$(worktree_state_of "$OBSERVABILITY_SOURCE_PATH")"
+
+if [ "$OBSERVABILITY_MODE" = pinned ]; then
   # -q --verify: without it, rev-parse echoes an unresolvable arg back on stdout
-  # and $want ends up non-empty garbage, misreporting "does not resolve" as a mismatch.
-  want="$(git -C "$OK_OBSERVABILITY_PATH" rev-parse -q --verify "${OK_OBSERVABILITY_REF}^{commit}" 2>/dev/null || true)"
-  [ -n "$want" ] || { echo "❌ OK_OBSERVABILITY_REF='${OK_OBSERVABILITY_REF}' does not resolve in $OK_OBSERVABILITY_PATH"; exit 2; }
-  if [ "$want" != "$OBSERVABILITY_SHA" ]; then
-    echo "❌ ok-observability pin mismatch"
-    echo "   requested OK_OBSERVABILITY_REF=${OK_OBSERVABILITY_REF} -> ${want}"
-    echo "   checkout  ${OK_OBSERVABILITY_PATH} is at ${OBSERVABILITY_SHA}"
-    echo "   Check out the requested revision yourself, then re-run."
+  # and the variable ends up non-empty garbage.
+  OBSERVABILITY_SHA="$(git -C "$OBSERVABILITY_SOURCE_PATH" rev-parse -q --verify "${OK_OBSERVABILITY_REF}^{commit}" 2>/dev/null || true)"
+  if [ -z "$OBSERVABILITY_SHA" ]; then
+    echo "❌ OK_OBSERVABILITY_REF='${OK_OBSERVABILITY_REF}' is not present in $OBSERVABILITY_SOURCE_PATH"
+    echo "   Fetch that revision into the local ok-observability checkout, then re-run."
     exit 2
   fi
+
+  if [ -n "${OK_OBSERVABILITY_CACHE:-}" ]; then
+    _cache_root="$OK_OBSERVABILITY_CACHE"
+  elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+    _cache_root="${XDG_CACHE_HOME}/ok-cluster/ok-observability"
+  elif [ -n "${HOME:-}" ]; then
+    _cache_root="${HOME}/.cache/ok-cluster/ok-observability"
+  else
+    echo "❌ cannot choose an observability cache: set OK_OBSERVABILITY_CACHE, XDG_CACHE_HOME, or HOME"
+    exit 2
+  fi
+  _cache_tree="${_cache_root}/${OBSERVABILITY_SHA}"
+  _cache_marker="${_cache_tree}/.ok-cluster-cache-ready"
+  mkdir -p "${_cache_root}/locks"
+  chmod 700 "$_cache_root" "${_cache_root}/locks"
+  exec 9>"${_cache_root}/locks/${OBSERVABILITY_SHA}.lock"
+  flock 9
+
+  if [ -f "$_cache_marker" ] &&
+     [ "$(< "$_cache_marker")" = "$OBSERVABILITY_SHA" ] &&
+     [ -x "${_cache_tree}/tests/contract-test.sh" ]; then
+    OBSERVABILITY_CACHE_RESULT="reused"
+  else
+    echo "  materialising ok-observability ${OBSERVABILITY_SHA} and building cached dependencies"
+    _materialise_tmp="$(mktemp -d "${_cache_root}/.${OBSERVABILITY_SHA}.tmp.XXXXXX")"
+    git -C "$OBSERVABILITY_SOURCE_PATH" archive "$OBSERVABILITY_SHA" | tar -x -C "$_materialise_tmp"
+    [ -d "${_materialise_tmp}/profiles/ok-observability-standard" ] || {
+      echo "❌ pinned revision ${OBSERVABILITY_SHA} has no ok-observability-standard profile"
+      exit 2
+    }
+    [ -x "${_materialise_tmp}/tests/contract-test.sh" ] || {
+      echo "❌ contract test is not executable in pinned revision ${OBSERVABILITY_SHA}"
+      exit 2
+    }
+    build_observability_deps "$_materialise_tmp"
+    printf '%s\n' "$OBSERVABILITY_SHA" > "${_materialise_tmp}/.ok-cluster-cache-ready"
+    # The published cache is a read-only derived object. This prevents an
+    # accidental edit from recreating the working-tree provenance hole.
+    chmod -R a-w "$_materialise_tmp"
+    if [ -L "$_cache_tree" ]; then
+      rm -- "$_cache_tree"
+    elif [ -e "$_cache_tree" ]; then
+      chmod -R u+w "$_cache_tree"
+      rm -rf -- "$_cache_tree"
+    fi
+    mv "$_materialise_tmp" "$_cache_tree"
+    _materialise_tmp=""
+    OBSERVABILITY_CACHE_RESULT="built"
+  fi
+  flock -u 9
+  exec 9>&-
+
+  OK_OBSERVABILITY_PATH="$_cache_tree"
+  OBSERVABILITY_STATE="pinned archive"
+else
+  OK_OBSERVABILITY_PATH="$OBSERVABILITY_SOURCE_PATH"
+  OBSERVABILITY_SHA="$SOURCE_OBSERVABILITY_SHA"
+  OBSERVABILITY_STATE="WORKTREE ${SOURCE_OBSERVABILITY_STATE}; NON-REPRODUCIBLE"
+fi
+
+PROFILE="${OK_OBSERVABILITY_PATH}/profiles/ok-observability-standard"
+[ -d "$PROFILE" ] || { echo "❌ profile not found: $PROFILE"; exit 2; }
+if [ "$SECRET_SOURCE" = vault ]; then
+  VSS_TEMPLATE="${OK_OBSERVABILITY_PATH}/implementations/vault-secrets-operator/vault-secret-sync.template.yaml"
+  [ -f "$VSS_TEMPLATE" ] || {
+    echo "❌ VaultStaticSecret template not found: $VSS_TEMPLATE"
+    echo "   The selected capability revision predates OK-117. Select a newer revision, or"
+    echo "   use OBSERVABILITY_SECRET_SOURCE=file."
+    exit 2
+  }
 fi
 
 echo "━━━ install-observability: ${RELEASE} → ${CLUSTER} (ns ${NAMESPACE}) ━━━"
 echo "  consumed ok-cluster:       ${OK_CLUSTER_SHA} (${OK_CLUSTER_STATE})"
-echo "  consumed ok-observability: ${OBSERVABILITY_SHA} (${OBSERVABILITY_STATE})${OK_OBSERVABILITY_REF:+ [pinned ${OK_OBSERVABILITY_REF}]}"
-[ "$OK_CLUSTER_STATE" = clean ] && [ "$OBSERVABILITY_STATE" = clean ] || \
-  echo "  ⚠️  a consumed checkout is DIRTY — this run is not reproducible conformance evidence"
+if [ "$OBSERVABILITY_MODE" = pinned ]; then
+  echo "  consumed ok-observability: ${OBSERVABILITY_SHA} (${OBSERVABILITY_STATE}; cache ${OBSERVABILITY_CACHE_RESULT})"
+  echo "  source checkout only:      ${SOURCE_OBSERVABILITY_SHA} (${SOURCE_OBSERVABILITY_STATE}; not rendered)"
+  [ "$OK_CLUSTER_STATE" = clean ] || \
+    echo "  ⚠️  ok-cluster is DIRTY — this run is not reproducible conformance evidence"
+else
+  echo "  consumed ok-observability: ${OBSERVABILITY_SHA} (${OBSERVABILITY_STATE})"
+  echo "  ⚠️  WORKING-TREE ESCAPE HATCH ACTIVE — ignored, untracked, and modified files may be rendered"
+  echo "  ⚠️  this run is NOT reproducible conformance evidence; OK_OBSERVABILITY_REF is not applied"
+fi
 
 # --- read passwords from provider-values (FILE profile only) ---------------
 # On the vault path the Secret is authored by VSO, so the values are read back
@@ -184,7 +300,6 @@ if [ "$SECRET_SOURCE" = file ]; then
 echo "  [2/6] Secret ${SECRET_NAME} from provider-values (offline profile)"
 _old_umask="$(umask)"; umask 077
 _cred_dir="$(mktemp -d)"
-trap 'rm -rf "$_cred_dir"' EXIT INT TERM
 printf '%s' "admin"                 > "$_cred_dir/grafana-admin-user"
 printf '%s' "$GRAFANA_PASSWORD"     > "$_cred_dir/grafana-admin-password"
 printf '%s' "$OPENSEARCH_PASSWORD"  > "$_cred_dir/opensearch-admin-password"
@@ -193,7 +308,7 @@ kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
   --from-file=grafana-admin-password="$_cred_dir/grafana-admin-password" \
   --from-file=opensearch-admin-password="$_cred_dir/opensearch-admin-password" \
   --dry-run=client -o yaml | kubectl apply -f -
-rm -rf "$_cred_dir"; trap - EXIT INT TERM; umask "$_old_umask"
+rm -rf -- "$_cred_dir"; _cred_dir=""; umask "$_old_umask"
 else
 # Datacenter profile: VSO authors the Secret from Vault. The template is owned by
 # the capability repo (ok-cluster installs, does not own) and rendered per cluster.
@@ -246,21 +361,20 @@ echo "        ✅ ${SECRET_NAME} materialised by VSO"
 fi
 
 # --- [3/6] helm dependency build + install ---------------------------------
-# `build` reuses the existing Chart.lock and does NOT refresh every configured
-# helm repo (that repo refresh is the slow part of `update`). Fall back to
-# `update` only on first run when the lock/vendored charts don't exist yet.
-echo "  [3/6] helm dependency build (no repo refresh) + install"
+# Pinned mode built dependencies before publishing the cache, so repeated runs
+# do not download charts again. Worktree mode retains the immediate-edit workflow
+# and therefore rebuilds dependencies from that mutable checkout each run.
+echo "  [3/6] helm dependencies + install"
 # The profile is a TWO-level umbrella (profile -> implementations/* -> upstream),
 # and `helm dependency build` resolves only ONE level: building just the profile
 # packages the wrappers with an empty charts/, which renders to NOTHING and would
 # install an empty release. The capability repo owns how its charts are built, so
 # use its `deps` target; fall back to the old single-level build for checkouts
 # that predate it.
-if make -C "$OK_OBSERVABILITY_PATH" -n deps >/dev/null 2>&1; then
-  make -C "$OK_OBSERVABILITY_PATH" deps
+if [ "$OBSERVABILITY_MODE" = pinned ]; then
+  echo "    using dependencies from ${OBSERVABILITY_CACHE_RESULT} SHA-keyed cache"
 else
-  echo "    (no 'make deps' in the capability repo — falling back to single-level build)"
-  helm dependency build "$PROFILE" 2>/dev/null || helm dependency update --skip-refresh "$PROFILE"
+  build_observability_deps "$OK_OBSERVABILITY_PATH"
 fi
 
 helm_values=( -f "$PROFILE/values.yaml" -f "${OK_OBSERVABILITY_PATH}/alerting/alertmanager-values.yaml" )
