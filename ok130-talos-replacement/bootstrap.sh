@@ -6,7 +6,7 @@ set -euo pipefail
 CLUSTER="ok130-talos-replacement"
 ENDPOINT="192.168.100.249"
 K8S_VERSION="v1.34.1"
-TALOS_VERSION="v1.9.5"
+TALOS_VERSION="v1.9.6"
 TALOSCONFIG="${HOME}/.talos/config"
 KUBECONFIG_OUT="${HOME}/.kube/ok130-talos-replacement.yaml"
 

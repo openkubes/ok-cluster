@@ -27,6 +27,7 @@ from profile_resolvers.talos import (  # noqa: E402
     resolve_talos_config,
 )
 from scripts.talos_golden_lifecycle import validate_manifest  # noqa: E402
+from scripts.talos_replacement_runtime import verify_timeline  # noqa: E402
 
 
 CHECKS: list[tuple[bool, str]] = []
@@ -72,17 +73,17 @@ def main() -> int:
     resolved = resolve_talos_config(raw, OK_LINUX)
     identity = (
         "sha256:"
-        "62a75f2e872a386ee70fe27158b6e235515d7c0a73f28ce8d95a8547236f1495"
+        "7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d"
     )
     check(
         resolved["os"]["identity"] == identity
         and resolved["os"]["imageDigest"]
         == "sha256:"
-        "9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7"
+        "461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5"
         and resolved["os"]["goldenImage"]
         == {
             "namespace": "ok-images",
-            "claim": "talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64",
+            "claim": "talos-v1-9-6-ce4c980550dd-461d72d30750-amd64",
             "published": True,
             "storageClass": "ok-storage-block",
         },
@@ -92,7 +93,7 @@ def main() -> int:
     current_talos = profile["talos"]
     current_artifact = current_talos["boot_artifact"]
     future_talos = copy.deepcopy(current_talos)
-    future_talos["version"] = "v1.9.6"
+    future_talos["version"] = "v1.9.7"
     check(
         golden_claim(current_talos, current_artifact)
         == current_artifact["golden_image"]["claim"]
@@ -104,7 +105,7 @@ def main() -> int:
     )
 
     bad_version = copy.deepcopy(raw)
-    bad_version["versions"]["talos"] = "v1.9.6"
+    bad_version["versions"]["talos"] = "v1.9.7"
     expect_failure(
         bad_version,
         "unreviewed Talos version fails closed",
@@ -187,13 +188,13 @@ def main() -> int:
                 {
                     "namespace": "ok-images",
                     "name": (
-                        "talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64"
+                        "talos-v1-9-6-ce4c980550dd-461d72d30750-amd64"
                     ),
                 },
                 {
                     "namespace": "ok-images",
                     "name": (
-                        "talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64"
+                        "talos-v1-9-6-ce4c980550dd-461d72d30750-amd64"
                     ),
                 },
             ],
@@ -260,6 +261,85 @@ def main() -> int:
     check(
         profile_test.returncode == 0,
         "owning ok-linux profile validator passes",
+    )
+
+    replacement_timeline = [
+        {
+            "nodes": [
+                {
+                    "uid": "old-cp",
+                    "name": "cluster-cp-old",
+                    "role": "control-plane",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.5)",
+                },
+                {
+                    "uid": "old-worker",
+                    "name": "cluster-worker-old",
+                    "role": "worker",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.5)",
+                },
+            ]
+        },
+        {
+            "nodes": [
+                {
+                    "uid": "old-cp",
+                    "name": "cluster-cp-old",
+                    "role": "control-plane",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.5)",
+                },
+                {
+                    "uid": "new-cp",
+                    "name": "cluster-cp-7f5dd4276432",
+                    "role": "control-plane",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.6)",
+                },
+                {
+                    "uid": "old-worker",
+                    "name": "cluster-worker-old",
+                    "role": "worker",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.5)",
+                },
+                {
+                    "uid": "new-worker",
+                    "name": "cluster-worker-7f5dd4276432",
+                    "role": "worker",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.6)",
+                },
+            ]
+        },
+        {
+            "nodes": [
+                {
+                    "uid": "new-cp",
+                    "name": "cluster-cp-7f5dd4276432",
+                    "role": "control-plane",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.6)",
+                },
+                {
+                    "uid": "new-worker",
+                    "name": "cluster-worker-7f5dd4276432",
+                    "role": "worker",
+                    "ready": True,
+                    "os_image": "Talos (v1.9.6)",
+                },
+            ]
+        },
+    ]
+    replacement_proof = verify_timeline(
+        replacement_timeline, "v1.9.5", "v1.9.6", "7f5dd4276432"
+    )
+    check(
+        replacement_proof["control_plane_ready_throughout"]
+        and replacement_proof["role_replacement_ready_before_old_absent"],
+        "replacement observer proves role-safe Talos blue-green convergence",
     )
 
     lifecycle_source = (

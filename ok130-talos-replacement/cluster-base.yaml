@@ -6,10 +6,10 @@ metadata:
   labels:
     openkubes.io/type: talos
     openkubes.io/provider: kubevirt
-    openkubes.io/os-identity: 62a75f2e872a
+    openkubes.io/os-identity: 7f5dd4276432
   annotations:
-    openkubes.io/os-identity-full: sha256:62a75f2e872a386ee70fe27158b6e235515d7c0a73f28ce8d95a8547236f1495
-    openkubes.io/os-image-digest: sha256:9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7
+    openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
     openkubes.io/golden-image-published: "true"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -20,7 +20,7 @@ metadata:
   labels:
     openkubes.io/type: talos
     openkubes.io/consumer-cluster: ok130-talos-replacement
-    openkubes.io/os-identity: 62a75f2e872a
+    openkubes.io/os-identity: 7f5dd4276432
 rules:
 - apiGroups:
   - cdi.kubevirt.io
@@ -37,7 +37,7 @@ metadata:
   labels:
     openkubes.io/type: talos
     openkubes.io/consumer-cluster: ok130-talos-replacement
-    openkubes.io/os-identity: 62a75f2e872a
+    openkubes.io/os-identity: 7f5dd4276432
 subjects:
 - kind: ServiceAccount
   name: default
@@ -56,7 +56,7 @@ metadata:
     openkubes.io/type: talos
     openkubes.io/provider: kubevirt
     openkubes.io/k8s-version: v1.34.1
-    openkubes.io/talos-version: v1.9.5
+    openkubes.io/talos-version: v1.9.6
 spec:
   clusterNetwork:
     pods:
@@ -95,12 +95,12 @@ spec:
   infrastructureTemplate:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
-    name: ok130-talos-replacement-cp-62a75f2e872a
+    name: ok130-talos-replacement-cp-7f5dd4276432
     namespace: ok130-talos-replacement
   controlPlaneConfig:
     controlplane:
       generateType: controlplane
-      talosVersion: v1.9.5
+      talosVersion: v1.9.6
       configPatches:
       - op: add
         path: /cluster/network/cni
@@ -124,7 +124,7 @@ spec:
   template:
     spec:
       generateType: worker
-      talosVersion: v1.9.5
+      talosVersion: v1.9.6
       configPatches:
       - op: add
         path: /cluster/network/cni
@@ -162,19 +162,19 @@ spec:
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
-        name: ok130-talos-replacement-workers-62a75f2e872a
+        name: ok130-talos-replacement-workers-7f5dd4276432
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ok130-talos-replacement-cp-62a75f2e872a
+  name: ok130-talos-replacement-cp-7f5dd4276432
   namespace: ok130-talos-replacement
   labels:
     openkubes.io/type: talos
-    openkubes.io/os-identity: 62a75f2e872a
+    openkubes.io/os-identity: 7f5dd4276432
   annotations:
-    openkubes.io/os-identity-full: sha256:62a75f2e872a386ee70fe27158b6e235515d7c0a73f28ce8d95a8547236f1495
-    openkubes.io/os-image-digest: sha256:9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7
+    openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
 spec:
   template:
     spec:
@@ -201,11 +201,11 @@ spec:
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ok130-talos-replacement-cp-62a75f2e872a-disk
+                  name: ok130-talos-replacement-cp-7f5dd4276432-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ok130-talos-replacement-cp-62a75f2e872a-disk
+              name: ok130-talos-replacement-cp-7f5dd4276432-disk
               namespace: ok130-talos-replacement
             spec:
               pvc:
@@ -218,19 +218,19 @@ spec:
               source:
                 pvc:
                   namespace: ok-images
-                  name: talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64
+                  name: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ok130-talos-replacement-workers-62a75f2e872a
+  name: ok130-talos-replacement-workers-7f5dd4276432
   namespace: ok130-talos-replacement
   labels:
     openkubes.io/type: talos
-    openkubes.io/os-identity: 62a75f2e872a
+    openkubes.io/os-identity: 7f5dd4276432
   annotations:
-    openkubes.io/os-identity-full: sha256:62a75f2e872a386ee70fe27158b6e235515d7c0a73f28ce8d95a8547236f1495
-    openkubes.io/os-image-digest: sha256:9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7
+    openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
 spec:
   template:
     spec:
@@ -257,11 +257,11 @@ spec:
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ok130-talos-replacement-worker-62a75f2e872a-disk
+                  name: ok130-talos-replacement-worker-7f5dd4276432-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ok130-talos-replacement-worker-62a75f2e872a-disk
+              name: ok130-talos-replacement-worker-7f5dd4276432-disk
               namespace: ok130-talos-replacement
             spec:
               pvc:
@@ -274,4 +274,4 @@ spec:
               source:
                 pvc:
                   namespace: ok-images
-                  name: talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64
+                  name: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64

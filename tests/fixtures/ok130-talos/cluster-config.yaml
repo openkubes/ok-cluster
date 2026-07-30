@@ -13,7 +13,7 @@ workers:
   disk: 20Gi
 versions:
   kubernetes: v1.34.1
-  talos: v1.9.5
+  talos: v1.9.6
 os:
   distribution: ok-linux
   profile: kubevirt

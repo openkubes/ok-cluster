@@ -507,6 +507,30 @@ def preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def replacement_preflight(args: argparse.Namespace) -> int:
+    """Verify a live cluster may consume a newly published Golden identity."""
+    config, manifest, kubeconfig = inputs(args)
+    validate_manifest(config, manifest)
+    kubevirt = verify_kubevirt(kubeconfig)
+    scheduling = verify_scheduling(kubeconfig)
+    golden = verify_golden(config, kubeconfig)
+    cluster_name = config["name"]
+    cluster = kubectl_json(
+        kubeconfig,
+        ["-n", cluster_name, "get", "cluster", cluster_name],
+    )
+    if true_condition(cluster, "Available", "Ready") is None:
+        raise TalosLifecycleError(
+            "existing Talos cluster is not Available for replacement"
+        )
+    print(
+        f"PASS Talos replacement preflight cluster={cluster_name} "
+        f"node={scheduling['name']} kubevirt={kubevirt['version']} "
+        f"new_golden_uid={golden['uid']}"
+    )
+    return 0
+
+
 def cleanup_authorization(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
@@ -611,6 +635,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--preflight", action="store_true")
+    mode.add_argument("--replacement-preflight", action="store_true")
     mode.add_argument("--runtime-evidence", action="store_true")
     mode.add_argument("--cleanup-authorization", action="store_true")
     parser.add_argument("--cluster", required=True)
@@ -626,6 +651,8 @@ def main() -> int:
     args = parse_args()
     if args.preflight:
         return preflight(args)
+    if args.replacement_preflight:
+        return replacement_preflight(args)
     if args.runtime_evidence:
         if not args.workload_kubeconfig or not args.cilium_chart:
             raise TalosLifecycleError(
