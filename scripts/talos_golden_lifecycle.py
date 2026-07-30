@@ -163,6 +163,30 @@ def verify_golden(config: dict, kubeconfig: Path) -> dict:
     }
 
 
+def verify_scheduling(kubeconfig: Path) -> dict:
+    node = kubectl_json(kubeconfig, ["get", "node", "ok-infra"])
+    ready = next(
+        (
+            condition
+            for condition in node.get("status", {}).get("conditions", [])
+            if condition.get("type") == "Ready"
+        ),
+        None,
+    )
+    if (
+        node.get("spec", {}).get("unschedulable", False)
+        or ready is None
+        or ready.get("status") != "True"
+    ):
+        raise TalosLifecycleError("ok-infra is not Ready and schedulable")
+    return {
+        "name": node["metadata"]["name"],
+        "uid": node["metadata"]["uid"],
+        "ready": True,
+        "schedulable": True,
+    }
+
+
 def true_condition(resource: dict, *types: str) -> dict | None:
     status = resource.get("status", {})
     condition_sets = [status.get("conditions", [])]
@@ -188,6 +212,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
     """Record a read-only warm-provisioning result, separate from publication."""
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
+    scheduling = verify_scheduling(kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster_name = config["name"]
     namespace = kubectl_json(
@@ -235,6 +260,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
         "cluster": cluster_name,
         "identity": config["os"]["identity"],
         "golden": golden,
+        "scheduling": scheduling,
         "started_at": started_at,
         "ready_at": ready_at,
         "duration_seconds": round(duration, 3),
@@ -256,6 +282,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
 def preflight(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
+    scheduling = verify_scheduling(kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster = config["name"]
     namespace = kubectl(
@@ -289,7 +316,7 @@ def preflight(args: argparse.Namespace) -> int:
             )
     print(
         f"PASS Talos Golden preflight cluster={cluster} "
-        f"golden_uid={golden['uid']}"
+        f"node={scheduling['name']} golden_uid={golden['uid']}"
     )
     return 0
 

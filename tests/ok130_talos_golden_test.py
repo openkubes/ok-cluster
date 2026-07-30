@@ -277,6 +277,11 @@ def main() -> int:
         and '"mutation_attempted": False' in lifecycle_source,
         "runtime evidence separates warm clone timing from publication",
     )
+    check(
+        '["get", "node", "ok-infra"]' in lifecycle_source
+        and "ok-infra is not Ready and schedulable" in lifecycle_source,
+        "management preflight verifies the reviewed scheduling target",
+    )
 
     secret_terms = (
         "BEGIN PRIVATE KEY",

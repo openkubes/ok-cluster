@@ -30,10 +30,12 @@ The OK-130 test proves:
 ## Guarded runtime
 
 `make talos-golden-preflight` is read-only and must pass before the existing
-`make bootstrap` applies a workload Talos manifest. Live publication,
-bootstrap and teardown require separate user approval. Teardown removes the
-consumer Role/RoleBinding after the consumer namespace and verifies that the
-shared Golden PVC retains its UID, digest and identity.
+`make bootstrap` applies a workload Talos manifest. It verifies that
+`ok-infra` is Ready and schedulable before checking the Golden PVC and clone
+authorization. Live publication, bootstrap and teardown require separate user
+approval. Teardown removes the consumer Role/RoleBinding after the consumer
+namespace and verifies that the shared Golden PVC retains its UID, digest and
+identity.
 
 After an approved cluster run, `make talos-golden-runtime-evidence
 CLUSTER=<name>` records the namespace-to-CAPI-Available interval as
