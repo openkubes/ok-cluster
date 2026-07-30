@@ -21,6 +21,7 @@ os:
   imageDigest: sha256:9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7
   profile: kubevirt
   schematic_id: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+provider: kubevirt
 type: talos
 upgrade:
   strategy: blue-green
