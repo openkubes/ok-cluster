@@ -1,0 +1,219 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ok-shared
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: ok-shared
+  namespace: ok-shared
+  labels:
+    openkubes.io/type: talos
+    openkubes.io/k8s-version: v1.34.1
+    openkubes.io/talos-version: v1.9.5
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 10.35.0.0/16
+    services:
+      cidrBlocks:
+      - 10.96.48.0/20
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: TalosControlPlane
+    name: ok-shared-cp
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: KubevirtCluster
+    name: ok-shared
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: ok-shared
+  namespace: ok-shared
+spec:
+  controlPlaneServiceTemplate:
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
+kind: TalosControlPlane
+metadata:
+  name: ok-shared-cp
+  namespace: ok-shared
+spec:
+  version: v1.34.1
+  replicas: 1
+  infrastructureTemplate:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtMachineTemplate
+    name: ok-shared-cp
+    namespace: ok-shared
+  controlPlaneConfig:
+    controlplane:
+      generateType: controlplane
+      talosVersion: v1.9.5
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+kind: TalosConfigTemplate
+metadata:
+  name: ok-shared-workers
+  namespace: ok-shared
+spec:
+  template:
+    spec:
+      generateType: worker
+      talosVersion: v1.9.5
+      configPatches:
+      - op: add
+        path: /cluster/network/cni
+        value:
+          name: none
+      - op: add
+        path: /cluster/proxy
+        value:
+          disabled: true
+      - op: add
+        path: /machine/features/hostDNS
+        value:
+          enabled: false
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ok-shared-workers
+  namespace: ok-shared
+spec:
+  clusterName: ok-shared
+  replicas: 3
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: ok-shared
+  template:
+    spec:
+      clusterName: ok-shared
+      version: v1.34.1
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: TalosConfigTemplate
+          name: ok-shared-workers
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: KubevirtMachineTemplate
+        name: ok-shared-workers
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ok-shared-cp
+  namespace: ok-shared
+spec:
+  template:
+    spec:
+      virtualMachineTemplate:
+        metadata:
+          namespace: ok-shared
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              nodeSelector:
+                kubernetes.io/hostname: ok-infra
+              domain:
+                cpu:
+                  cores: 2
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: talos
+                  networkInterfaceMultiqueue: true
+                memory:
+                  guest: 4Gi
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: ok-shared-cp-disk
+                name: talos
+          dataVolumeTemplates:
+          - metadata:
+              name: ok-shared-cp-disk
+              namespace: ok-shared
+            spec:
+              pvc:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 15Gi
+                storageClassName: ok-storage-block
+              source:
+                http:
+                  url: "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.9.5/openstack-amd64.qcow2"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ok-shared-workers
+  namespace: ok-shared
+spec:
+  template:
+    spec:
+      virtualMachineTemplate:
+        metadata:
+          namespace: ok-shared
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              nodeSelector:
+                kubernetes.io/hostname: ok-infra
+              domain:
+                cpu:
+                  cores: 2
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: talos
+                  networkInterfaceMultiqueue: true
+                memory:
+                  guest: 4Gi
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: ok-shared-worker-disk
+                name: talos
+          dataVolumeTemplates:
+          - metadata:
+              name: ok-shared-worker-disk
+              namespace: ok-shared
+            spec:
+              pvc:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 15Gi
+                storageClassName: ok-storage-block
+              source:
+                http:
+                  url: "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.9.5/openstack-amd64.qcow2"
