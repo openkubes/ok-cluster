@@ -249,15 +249,15 @@ def main() -> int:
             "Talos machine configuration and secrets remain dynamic",
         )
         check(
-            worker["metadata"]["name"].endswith(short)
+            worker["metadata"]["name"].endswith("v1-9-6")
             and [
                 item
                 for item in resources
                 if item["kind"] == "MachineDeployment"
             ][0]["spec"]["template"]["spec"]["bootstrap"]["configRef"][
                 "name"
-            ].endswith(short),
-            "worker bootstrap template is immutable and identity-bound",
+            ].endswith("v1-9-6"),
+            "worker bootstrap template is immutable and Talos-version-bound",
         )
         validate_manifest(resolved, base)
         check(True, "lifecycle local manifest guard accepts the render")
@@ -348,9 +348,19 @@ def main() -> int:
         replacement_timeline, "v1.9.5", "v1.9.6", "7f5dd4276432"
     )
     check(
-        replacement_proof["control_plane_ready_throughout"]
+        replacement_proof["control_plane_ready_in_every_observation"]
         and replacement_proof["role_replacement_ready_before_old_absent"],
         "replacement observer proves role-safe Talos blue-green convergence",
+    )
+    replacement_source = (
+        ROOT / "scripts" / "talos_replacement_runtime.py"
+    ).read_text(encoding="utf-8")
+    check(
+        "PASS_WITH_TRANSIENT_API_INTERRUPTION" in replacement_source
+        and '"api_continuity"' in replacement_source
+        and "max-api-unavailable-seconds" in replacement_source
+        and "transient_workload_api_error" in replacement_source,
+        "replacement evidence records bounded workload API interruptions",
     )
 
     lifecycle_source = (

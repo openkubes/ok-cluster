@@ -118,7 +118,7 @@ spec:
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
 metadata:
-  name: ok130-talos-replacement-workers-7f5dd4276432
+  name: ok130-talos-replacement-workers-v1-9-6
   namespace: ok130-talos-replacement
 spec:
   template:
@@ -158,7 +158,7 @@ spec:
           configRef:
             apiGroup: bootstrap.cluster.x-k8s.io
             kind: TalosConfigTemplate
-            name: ok130-talos-replacement-workers-7f5dd4276432
+            name: ok130-talos-replacement-workers-v1-9-6
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate

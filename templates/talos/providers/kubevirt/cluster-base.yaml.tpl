@@ -118,7 +118,7 @@ spec:
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
+  name: ${CLUSTER_NAME}-workers-${TALOS_VERSION_NAME}
   namespace: ${CLUSTER_NAME}
 spec:
   template:
@@ -158,7 +158,7 @@ spec:
           configRef:
             apiGroup: bootstrap.cluster.x-k8s.io
             kind: TalosConfigTemplate
-            name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
+            name: ${CLUSTER_NAME}-workers-${TALOS_VERSION_NAME}
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate

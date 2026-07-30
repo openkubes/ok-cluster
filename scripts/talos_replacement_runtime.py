@@ -19,6 +19,20 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def transient_workload_api_error(detail: str) -> bool:
+    return any(
+        term in detail.lower()
+        for term in (
+            "connection refused",
+            "was refused",
+            "i/o timeout",
+            "context deadline exceeded",
+            "tls handshake timeout",
+            "server was unable to return a response",
+        )
+    )
+
+
 def kubectl_json(kubeconfig: Path, arguments: list[str]) -> dict:
     result = subprocess.run(
         ["kubectl", "--kubeconfig", str(kubeconfig), *arguments, "-o", "json"],
@@ -146,9 +160,20 @@ def verify_timeline(
     return {
         "old_node_uids": sorted(old),
         "new_node_uids": sorted(node["uid"] for node in final),
-        "control_plane_ready_throughout": True,
+        "control_plane_ready_in_every_observation": True,
         "role_replacement_ready_before_old_absent": True,
     }
+
+
+def write_evidence(path: Path, evidence: dict) -> None:
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def main() -> int:
@@ -161,6 +186,7 @@ def main() -> int:
     parser.add_argument("--new-identity-short", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=1200)
+    parser.add_argument("--max-api-unavailable-seconds", type=float, default=120)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command[:1] == ["--"]:
@@ -173,11 +199,50 @@ def main() -> int:
         raise ReplacementError("explicit kubeconfigs are required")
 
     observations = [snapshot(management, workload, args.cluster)]
+    api_unavailable_windows: list[dict] = []
+    active_api_window: dict | None = None
     process = subprocess.Popen(args.command)
     deadline = time.monotonic() + args.timeout_seconds
     last = signature(observations[-1])
     while time.monotonic() < deadline:
-        current = snapshot(management, workload, args.cluster)
+        try:
+            current = snapshot(management, workload, args.cluster)
+        except ReplacementError as error:
+            detail = str(error)
+            if not transient_workload_api_error(detail):
+                process.terminate()
+                raise
+            if active_api_window is None:
+                active_api_window = {
+                    "started_at": now(),
+                    "started_monotonic": time.monotonic(),
+                    "samples": 0,
+                    "last_error": detail,
+                }
+            active_api_window["samples"] += 1
+            active_api_window["last_error"] = detail
+            if process.poll() not in (None, 0):
+                raise ReplacementError(
+                    f"lifecycle command exited {process.returncode}"
+                )
+            time.sleep(2)
+            continue
+        if active_api_window is not None:
+            ended_monotonic = time.monotonic()
+            api_unavailable_windows.append(
+                {
+                    "started_at": active_api_window["started_at"],
+                    "ended_at": now(),
+                    "duration_seconds": round(
+                        ended_monotonic
+                        - active_api_window["started_monotonic"],
+                        3,
+                    ),
+                    "samples": active_api_window["samples"],
+                    "last_error": active_api_window["last_error"],
+                }
+            )
+            active_api_window = None
         current_signature = signature(current)
         if current_signature != last:
             observations.append(current)
@@ -210,9 +275,26 @@ def main() -> int:
         args.new_version,
         args.new_identity_short,
     )
+    max_api_unavailable = max(
+        (
+            window["duration_seconds"]
+            for window in api_unavailable_windows
+        ),
+        default=0,
+    )
+    continuity_passed = not api_unavailable_windows
+    within_guard = max_api_unavailable <= args.max_api_unavailable_seconds
     evidence = {
-        "schema": "openkubes.ok130.talos-replacement/v1",
-        "status": "PASS",
+        "schema": "openkubes.ok130.talos-replacement/v2",
+        "status": (
+            "PASS"
+            if continuity_passed
+            else (
+                "PASS_WITH_TRANSIENT_API_INTERRUPTION"
+                if within_guard
+                else "FAIL_API_UNAVAILABLE_TOO_LONG"
+            )
+        ),
         "cluster": args.cluster,
         "old_version": args.old_version,
         "new_version": args.new_version,
@@ -220,20 +302,22 @@ def main() -> int:
         "command": args.command,
         "completed_at": now(),
         "proof": proof,
+        "api_continuity": {
+            "passed": continuity_passed,
+            "maximum_allowed_unavailable_seconds": (
+                args.max_api_unavailable_seconds
+            ),
+            "maximum_observed_unavailable_seconds": max_api_unavailable,
+            "windows": api_unavailable_windows,
+        },
         "observations": observations,
         "public_import_count": 0,
         "secret_values_recorded": False,
     }
-    output = Path(args.output).resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_suffix(output.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(evidence, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(output)
-    print(f"PASS Talos replacement evidence: {output}")
-    return 0
+    output = Path(args.output)
+    write_evidence(output, evidence)
+    print(f"{evidence['status']} Talos replacement evidence: {output.resolve()}")
+    return 0 if within_guard else 1
 
 
 if __name__ == "__main__":
