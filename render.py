@@ -202,6 +202,12 @@ def build_context(cfg: dict) -> dict:
     bootstrap = cfg.get("bootstrap", {})
     identity = str(os_cfg.get("identity", ""))
     identity_hex = identity.removeprefix("sha256:")
+    talos_version = str(
+        ver.get("talos", OK_LINUX_DEFAULT_TALOS_VERSION)
+    )
+    talos_version_name = re.sub(
+        r"[^a-z0-9]+", "-", talos_version.lower()
+    ).strip("-")
     return {
         "CLUSTER_NAME":       cfg["name"],
         "CLUSTER_TYPE":       cfg.get("type", "ubuntu"),
@@ -227,7 +233,8 @@ def build_context(cfg: dict) -> dict:
         "POD_CIDR":           net.get("podCIDR"),
         "SERVICE_CIDR":       net.get("serviceCIDR"),
         "K8S_VERSION":        ver.get("kubernetes", "v1.34.1"),
-        "TALOS_VERSION":      ver.get("talos", OK_LINUX_DEFAULT_TALOS_VERSION),
+        "TALOS_VERSION":      talos_version,
+        "TALOS_VERSION_NAME": talos_version_name,
         "UPGRADE_STRATEGY":   upg.get("strategy", "blue-green"),
         "NODE_SELECTOR":      cfg.get("nodeSelector", ""),
         # Generic, explicit OS/profile inputs. The shared renderer does not

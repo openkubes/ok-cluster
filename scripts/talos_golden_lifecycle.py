@@ -7,6 +7,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -507,6 +508,262 @@ def preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def replacement_preflight(args: argparse.Namespace) -> int:
+    """Verify a live cluster may consume a newly published Golden identity."""
+    config, manifest, kubeconfig = inputs(args)
+    validate_manifest(config, manifest)
+    kubevirt = verify_kubevirt(kubeconfig)
+    scheduling = verify_scheduling(kubeconfig)
+    golden = verify_golden(config, kubeconfig)
+    cluster_name = config["name"]
+    cluster = kubectl_json(
+        kubeconfig,
+        ["-n", cluster_name, "get", "cluster", cluster_name],
+    )
+    if true_condition(cluster, "Available", "Ready") is None:
+        raise TalosLifecycleError(
+            "existing Talos cluster is not Available for replacement"
+        )
+    print(
+        f"PASS Talos replacement preflight cluster={cluster_name} "
+        f"node={scheduling['name']} kubevirt={kubevirt['version']} "
+        f"new_golden_uid={golden['uid']}"
+    )
+    return 0
+
+
+def owner_uids(resource: dict, kind: str) -> set[str]:
+    return {
+        owner["uid"]
+        for owner in resource.get("metadata", {}).get("ownerReferences", [])
+        if owner.get("kind") == kind and owner.get("uid")
+    }
+
+
+def replacement_templates(
+    config: dict, manifest_path: Path
+) -> dict[str, int]:
+    docs = objects(manifest_path)
+    control_planes = [
+        item for item in docs if item.get("kind") == "TalosControlPlane"
+    ]
+    deployments = [
+        item for item in docs if item.get("kind") == "MachineDeployment"
+    ]
+    if len(control_planes) != 1 or len(deployments) != 1:
+        raise TalosLifecycleError(
+            "replacement manifest must contain one control plane and deployment"
+        )
+    return {
+        control_planes[0]["spec"]["infrastructureTemplate"]["name"]: int(
+            config["controlPlane"]["replicas"]
+        ),
+        deployments[0]["spec"]["template"]["spec"]["infrastructureRef"][
+            "name"
+        ]: int(config["workers"]["replicas"]),
+    }
+
+
+def replacement_data_volume_state(
+    config: dict,
+    manifest_path: Path,
+    infrastructure_machines: list[dict],
+    virtual_machines: list[dict],
+    data_volumes: list[dict],
+) -> dict:
+    templates = replacement_templates(config, manifest_path)
+    by_template = {name: [] for name in templates}
+    for machine in infrastructure_machines:
+        cloned_from = (
+            machine.get("metadata", {})
+            .get("annotations", {})
+            .get("cluster.x-k8s.io/cloned-from-name")
+        )
+        if cloned_from in by_template:
+            by_template[cloned_from].append(machine)
+    for template, expected in templates.items():
+        observed = len(by_template[template])
+        if observed > expected:
+            raise TalosLifecycleError(
+                f"replacement template {template} has {observed} active "
+                f"machines; expected {expected}"
+            )
+
+    target_machines = [
+        machine
+        for template in templates
+        for machine in by_template[template]
+    ]
+    machine_names = {
+        machine["metadata"]["name"] for machine in target_machines
+    }
+    owned_virtual_machines = [
+        virtual_machine
+        for virtual_machine in virtual_machines
+        if virtual_machine.get("metadata", {}).get("name") in machine_names
+    ]
+    virtual_machines_by_owner = {
+        machine_name: [
+            virtual_machine
+            for virtual_machine in owned_virtual_machines
+            if virtual_machine["metadata"]["name"] == machine_name
+        ]
+        for machine_name in machine_names
+    }
+    if any(
+        len(values) > 1 for values in virtual_machines_by_owner.values()
+    ):
+        raise TalosLifecycleError(
+            "replacement KubevirtMachine owns multiple VirtualMachines"
+        )
+    virtual_machine_uids = {
+        virtual_machine["metadata"]["uid"]
+        for virtual_machine in owned_virtual_machines
+    }
+    owned_data_volumes = [
+        data_volume
+        for data_volume in data_volumes
+        if owner_uids(data_volume, "VirtualMachine") & virtual_machine_uids
+    ]
+    by_owner = {
+        virtual_machine_uid: [
+            data_volume
+            for data_volume in owned_data_volumes
+            if virtual_machine_uid
+            in owner_uids(data_volume, "VirtualMachine")
+        ]
+        for virtual_machine_uid in virtual_machine_uids
+    }
+    if any(len(values) > 1 for values in by_owner.values()):
+        raise TalosLifecycleError(
+            "replacement VirtualMachine owns multiple boot DataVolumes"
+        )
+    expected_source = {
+        "pvc": {
+            "namespace": config["os"]["goldenImage"]["namespace"],
+            "name": config["os"]["goldenImage"]["claim"],
+        }
+    }
+    for data_volume in owned_data_volumes:
+        if data_volume.get("spec", {}).get("source") != expected_source:
+            raise TalosLifecycleError(
+                "replacement DataVolume source is not the reviewed Golden PVC"
+            )
+        if data_volume.get("status", {}).get("phase") == "Failed":
+            raise TalosLifecycleError(
+                f"replacement DataVolume "
+                f"{data_volume['metadata']['name']} failed"
+            )
+    expected_count = sum(templates.values())
+    phases = {
+        data_volume["metadata"]["name"]: data_volume.get("status", {}).get(
+            "phase", ""
+        )
+        for data_volume in owned_data_volumes
+    }
+    ready = (
+        len(target_machines) == expected_count
+        and len(owned_virtual_machines) == expected_count
+        and all(
+            len(values) == 1
+            for values in virtual_machines_by_owner.values()
+        )
+        and len(owned_data_volumes) == expected_count
+        and all(len(values) == 1 for values in by_owner.values())
+        and all(phase == "Succeeded" for phase in phases.values())
+    )
+    return {
+        "ready": ready,
+        "expected": expected_count,
+        "target_machine_names": sorted(machine_names),
+        "virtual_machine_uids": sorted(virtual_machine_uids),
+        "data_volume_names": sorted(phases),
+        "data_volume_uids": sorted(
+            data_volume["metadata"]["uid"]
+            for data_volume in owned_data_volumes
+        ),
+        "phases": phases,
+    }
+
+
+def replacement_wait(args: argparse.Namespace) -> int:
+    """Wait for exact current replacement-machine boot clones."""
+    config, manifest, kubeconfig = inputs(args)
+    validate_manifest(config, manifest)
+    deadline = time.monotonic() + args.replacement_timeout_seconds
+    last_state = None
+    while time.monotonic() < deadline:
+        infrastructure_machines = kubectl_json(
+            kubeconfig,
+            [
+                "-n",
+                config["name"],
+                "get",
+                "kubevirtmachines.infrastructure.cluster.x-k8s.io",
+            ],
+        ).get("items", [])
+        virtual_machines = kubectl_json(
+            kubeconfig,
+            [
+                "-n",
+                config["name"],
+                "get",
+                "virtualmachines.kubevirt.io",
+            ],
+        ).get("items", [])
+        data_volumes = kubectl_json(
+            kubeconfig,
+            ["-n", config["name"], "get", "datavolumes.cdi.kubevirt.io"],
+        ).get("items", [])
+        state = replacement_data_volume_state(
+            config,
+            manifest,
+            infrastructure_machines,
+            virtual_machines,
+            data_volumes,
+        )
+        for name in state["data_volume_names"]:
+            annotation = kubectl(
+                kubeconfig,
+                [
+                    "-n",
+                    config["name"],
+                    "annotate",
+                    "pvc",
+                    name,
+                    "volume.kubernetes.io/selected-node=ok-infra",
+                    "--overwrite",
+                ],
+                expected=(0, 1),
+            )
+            if (
+                annotation.returncode != 0
+                and "NotFound" not in annotation.stderr
+            ):
+                raise TalosLifecycleError(
+                    f"could not annotate replacement PVC {name}: "
+                    f"{annotation.stderr.strip() or 'unknown error'}"
+                )
+        if state["ready"]:
+            print(
+                f"PASS {state['expected']}/{state['expected']} exact "
+                "replacement DataVolumes succeeded "
+                f"uids={','.join(state['data_volume_uids'])}"
+            )
+            return 0
+        if state != last_state:
+            print(
+                "WAIT replacement DataVolumes "
+                f"machines={len(state['target_machine_names'])}/"
+                f"{state['expected']} phases={state['phases']}"
+            )
+            last_state = state
+        time.sleep(15)
+    raise TalosLifecycleError(
+        "exact replacement DataVolumes did not succeed before timeout"
+    )
+
+
 def cleanup_authorization(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
@@ -611,6 +868,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--preflight", action="store_true")
+    mode.add_argument("--replacement-preflight", action="store_true")
+    mode.add_argument("--replacement-wait", action="store_true")
     mode.add_argument("--runtime-evidence", action="store_true")
     mode.add_argument("--cleanup-authorization", action="store_true")
     parser.add_argument("--cluster", required=True)
@@ -619,6 +878,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workload-kubeconfig")
     parser.add_argument("--cilium-chart")
     parser.add_argument("--data-volume-uids", default="")
+    parser.add_argument("--replacement-timeout-seconds", type=int, default=600)
     return parser.parse_args()
 
 
@@ -626,6 +886,14 @@ def main() -> int:
     args = parse_args()
     if args.preflight:
         return preflight(args)
+    if args.replacement_preflight:
+        return replacement_preflight(args)
+    if args.replacement_wait:
+        if args.replacement_timeout_seconds <= 0:
+            raise TalosLifecycleError(
+                "--replacement-timeout-seconds must be positive"
+            )
+        return replacement_wait(args)
     if args.runtime_evidence:
         if not args.workload_kubeconfig or not args.cilium_chart:
             raise TalosLifecycleError(

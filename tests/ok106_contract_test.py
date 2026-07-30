@@ -41,9 +41,11 @@ KIND_TO_PROVIDER = {"KubevirtCluster": "kubevirt", "OpenStackCluster": "openstac
 FIXTURES = {
     "ct-kubevirt": {"name": "ct", "type": "talos", "provider": "kubevirt",
                     "controlPlane": {"replicas": 1}, "workers": {"replicas": 2},
+                    "versions": {"talos": "v1.9.6", "kubernetes": "v1.34.1"},
                     "network": {"endpoint": "192.168.100.250", "podCIDR": "10.32.0.0/16", "serviceCIDR": "10.96.0.0/20"}, "nodeSelector": "ok-infra"},
     "ct-openstack": {"name": "ct", "type": "talos", "provider": "openstack",
                      "controlPlane": {"replicas": 1}, "workers": {"replicas": 2},
+                     "versions": {"talos": "v1.9.6", "kubernetes": "v1.34.1"},
                      "network": {"endpoint": "192.168.100.251", "podCIDR": "10.32.0.0/16", "serviceCIDR": "10.96.0.0/20"},
                      "openstack": {"cloud": "openstack", "externalNetwork": "public",
                                    "image": "talos-openstack-amd64", "controlPlaneFlavor": "m1.large",
@@ -54,8 +56,18 @@ def render(name, cfg):
     d = REPO / name; d.mkdir(exist_ok=True)
     (d / "cluster-config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     env = dict(os.environ, OKB_KUBECONFIG="/nonexistent")
-    subprocess.run([sys.executable, "render.py", "render", "--cluster", name],
-                   cwd=REPO, env=env, check=True, capture_output=True)
+    result = subprocess.run(
+        [sys.executable, "render.py", "render", "--cluster", name],
+        cwd=REPO,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            f"{name} render failed: {result.stderr.strip() or result.stdout.strip()}"
+        )
     docs = []
     for f in sorted(d.glob("*")):
         if f.name == "cluster-config.yaml" or f.suffix in (".sh",): continue

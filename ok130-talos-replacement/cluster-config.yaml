@@ -1,0 +1,36 @@
+controlPlane:
+  cores: 2
+  memory: 4Gi
+  replicas: 1
+name: ok130-talos-replacement
+network:
+  endpoint: 192.168.100.249
+  podCIDR: 10.38.0.0/16
+  serviceCIDR: 10.96.96.0/20
+nodeSelector: ok-infra
+os:
+  architecture: amd64
+  distribution: ok-linux
+  goldenImage:
+    namespace: ok-images
+    claim: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64
+    published: true
+    storageClass: ok-storage-block
+  identity: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+  imageDigest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
+  profile: kubevirt
+  schematic_id: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+type: talos
+upgrade:
+  strategy: blue-green
+  workloadMigration:
+    stateful: app-native
+    stateless: gitops
+versions:
+  kubernetes: v1.34.1
+  talos: v1.9.6
+workers:
+  cores: 2
+  disk: 20Gi
+  memory: 4Gi
+  replicas: 1

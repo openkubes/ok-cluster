@@ -2,25 +2,25 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ${CLUSTER_NAME}
+  name: ok130-talos-replacement
   labels:
     openkubes.io/type: talos
-    openkubes.io/provider: ${INFRA_PROVIDER}
-    openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
+    openkubes.io/provider: kubevirt
+    openkubes.io/os-identity: 7f5dd4276432
   annotations:
-    openkubes.io/os-identity-full: ${OS_IDENTITY}
-    openkubes.io/os-image-digest: ${OS_IMAGE_DIGEST}
-    openkubes.io/golden-image-published: "${OS_GOLDEN_IMAGE_PUBLISHED}"
+    openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
+    openkubes.io/golden-image-published: "true"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: ${CLUSTER_NAME}-talos-golden-image-cloner
-  namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
+  name: ok130-talos-replacement-talos-golden-image-cloner
+  namespace: ok-images
   labels:
     openkubes.io/type: talos
-    openkubes.io/consumer-cluster: ${CLUSTER_NAME}
-    openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
+    openkubes.io/consumer-cluster: ok130-talos-replacement
+    openkubes.io/os-identity: 7f5dd4276432
 rules:
 - apiGroups:
   - cdi.kubevirt.io
@@ -32,53 +32,53 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: ${CLUSTER_NAME}-talos-golden-image-cloner
-  namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
+  name: ok130-talos-replacement-talos-golden-image-cloner
+  namespace: ok-images
   labels:
     openkubes.io/type: talos
-    openkubes.io/consumer-cluster: ${CLUSTER_NAME}
-    openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
+    openkubes.io/consumer-cluster: ok130-talos-replacement
+    openkubes.io/os-identity: 7f5dd4276432
 subjects:
 - kind: ServiceAccount
   name: default
-  namespace: ${CLUSTER_NAME}
+  namespace: ok130-talos-replacement
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: ${CLUSTER_NAME}-talos-golden-image-cloner
+  name: ok130-talos-replacement-talos-golden-image-cloner
 ---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
-  name: ${CLUSTER_NAME}
-  namespace: ${CLUSTER_NAME}
+  name: ok130-talos-replacement
+  namespace: ok130-talos-replacement
   labels:
     openkubes.io/type: talos
-    openkubes.io/provider: ${INFRA_PROVIDER}
-    openkubes.io/k8s-version: ${K8S_VERSION}
-    openkubes.io/talos-version: ${TALOS_VERSION}
+    openkubes.io/provider: kubevirt
+    openkubes.io/k8s-version: v1.34.1
+    openkubes.io/talos-version: v1.9.6
 spec:
   clusterNetwork:
     pods:
       cidrBlocks:
-      - ${POD_CIDR}
+      - 10.38.0.0/16
     services:
       cidrBlocks:
-      - ${SERVICE_CIDR}
+      - 10.96.96.0/20
   controlPlaneRef:
     apiGroup: controlplane.cluster.x-k8s.io
     kind: TalosControlPlane
-    name: ${CLUSTER_NAME}-cp
+    name: ok130-talos-replacement-cp
   infrastructureRef:
     apiGroup: infrastructure.cluster.x-k8s.io
     kind: KubevirtCluster
-    name: ${CLUSTER_NAME}
+    name: ok130-talos-replacement
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtCluster
 metadata:
-  name: ${CLUSTER_NAME}
-  namespace: ${CLUSTER_NAME}
+  name: ok130-talos-replacement
+  namespace: ok130-talos-replacement
 spec:
   controlPlaneServiceTemplate:
     spec:
@@ -87,20 +87,20 @@ spec:
 apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
 kind: TalosControlPlane
 metadata:
-  name: ${CLUSTER_NAME}-cp
-  namespace: ${CLUSTER_NAME}
+  name: ok130-talos-replacement-cp
+  namespace: ok130-talos-replacement
 spec:
-  version: ${K8S_VERSION}
-  replicas: ${CP_REPLICAS}
+  version: v1.34.1
+  replicas: 1
   infrastructureTemplate:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
-    name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}
-    namespace: ${CLUSTER_NAME}
+    name: ok130-talos-replacement-cp-7f5dd4276432
+    namespace: ok130-talos-replacement
   controlPlaneConfig:
     controlplane:
       generateType: controlplane
-      talosVersion: ${TALOS_VERSION}
+      talosVersion: v1.9.6
       configPatches:
       - op: add
         path: /cluster/network/cni
@@ -118,13 +118,13 @@ spec:
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers-${TALOS_VERSION_NAME}
-  namespace: ${CLUSTER_NAME}
+  name: ok130-talos-replacement-workers-v1-9-6
+  namespace: ok130-talos-replacement
 spec:
   template:
     spec:
       generateType: worker
-      talosVersion: ${TALOS_VERSION}
+      talosVersion: v1.9.6
       configPatches:
       - op: add
         path: /cluster/network/cni
@@ -142,54 +142,54 @@ spec:
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment
 metadata:
-  name: ${CLUSTER_NAME}-workers
-  namespace: ${CLUSTER_NAME}
+  name: ok130-talos-replacement-workers
+  namespace: ok130-talos-replacement
 spec:
-  clusterName: ${CLUSTER_NAME}
-  replicas: ${WORKER_REPLICAS}
+  clusterName: ok130-talos-replacement
+  replicas: 1
   selector:
     matchLabels:
-      cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+      cluster.x-k8s.io/cluster-name: ok130-talos-replacement
   template:
     spec:
-      clusterName: ${CLUSTER_NAME}
-      version: ${K8S_VERSION}
+      clusterName: ok130-talos-replacement
+      version: v1.34.1
       bootstrap:
           configRef:
             apiGroup: bootstrap.cluster.x-k8s.io
             kind: TalosConfigTemplate
-            name: ${CLUSTER_NAME}-workers-${TALOS_VERSION_NAME}
+            name: ok130-talos-replacement-workers-v1-9-6
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
-        name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
+        name: ok130-talos-replacement-workers-7f5dd4276432
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}
-  namespace: ${CLUSTER_NAME}
+  name: ok130-talos-replacement-cp-7f5dd4276432
+  namespace: ok130-talos-replacement
   labels:
     openkubes.io/type: talos
-    openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
+    openkubes.io/os-identity: 7f5dd4276432
   annotations:
-    openkubes.io/os-identity-full: ${OS_IDENTITY}
-    openkubes.io/os-image-digest: ${OS_IMAGE_DIGEST}
+    openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
 spec:
   template:
     spec:
       virtualMachineTemplate:
         metadata:
-          namespace: ${CLUSTER_NAME}
+          namespace: ok130-talos-replacement
         spec:
           runStrategy: Always
           template:
             spec:
               nodeSelector:
-                kubernetes.io/hostname: ${NODE_SELECTOR}
+                kubernetes.io/hostname: ok-infra
               domain:
                 cpu:
-                  cores: ${CP_CORES}
+                  cores: 2
                 devices:
                   disks:
                   - disk:
@@ -197,55 +197,55 @@ spec:
                     name: talos
                   networkInterfaceMultiqueue: true
                 memory:
-                  guest: ${CP_MEMORY}
+                  guest: 4Gi
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-disk
+                  name: ok130-talos-replacement-cp-7f5dd4276432-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-disk
-              namespace: ${CLUSTER_NAME}
+              name: ok130-talos-replacement-cp-7f5dd4276432-disk
+              namespace: ok130-talos-replacement
             spec:
               pvc:
                 accessModes:
                 - ReadWriteOnce
                 resources:
                   requests:
-                    storage: ${CP_DISK}
+                    storage: 20Gi
                 storageClassName: ok-storage-block
               source:
                 pvc:
-                  namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
-                  name: ${OS_GOLDEN_IMAGE_CLAIM}
+                  namespace: ok-images
+                  name: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
-  namespace: ${CLUSTER_NAME}
+  name: ok130-talos-replacement-workers-7f5dd4276432
+  namespace: ok130-talos-replacement
   labels:
     openkubes.io/type: talos
-    openkubes.io/os-identity: ${OS_IDENTITY_SHORT}
+    openkubes.io/os-identity: 7f5dd4276432
   annotations:
-    openkubes.io/os-identity-full: ${OS_IDENTITY}
-    openkubes.io/os-image-digest: ${OS_IMAGE_DIGEST}
+    openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
 spec:
   template:
     spec:
       virtualMachineTemplate:
         metadata:
-          namespace: ${CLUSTER_NAME}
+          namespace: ok130-talos-replacement
         spec:
           runStrategy: Always
           template:
             spec:
               nodeSelector:
-                kubernetes.io/hostname: ${NODE_SELECTOR}
+                kubernetes.io/hostname: ok-infra
               domain:
                 cpu:
-                  cores: ${WORKER_CORES}
+                  cores: 2
                 devices:
                   disks:
                   - disk:
@@ -253,25 +253,25 @@ spec:
                     name: talos
                   networkInterfaceMultiqueue: true
                 memory:
-                  guest: ${WORKER_MEMORY}
+                  guest: 4Gi
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ${CLUSTER_NAME}-worker-${OS_IDENTITY_SHORT}-disk
+                  name: ok130-talos-replacement-worker-7f5dd4276432-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ${CLUSTER_NAME}-worker-${OS_IDENTITY_SHORT}-disk
-              namespace: ${CLUSTER_NAME}
+              name: ok130-talos-replacement-worker-7f5dd4276432-disk
+              namespace: ok130-talos-replacement
             spec:
               pvc:
                 accessModes:
                 - ReadWriteOnce
                 resources:
                   requests:
-                    storage: ${WORKER_DISK}
+                    storage: 20Gi
                 storageClassName: ok-storage-block
               source:
                 pvc:
-                  namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
-                  name: ${OS_GOLDEN_IMAGE_CLAIM}
+                  namespace: ok-images
+                  name: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64

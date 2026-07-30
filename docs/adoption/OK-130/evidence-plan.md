@@ -24,6 +24,8 @@ The OK-130 test proves:
 - the only cross-namespace permission is
   `create` on `cdi.kubevirt.io/datavolumes/source`;
 - machine templates and boot volumes carry the Talos identity;
+- immutable worker bootstrap templates are Talos-version-bound across
+  replacements;
 - no supported KubeVirt Talos render contains an HTTP/registry qcow2 source;
 - `TalosControlPlane` and `TalosConfigTemplate` remain the dynamic
   machine-configuration and secret authority;
@@ -65,6 +67,17 @@ Talos/KubeVirt Node identity and every runtime boot DataVolume clone, then
 records `public_import_count: 0`. No Secret object or value is read into
 evidence. This evidence stays separate from `ok-linux`'s one-time
 `mode: cold-publication` timing.
+
+For a version or schematic replacement,
+`scripts/talos_replacement_runtime.py` observes the old and new Node UIDs,
+Talos versions and identity-bound names while the guarded replacement target
+runs. Workload API interruptions are retained as bounded time windows in the
+result. A converged replacement with such a window is explicitly
+`PASS_WITH_TRANSIENT_API_INTERRUPTION`, never a claim of continuous API
+availability; role replacement ordering is recorded as unknown across the
+blind window, and a window over the 120-second guard fails the run. Every
+terminal failure writes atomic negative evidence and terminates a still-running
+wrapped lifecycle.
 
 The guarded Flatcar `ok125-node-ready` evidence records the same
 namespace-to-CAPI-Available, namespace-to-all-Nodes-Ready and

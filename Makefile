@@ -37,6 +37,7 @@ TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
 CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
 CILIUM_CHART_SOURCE ?=
 KUBEVIRT_EXPAND_DISKS_APPLY ?= no
+OK130_REPLACEMENT_APPLY ?= no
 OK128_BENCHMARK_APPLY ?= no
 OK128_OS ?=
 OK128_MANAGEMENT_KUBECONFIG ?=
@@ -159,7 +160,7 @@ cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test talos-golden-preflight talos-golden-runtime-evidence
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -369,6 +370,25 @@ talos-golden-runtime-evidence: require-cluster ## Record read-only warm provisio
 		--ok-linux-path "$(OK_LINUX_PATH)" \
 		--workload-kubeconfig "$(or $(TALOS_WORKLOAD_KUBECONFIG),$(HOME)/.kube/$(CLUSTER).yaml)" \
 		--cilium-chart "$(CILIUM_CHART)"
+
+talos-golden-replacement-preflight: require-cluster ## Read-only live-cluster/new-Golden replacement preflight
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--replacement-preflight \
+		--cluster "$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"
+
+talos-golden-replacement-apply: require-cluster ## Apply identity-bound Talos replacement (OK130_REPLACEMENT_APPLY=yes)
+	@test "$(OK130_REPLACEMENT_APPLY)" = "yes" || \
+		(echo "ERROR: replacement requires OK130_REPLACEMENT_APPLY=yes"; exit 1)
+	@$(MAKE) --no-print-directory talos-golden-replacement-preflight CLUSTER="$(CLUSTER)"
+	kubectl --kubeconfig "$(TALOS_INFRA_KUBECONFIG)" apply \
+		-f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--replacement-wait \
+		--cluster "$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-not-flatcar

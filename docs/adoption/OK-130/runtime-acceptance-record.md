@@ -1,6 +1,8 @@
 # OK-130 Talos Golden-Image runtime acceptance
 
-**Status:** PASS
+**Status:** PASS for Golden publication, warm provisioning and replacement
+convergence; continuous workload API availability during replacement did not
+pass.
 
 **Completed:** 2026-07-30
 
@@ -81,3 +83,63 @@ infrastructure configuration.
 
 No pull request or Jira transition was performed as part of this acceptance
 run.
+
+## Talos v1.9.6 identity replacement
+
+On 2026-07-30, the same disposable 1+1 cluster was changed from the accepted
+v1.9.5 identity above to the reviewed direct patch successor:
+
+- Talos: `v1.9.6`
+- schematic:
+  `ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515`
+- artifact digest:
+  `sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5`
+- OS identity:
+  `sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d`
+- new immutable Golden PVC:
+  `ok-images/talos-v1-9-6-ce4c980550dd-461d72d30750-amd64`
+- new Golden PVC UID: `60b69267-e507-416a-b5a8-835bb0232ce6`
+
+The v1.9.5 Golden PVC retained its original UID and remained `Bound`; the
+publisher did not overwrite it. Control-plane and worker replacement
+DataVolumes both cloned the v1.9.6 Golden PVC and reached `Succeeded`. The
+final Nodes were:
+
+- `ok130-talos-replacement-cp-7f5dd4276432-cgrsx`
+- `ok130-talos-replacement-workers-bl6f4-bn7bn`
+
+Both reported `Talos (v1.9.6)`, Kubernetes `v1.34.1`, kernel
+`6.12.25-talos`, and were Ready. Cilium subsequently converged to two ready
+agents and one ready operator. The final read-only warm evidence passed with
+`public_import_count: 0`.
+
+The first apply also exposed that `TalosConfigTemplate.spec` is immutable.
+The static worker bootstrap template name attempted an in-place v1.9.5 to
+v1.9.6 mutation and the admission webhook correctly rejected it. Worker
+bootstrap templates and their MachineDeployment references are now
+Talos-version-bound, so the corrected apply created a new immutable template
+without leaking the KubeVirt Golden-Image identity into the shared Talos
+bootstrap contract.
+
+This was replacement convergence, but not a clean continuous-availability
+result. Management events record control-plane drain timeouts at
+18:29:40 UTC and a refused connection to the workload API at 18:29:53 UTC,
+followed by `SuccessfulDrainNode` at 18:30:17 UTC. The runtime observer also
+encountered the refused API connection. The exact outage duration was not
+captured, so no duration is inferred after the fact. The replacement
+eventually converged with distinct old/new identities, but this run must not
+be cited as proof of uninterrupted API service.
+
+After the final evidence capture, teardown removed the disposable namespace,
+clone Role and RoleBinding, workload kubeconfig, both replacement PVs and
+their Longhorn volumes. No cluster-owned CDI snapshot remained. A cleanup-v2
+verification passed for PVs
+`pvc-904f9633-c750-42fb-8a81-16a5574de27b` and
+`pvc-1692a11a-d3c6-4edb-81f4-7d544fe3fd40`. Both shared Golden PVCs remained
+`Bound` with their original UIDs.
+
+The v1.9.6 replacement source is on
+`feature/ok-130-talos-v1-9-6-replacement` in both `ok-linux` and
+`ok-cluster`. The owning `ok-linux` pin is commit `b499694`; final
+`ok-cluster` commit IDs are intentionally not self-referenced from this
+record.
