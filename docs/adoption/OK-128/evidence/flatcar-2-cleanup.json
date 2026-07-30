@@ -1,0 +1,27 @@
+{
+  "clone_rbac_absent": true,
+  "cluster": "ok128-flatcar",
+  "cluster_namespace_absent": true,
+  "cluster_owned_snapshots_absent": true,
+  "cluster_owned_storage": {
+    "longhorn_namespace": "longhorn-system",
+    "longhorn_volumes_absent": [
+      "pvc-75590c3f-90d5-4c34-9fc5-c769719c6538",
+      "pvc-7a05362d-357d-4b7f-8d28-28612104cff3"
+    ],
+    "persistent_volumes_absent": [
+      "pvc-75590c3f-90d5-4c34-9fc5-c769719c6538",
+      "pvc-7a05362d-357d-4b7f-8d28-28612104cff3"
+    ]
+  },
+  "golden_image": {
+    "claim": "flatcar-stable-4593-2-4-amd64-kubevirt",
+    "namespace": "ok-images",
+    "phase": "Bound",
+    "preserved": true,
+    "uid": "8e2a4094-3ef1-437f-b4e1-b9b2fb511119"
+  },
+  "observed_at": "2026-07-30T17:52:03Z",
+  "schema": "openkubes.ok128.cleanup-verification/v2",
+  "workload_kubeconfig_absent": true
+}

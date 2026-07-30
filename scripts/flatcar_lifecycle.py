@@ -234,6 +234,18 @@ def require_inputs(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def workload_kubeconfig_owned(config: dict, cluster: str) -> bool:
+    contexts = {
+        item.get("name"): item.get("context", {}).get("cluster")
+        for item in config.get("contexts", [])
+    }
+    current_context = config.get("current-context")
+    clusters = {item.get("name") for item in config.get("clusters", [])}
+    return (
+        contexts.get(current_context) == cluster and cluster in clusters
+    )
+
+
 def require_teardown_inputs(args: argparse.Namespace) -> dict[str, object]:
     if not args.cluster or args.cluster == "ok125-flatcar":
         raise FlatcarLifecycleError(
@@ -274,14 +286,7 @@ def require_teardown_inputs(args: argparse.Namespace) -> dict[str, object]:
             raise FlatcarLifecycleError(
                 "workload kubeconfig is not a mapping"
             )
-        contexts = {
-            item.get("name"): item.get("context", {}).get("cluster")
-            for item in workload_config.get("contexts", [])
-        }
-        if (
-            workload_config.get("current-context") != args.cluster
-            or contexts.get(args.cluster) != args.cluster
-        ):
+        if not workload_kubeconfig_owned(workload_config, args.cluster):
             raise FlatcarLifecycleError(
                 "workload kubeconfig ownership does not match the cluster"
             )

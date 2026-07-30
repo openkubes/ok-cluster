@@ -1,0 +1,246 @@
+{
+  "classification": "observed-single-run-no-slo",
+  "cluster": "ok128-flatcar",
+  "command": [
+    "make",
+    "--no-print-directory",
+    "install-flatcar",
+    "CLUSTER=ok128-flatcar",
+    "FLATCAR_INFRA_KUBECONFIG=/Users/arash/.kube/ok-infra.yaml",
+    "FLATCAR_WORKLOAD_KUBECONFIG=/Users/arash/.kube/ok128-flatcar.yaml",
+    "FLATCAR_CILIUM_CHART=/Users/arash/temp/kubernauts/ok/ok-cluster/.tools/cilium-1.19.6.tgz",
+    "FLATCAR_APPLY=yes"
+  ],
+  "envelope": {
+    "architecture": "amd64",
+    "control_plane_replicas": 1,
+    "expected_nodes": 2,
+    "kubernetes": "v1.34.1",
+    "node_selector": "ok-infra",
+    "provider": "kubevirt",
+    "worker_replicas": 1
+  },
+  "exit_code": 0,
+  "final_nodes": [
+    {
+      "kubelet_version": "v1.34.1",
+      "name": "ok128-flatcar-cp-77949",
+      "os_image": "Flatcar Container Linux by Kinvolk 4593.2.4 (Oklo)"
+    },
+    {
+      "kubelet_version": "v1.34.1",
+      "name": "ok128-flatcar-workers-r484k-qwmtk",
+      "os_image": "Flatcar Container Linux by Kinvolk 4593.2.4 (Oklo)"
+    }
+  ],
+  "inputs": {
+    "cilium_chart": {
+      "path": "/Users/arash/temp/kubernauts/ok/ok-cluster/.tools/cilium-1.19.6.tgz",
+      "sha256": "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179",
+      "version": "1.19.6"
+    },
+    "cluster_config": {
+      "bootstrap": {
+        "format": "ignition",
+        "virtualMachineBootstrapCheck": "none"
+      },
+      "controlPlane": {
+        "cores": 2,
+        "disk": "20Gi",
+        "memory": "4Gi",
+        "replicas": 1
+      },
+      "name": "ok128-flatcar",
+      "network": {
+        "endpoint": "192.168.100.212",
+        "podCIDR": "10.36.0.0/16",
+        "serviceCIDR": "10.96.64.0/20"
+      },
+      "nodeSelector": "ok-infra",
+      "os": {
+        "architecture": "amd64",
+        "contractRef": "ADR-Platform-016",
+        "deployable": true,
+        "distribution": "flatcar",
+        "goldenImage": {
+          "claim": "flatcar-stable-4593-2-4-amd64-kubevirt",
+          "namespace": "ok-images",
+          "published": true,
+          "storageClass": "local-path"
+        },
+        "identity": "sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb",
+        "imageDigest": "sha256:49b72cf26d27d4747d6252c64582f17fdbd7d629993beebbcf997794333a978a",
+        "profile": "flatcar-kubevirt",
+        "profileRevision": 1,
+        "status": "production-constrained",
+        "supportDecision": "docs/adr/ADR-009-flatcar-kubevirt-constrained-support.md",
+        "version": "4593.2.4"
+      },
+      "provider": "kubevirt",
+      "providerProfile": {
+        "goldenImageStorageClass": "local-path"
+      },
+      "type": "flatcar",
+      "upgrade": {
+        "strategy": "blue-green",
+        "workloadMigration": {
+          "stateful": "app-native",
+          "stateless": "gitops"
+        }
+      },
+      "versions": {
+        "kubernetes": "v1.34.1"
+      },
+      "workers": {
+        "cores": 2,
+        "disk": "20Gi",
+        "memory": "4Gi",
+        "replicas": 1
+      }
+    },
+    "files": [
+      {
+        "path": "ok128-flatcar/cluster-config.yaml",
+        "sha256": "ae14dfd090a2c253d324e62a19e028e6685b5571388869091e18fec9cd5982fb"
+      },
+      {
+        "path": "ok128-flatcar/cluster-v2.yaml",
+        "sha256": "daaabdab288ced9c4571f64b7507707a530301b7c7da8319b0a92a5e6b02f867"
+      },
+      {
+        "path": "ok128-flatcar/cilium-values.yaml",
+        "sha256": "e93ac304c8fc0ed87ee6bd68c0919acd8faa5cd945d8bf6214bd675038751906"
+      }
+    ],
+    "golden_image": {
+      "annotations": {
+        "cdi.kubevirt.io/storage.contentType": "kubevirt"
+      },
+      "claim": "flatcar-stable-4593-2-4-amd64-kubevirt",
+      "clone_target_storage_class": "local-path",
+      "identity": "sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb",
+      "image_digest": "sha256:49b72cf26d27d4747d6252c64582f17fdbd7d629993beebbcf997794333a978a",
+      "namespace": "ok-images",
+      "phase": "Bound",
+      "source_storage_class": "ok-storage-block",
+      "uid": "8e2a4094-3ef1-437f-b4e1-b9b2fb511119"
+    },
+    "image_digest": "sha256:49b72cf26d27d4747d6252c64582f17fdbd7d629993beebbcf997794333a978a",
+    "os_identity": "sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb",
+    "talos_schematic_id": null,
+    "talos_version": null
+  },
+  "lifecycle_command_completed": {
+    "elapsed_seconds": 189,
+    "timestamp": "2026-07-30T17:17:16Z"
+  },
+  "management_load": {
+    "after": {
+      "allocatable": {
+        "cpu": "16",
+        "devices.kubevirt.io/kvm": "1k",
+        "devices.kubevirt.io/tun": "1k",
+        "devices.kubevirt.io/vhost-net": "1k",
+        "ephemeral-storage": "472376605121",
+        "hugepages-1Gi": "0",
+        "hugepages-2Mi": "0",
+        "memory": "130992368Ki",
+        "pods": "110"
+      },
+      "node": "ok-infra",
+      "observed_at": "2026-07-30T17:17:19Z",
+      "pod_phases": {
+        "Running": 60,
+        "Succeeded": 8
+      },
+      "running_vmis": 24,
+      "scheduled_pods": 68,
+      "total_vmis": 24
+    },
+    "before": {
+      "allocatable": {
+        "cpu": "16",
+        "devices.kubevirt.io/kvm": "1k",
+        "devices.kubevirt.io/tun": "1k",
+        "devices.kubevirt.io/vhost-net": "1k",
+        "ephemeral-storage": "472376605121",
+        "hugepages-1Gi": "0",
+        "hugepages-2Mi": "0",
+        "memory": "130992368Ki",
+        "pods": "110"
+      },
+      "node": "ok-infra",
+      "observed_at": "2026-07-30T17:14:07Z",
+      "pod_phases": {
+        "Running": 58,
+        "Succeeded": 8
+      },
+      "running_vmis": 22,
+      "scheduled_pods": 66,
+      "total_vmis": 22
+    }
+  },
+  "operator_timing_seconds": {
+    "real": 188.22,
+    "sys": 2.7,
+    "user": 8.17
+  },
+  "os": "flatcar",
+  "run_id": "flatcar-2",
+  "schema": "openkubes.ok128.provisioning-benchmark/v1",
+  "source": {
+    "ok-cluster": {
+      "branch": "feature/ok-128-provisioning-benchmark",
+      "clean": true,
+      "path": "/Users/arash/temp/kubernauts/ok/ok-cluster",
+      "pushed": true,
+      "revision": "0f4f5ff046d119aa5be346fb438b32e4f07af374"
+    },
+    "ok-linux": {
+      "branch": "feature/ok-130-talos-golden-image",
+      "clean": true,
+      "path": "/Users/arash/temp/kubernauts/ok/ok-linux",
+      "pushed": true,
+      "revision": "97c36d766b6422315ee975dfb453545350ce2025"
+    }
+  },
+  "test_order": 1,
+  "timeline": {
+    "all_nodes_ready": {
+      "elapsed_seconds": 180,
+      "timestamp": "2026-07-30T17:17:07Z"
+    },
+    "api_reachable_control_plane_registered": {
+      "elapsed_seconds": 96,
+      "timestamp": "2026-07-30T17:15:43Z"
+    },
+    "capi_cluster_available": {
+      "elapsed_seconds": 181,
+      "timestamp": "2026-07-30T17:17:08Z"
+    },
+    "capi_cluster_created": {
+      "elapsed_seconds": 7,
+      "timestamp": "2026-07-30T17:14:14Z"
+    },
+    "cilium_daemonset_available": {
+      "elapsed_seconds": 185,
+      "timestamp": "2026-07-30T17:17:12Z"
+    },
+    "cilium_operator_available": {
+      "elapsed_seconds": 119,
+      "timestamp": "2026-07-30T17:16:06Z"
+    },
+    "command_completed": {
+      "elapsed_seconds": 189,
+      "timestamp": "2026-07-30T17:17:16Z"
+    },
+    "command_started": {
+      "elapsed_seconds": 0,
+      "timestamp": "2026-07-30T17:14:07Z"
+    },
+    "first_node_ready": {
+      "elapsed_seconds": 129,
+      "timestamp": "2026-07-30T17:16:16Z"
+    }
+  }
+}

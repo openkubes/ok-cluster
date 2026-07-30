@@ -1,0 +1,83 @@
+Bootstrapping Talos cluster ok128-talos...
+PASS Talos Golden preflight cluster=ok128-talos node=ok-infra kubevirt=v1.8.1 expand_disks=True golden_uid=004796a1-0d2f-4775-ae71-b0ef79ee04a0
+kubectl --kubeconfig ~/.kube/ok-infra.yaml apply -f /Users/arash/temp/kubernauts/ok/ok-cluster/ok128-talos/cluster-base.yaml
+namespace/ok128-talos created
+role.rbac.authorization.k8s.io/ok128-talos-talos-golden-image-cloner created
+rolebinding.rbac.authorization.k8s.io/ok128-talos-talos-golden-image-cloner created
+cluster.cluster.x-k8s.io/ok128-talos created
+kubevirtcluster.infrastructure.cluster.x-k8s.io/ok128-talos created
+taloscontrolplane.controlplane.cluster.x-k8s.io/ok128-talos-cp created
+talosconfigtemplate.bootstrap.cluster.x-k8s.io/ok128-talos-workers created
+machinedeployment.cluster.x-k8s.io/ok128-talos-workers created
+kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io/ok128-talos-cp-62a75f2e872a created
+kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io/ok128-talos-workers-62a75f2e872a created
+
+Annotating PVCs for ok128-talos → ok-infra (until 2 DataVolume imports succeed)...
+  ⏳ 0/2 imports done, 0 PVC(s) Pending — retrying in 15s... (1/20)
+persistentvolumeclaim/ok128-talos-cp-62a75f2e872a-cvskk-ok128-talos-cp-62a75f2e872a-disk annotated
+persistentvolumeclaim/ok128-talos-workers-w6fg4-2jnm5-ok128-talos-worker-62a75f2e872a-disk annotated
+  ⏳ 0/2 imports done, 2 PVC(s) Pending — retrying in 15s... (2/20)
+persistentvolumeclaim/ok128-talos-cp-62a75f2e872a-cvskk-ok128-talos-cp-62a75f2e872a-disk annotated
+persistentvolumeclaim/ok128-talos-workers-w6fg4-2jnm5-ok128-talos-worker-62a75f2e872a-disk annotated
+  ⏳ 0/2 imports done, 2 PVC(s) Pending — retrying in 15s... (3/20)
+persistentvolumeclaim/ok128-talos-cp-62a75f2e872a-cvskk-ok128-talos-cp-62a75f2e872a-disk annotated
+persistentvolumeclaim/ok128-talos-workers-w6fg4-2jnm5-ok128-talos-worker-62a75f2e872a-disk annotated
+  ⏳ 0/2 imports done, 2 PVC(s) Pending — retrying in 15s... (4/20)
+persistentvolumeclaim/ok128-talos-cp-62a75f2e872a-cvskk-ok128-talos-cp-62a75f2e872a-disk annotated
+persistentvolumeclaim/ok128-talos-workers-w6fg4-2jnm5-ok128-talos-worker-62a75f2e872a-disk annotated
+  ⏳ 0/2 imports done, 2 PVC(s) Pending — retrying in 15s... (5/20)
+persistentvolumeclaim/ok128-talos-cp-62a75f2e872a-cvskk-ok128-talos-cp-62a75f2e872a-disk annotated
+persistentvolumeclaim/ok128-talos-workers-w6fg4-2jnm5-ok128-talos-worker-62a75f2e872a-disk annotated
+  ⏳ 0/2 imports done, 2 PVC(s) Pending — retrying in 15s... (6/20)
+persistentvolumeclaim/ok128-talos-cp-62a75f2e872a-cvskk-ok128-talos-cp-62a75f2e872a-disk annotated
+persistentvolumeclaim/ok128-talos-workers-w6fg4-2jnm5-ok128-talos-worker-62a75f2e872a-disk annotated
+  ⏳ 0/2 imports done, 2 PVC(s) Pending — retrying in 15s... (7/20)
+persistentvolumeclaim/ok128-talos-cp-62a75f2e872a-cvskk-ok128-talos-cp-62a75f2e872a-disk annotated
+persistentvolumeclaim/ok128-talos-workers-w6fg4-2jnm5-ok128-talos-worker-62a75f2e872a-disk annotated
+  ✅ 2/2 DataVolume import(s) succeeded, no Pending PVCs.
+
+⏳ Waiting for control plane to register (nodes stay NotReady until CNI is installed)...
+✅ Kubeconfig saved to ~/.kube/ok128-talos.yaml
+  ⏳ API not reachable yet, retrying in 15s... (1/40)
+✅ Kubeconfig saved to ~/.kube/ok128-talos.yaml
+  ⏳ API not reachable yet, retrying in 15s... (2/40)
+✅ Kubeconfig saved to ~/.kube/ok128-talos.yaml
+  ⏳ API not reachable yet, retrying in 15s... (3/40)
+✅ Kubeconfig saved to ~/.kube/ok128-talos.yaml
+  ⏳ API not reachable yet, retrying in 15s... (4/40)
+✅ Kubeconfig saved to ~/.kube/ok128-talos.yaml
+  ⏳ API not reachable yet, retrying in 15s... (5/40)
+✅ Kubeconfig saved to ~/.kube/ok128-talos.yaml
+✅ Control plane registered — installing Cilium CNI...
+✅ Kubeconfig saved to ~/.kube/ok128-talos.yaml
+Installing Cilium CNI on ok128-talos...
+  Cluster type: talos (from /Users/arash/temp/kubernauts/ok/ok-cluster/ok128-talos/cluster-config.yaml)
+  Node OS: Talos (v1.9.5)
+REUSED /Users/arash/temp/kubernauts/ok/ok-cluster/.tools/cilium-1.19.6.tgz sha256:21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179
+  Using Talos values (KubePrism localhost:7445, cgroup hostRoot, agent capabilities)
+Release "cilium" does not exist. Installing it now.
+I0730 19:22:20.080489   49702 warnings.go:107] "Warning: spec.SessionAffinity is ignored for headless services"
+NAME: cilium
+LAST DEPLOYED: Thu Jul 30 19:22:16 2026
+NAMESPACE: kube-system
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+You have successfully installed Cilium with Hubble.
+
+Your release version is 1.19.6.
+
+For any further help, visit https://docs.cilium.io/en/v1.19/gettinghelp
+
+✅ Cluster ok128-talos ready!
+   kubectl --kubeconfig ~/.kube/ok128-talos.yaml get nodes
+⏳ Waiting for all nodes to become Ready...
+node/ok128-talos-cp-62a75f2e872a-cvskk condition met
+node/ok128-talos-workers-w6fg4-2jnm5 condition met
+
+✅ Talos cluster ok128-talos bootstrapped with Cilium. Next steps:
+   make install-storage       CLUSTER=ok128-talos
+   make install-ingress       CLUSTER=ok128-talos
+   make install-observability CLUSTER=ok128-talos   # OK-79: deploy + gated contract test
+   make status                CLUSTER=ok128-talos

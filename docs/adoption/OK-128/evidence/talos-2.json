@@ -1,0 +1,233 @@
+{
+  "classification": "observed-single-run-no-slo",
+  "cluster": "ok128-talos",
+  "command": [
+    "make",
+    "--no-print-directory",
+    "bootstrap",
+    "CLUSTER=ok128-talos",
+    "CILIUM_CHART=/Users/arash/temp/kubernauts/ok/ok-cluster/.tools/cilium-1.19.6.tgz",
+    "TALOS_INFRA_KUBECONFIG=/Users/arash/.kube/ok-infra.yaml"
+  ],
+  "envelope": {
+    "architecture": "amd64",
+    "control_plane_replicas": 1,
+    "expected_nodes": 2,
+    "kubernetes": "v1.34.1",
+    "node_selector": "ok-infra",
+    "provider": "kubevirt",
+    "worker_replicas": 1
+  },
+  "exit_code": 0,
+  "final_nodes": [
+    {
+      "kubelet_version": "v1.34.1",
+      "name": "ok128-talos-cp-62a75f2e872a-cvskk",
+      "os_image": "Talos (v1.9.5)"
+    },
+    {
+      "kubelet_version": "v1.34.1",
+      "name": "ok128-talos-workers-w6fg4-2jnm5",
+      "os_image": "Talos (v1.9.5)"
+    }
+  ],
+  "inputs": {
+    "cilium_chart": {
+      "path": "/Users/arash/temp/kubernauts/ok/ok-cluster/.tools/cilium-1.19.6.tgz",
+      "sha256": "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179",
+      "version": "1.19.6"
+    },
+    "cluster_config": {
+      "controlPlane": {
+        "cores": 2,
+        "disk": "20Gi",
+        "memory": "4Gi",
+        "replicas": 1
+      },
+      "name": "ok128-talos",
+      "network": {
+        "endpoint": "192.168.100.213",
+        "podCIDR": "10.37.0.0/16",
+        "serviceCIDR": "10.96.80.0/20"
+      },
+      "nodeSelector": "ok-infra",
+      "os": {
+        "architecture": "amd64",
+        "distribution": "ok-linux",
+        "goldenImage": {
+          "claim": "talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64",
+          "namespace": "ok-images",
+          "published": true,
+          "storageClass": "ok-storage-block"
+        },
+        "identity": "sha256:62a75f2e872a386ee70fe27158b6e235515d7c0a73f28ce8d95a8547236f1495",
+        "imageDigest": "sha256:9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7",
+        "profile": "kubevirt",
+        "schematic_id": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+      },
+      "provider": "kubevirt",
+      "type": "talos",
+      "upgrade": {
+        "strategy": "blue-green",
+        "workloadMigration": {
+          "stateful": "app-native",
+          "stateless": "gitops"
+        }
+      },
+      "versions": {
+        "kubernetes": "v1.34.1",
+        "talos": "v1.9.5"
+      },
+      "workers": {
+        "cores": 2,
+        "disk": "20Gi",
+        "memory": "4Gi",
+        "replicas": 1
+      }
+    },
+    "files": [
+      {
+        "path": "ok128-talos/cluster-config.yaml",
+        "sha256": "ccf9b506ac1c4088e71a6285dca8a717a25971ecc353c3595e795fa5248ab9a2"
+      },
+      {
+        "path": "ok128-talos/cluster-base.yaml",
+        "sha256": "15985520eb9b77c29a7b408c34584fa3857077c0c75849fc0c48bbbce24cbf35"
+      },
+      {
+        "path": "ok128-talos/cluster-v2.yaml",
+        "sha256": "9adeefb3241d4372ff2d109747984d11504560313a60ef23282100fef04d1f34"
+      }
+    ],
+    "golden_image": {
+      "annotations": {
+        "cdi.kubevirt.io/storage.contentType": "kubevirt"
+      },
+      "claim": "talos-v1-9-5-ce4c980550dd-9bb07c3a5857-amd64",
+      "clone_target_storage_class": "ok-storage-block",
+      "identity": "sha256:62a75f2e872a386ee70fe27158b6e235515d7c0a73f28ce8d95a8547236f1495",
+      "image_digest": "sha256:9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7",
+      "namespace": "ok-images",
+      "phase": "Bound",
+      "source_storage_class": "ok-storage-block",
+      "uid": "004796a1-0d2f-4775-ae71-b0ef79ee04a0"
+    },
+    "image_digest": "sha256:9bb07c3a585745dd888f6f30f3c5df9c69bf6752171a3058f84ad2ed11dec4f7",
+    "os_identity": "sha256:62a75f2e872a386ee70fe27158b6e235515d7c0a73f28ce8d95a8547236f1495",
+    "talos_schematic_id": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "talos_version": "v1.9.5"
+  },
+  "lifecycle_command_completed": {
+    "elapsed_seconds": 263,
+    "timestamp": "2026-07-30T17:23:06Z"
+  },
+  "management_load": {
+    "after": {
+      "allocatable": {
+        "cpu": "16",
+        "devices.kubevirt.io/kvm": "1k",
+        "devices.kubevirt.io/tun": "1k",
+        "devices.kubevirt.io/vhost-net": "1k",
+        "ephemeral-storage": "472376605121",
+        "hugepages-1Gi": "0",
+        "hugepages-2Mi": "0",
+        "memory": "130992368Ki",
+        "pods": "110"
+      },
+      "node": "ok-infra",
+      "observed_at": "2026-07-30T17:23:11Z",
+      "pod_phases": {
+        "Running": 60,
+        "Succeeded": 8
+      },
+      "running_vmis": 24,
+      "scheduled_pods": 68,
+      "total_vmis": 24
+    },
+    "before": {
+      "allocatable": {
+        "cpu": "16",
+        "devices.kubevirt.io/kvm": "1k",
+        "devices.kubevirt.io/tun": "1k",
+        "devices.kubevirt.io/vhost-net": "1k",
+        "ephemeral-storage": "472376605121",
+        "hugepages-1Gi": "0",
+        "hugepages-2Mi": "0",
+        "memory": "130992368Ki",
+        "pods": "110"
+      },
+      "node": "ok-infra",
+      "observed_at": "2026-07-30T17:18:43Z",
+      "pod_phases": {
+        "Running": 58,
+        "Succeeded": 8
+      },
+      "running_vmis": 22,
+      "scheduled_pods": 66,
+      "total_vmis": 22
+    }
+  },
+  "operator_timing_seconds": {
+    "real": 264.04,
+    "sys": 3.23,
+    "user": 8.45
+  },
+  "os": "talos",
+  "run_id": "talos-2",
+  "schema": "openkubes.ok128.provisioning-benchmark/v1",
+  "source": {
+    "ok-cluster": {
+      "branch": "feature/ok-128-provisioning-benchmark",
+      "clean": true,
+      "path": "/Users/arash/temp/kubernauts/ok/ok-cluster",
+      "pushed": true,
+      "revision": "0f4f5ff046d119aa5be346fb438b32e4f07af374"
+    },
+    "ok-linux": {
+      "branch": "feature/ok-130-talos-golden-image",
+      "clean": true,
+      "path": "/Users/arash/temp/kubernauts/ok/ok-linux",
+      "pushed": true,
+      "revision": "97c36d766b6422315ee975dfb453545350ce2025"
+    }
+  },
+  "test_order": 2,
+  "timeline": {
+    "all_nodes_ready": {
+      "elapsed_seconds": 264,
+      "timestamp": "2026-07-30T17:23:07Z"
+    },
+    "api_reachable_control_plane_registered": {
+      "elapsed_seconds": 212,
+      "timestamp": "2026-07-30T17:22:15Z"
+    },
+    "capi_cluster_available": {
+      "elapsed_seconds": 265,
+      "timestamp": "2026-07-30T17:23:08Z"
+    },
+    "capi_cluster_created": {
+      "elapsed_seconds": 3,
+      "timestamp": "2026-07-30T17:18:46Z"
+    },
+    "cilium_daemonset_available": {
+      "elapsed_seconds": 259,
+      "timestamp": "2026-07-30T17:23:02Z"
+    },
+    "cilium_operator_available": {
+      "elapsed_seconds": 250,
+      "timestamp": "2026-07-30T17:22:53Z"
+    },
+    "command_completed": {
+      "elapsed_seconds": 265,
+      "timestamp": "2026-07-30T17:23:08Z"
+    },
+    "command_started": {
+      "elapsed_seconds": 0,
+      "timestamp": "2026-07-30T17:18:43Z"
+    },
+    "first_node_ready": {
+      "elapsed_seconds": 255,
+      "timestamp": "2026-07-30T17:22:58Z"
+    }
+  }
+}
