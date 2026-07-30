@@ -298,6 +298,37 @@ def main() -> int:
         and "ok-infra is not Ready and schedulable" in lifecycle_source,
         "management preflight verifies the reviewed scheduling target",
     )
+    check(
+        '"ExpandDisks" not in gates' in lifecycle_source
+        and "KubeVirt v1.8.1 must be Deployed with ExpandDisks"
+        in lifecycle_source,
+        "management preflight fails closed without KubeVirt disk expansion",
+    )
+    expand_disks_test = subprocess.run(
+        [
+            "python3",
+            str(ROOT / "scripts" / "configure_kubevirt_expand_disks.py"),
+            "--self-test",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    provider_infra = (
+        ROOT
+        / "templates"
+        / "talos-mgmt"
+        / "providers"
+        / "kubevirt"
+        / "provider-infra.sh.tpl"
+    ).read_text(encoding="utf-8")
+    check(
+        expand_disks_test.returncode == 0
+        and '--kubeconfig "$$INFRA_KUBECONFIG"' in provider_infra
+        and "configure_kubevirt_expand_disks.py" in provider_infra,
+        "management bootstrap converges ExpandDisks with a bounded helper",
+    )
 
     secret_terms = (
         "BEGIN PRIVATE KEY",

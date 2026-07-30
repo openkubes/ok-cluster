@@ -19,6 +19,14 @@ if [[ ! -f "$$INFRA_KUBECONFIG" ]]; then
   fail "ok-infra kubeconfig not found at $$INFRA_KUBECONFIG — set INFRA_KUBECONFIG_PATH"
 fi
 
+# Filesystem CDI snapshot clones retain the source disk.img virtual size.
+# KubeVirt v1.8.1 ExpandDisks grows that image to the requested PVC capacity
+# before Talos boots, so its dynamic EPHEMERAL volume can use the remainder.
+python3 "$$(dirname "$$0")/../scripts/configure_kubevirt_expand_disks.py" \
+  --kubeconfig "$$INFRA_KUBECONFIG" \
+  --apply
+ok "ok-infra KubeVirt ExpandDisks feature gate active"
+
 kubectl -n capk-system create secret generic external-infra-kubeconfig \
   --from-file=kubeconfig="$$INFRA_KUBECONFIG" \
   --dry-run=client -o yaml | kubectl apply -f -

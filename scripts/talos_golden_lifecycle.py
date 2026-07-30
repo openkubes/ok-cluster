@@ -192,6 +192,44 @@ def verify_scheduling(kubeconfig: Path) -> dict:
     }
 
 
+def verify_kubevirt(kubeconfig: Path) -> dict:
+    items = kubectl_json(
+        kubeconfig, ["get", "kubevirt.kubevirt.io", "-A"]
+    ).get("items", [])
+    if len(items) != 1:
+        raise TalosLifecycleError(
+            f"expected one KubeVirt installation, observed {len(items)}"
+        )
+    item = items[0]
+    status = item.get("status", {})
+    gates = (
+        item.get("spec", {})
+        .get("configuration", {})
+        .get("developerConfiguration", {})
+        .get("featureGates")
+        or []
+    )
+    if not isinstance(gates, list):
+        raise TalosLifecycleError(
+            "infrastructure KubeVirt featureGates must be a list"
+        )
+    if (
+        status.get("phase") != "Deployed"
+        or status.get("observedKubeVirtVersion") != "v1.8.1"
+        or status.get("targetKubeVirtVersion") != "v1.8.1"
+        or "ExpandDisks" not in gates
+    ):
+        raise TalosLifecycleError(
+            "infrastructure KubeVirt v1.8.1 must be Deployed with ExpandDisks"
+        )
+    return {
+        "namespace": item["metadata"]["namespace"],
+        "name": item["metadata"]["name"],
+        "version": "v1.8.1",
+        "expand_disks": True,
+    }
+
+
 def true_condition(resource: dict, *types: str) -> dict | None:
     status = resource.get("status", {})
     condition_sets = [status.get("conditions", [])]
@@ -326,6 +364,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
     """Record a read-only warm-provisioning result, separate from publication."""
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
+    kubevirt = verify_kubevirt(kubeconfig)
     scheduling = verify_scheduling(kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster_name = config["name"]
@@ -397,6 +436,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
         "identity": config["os"]["identity"],
         "golden": golden,
         "scheduling": scheduling,
+        "kubevirt": kubevirt,
         "started_at": started_at,
         "capi_available_at": ready_at,
         "nodes_ready_at": nodes_ready_at,
@@ -426,6 +466,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
 def preflight(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
+    kubevirt = verify_kubevirt(kubeconfig)
     scheduling = verify_scheduling(kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster = config["name"]
@@ -460,7 +501,8 @@ def preflight(args: argparse.Namespace) -> int:
             )
     print(
         f"PASS Talos Golden preflight cluster={cluster} "
-        f"node={scheduling['name']} golden_uid={golden['uid']}"
+        f"node={scheduling['name']} kubevirt={kubevirt['version']} "
+        f"expand_disks={kubevirt['expand_disks']} golden_uid={golden['uid']}"
     )
     return 0
 

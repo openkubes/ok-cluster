@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -36,6 +36,7 @@ FLATCAR_WORKLOAD_KUBECONFIG ?=
 TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
 CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
 CILIUM_CHART_SOURCE ?=
+KUBEVIRT_EXPAND_DISKS_APPLY ?= no
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -223,6 +224,15 @@ teardown-flatcar: require-cluster ## Tear down only an owned constrained Flatcar
 ok130-test: ## Offline-test the Talos Golden-Image resolver/render/lifecycle
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok130_talos_golden_test.py
+
+configure-kubevirt-expand-disks: ## Guardedly enable ExpandDisks on ok-infra (requires APPLY=yes)
+	@if [ "$(KUBEVIRT_EXPAND_DISKS_APPLY)" != "yes" ]; then \
+		echo "Refusing mutation: set KUBEVIRT_EXPAND_DISKS_APPLY=yes after approval."; \
+		exit 1; \
+	fi
+	@python3 $(SCRIPT_DIR)/scripts/configure_kubevirt_expand_disks.py \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--apply
 
 talos-golden-preflight: require-cluster ## Read-only Golden-PVC/RBAC preflight
 	@CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; print((yaml.safe_load(open(sys.argv[1])) or {}).get("type",""))' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
