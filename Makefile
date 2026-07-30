@@ -33,6 +33,7 @@ FLATCAR_CILIUM_CHART     ?=
 FLATCAR_APPLY            ?= no
 FLATCAR_TEARDOWN         ?= no
 FLATCAR_WORKLOAD_KUBECONFIG ?=
+TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -128,7 +129,7 @@ render: require-cluster
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok130-test talos-golden-preflight talos-golden-runtime-evidence
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -202,6 +203,29 @@ teardown-flatcar: require-cluster ## Tear down only an owned constrained Flatcar
 		--cluster "$(CLUSTER)" \
 		--management-kubeconfig "$(FLATCAR_INFRA_KUBECONFIG)" \
 		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
+
+ok130-test: ## Offline-test the Talos Golden-Image resolver/render/lifecycle
+	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
+		python3 $(SCRIPT_DIR)/tests/ok130_talos_golden_test.py
+
+talos-golden-preflight: require-cluster ## Read-only Golden-PVC/RBAC preflight
+	@CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; print((yaml.safe_load(open(sys.argv[1])) or {}).get("type",""))' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
+	if [ "$$CLUSTER_TYPE" = "talos" ]; then \
+		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+			--preflight \
+			--cluster "$(CLUSTER)" \
+			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+			--ok-linux-path "$(OK_LINUX_PATH)"; \
+	else \
+		echo "Skipping workload Talos Golden preflight for type=$$CLUSTER_TYPE"; \
+	fi
+
+talos-golden-runtime-evidence: require-cluster ## Record read-only warm provisioning evidence
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--runtime-evidence \
+		--cluster "$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 install: require-not-flatcar
@@ -407,6 +431,7 @@ install-observability: require-cluster kubeconfig ## Install ok-observability-st
 
 bootstrap: require-not-flatcar
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
+	@$(MAKE) --no-print-directory talos-golden-preflight CLUSTER=$(CLUSTER)
 	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml
 	@echo ""
 	@$(MAKE) --no-print-directory annotate-pvcs CLUSTER=$(CLUSTER)
@@ -486,6 +511,14 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 	fi; \
 	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
 	$(OKB) delete namespace $(CLUSTER) --ignore-not-found; \
+	HAS_TALOS_GOLDEN=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])) or {}; print(str(c.get("type") == "talos" and bool(c.get("os",{}).get("goldenImage"))).lower())' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"); \
+	if [ "$$HAS_TALOS_GOLDEN" = "true" ]; then \
+		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+			--cleanup-authorization \
+			--cluster "$(CLUSTER)" \
+			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+			--ok-linux-path "$(OK_LINUX_PATH)"; \
+	fi; \
 	echo "Removing local cluster directory..."; \
 	rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
 	if [ -n "$$PVS" ]; then \

@@ -1,0 +1,30 @@
+name: ok130-talos
+type: talos
+provider: kubevirt
+controlPlane:
+  replicas: 1
+  cores: 2
+  memory: 4Gi
+  disk: 20Gi
+workers:
+  replicas: 1
+  cores: 2
+  memory: 4Gi
+  disk: 20Gi
+versions:
+  kubernetes: v1.34.1
+  talos: v1.9.5
+os:
+  distribution: ok-linux
+  profile: kubevirt
+  schematic_id: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+network:
+  endpoint: 192.168.100.249
+  podCIDR: 10.63.0.0/16
+  serviceCIDR: 10.111.0.0/20
+nodeSelector: ok-infra
+upgrade:
+  strategy: blue-green
+  workloadMigration:
+    stateless: gitops
+    stateful: app-native

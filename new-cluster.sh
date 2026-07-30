@@ -45,10 +45,14 @@ if [[ -z "$CLUSTER" ]]; then
   exit 1
 fi
 
-# Talos requires a nodeSelector for local-path PVC binding
-if [[ "$TYPE" == talos* && -z "$NODE_SELECTOR" ]]; then
+# The OK-130 Talos Golden Image and its clones use ok-storage-block on ok-infra.
+if [[ "$TYPE" == "talos" && -z "$NODE_SELECTOR" ]]; then
+  NODE_SELECTOR="ok-infra"
+  echo "  INFO: Talos KubeVirt Golden-Image path defaults to ok-infra"
+fi
+if [[ "$TYPE" == "talos-mgmt" && -z "$NODE_SELECTOR" ]]; then
   NODE_SELECTOR="ok-gpu"
-  echo "  INFO: Talos requires nodeSelector for PVC binding, defaulting to ok-gpu"
+  echo "  INFO: Talos management path defaults to ok-gpu"
 fi
 if [[ "$TYPE" == "flatcar" && -z "$NODE_SELECTOR" ]]; then
   NODE_SELECTOR="ok-infra"
