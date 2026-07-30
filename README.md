@@ -358,6 +358,17 @@ replacement-only Day-2 convergence without SSH or guest mutation.
 See [Constrained Flatcar Cluster](#constrained-flatcar-cluster) for the
 canonical scaffold, preflight, install, and verified-runtime procedure.
 
+### Flatcar/Talos provisioning benchmark
+
+The guarded OK-128 observer measures the exact supported `install-flatcar`
+and `bootstrap` targets without owning either lifecycle. It verifies the
+pinned local Cilium chart before timing, records a nine-point Kubernetes
+timeline plus sanitized raw evidence, rejects non-comparable or overlapping
+runs, and keeps cold Golden-Image publication outside warm provisioning time.
+See the
+[controlled benchmark runbook](docs/adoption/OK-128/benchmark-runbook.md);
+live targets require explicit Runtime GO and `OK128_BENCHMARK_APPLY=yes`.
+
 ---
 
 ## Templating System

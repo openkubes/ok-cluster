@@ -37,6 +37,18 @@ TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
 CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
 CILIUM_CHART_SOURCE ?=
 KUBEVIRT_EXPAND_DISKS_APPLY ?= no
+OK128_BENCHMARK_APPLY ?= no
+OK128_OS ?=
+OK128_MANAGEMENT_KUBECONFIG ?=
+OK128_WORKLOAD_KUBECONFIG ?=
+OK128_OUTPUT_DIR ?=
+OK128_RUN_ID ?=
+OK128_TEST_ORDER ?=
+OK128_FLATCAR_EVIDENCE ?=
+OK128_TALOS_EVIDENCE ?=
+OK128_GOLDEN_NAMESPACE ?= ok-images
+OK128_GOLDEN_CLAIM ?=
+OK128_GOLDEN_UID ?=
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -146,7 +158,7 @@ cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok130-test talos-golden-preflight talos-golden-runtime-evidence
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test talos-golden-preflight talos-golden-runtime-evidence
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -220,6 +232,104 @@ teardown-flatcar: require-cluster ## Tear down only an owned constrained Flatcar
 		--cluster "$(CLUSTER)" \
 		--management-kubeconfig "$(FLATCAR_INFRA_KUBECONFIG)" \
 		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
+
+ok128-benchmark-test: ## Offline-test the OK-128 observer and comparison gates
+	@PYTHONDONTWRITEBYTECODE=1 \
+		python3 $(SCRIPT_DIR)/tests/ok128_provisioning_benchmark_test.py
+
+ok128-benchmark-preflight: require-cluster ## Read-only OK-128 envelope/source/Golden/load preflight
+	@test "$(OK128_OS)" = "flatcar" -o "$(OK128_OS)" = "talos" || \
+		(echo "ERROR: OK128_OS must be flatcar or talos"; exit 1)
+	@test -n "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		-a -n "$(OK128_WORKLOAD_KUBECONFIG)" || \
+		(echo "ERROR: explicit OK128 management/workload kubeconfig paths are required"; exit 1)
+	@python3 $(SCRIPT_DIR)/scripts/provisioning_benchmark.py preflight \
+		--os "$(OK128_OS)" \
+		--cluster "$(CLUSTER)" \
+		--management-kubeconfig "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		--workload-kubeconfig "$(OK128_WORKLOAD_KUBECONFIG)" \
+		--cilium-chart "$(CILIUM_CHART)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"
+
+ok128-benchmark-flatcar: require-cluster ## Observe exact install-flatcar lifecycle (requires runtime GO)
+	@test -n "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		-a -n "$(OK128_WORKLOAD_KUBECONFIG)" \
+		-a -n "$(OK128_OUTPUT_DIR)" \
+		-a -n "$(OK128_RUN_ID)" \
+		-a -n "$(OK128_TEST_ORDER)" || \
+		(echo "ERROR: explicit OK128 management/workload kubeconfig, output, run ID, and order are required"; exit 1)
+	@OK128_BENCHMARK_APPLY="$(OK128_BENCHMARK_APPLY)" \
+		python3 $(SCRIPT_DIR)/scripts/provisioning_benchmark.py run \
+		--os flatcar \
+		--cluster "$(CLUSTER)" \
+		--management-kubeconfig "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		--workload-kubeconfig "$(OK128_WORKLOAD_KUBECONFIG)" \
+		--cilium-chart "$(CILIUM_CHART)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" \
+		--output-dir "$(OK128_OUTPUT_DIR)" \
+		--run-id "$(OK128_RUN_ID)" \
+		--test-order "$(OK128_TEST_ORDER)" \
+		-- make --no-print-directory install-flatcar \
+			CLUSTER="$(CLUSTER)" \
+			FLATCAR_INFRA_KUBECONFIG="$(OK128_MANAGEMENT_KUBECONFIG)" \
+			FLATCAR_WORKLOAD_KUBECONFIG="$(OK128_WORKLOAD_KUBECONFIG)" \
+			FLATCAR_CILIUM_CHART="$(CILIUM_CHART)" \
+			FLATCAR_APPLY=yes
+
+ok128-benchmark-talos: require-cluster ## Observe exact bootstrap lifecycle (requires runtime GO)
+	@test -n "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		-a -n "$(OK128_WORKLOAD_KUBECONFIG)" \
+		-a -n "$(OK128_OUTPUT_DIR)" \
+		-a -n "$(OK128_RUN_ID)" \
+		-a -n "$(OK128_TEST_ORDER)" || \
+		(echo "ERROR: explicit OK128 management/workload kubeconfig, output, run ID, and order are required"; exit 1)
+	@test "$$(cd "$$(dirname "$(OK128_MANAGEMENT_KUBECONFIG)")" && pwd)/$$(basename "$(OK128_MANAGEMENT_KUBECONFIG)")" = \
+		"$$(cd "$(HOME)/.kube" && pwd)/ok-infra.yaml" || \
+		(echo "ERROR: bootstrap currently consumes $(HOME)/.kube/ok-infra.yaml; benchmark path must match"; exit 1)
+	@test "$$(cd "$$(dirname "$(OK128_WORKLOAD_KUBECONFIG)")" && pwd)/$$(basename "$(OK128_WORKLOAD_KUBECONFIG)")" = \
+		"$$(cd "$(HOME)/.kube" && pwd)/$(CLUSTER).yaml" || \
+		(echo "ERROR: bootstrap writes $(HOME)/.kube/$(CLUSTER).yaml; benchmark path must match"; exit 1)
+	@OK128_BENCHMARK_APPLY="$(OK128_BENCHMARK_APPLY)" \
+		python3 $(SCRIPT_DIR)/scripts/provisioning_benchmark.py run \
+		--os talos \
+		--cluster "$(CLUSTER)" \
+		--management-kubeconfig "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		--workload-kubeconfig "$(OK128_WORKLOAD_KUBECONFIG)" \
+		--cilium-chart "$(CILIUM_CHART)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" \
+		--output-dir "$(OK128_OUTPUT_DIR)" \
+		--run-id "$(OK128_RUN_ID)" \
+		--test-order "$(OK128_TEST_ORDER)" \
+		-- make --no-print-directory bootstrap \
+			CLUSTER="$(CLUSTER)" \
+			CILIUM_CHART="$(CILIUM_CHART)" \
+			TALOS_INFRA_KUBECONFIG="$(OK128_MANAGEMENT_KUBECONFIG)"
+
+ok128-benchmark-compare: ## Emit observed-only Markdown/CSV from two sanitized runs
+	@test -n "$(OK128_FLATCAR_EVIDENCE)" \
+		-a -n "$(OK128_TALOS_EVIDENCE)" \
+		-a -n "$(OK128_OUTPUT_DIR)" || \
+		(echo "ERROR: explicit Flatcar/Talos evidence and output paths are required"; exit 1)
+	@python3 $(SCRIPT_DIR)/scripts/provisioning_benchmark.py compare \
+		--flatcar "$(OK128_FLATCAR_EVIDENCE)" \
+		--talos "$(OK128_TALOS_EVIDENCE)" \
+		--output-dir "$(OK128_OUTPUT_DIR)"
+
+ok128-benchmark-cleanup-verify: require-cluster ## Read-only cleanup/Golden-PVC preservation evidence
+	@test -n "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		-a -n "$(OK128_OUTPUT_DIR)" \
+		-a -n "$(OK128_RUN_ID)" \
+		-a -n "$(OK128_GOLDEN_CLAIM)" \
+		-a -n "$(OK128_GOLDEN_UID)" || \
+		(echo "ERROR: explicit management, output, run ID, Golden claim and UID are required"; exit 1)
+	@python3 $(SCRIPT_DIR)/scripts/provisioning_benchmark.py verify-cleanup \
+		--cluster "$(CLUSTER)" \
+		--management-kubeconfig "$(OK128_MANAGEMENT_KUBECONFIG)" \
+		--golden-namespace "$(OK128_GOLDEN_NAMESPACE)" \
+		--golden-claim "$(OK128_GOLDEN_CLAIM)" \
+		--golden-uid "$(OK128_GOLDEN_UID)" \
+		--run-id "$(OK128_RUN_ID)" \
+		--output-dir "$(OK128_OUTPUT_DIR)"
 
 ok130-test: ## Offline-test the Talos Golden-Image resolver/render/lifecycle
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
