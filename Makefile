@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -34,6 +34,8 @@ FLATCAR_APPLY            ?= no
 FLATCAR_TEARDOWN         ?= no
 FLATCAR_WORKLOAD_KUBECONFIG ?=
 TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
+CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
+CILIUM_CHART_SOURCE ?=
 
 # ── observability (OK-79) ─────────────────────────────────────────────────────
 # ok-cluster INSTALLS ok-observability, it does not OWN it — assets come from the
@@ -126,6 +128,20 @@ new: require-cluster require-type
 
 render: require-cluster
 	@START_IP=$(START_IP) python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
+
+prepare-cilium-chart: ## Download/verify pinned Cilium 1.19.6 into .tools
+	@python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
+		--cache "$(CILIUM_CHART)" \
+		$(if $(CILIUM_CHART_SOURCE),--source "$(CILIUM_CHART_SOURCE)")
+
+verify-cilium-chart: ## Offline-verify an existing pinned Cilium chart
+	@python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
+		--verify-only \
+		--cache "$(CILIUM_CHART)"
+
+cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
+	@PYTHONDONTWRITEBYTECODE=1 \
+		python3 $(SCRIPT_DIR)/tests/cilium_chart_tool_test.py
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
@@ -293,11 +309,11 @@ install-cni: require-cluster kubeconfig
 			fi ;; \
 		esac; \
 	fi; \
-	helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true; \
-	helm repo update cilium 2>/dev/null; \
 	if [ "$$CLUSTER_TYPE" = "talos" ] || [ "$$CLUSTER_TYPE" = "talos-mgmt" ]; then \
+		python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
+			--verify-only --cache "$(CILIUM_CHART)"; \
 		echo "  Using Talos values (KubePrism localhost:7445, cgroup hostRoot, agent capabilities)"; \
-		helm upgrade --install cilium cilium/cilium \
+		helm upgrade --install cilium "$(CILIUM_CHART)" \
 			--kubeconfig ~/.kube/$(CLUSTER).yaml \
 			--namespace kube-system \
 			--set operator.replicas=1 \
@@ -313,6 +329,8 @@ install-cni: require-cluster kubeconfig
 			--set cgroup.autoMount.enabled=false \
 			--set cgroup.hostRoot=/sys/fs/cgroup; \
 	else \
+		helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true; \
+		helm repo update cilium 2>/dev/null; \
 		CLUSTER_CP_IP=$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'); \
 		echo "  Control plane IP: $$CLUSTER_CP_IP"; \
 		helm upgrade --install cilium cilium/cilium \
@@ -775,18 +793,22 @@ help:
 	@echo "  make install CLUSTER=ok1   # apply + wait for Ready + install Cilium"
 	@echo ""
 	@echo "── Talos Workflow ───────────────────────────────────────────────────"
+	@echo "  make prepare-cilium-chart       # pinned .tools/cilium-1.19.6.tgz"
 	@echo "  make new       CLUSTER=ok-ai TYPE=talos [WORKERS=2] [K8S_VERSION=v1.36.2] [TALOS_VERSION=v1.13.4]"
 	@echo "  make bootstrap CLUSTER=ok-ai   # apply + annotate PVCs + Cilium CNI"
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo ""
 	@echo "── Constrained Flatcar Workflow (ADR-009) ───────────────────────────"
+	@echo "  make prepare-cilium-chart"
 	@echo "  make new CLUSTER=ok-flatcar TYPE=flatcar"
-	@echo "  make flatcar-preflight CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<local-chart>"
-	@echo "  make install-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=<local-chart> FLATCAR_APPLY=yes"
+	@echo "  make flatcar-preflight CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=$(CILIUM_CHART)"
+	@echo "  make install-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=$(CILIUM_CHART) FLATCAR_APPLY=yes"
 	@echo "  make teardown-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes"
 	@echo "  Envelope: Flatcar 4593.2.4, amd64, KubeVirt, Kubernetes v1.34.1, 1 CP + 1 worker"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
+	@echo "  make prepare-cilium-chart [CILIUM_CHART_SOURCE=<predownloaded.tgz>]"
+	@echo "  make verify-cilium-chart"
 	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"

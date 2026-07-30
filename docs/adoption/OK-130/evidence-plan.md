@@ -42,3 +42,18 @@ CLUSTER=<name>` records the namespace-to-CAPI-Available interval as
 `mode: warm-provisioning`. It also proves every runtime boot DataVolume cloned
 the same Golden PVC and records `public_import_count: 0`. This evidence is
 kept separate from `ok-linux`'s one-time `mode: cold-publication` timing.
+
+The pinned Cilium chart must be acquired before starting the comparable warm
+provisioning timer:
+
+```bash
+make prepare-cilium-chart
+make verify-cilium-chart
+```
+
+Talos `install-cni` re-verifies and installs that local chart rather than
+updating a Helm repository during provisioning. Flatcar consumes the same
+bytes only through its still-explicit
+`FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz"` input. This keeps
+chart acquisition outside both OK-128 timing windows without merging Talos
+and Flatcar lifecycle semantics.
