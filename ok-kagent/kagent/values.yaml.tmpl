@@ -1,0 +1,62 @@
+# Cluster-specific values for the standalone OK-129 lab.
+# OLLAMA_URL is rendered locally into the Git-ignored .values.local.yaml.
+registry: ghcr.io
+
+providers:
+  default: ollama
+  ollama:
+    provider: Ollama
+    model: gpt-oss:20b
+    config:
+      host: ${OLLAMA_URL}
+      options:
+        num_ctx: "32768"
+
+rbac:
+  # P1 starts cluster-scoped so the built-in Kubernetes tool can be evaluated.
+  # Namespaced RBAC and the resulting failure modes are exercised in P4.
+  namespaces: []
+
+controller:
+  replicas: 1
+  auth:
+    mode: unsecure
+
+database:
+  postgres:
+    vectorEnabled: false
+    bundled:
+      enabled: true
+      storage: 500Mi
+
+kmcp:
+  enabled: true
+
+kagent-tools:
+  enabled: true
+
+# Minimal profile: no demo agents or optional MCP integrations.
+k8s-agent:
+  enabled: false
+kgateway-agent:
+  enabled: false
+istio-agent:
+  enabled: false
+promql-agent:
+  enabled: false
+observability-agent:
+  enabled: false
+argo-rollouts-agent:
+  enabled: false
+helm-agent:
+  enabled: false
+cilium-policy-agent:
+  enabled: false
+cilium-manager-agent:
+  enabled: false
+cilium-debug-agent:
+  enabled: false
+grafana-mcp:
+  enabled: false
+querydoc:
+  enabled: false

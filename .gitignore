@@ -37,3 +37,4 @@ ok-flatcar.yaml
 /ok-kagent/cluster-base.yaml
 /ok-kagent/cluster-v2.yaml
 /ok-kagent/cluster-config.local.yaml
+/ok-kagent/kagent/.values.local.yaml
