@@ -3,6 +3,8 @@
 The `ok-linux` `kubevirt` profile owns the exact Talos artifact identity and
 publication PVC. This repository consumes only the materialized identity.
 Flatcar profile semantics and the shared OS capability contract are unchanged.
+The completed live result is recorded in
+[runtime-acceptance-record.md](runtime-acceptance-record.md).
 
 ## Offline acceptance
 
