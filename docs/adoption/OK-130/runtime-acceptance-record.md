@@ -143,3 +143,57 @@ The v1.9.6 replacement source is on
 `ok-cluster`. The owning `ok-linux` pin is commit `b499694`; final
 `ok-cluster` commit IDs are intentionally not self-referenced from this
 record.
+
+## Post-merge v1.9.6 warm replay
+
+On 2026-07-30, an operator repeated the supported bootstrap from the merged
+source state:
+
+- `ok-linux/main`: `d5b4ded111ed00893016465874126e1a7a5ba80e`
+- `ok-cluster/main`: `aab8a754dbb246fc0c4fa7e370955ab06d968cb1`
+- cluster: `ok130-talos-replacement`
+- one control-plane and one worker, scheduled on `ok-infra`
+- Talos `v1.9.6`, Kubernetes `v1.34.1`
+- local Cilium `1.19.6` chart SHA-256:
+  `21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179`
+
+The Golden preflight passed with KubeVirt `v1.8.1`, `ExpandDisks` active and
+Golden PVC UID `60b69267-e507-416a-b5a8-835bb0232ce6`. Both boot DataVolumes
+cloned the immutable v1.9.6 Golden PVC and reached `Succeeded`.
+
+| Observation | Result |
+|---|---:|
+| Namespace to CAPI Available | 282.000 s |
+| Namespace to all Nodes Ready | 286.000 s |
+| Bootstrap command wall time | 288.820 s |
+| Public image imports | 0 |
+| Ready Cilium agents | 2/2 |
+| Ready Cilium operators | 1 |
+
+The manually invoked evidence capture completed at 531.219 seconds after
+namespace creation because the operator ran it after the workload smoke test.
+That delayed capture timestamp is not treated as Cilium convergence time. The
+bootstrap command had already installed Cilium and waited for both Nodes
+before completing at 288.820 seconds. The command's wall time is therefore
+the bounded end-to-end result for this replay.
+
+Both Nodes reported `Talos (v1.9.6)`, kernel `6.12.25-talos`, containerd
+`2.0.5` and distinct `kubevirt://` ProviderIDs. Cilium, Cilium Envoy, CoreDNS
+and all control-plane components were Running. An nginx workload and an
+ephemeral curl client then proved image pull, scheduling, DNS, Cilium
+pod-to-service networking and ClusterIP routing. The nginx response was
+received successfully, and both smoke resources were removed.
+
+Pod Security emitted `restricted:latest` warnings for the deliberately
+minimal smoke manifests; the namespace was in warning rather than enforcement
+mode. These warnings do not change the networking result and must not be used
+as an example of a production security context.
+
+The sanitized evidence passed with schema version 1, mode
+`warm-provisioning`, two boot DataVolumes, the reviewed Golden digest and
+identity, `public_import_count: 0`, and `secret_values_recorded: false`. The
+raw local evidence remains intentionally excluded by
+`docs/adoption/OK-130/.gitignore`.
+
+The cluster was still running when this replay record was written. Cleanup is
+therefore not claimed by this section.
