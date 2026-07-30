@@ -272,6 +272,14 @@ def main() -> int:
         "cleanup targets exact clone RBAC and re-verifies the Golden PVC",
     )
     check(
+        '"cdi.kubevirt.io/OwnedByUID"' in lifecycle_source
+        and "cluster-owned CDI snapshot source is invalid" in lifecycle_source
+        and '--data-volume-uids "$$DV_UIDS"' in (
+            ROOT / "Makefile"
+        ).read_text(encoding="utf-8"),
+        "cleanup binds temporary CDI snapshots to exact DataVolume UIDs",
+    )
+    check(
         '"mode": "warm-provisioning"' in lifecycle_source
         and '"public_import_count": 0' in lifecycle_source
         and '"mutation_attempted": False' in lifecycle_source,

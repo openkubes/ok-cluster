@@ -35,7 +35,9 @@ The OK-130 test proves:
 authorization. Live publication, bootstrap and teardown require separate user
 approval. Teardown removes the consumer Role/RoleBinding after the consumer
 namespace and verifies that the shared Golden PVC retains its UID, digest and
-identity.
+identity. It captures the consumer DataVolume UIDs before deletion and removes
+only CDI temporary snapshots in `ok-images` that carry one of those exact UIDs
+and reference the expected Golden PVC.
 
 After an approved cluster run, `make talos-golden-runtime-evidence
 CLUSTER=<name>` records separate namespace-to-CAPI-Available,

@@ -511,6 +511,7 @@ clean: require-not-flatcar
 teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses teardown-flatcar)
 	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
 	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
+	DV_UIDS=$$($(OKB) get datavolumes -n $(CLUSTER) -o jsonpath='{range .items[*]}{.metadata.uid}{","}{end}' 2>/dev/null); \
 	if [ -n "$$PVS" ]; then \
 		echo "  VM disks use ok-storage-* (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
 		echo "$$PVS" | sed 's/^/    /'; \
@@ -537,7 +538,8 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 			--cleanup-authorization \
 			--cluster "$(CLUSTER)" \
 			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
-			--ok-linux-path "$(OK_LINUX_PATH)"; \
+			--ok-linux-path "$(OK_LINUX_PATH)" \
+			--data-volume-uids "$$DV_UIDS"; \
 	fi; \
 	echo "Removing local cluster directory..."; \
 	rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \

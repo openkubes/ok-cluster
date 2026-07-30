@@ -504,11 +504,62 @@ def cleanup_authorization(args: argparse.Namespace) -> int:
                 authorization,
             ],
         )
+    data_volume_uids = {
+        value for value in args.data_volume_uids.split(",") if value
+    }
+    removed_snapshots = []
+    if data_volume_uids:
+        snapshots = kubectl_json(
+            kubeconfig,
+            ["-n", golden_namespace, "get", "volumesnapshots"],
+        ).get("items", [])
+        for snapshot in snapshots:
+            metadata = snapshot.get("metadata", {})
+            labels = metadata.get("labels", {})
+            if labels.get("cdi.kubevirt.io/OwnedByUID") not in data_volume_uids:
+                continue
+            if (
+                labels.get("app") != "containerized-data-importer"
+                or snapshot.get("spec", {})
+                .get("source", {})
+                .get("persistentVolumeClaimName")
+                != config["os"]["goldenImage"]["claim"]
+            ):
+                raise TalosLifecycleError(
+                    "cluster-owned CDI snapshot source is invalid"
+                )
+            name = metadata["name"]
+            kubectl(
+                kubeconfig,
+                [
+                    "-n",
+                    golden_namespace,
+                    "delete",
+                    "volumesnapshot",
+                    name,
+                ],
+            )
+            removed_snapshots.append(name)
+        remaining = kubectl_json(
+            kubeconfig,
+            ["-n", golden_namespace, "get", "volumesnapshots"],
+        ).get("items", [])
+        if any(
+            item.get("metadata", {})
+            .get("labels", {})
+            .get("cdi.kubevirt.io/OwnedByUID")
+            in data_volume_uids
+            for item in remaining
+        ):
+            raise TalosLifecycleError(
+                "cluster-owned CDI snapshots remain after cleanup"
+            )
     after = verify_golden(config, kubeconfig)
     if after != before:
         raise TalosLifecycleError("shared Talos Golden PVC changed on cleanup")
     print(
         f"PASS removed {golden_namespace}/{authorization}; "
+        f"removed_snapshots={len(removed_snapshots)} "
         f"preserved golden_uid={after['uid']}"
     )
     return 0
@@ -525,6 +576,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ok-linux-path", required=True)
     parser.add_argument("--workload-kubeconfig")
     parser.add_argument("--cilium-chart")
+    parser.add_argument("--data-volume-uids", default="")
     return parser.parse_args()
 
 
