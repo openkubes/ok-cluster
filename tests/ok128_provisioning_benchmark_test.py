@@ -118,13 +118,13 @@ def main() -> int:
             "replicas": 1,
             "cores": 2,
             "memory": "4Gi",
-            "disk": "20Gi",
+            "disk": "50Gi",
         },
         "workers": {
             "replicas": 1,
             "cores": 2,
             "memory": "4Gi",
-            "disk": "20Gi",
+            "disk": "50Gi",
         },
         "nodeSelector": "ok-infra",
     }

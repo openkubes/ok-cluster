@@ -6,8 +6,9 @@ not change. Talos and ADR-Platform-016 remain unchanged.
 
 ## Contract and acceptance gates
 
-1. `ok-linux` profile revision 4 owns the exact `ok-storage-block` Longhorn,
-   RWO filesystem, `Retain`/`Immediate`, expansion and `ExpandDisks` contract.
+1. `ok-linux` profile revision 5 owns the exact `ok-storage-block` Longhorn,
+   50 GiB RWO filesystem, `Retain`/`Immediate`, expansion and `ExpandDisks`
+   contract.
    Revisions 2 and 3 remain reserved by the historical OK-125 replacement
    evidence.
 2. The `ok-cluster` resolver rejects `local-path` and every other override.
@@ -66,12 +67,11 @@ make flatcar-preflight CLUSTER=ok135-flatcar \
 
 After explicit Runtime GO, run `install-flatcar`, verify one Ready CP and one
 Ready worker, Cilium, DataVolume source/phase, PVC/PV StorageClass, requested
-and guest disk capacity, Longhorn volume identity, and absence of credentials
-in manifests/evidence. Repeat with an explicitly supported disk-size case only
-if the constrained envelope is deliberately expanded and reviewed.
+and 50 GiB guest disk capacity, Longhorn volume identity, and absence of
+credentials in manifests/evidence.
 
 For the fair warm replay, run the OK-128 observer sequentially for Flatcar and
-Talos with identical 1+1, CPU, memory, 20 GiB, Cilium and
+Talos with identical 1+1, CPU, memory, 50 GiB, Cilium and
 `ok-storage-block` inputs. Record both durations as observations, not an SLO;
 cold Golden publication remains excluded.
 

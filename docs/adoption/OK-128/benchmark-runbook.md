@@ -9,7 +9,7 @@ Results are single-run observations and must not be presented as an SLO.
 
 - KubeVirt, `amd64`, Kubernetes `v1.34.1`
 - one control-plane and one worker VM
-- 2 vCPU, 4 GiB RAM, and 20 GiB disk per VM
+- 2 vCPU, 4 GiB RAM, and 50 GiB disk per VM
 - scheduling node `ok-infra`; both shared Golden PVCs and both operating
   systems' clone targets are on `ok-storage-block`
 - Cilium chart `1.19.6`, SHA-256
@@ -20,7 +20,7 @@ Results are single-run observations and must not be presented as an SLO.
 The evidence already recorded in this directory predates OK-135 and remains a
 historical comparison of Flatcar `local-path` against Talos
 `ok-storage-block`; it must not be relabelled as storage-identical. A new fair
-replay uses Flatcar profile revision 4 and the fixed envelope above.
+replay uses Flatcar profile revision 5 and the fixed envelope above.
 
 The benchmark records the exact repository revisions, input file digests,
 Golden-Image identity, node versions, management load before/after, command

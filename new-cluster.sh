@@ -25,13 +25,17 @@ PROVIDER="${PROVIDER:-kubevirt}"
 ARCHITECTURE="${ARCHITECTURE:-amd64}"
 CP_CORES="${CP_CORES:-2}"
 CP_MEMORY="${CP_MEMORY:-4Gi}"
-CP_DISK="${CP_DISK:-20Gi}"
+if [[ "$TYPE" == "flatcar" ]]; then
+  CP_DISK="${CP_DISK:-50Gi}"
+else
+  CP_DISK="${CP_DISK:-20Gi}"
+fi
 WORKER_CORES="${WORKER_CORES:-2}"
 WORKER_MEMORY="${WORKER_MEMORY:-4Gi}"
 WORKER_DISK="${WORKER_DISK:-}"
 if [[ -z "$WORKER_DISK" ]]; then
   if [[ "$TYPE" == "flatcar" ]]; then
-    WORKER_DISK="20Gi"
+    WORKER_DISK="50Gi"
   else
     WORKER_DISK="15Gi"
   fi
