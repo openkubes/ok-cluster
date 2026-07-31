@@ -164,11 +164,14 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
 
     identity = cfg["os"]["identity"]
     identity_short = identity.removeprefix("sha256:")[:12]
+    template_identity = (
+        f"{identity_short}-r{cfg['os']['profileRevision']}"
+    )
     machine_templates = by_kind(docs, "KubevirtMachineTemplate")
     check(
         len(machine_templates) == 2
         and all(
-            template["metadata"]["name"].endswith(identity_short)
+            template["metadata"]["name"].endswith(template_identity)
             and template["metadata"]["labels"][
                 "openkubes.io/profile-revision"
             ]
@@ -203,7 +206,7 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
     worker = by_kind(docs, "KubeadmConfigTemplate")[0]
     machine_deployment = by_kind(docs, "MachineDeployment")[0]
     check(
-        worker["metadata"]["name"].endswith(identity_short)
+        worker["metadata"]["name"].endswith(template_identity)
         and machine_deployment["spec"]["template"]["spec"]["bootstrap"][
             "configRef"
         ]["name"]
@@ -396,7 +399,7 @@ def validate_manifest(manifest: Path, cfg: dict) -> None:
     check(
         machine_deployment["spec"]["template"]["spec"]["infrastructureRef"][
             "name"
-        ].endswith(identity_short),
+        ].endswith(template_identity),
         "worker lifecycle references the identity-bound infrastructure template",
     )
 

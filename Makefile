@@ -160,7 +160,7 @@ cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test ok135-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -206,6 +206,8 @@ ok125-cleanup: ## Delete only the owned disposable OK-125 runtime
 flatcar-promotion-test: ## Offline-test the exact ordinary Flatcar profile
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/flatcar_promotion_test.py
+
+ok135-test: flatcar-promotion-test ok128-benchmark-test ## Offline-test Flatcar Longhorn clone contract
 
 flatcar-preflight: require-cluster ## Read-only production Flatcar preflight
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \

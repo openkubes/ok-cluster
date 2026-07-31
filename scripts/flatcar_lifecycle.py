@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from profile_resolvers.flatcar import (  # noqa: E402
+    EXPECTED_CLONE_TARGET,
     EXPECTED_PROFILE,
     resolve_flatcar_config,
     validate_cluster_name,
@@ -434,13 +435,94 @@ def management_preflight(
             f"expected one KubeVirt installation, observed {len(kubevirt_items)}"
         )
     kubevirt_status = kubevirt_items[0].get("status", {})
+    kubevirt_gates = (
+        kubevirt_items[0]
+        .get("spec", {})
+        .get("configuration", {})
+        .get("developerConfiguration", {})
+        .get("featureGates", [])
+    )
     if (
         kubevirt_status.get("phase") != "Deployed"
         or kubevirt_status.get("observedKubeVirtVersion") != "v1.8.1"
         or kubevirt_status.get("targetKubeVirtVersion") != "v1.8.1"
+        or kubevirt_gates != EXPECTED_CLONE_TARGET["kubevirt_feature_gates"]
     ):
         raise FlatcarLifecycleError(
-            "management KubeVirt must be deployed at exact version v1.8.1"
+            "management KubeVirt must be v1.8.1 with only ExpandDisks enabled"
+        )
+
+    storage_class = kubectl_json(
+        kubectl_bin,
+        paths["management"],
+        ["get", "storageclass", EXPECTED_CLONE_TARGET["storage_class"]],
+    )
+    observed_storage = {
+        "provisioner": storage_class.get("provisioner"),
+        "reclaim_policy": storage_class.get("reclaimPolicy"),
+        "volume_binding_mode": storage_class.get("volumeBindingMode"),
+        "allow_volume_expansion": storage_class.get("allowVolumeExpansion"),
+    }
+    expected_storage = {
+        key: EXPECTED_CLONE_TARGET[key]
+        for key in observed_storage
+    }
+    if observed_storage != expected_storage:
+        raise FlatcarLifecycleError(
+            f"clone-target StorageClass contract mismatch: {observed_storage}"
+        )
+
+    snapshot_classes = kubectl_json(
+        kubectl_bin,
+        paths["management"],
+        ["get", "volumesnapshotclass"],
+    ).get("items", [])
+    snapshot_class = next(
+        (
+            item
+            for item in snapshot_classes
+            if item.get("metadata", {}).get("name")
+            == "ok-storage-block-snapshot"
+        ),
+        None,
+    )
+    if (
+        snapshot_class is None
+        or snapshot_class.get("driver") != EXPECTED_CLONE_TARGET["provisioner"]
+        or snapshot_class.get("deletionPolicy") != "Delete"
+        or snapshot_class.get("parameters") != {"type": "snap"}
+    ):
+        raise FlatcarLifecycleError(
+            "ok-storage-block-snapshot must be the Longhorn Delete/snap class"
+        )
+
+    storage_profile = kubectl_json(
+        kubectl_bin,
+        paths["management"],
+        [
+            "get",
+            "storageprofile.cdi.kubevirt.io",
+            EXPECTED_CLONE_TARGET["storage_class"],
+        ],
+    ).get("status", {})
+    if (
+        storage_profile.get("provisioner")
+        != EXPECTED_CLONE_TARGET["provisioner"]
+        or storage_profile.get("storageClass")
+        != EXPECTED_CLONE_TARGET["storage_class"]
+        or storage_profile.get("snapshotClass")
+        != "ok-storage-block-snapshot"
+        or storage_profile.get("cloneStrategy") != "snapshot"
+        or storage_profile.get("claimPropertySets")
+        != [
+            {
+                "accessModes": [EXPECTED_CLONE_TARGET["access_mode"]],
+                "volumeMode": EXPECTED_CLONE_TARGET["volume_mode"],
+            }
+        ]
+    ):
+        raise FlatcarLifecycleError(
+            "CDI ok-storage-block profile is not the expected snapshot clone path"
         )
 
     for expected_deployment in GATE_DEPLOYMENTS:
@@ -851,17 +933,97 @@ def teardown(
         management,
         ["get", "persistentvolume"],
     ).get("items", [])
-    owned_pvs = sorted(
-        item["metadata"]["name"]
+    owned_pv_objects = [
+        item
         for item in pvs
         if item.get("spec", {}).get("claimRef", {}).get("namespace") == cluster
+    ]
+    invalid_pvs = [
+        item.get("metadata", {}).get("name", "<unnamed>")
+        for item in owned_pv_objects
+        if (
+            item.get("spec", {}).get("storageClassName")
+            != EXPECTED_CLONE_TARGET["storage_class"]
+            or item.get("spec", {}).get("csi", {}).get("driver")
+            != EXPECTED_CLONE_TARGET["provisioner"]
+            or item.get("spec", {}).get("csi", {}).get("volumeHandle")
+            != item.get("metadata", {}).get("name")
+            or not item.get("spec", {}).get("claimRef", {}).get("name")
+        )
+    ]
+    if invalid_pvs:
+        raise FlatcarLifecycleError(
+            f"refusing cleanup: non-profile PVs are cluster-bound: {invalid_pvs}"
+        )
+    owned_pvs = sorted(
+        item["metadata"]["name"] for item in owned_pv_objects
     )
+    data_volumes = kubectl_json(
+        kubectl_bin,
+        management,
+        ["-n", cluster, "get", "datavolumes"],
+    ).get("items", [])
+    golden_source = config["os"]["goldenImage"]
+    expected_source = {
+        "pvc": {
+            "namespace": golden_source["namespace"],
+            "name": golden_source["claim"],
+        }
+    }
+    invalid_data_volumes = [
+        item.get("metadata", {}).get("name", "<unnamed>")
+        for item in data_volumes
+        if (
+            item.get("spec", {}).get("source") != expected_source
+            or item.get("spec", {})
+            .get("storage", {})
+            .get("storageClassName")
+            != EXPECTED_CLONE_TARGET["storage_class"]
+            or not item.get("metadata", {}).get("uid")
+        )
+    ]
+    if invalid_data_volumes:
+        raise FlatcarLifecycleError(
+            "refusing cleanup: invalid cluster DataVolumes: "
+            f"{invalid_data_volumes}"
+        )
+    data_volume_uids = {
+        item.get("metadata", {}).get("uid") for item in data_volumes
+    } - {None}
+    longhorn_volumes = {}
+    for pv in owned_pv_objects:
+        name = pv["metadata"]["name"]
+        volume = kubectl_json(
+            kubectl_bin,
+            management,
+            [
+                "-n",
+                "longhorn-system",
+                "get",
+                "volumes.longhorn.io",
+                name,
+            ],
+        )
+        kubernetes_status = volume.get("status", {}).get(
+            "kubernetesStatus", {}
+        )
+        if (
+            kubernetes_status.get("namespace") != cluster
+            or kubernetes_status.get("pvName") != name
+            or kubernetes_status.get("pvcName")
+            != pv["spec"]["claimRef"]["name"]
+        ):
+            raise FlatcarLifecycleError(
+                f"refusing cleanup: Longhorn ownership mismatch for {name}"
+            )
+        longhorn_volumes[name] = volume["metadata"]["uid"]
     clone_name = f"{cluster}-golden-image-cloner"
     golden_namespace = config["os"]["goldenImage"]["namespace"]
     progress(
         "teardown targets: "
         f"namespace={cluster}, clone_authorization="
-        f"{golden_namespace}/{clone_name}, pvs={owned_pvs}"
+        f"{golden_namespace}/{clone_name}, pvs={owned_pvs}, "
+        f"longhorn_uids={longhorn_volumes}"
     )
 
     kubectl(
@@ -902,6 +1064,52 @@ def teardown(
             management,
             ["delete", "persistentvolume", pv, "--ignore-not-found"],
         )
+        kubectl(
+            kubectl_bin,
+            management,
+            [
+                "-n",
+                "longhorn-system",
+                "delete",
+                "volumes.longhorn.io",
+                pv,
+                "--ignore-not-found",
+            ],
+        )
+
+    removed_snapshots = []
+    snapshots = kubectl_json(
+        kubectl_bin,
+        management,
+        ["-n", golden_namespace, "get", "volumesnapshots"],
+    ).get("items", [])
+    for snapshot in snapshots:
+        metadata = snapshot.get("metadata", {})
+        labels = metadata.get("labels", {})
+        if labels.get("cdi.kubevirt.io/OwnedByUID") not in data_volume_uids:
+            continue
+        if (
+            labels.get("app") != "containerized-data-importer"
+            or snapshot.get("spec", {})
+            .get("source", {})
+            .get("persistentVolumeClaimName")
+            != golden_source["claim"]
+        ):
+            raise FlatcarLifecycleError(
+                "cluster-owned CDI snapshot source is invalid"
+            )
+        kubectl(
+            kubectl_bin,
+            management,
+            [
+                "-n",
+                golden_namespace,
+                "delete",
+                "volumesnapshot",
+                metadata["name"],
+            ],
+        )
+        removed_snapshots.append(metadata["name"])
 
     absent = kubectl(
         kubectl_bin,
@@ -912,6 +1120,39 @@ def teardown(
     if absent.returncode == 0:
         raise FlatcarLifecycleError(
             f"namespace {cluster} still exists after teardown"
+        )
+    for pv in owned_pvs:
+        for resource, namespace in (
+            ("persistentvolume", None),
+            ("volumes.longhorn.io", "longhorn-system"),
+        ):
+            command = ["get", resource, pv, "-o", "name"]
+            if namespace:
+                command = ["-n", namespace, *command]
+            remaining = kubectl(
+                kubectl_bin,
+                management,
+                command,
+                expected=(0, 1),
+            )
+            if remaining.returncode == 0:
+                raise FlatcarLifecycleError(
+                    f"cluster-owned storage remains after teardown: {resource}/{pv}"
+                )
+    remaining_snapshots = kubectl_json(
+        kubectl_bin,
+        management,
+        ["-n", golden_namespace, "get", "volumesnapshots"],
+    ).get("items", [])
+    if any(
+        item.get("metadata", {})
+        .get("labels", {})
+        .get("cdi.kubevirt.io/OwnedByUID")
+        in data_volume_uids
+        for item in remaining_snapshots
+    ):
+        raise FlatcarLifecycleError(
+            "cluster-owned CDI snapshots remain after teardown"
         )
     golden = kubectl_json(
         kubectl_bin,
@@ -942,7 +1183,10 @@ def teardown(
     if cluster_dir.parent != ROOT.resolve() or cluster_dir.name != cluster:
         raise FlatcarLifecycleError("refusing unsafe local directory removal")
     shutil.rmtree(cluster_dir)
-    progress(f"PASS {cluster}: exact constrained Flatcar teardown completed")
+    progress(
+        f"PASS {cluster}: exact constrained Flatcar teardown completed; "
+        f"pvs={len(owned_pvs)} snapshots={len(removed_snapshots)}"
+    )
     return 0
 
 
@@ -951,6 +1195,9 @@ def self_test() -> int:
         EXPECTED_PROFILE["architecture"] != "amd64"
         or EXPECTED_PROFILE["provider"] != "kubevirt"
         or EXPECTED_PROFILE["node_selector"] != "ok-infra"
+        or EXPECTED_PROFILE["golden_target_storage_class"]
+        != "ok-storage-block"
+        or EXPECTED_CLONE_TARGET["kubevirt_feature_gates"] != ["ExpandDisks"]
         or EXPECTED_CILIUM_CHART_SHA256
         != "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179"
         or len(EXPECTED_PROVIDER_INVENTORY) != 4
