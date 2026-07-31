@@ -23,9 +23,16 @@ OS_PROFILE="${OS_PROFILE:-${OK_LINUX_DEFAULT_PROFILE}}"
 OS_SCHEMATIC_ID="${OS_SCHEMATIC_ID:-${OK_LINUX_DEFAULT_SCHEMATIC_ID}}"
 PROVIDER="${PROVIDER:-kubevirt}"
 ARCHITECTURE="${ARCHITECTURE:-amd64}"
+DEMO_PROFILE="${DEMO_PROFILE:-}"
 CP_CORES="${CP_CORES:-2}"
 CP_MEMORY="${CP_MEMORY:-4Gi}"
-if [[ "$TYPE" == "flatcar" ]]; then
+if [[ "$DEMO_PROFILE" == "gpu-single-replica" ]]; then
+  if [[ -n "${CP_DISK:-}" && "${CP_DISK}" != "20Gi" ]]; then
+    echo "ERROR: gpu-single-replica requires CP_DISK=20Gi"
+    exit 1
+  fi
+  CP_DISK="20Gi"
+elif [[ "$TYPE" == "flatcar" ]]; then
   CP_DISK="${CP_DISK:-50Gi}"
 else
   CP_DISK="${CP_DISK:-20Gi}"
@@ -33,7 +40,13 @@ fi
 WORKER_CORES="${WORKER_CORES:-2}"
 WORKER_MEMORY="${WORKER_MEMORY:-4Gi}"
 WORKER_DISK="${WORKER_DISK:-}"
-if [[ -z "$WORKER_DISK" ]]; then
+if [[ "$DEMO_PROFILE" == "gpu-single-replica" ]]; then
+  if [[ -n "$WORKER_DISK" && "$WORKER_DISK" != "20Gi" ]]; then
+    echo "ERROR: gpu-single-replica requires WORKER_DISK=20Gi"
+    exit 1
+  fi
+  WORKER_DISK="20Gi"
+elif [[ -z "$WORKER_DISK" ]]; then
   if [[ "$TYPE" == "flatcar" ]]; then
     WORKER_DISK="50Gi"
   else
@@ -41,7 +54,6 @@ if [[ -z "$WORKER_DISK" ]]; then
   fi
 fi
 NODE_SELECTOR="${NODE_SELECTOR:-${NODE:-}}"   # OK-82: NODE= accepted as alias
-DEMO_PROFILE="${DEMO_PROFILE:-}"
 START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
 if [[ "$TYPE" == "flatcar" ]]; then
   GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-ok-storage-block}"

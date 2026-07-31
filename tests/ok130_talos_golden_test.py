@@ -138,12 +138,20 @@ def main() -> int:
     demo_raw["providerProfile"] = {
         "cloneTargetStorageClass": "ok-storage-block-gpu-test"
     }
+    demo_raw["controlPlane"]["disk"] = "20Gi"
+    demo_raw["workers"]["disk"] = "20Gi"
     demo_resolved = resolve_talos_config(demo_raw, OK_LINUX)
     wrong_demo_node = copy.deepcopy(demo_raw)
     wrong_demo_node["nodeSelector"] = "ok-infra"
     expect_failure(
         wrong_demo_node,
         "Talos GPU demo rejects a non-GPU scheduling target",
+    )
+    wrong_demo_disk = copy.deepcopy(demo_raw)
+    wrong_demo_disk["workers"]["disk"] = "50Gi"
+    expect_failure(
+        wrong_demo_disk,
+        "Talos GPU demo rejects a non-profile disk size",
     )
     unscoped_storage = copy.deepcopy(raw)
     unscoped_storage["providerProfile"] = {
@@ -516,6 +524,13 @@ def main() -> int:
                 "virtualMachineTemplate"
             ]["spec"]["dataVolumeTemplates"]
         ]
+        clone_sizes = [
+            data_volume["spec"]["pvc"]["resources"]["requests"]["storage"]
+            for item in machine_templates
+            for data_volume in item["spec"]["template"]["spec"][
+                "virtualMachineTemplate"
+            ]["spec"]["dataVolumeTemplates"]
+        ]
         scheduling = [
             item["spec"]["template"]["spec"]["virtualMachineTemplate"][
                 "spec"
@@ -527,8 +542,9 @@ def main() -> int:
             == "ok-storage-block"
             and clone_storage
             == ["ok-storage-block-gpu-test", "ok-storage-block-gpu-test"]
+            and clone_sizes == ["20Gi", "20Gi"]
             and scheduling == ["ok-gpu", "ok-gpu"],
-            "Talos GPU demo keeps the Golden source and isolates disposable clones",
+            "Talos GPU demo renders two isolated 20Gi disposable clones",
         )
 
     replacement_proof = verify_timeline(

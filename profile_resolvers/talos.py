@@ -29,7 +29,7 @@ EXPECTED_DEMO_PROFILES = {
         "node_selector": "ok-gpu",
         "clone_target": {
             "storage_class": "ok-storage-block-gpu-test",
-            "boot_disk_capacity": "50Gi",
+            "boot_disk_capacity": "20Gi",
             "provisioner": "driver.longhorn.io",
             "replica_count": 1,
             "node_tag": "openkubes-gpu-demo",
@@ -150,6 +150,12 @@ def resolve_talos_config(cfg: dict, ok_linux_path: Path) -> dict:
                 f"{demo_name} clone target differs from reviewed profile"
             )
         resolved["providerProfile"] = expected_provider
+        expected_disk = demo["clone_target"]["boot_disk_capacity"]
+        for role in ("controlPlane", "workers"):
+            if resolved.get(role, {}).get("disk") != expected_disk:
+                raise TalosProfileError(
+                    f"{demo_name} requires {role}.disk: {expected_disk}"
+                )
     elif "providerProfile" in resolved:
         raise TalosProfileError(
             "Talos providerProfile overrides require an explicit demoProfile"

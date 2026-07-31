@@ -71,7 +71,7 @@ EXPECTED_DEMO_PROFILES = {
         "node_selector": "ok-gpu",
         "clone_target": {
             "storage_class": "ok-storage-block-gpu-test",
-            "boot_disk_capacity": "50Gi",
+            "boot_disk_capacity": "20Gi",
             "provisioner": "driver.longhorn.io",
             "replica_count": 1,
             "node_tag": "openkubes-gpu-demo",
@@ -257,10 +257,16 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
         {"kubernetes": EXPECTED_PROFILE["kubernetes_version"]},
         "versions",
     )
+    demo_disk = demo["clone_target"]["boot_disk_capacity"] if demo else None
+    expected_control_plane = copy.deepcopy(EXPECTED_CONTROL_PLANE)
+    expected_workers = copy.deepcopy(EXPECTED_WORKERS)
+    if demo_disk:
+        expected_control_plane["disk"] = demo_disk
+        expected_workers["disk"] = demo_disk
     control_plane = resolved.setdefault("controlPlane", {})
-    exact_mapping(control_plane, EXPECTED_CONTROL_PLANE, "controlPlane")
+    exact_mapping(control_plane, expected_control_plane, "controlPlane")
     workers = resolved.setdefault("workers", {})
-    exact_mapping(workers, EXPECTED_WORKERS, "workers")
+    exact_mapping(workers, expected_workers, "workers")
     set_exact(
         resolved,
         "nodeSelector",

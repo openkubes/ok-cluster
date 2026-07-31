@@ -117,7 +117,17 @@ def negative_cases() -> None:
     cfg["providerProfile"]["cloneTargetStorageClass"] = (
         "ok-storage-block-gpu-test"
     )
+    cfg["controlPlane"]["disk"] = "20Gi"
+    cfg["workers"]["disk"] = "20Gi"
     cases.append(("GPU demo with wrong scheduling node", cfg))
+
+    cfg = base_config()
+    cfg["demoProfile"] = "gpu-single-replica"
+    cfg["nodeSelector"] = "ok-gpu"
+    cfg["providerProfile"]["cloneTargetStorageClass"] = (
+        "ok-storage-block-gpu-test"
+    )
+    cases.append(("GPU demo with production disk sizes", cfg))
 
     cfg = base_config()
     cfg["providerProfile"]["cloneTargetStorageClass"] = (
@@ -302,6 +312,8 @@ def main() -> int:
     demo_config["providerProfile"]["cloneTargetStorageClass"] = (
         "ok-storage-block-gpu-test"
     )
+    demo_config["controlPlane"]["disk"] = "20Gi"
+    demo_config["workers"]["disk"] = "20Gi"
     demo = resolve_flatcar_config(demo_config, OK_LINUX)
     with tempfile.TemporaryDirectory(
         prefix=".flatcar-gpu-demo-", dir=ROOT
@@ -321,6 +333,13 @@ def main() -> int:
                 "virtualMachineTemplate"
             ]["spec"]["dataVolumeTemplates"]
         ]
+        clone_sizes = [
+            data_volume["spec"]["storage"]["resources"]["requests"]["storage"]
+            for item in machine_templates
+            for data_volume in item["spec"]["template"]["spec"][
+                "virtualMachineTemplate"
+            ]["spec"]["dataVolumeTemplates"]
+        ]
         scheduling = [
             item["spec"]["template"]["spec"]["virtualMachineTemplate"][
                 "spec"
@@ -331,8 +350,9 @@ def main() -> int:
             demo["os"]["goldenImage"]["storageClass"] == "ok-storage-block"
             and clone_storage
             == ["ok-storage-block-gpu-test", "ok-storage-block-gpu-test"]
+            and clone_sizes == ["20Gi", "20Gi"]
             and scheduling == ["ok-gpu", "ok-gpu"],
-            "Flatcar GPU demo keeps the Golden source and isolates disposable clones",
+            "Flatcar GPU demo renders two isolated 20Gi disposable clones",
         )
 
     lifecycle_source = (
