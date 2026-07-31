@@ -31,27 +31,21 @@ read:
     - k8s_get_resource_yaml
 
 write:
-  # namespaces : one Role + RoleBinding per listed namespace. Preferred.
-  # cluster    : ClusterRole + ClusterRoleBinding, i.e. every namespace,
-  #              including ones created later. Requires the approval gate.
+  # OK-129 is deliberately narrower than the generic renderer: only the
+  # explicit kagent-lab namespace is accepted by this installer.
   scope: namespaces
 
-  # Required for scope `namespaces`, must be empty for scope `cluster`.
-  # kube-* and the install namespace above are refused.
+  # The installer refuses any target outside this evidenced lab namespace.
   namespaces:
     - kagent-lab
 
-  # Supported: configmaps, deployments, statefulsets, daemonsets, replicasets,
-  #            services, ingresses, jobs, cronjobs, pods (delete only).
-  # Read verbs and read-only context (pods, pod logs, events) are added
-  # automatically so the agent can verify its own change. Secrets, RBAC objects,
-  # ServiceAccounts, Namespaces, Nodes, CRDs and webhooks are never grantable.
+  # The OK-129 drill evidenced reversible ConfigMap create/update/delete only.
+  # The installer refuses every other resource, even if the generic renderer
+  # gains support for it.
   resources:
     - configmaps
-    - deployments
 
-  # Approve/Reject in the UI for every write tool. `false` is refused with
-  # scope `cluster` and warns otherwise.
+  # Approve/Reject in the UI for every write tool. The installer refuses false.
   requireApproval: true
 
   toolServer:

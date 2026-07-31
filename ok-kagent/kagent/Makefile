@@ -12,7 +12,7 @@
 
 .PHONY: help preflight context-check assets-check render-values render-access \
         render-access-quiet access-summary access-test install configure-access \
-        status verify-access dashboard logs uninstall verify-clean \
+        status evidence verify-access dashboard logs uninstall verify-clean \
         write-tools-install write-tools-status write-tools-uninstall
 
 .DEFAULT_GOAL := help
@@ -34,6 +34,12 @@ PROFILE_ENV    := $(ACCESS_OUT)/profile.env
 OPENKUBES_DIR  ?= $(abspath ../../../openkubes)
 KAGENT_ASSETS  := $(OPENKUBES_DIR)/platform/ai/kagent-standalone
 RENDER_ACCESS  := $(KAGENT_ASSETS)/access/render-access.py
+OK129_ACCESS   := $(abspath ok129_access.py)
+OK_CLUSTER_DIR := $(abspath ../..)
+RBAC_RENDERED  := $(ACCESS_OUT)/manifests/20-rbac.yaml
+VERIFY_MATRIX  := $(ACCESS_OUT)/verification.tsv
+EVIDENCE_FILE  := $(ACCESS_OUT)/evidence.json
+EVIDENCE_RESULT ?= OBSERVED
 
 help:
 	@echo "Standalone kagent on ok-kagent (OK-129)"
@@ -41,6 +47,7 @@ help:
 	@echo "  make preflight        Check local tools and repository layout"
 	@echo "  make install          Install kagent and apply the access profile"
 	@echo "  make status           Show releases, workloads, CRs and active profile"
+	@echo "  make evidence         Record repository SHAs, config digest and versions"
 	@echo "  make verify-access    Assert the RBAC boundary the profile declares"
 	@echo "  make access-summary   Print what the current profile grants"
 	@echo "  make access-test      Run the access renderer's own tests"
@@ -49,8 +56,9 @@ help:
 	@echo "  make uninstall        Remove releases, namespaces, CRDs and RBAC"
 	@echo "  make verify-clean     Fail if kagent objects remain"
 	@echo ""
-	@echo "Permissions come from $(ACCESS_CONFIG) (mode: read-only | read-write,"
-	@echo "write scope: cluster | namespaces). Override with ACCESS_CONFIG=<path>"
+	@echo "Permissions come from $(ACCESS_CONFIG) (mode: read-only | read-write)."
+	@echo "OK-129 only permits approval-gated ConfigMap writes in kagent-lab."
+	@echo "Override with ACCESS_CONFIG=<path>"
 	@echo "to keep several profiles side by side."
 
 # ── local prerequisites ──────────────────────────────────────────────────────
@@ -69,6 +77,9 @@ preflight:
 	}
 	@test -f "$(ACCESS_CONFIG)" || { \
 	  echo "ERROR: access config not found: $(ACCESS_CONFIG)"; exit 1; \
+	}
+	@test -f "$(OK129_ACCESS)" || { \
+	  echo "ERROR: OK-129 access guard not found: $(OK129_ACCESS)"; exit 1; \
 	}
 	@$(MAKE) --no-print-directory assets-check
 	@echo "Preflight OK: tools present, access config and openkubes assets found."
@@ -111,25 +122,38 @@ render-values:
 	@echo "Rendered $(VALUES_LOCAL) (mode 600, git-ignored)."
 
 render-access: assets-check
+	@python3 "$(OK129_ACCESS)" validate --config "$(ACCESS_CONFIG)"
 	@python3 "$(RENDER_ACCESS)" \
 	  --config "$(ACCESS_CONFIG)" \
 	  --out "$(ACCESS_OUT)" \
 	  --tools-image-tag "$(TOOLS_VERSION)"
+	@python3 "$(OK129_ACCESS)" matrix \
+	  --config "$(ACCESS_CONFIG)" \
+	  --rbac "$(RBAC_RENDERED)" \
+	  --out "$(VERIFY_MATRIX)"
 
 # Same render, without the per-file chatter — for targets that only need the
 # output to be current. Boundary warnings are still printed.
 render-access-quiet: assets-check
+	@python3 "$(OK129_ACCESS)" validate --config "$(ACCESS_CONFIG)"
 	@python3 "$(RENDER_ACCESS)" \
 	  --config "$(ACCESS_CONFIG)" \
 	  --out "$(ACCESS_OUT)" \
 	  --tools-image-tag "$(TOOLS_VERSION)" \
 	  --quiet
+	@python3 "$(OK129_ACCESS)" matrix \
+	  --config "$(ACCESS_CONFIG)" \
+	  --rbac "$(RBAC_RENDERED)" \
+	  --out "$(VERIFY_MATRIX)"
 
 access-summary: render-access-quiet
-	@cat "$(ACCESS_OUT)/SUMMARY.md"
+	@sed '/^Verify, do not trust this table:/,$$d' "$(ACCESS_OUT)/SUMMARY.md"
+	@echo "Executable API verification matrix: $(VERIFY_MATRIX)"
 
 access-test: assets-check
 	@python3 "$(KAGENT_ASSETS)/access/render_access_test.py"
+	@PYTHONPYCACHEPREFIX=/tmp/ok129-pyc python3 "$(OK129_ACCESS)" validate --config "$(ACCESS_CONFIG)"
+	@PYTHONPYCACHEPREFIX=/tmp/ok129-pyc python3 "$(abspath ok129_access_test.py)"
 
 # ── install ──────────────────────────────────────────────────────────────────
 install: preflight render-values render-access
@@ -156,11 +180,14 @@ install: preflight render-values render-access
 # Applies the read-path assets, then adds or removes the write path depending on
 # the mode in the access config. Switching back to read-only removes the write
 # objects instead of leaving them orphaned.
+#
+# The write targets are asserted before the tool server is installed, so a
+# config naming a namespace that does not exist fails without leaving a running
+# write release behind.
 configure-access: context-check render-access-quiet
 	$(KUBECTL) apply -k "$(KAGENT_ASSETS)"
 	@. "$(PROFILE_ENV)"; \
 	  if [ "$$KAGENT_ACCESS_MODE" = "read-write" ]; then \
-	    $(MAKE) --no-print-directory write-tools-install; \
 	    for ns in $$KAGENT_WRITE_NAMESPACES; do \
 	      $(KUBECTL) get namespace "$$ns" >/dev/null 2>&1 || { \
 	        echo "ERROR: write target namespace '$$ns' does not exist."; \
@@ -168,6 +195,7 @@ configure-access: context-check render-access-quiet
 	        exit 1; \
 	      }; \
 	    done; \
+	    $(MAKE) --no-print-directory write-tools-install; \
 	    $(KUBECTL) --namespace "$$KAGENT_WRITE_SA_NAMESPACE" get serviceaccount "$$KAGENT_WRITE_SA_NAME" >/dev/null 2>&1 || { \
 	      echo "ERROR: ServiceAccount $$KAGENT_WRITE_SA_NAMESPACE/$$KAGENT_WRITE_SA_NAME was not created by the tools chart."; \
 	      echo "       The generated RoleBindings would bind nothing. Check the chart version."; \
@@ -195,64 +223,56 @@ status: context-check render-access-quiet
 	    $(KUBECTL) --namespace "$$KAGENT_WRITE_SA_NAMESPACE" get deployment,svc,serviceaccount \
 	      -l app.kubernetes.io/instance="$$KAGENT_WRITE_RELEASE" 2>/dev/null || true; \
 	  fi
+	@$(MAKE) --no-print-directory evidence EVIDENCE_RESULT=OBSERVED
+
+evidence: render-access-quiet
+	@python3 "$(OK129_ACCESS)" evidence \
+	  --ok-cluster "$(OK_CLUSTER_DIR)" \
+	  --openkubes "$(OPENKUBES_DIR)" \
+	  --config "$(ACCESS_CONFIG)" \
+	  --out "$(EVIDENCE_FILE)" \
+	  --kagent-version "$(KAGENT_VERSION)" \
+	  --tools-version "$(TOOLS_VERSION)" \
+	  --result "$(EVIDENCE_RESULT)"
 
 # Asserts the boundary the profile declares — against the API server, not the
 # manifests. This is the check that catches a chart change widening RBAC.
 verify-access: context-check render-access-quiet
-	@reader='system:serviceaccount:$(NS):kagent-tools'; \
-	  fail=0; \
+	@fail=0; \
 	  check() { \
-	    got="$$($(KUBECTL) auth can-i $$2 --as="$$1" $$4 2>/dev/null)"; \
-	    if [ "$$got" != "$$3" ]; then \
-	      echo "  FAIL $$1: '$$2' $$4 -> $$got (expected $$3)"; fail=1; \
+	    label="$$1"; subject="$$2"; verb="$$3"; resource="$$4"; expected="$$5"; \
+	    scope="$$6"; namespace="$$7"; \
+	    if [ "$$scope" = "all-namespaces" ]; then \
+	      got="$$($(KUBECTL) auth can-i "$$verb" "$$resource" --as="$$subject" --all-namespaces 2>/dev/null)"; \
+	      where='all namespaces'; \
 	    else \
-	      echo "  ok   $$1: '$$2' $$4 -> $$got"; \
+	      got="$$($(KUBECTL) auth can-i "$$verb" "$$resource" --as="$$subject" --namespace "$$namespace" 2>/dev/null)"; \
+	      where="namespace $$namespace"; \
+	    fi; \
+	    if [ "$$got" != "$$expected" ]; then \
+	      echo "  FAIL $$label: $$subject '$$verb $$resource' in $$where -> $$got (expected $$expected)"; \
+	      fail=1; \
+	    else \
+	      echo "  ok   $$label: '$$verb $$resource' in $$where -> $$got"; \
 	    fi; \
 	  }; \
-	  echo "Read identity ($$reader):"; \
-	  check "$$reader" "get pods" yes "--all-namespaces"; \
-	  check "$$reader" "patch deployments" no "--all-namespaces"; \
-	  check "$$reader" "delete deployments" no "--all-namespaces"; \
-	  check "$$reader" "get secrets" no "--all-namespaces"; \
-	  check "$$reader" "* *" no "--all-namespaces"; \
+	  tab="$$(printf '\t')"; \
+	  while IFS="$$tab" read -r label subject verb resource expected scope namespace; do \
+	    check "$$label" "$$subject" "$$verb" "$$resource" "$$expected" "$$scope" "$$namespace"; \
+	  done < "$(VERIFY_MATRIX)"; \
 	  . "$(PROFILE_ENV)"; \
 	  if [ "$$KAGENT_ACCESS_MODE" = "read-write" ]; then \
-	    writer="system:serviceaccount:$$KAGENT_WRITE_SA_NAMESPACE:$$KAGENT_WRITE_SA_NAME"; \
-	    echo "Write identity ($$writer), scope $$KAGENT_WRITE_SCOPE:"; \
-	    check "$$writer" "get secrets" no "--all-namespaces"; \
-	    check "$$writer" "* *" no "--all-namespaces"; \
-	    check "$$writer" "create rolebindings" no "--all-namespaces"; \
-	    if [ "$$KAGENT_WRITE_SCOPE" = "cluster" ]; then \
-	      check "$$writer" "patch deployments" yes "--all-namespaces"; \
-	    else \
-	      for ns in $$KAGENT_WRITE_NAMESPACES; do \
-	        check "$$writer" "patch deployments" yes "-n $$ns"; \
-	      done; \
-	      check "$$writer" "patch deployments" no "-n $(NS)"; \
-	      check "$$writer" "patch deployments" no "-n default"; \
-	    fi; \
 	    if ! $(KUBECTL) --namespace $(NS) get agent/"$$KAGENT_WRITE_AGENT" >/dev/null 2>&1; then \
 	      echo "  FAIL write Agent $$KAGENT_WRITE_AGENT is not installed"; fail=1; \
 	    else \
 	      echo "  ok   write Agent $$KAGENT_WRITE_AGENT present"; \
 	    fi; \
-	  else \
-	    echo "Read-only profile — asserting no write path exists:"; \
-	    for object in agent/cluster-operator-gated remotemcpserver/kagent-write-tools; do \
-	      if $(KUBECTL) --namespace $(NS) get "$$object" >/dev/null 2>&1; then \
-	        echo "  FAIL $$object still exists"; fail=1; \
-	      else \
-	        echo "  ok   $$object absent"; \
-	      fi; \
-	    done; \
-	    if $(KUBECTL) get namespace kagent-write >/dev/null 2>&1; then \
-	      echo "  FAIL namespace kagent-write still exists"; fail=1; \
-	    else \
-	      echo "  ok   namespace kagent-write absent"; \
-	    fi; \
+	  elif ! python3 "$(OK129_ACCESS)" assert-clean --kubeconfig "$(KUBECONFIG)"; then \
+	    fail=1; \
 	  fi; \
 	  test "$$fail" -eq 0 || { echo "Access verification FAILED"; exit 1; }; \
 	  echo "Access verification passed."
+	@$(MAKE) --no-print-directory evidence EVIDENCE_RESULT=PASS
 
 dashboard: context-check
 	@echo "UI: http://localhost:8080  (Ctrl-C to stop)"
@@ -262,14 +282,17 @@ logs: context-check
 	$(KUBECTL) --namespace $(NS) logs deployment/kagent-controller --follow --tail=100
 
 # ── scoped write tool server ─────────────────────────────────────────────────
+# The namespace comes from the rendered manifest, not from `kubectl create
+# namespace`: only the rendered object carries the ownership labels that
+# `write-tools-uninstall` discovers. An install that aborts halfway therefore
+# still leaves a removable namespace behind, never an orphan.
 write-tools-install: context-check render-access-quiet
 	@. "$(PROFILE_ENV)"; \
 	  test "$$KAGENT_ACCESS_MODE" = "read-write" || { \
 	    echo "ERROR: profile is $$KAGENT_ACCESS_MODE; set 'mode: read-write' in $(ACCESS_CONFIG)"; \
 	    exit 1; \
 	  }; \
-	  $(KUBECTL) create namespace "$$KAGENT_WRITE_SA_NAMESPACE" \
-	    --dry-run=client -o yaml | $(KUBECTL) apply -f -; \
+	  $(KUBECTL) apply -f "$(ACCESS_OUT)/manifests/10-namespace.yaml"; \
 	  $(HELM) upgrade --install "$$KAGENT_WRITE_RELEASE" \
 	    $(TOOLS_CHART) \
 	    --version $(TOOLS_VERSION) \
@@ -290,28 +313,7 @@ write-tools-status: context-check render-access-quiet
 # wider profile left behind: generated RoleBindings are labelled, so their
 # namespaces are discovered rather than assumed.
 write-tools-uninstall: context-check
-	@sa_ns='kagent-write'; release='kagent-write-tools'; agent='cluster-operator-gated'; \
-	  if [ -f "$(PROFILE_ENV)" ]; then \
-	    . "$(PROFILE_ENV)"; \
-	    [ -n "$$KAGENT_WRITE_SA_NAMESPACE" ] && sa_ns="$$KAGENT_WRITE_SA_NAMESPACE"; \
-	    [ -n "$$KAGENT_WRITE_RELEASE" ] && release="$$KAGENT_WRITE_RELEASE"; \
-	    [ -n "$$KAGENT_WRITE_AGENT" ] && agent="$$KAGENT_WRITE_AGENT"; \
-	  fi; \
-	  $(KUBECTL) --namespace $(NS) delete \
-	    "agent/$$agent" "remotemcpserver/$$release" --ignore-not-found; \
-	  for ns in $$($(KUBECTL) get rolebinding -A \
-	      -l app.kubernetes.io/managed-by=render-access.py \
-	      -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null \
-	      | sort -u); do \
-	    $(KUBECTL) --namespace "$$ns" delete \
-	      "role/$$release" "rolebinding/$$release" --ignore-not-found; \
-	  done; \
-	  $(KUBECTL) delete \
-	    "clusterrole/$$release" "clusterrolebinding/$$release" --ignore-not-found; \
-	  if $(HELM) --namespace "$$sa_ns" status "$$release" >/dev/null 2>&1; then \
-	    $(HELM) --namespace "$$sa_ns" uninstall "$$release" --wait --timeout 5m; \
-	  fi; \
-	  $(KUBECTL) delete namespace "$$sa_ns" --ignore-not-found --wait=true --timeout=3m
+	@python3 "$(OK129_ACCESS)" cleanup --kubeconfig "$(KUBECONFIG)"
 
 # ── uninstall ────────────────────────────────────────────────────────────────
 uninstall:
@@ -334,6 +336,7 @@ uninstall:
 	@$(MAKE) --no-print-directory verify-clean
 
 verify-clean: context-check
+	@python3 "$(OK129_ACCESS)" assert-clean --kubeconfig "$(KUBECONFIG)"
 	@leftovers="$$($(KUBECTL) get crd -o name 2>/dev/null | grep -E -i 'kagent|mcp' || true)"; \
 	  test -z "$$leftovers" || { echo "$$leftovers"; echo "ERROR: CRDs remain"; exit 1; }
 	@leftovers="$$($(KUBECTL) get clusterrole,clusterrolebinding -o name 2>/dev/null | grep -E -i kagent || true)"; \

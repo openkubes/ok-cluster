@@ -32,10 +32,10 @@ hand, so nothing can drift out of sync with the documentation.
 | Knob | Values | Effect |
 |---|---|---|
 | `mode` | `read-only` \| `read-write` | whether a write identity exists at all |
-| `write.scope` | `namespaces` \| `cluster` | Role per namespace, or one ClusterRole |
-| `write.namespaces` | list | the maintained set of write targets |
-| `write.resources` | list | which kinds may be changed |
-| `write.requireApproval` | `true` \| `false` | Approve/Reject gate per write tool |
+| `write.scope` | `namespaces` | cluster scope is refused by this installer |
+| `write.namespaces` | `[kagent-lab]` | the only evidenced write target |
+| `write.resources` | `[configmaps]` | the only evidenced mutable kind |
+| `write.requireApproval` | `true` | Approve/Reject gate per write tool |
 
 Switch a profile:
 
@@ -44,16 +44,16 @@ Switch a profile:
 sed -i'' -e 's/^mode: .*/mode: read-only/' access-config.yaml
 make install          # removes the write identity, Role, tool server and Agent
 
-# approval-gated writes in two namespaces
-$EDITOR access-config.yaml   # mode: read-write, write.namespaces: [kagent-lab, team-a]
+# approval-gated ConfigMap writes in the lab namespace
+$EDITOR access-config.yaml   # mode: read-write; keep the constrained write block
 make install
 make verify-access
 ```
 
-Refused by design, whatever the config says: Secrets in any scope; RBAC objects,
-ServiceAccounts, Namespaces, Nodes, CRDs and webhooks; `*` as a resource; the
-`kagent` install namespace as a write target; `kube-*` namespaces; and an ungated
-cluster-wide writer. The renderer exits non-zero and generates nothing.
+The cluster installer adds a fail-closed OK-129 guard before the generic
+renderer. It refuses cluster scope, ungated writes, resources other than
+ConfigMaps, and targets other than `kagent-lab`. The generic renderer's broader
+schema therefore cannot silently widen this evidenced lab profile.
 
 Full reference: `openkubes/platform/ai/kagent-standalone/access/README.md`.
 
@@ -65,13 +65,20 @@ decides what is possible. `make verify-access` therefore asserts against the API
 server rather than reading manifests:
 
 - read identity: reads yes, writes no, Secrets no, wildcard no;
-- write identity: works inside its configured scope, denied outside it, no
-  Secrets, cannot create RoleBindings;
-- read-only mode: the write Agent, its `RemoteMCPServer` and the
-  `kagent-write` namespace must not exist.
+- write identity: every verb found in the rendered ConfigMap Role is tested in
+  `kagent-lab`, denied outside it, and mutations of a representative
+  non-configured workload resource remain denied;
+- read-only mode: no label-owned write Agent, `RemoteMCPServer`, RBAC object, or
+  write-tools namespace may exist.
 
-A chart upgrade that quietly widens RBAC fails that target. That is the point of
-having it.
+The executable verification matrix is generated from the rendered Role, not
+from a second permission list in the Makefile. A renderer or chart change that
+quietly widens RBAC fails the target.
+
+`make status` and every successful `make verify-access` write
+`.access.local/evidence.json`. It records the `ok-cluster` commit, the coupled
+`openkubes` asset commit, the access-config SHA-256 digest, both pinned chart
+versions, dirty-worktree flags, and the observation result.
 
 ## Layout and prerequisites
 
