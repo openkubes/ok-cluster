@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -33,6 +34,27 @@ TOOLS_NAMESPACE_SELECTOR = MANAGED_SELECTOR + ",openkubes.io/purpose=kagent-writ
 ALLOWED_WRITE_NAMESPACES = {"kagent-lab"}
 ALLOWED_WRITE_RESOURCES = {"configmaps"}
 READ_VERBS = {"get", "list", "watch"}
+
+# Only the standalone write tool server uses this chart. The read path ships
+# kagent-tools as a subchart of the `kagent` release, whose chart is kagent-*,
+# so this prefix cannot match the read path.
+TOOLS_CHART_PREFIX = "kagent-tools-"
+
+# Namespaces cleanup must never delete, whatever a label or release claims.
+NEVER_DELETE_NAMESPACES = {"default", "kube-system", "kube-public", "kube-node-lease"}
+NEVER_DELETE_PREFIXES = ("kube-",)
+
+# RFC 1123 label. Every name that reaches profile.env — and from there a shell —
+# must match this, so the sourced file cannot carry shell syntax.
+DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+# The only shape a generated profile.env line may have: an upper-case key and a
+# bare, single- or double-quoted value built from DNS-safe characters and spaces.
+# No command substitution, no expansion, no metacharacters. Single quotes are the
+# renderer's current form and the strongest one — nothing expands inside them.
+PROFILE_LINE = re.compile(
+    r"^[A-Z][A-Z0-9_]*=(?:'[a-zA-Z0-9 ._:-]*'|\"[a-zA-Z0-9 ._:-]*\"|[a-zA-Z0-9._:-]*)$"
+)
 
 
 class AccessError(RuntimeError):
@@ -88,6 +110,62 @@ def validate_ok129(raw: dict[str, Any]) -> None:
         )
     if approval is not True:
         raise AccessError("OK-129 requires write.requireApproval=true")
+
+    _validate_sourced_names(write)
+
+
+def _validate_sourced_names(write: dict[str, Any]) -> None:
+    """Constrain every name that ends up in profile.env, which a shell sources.
+
+    The generic renderer validates its namespace fields but not the release or
+    Agent name, and the Makefile sources the generated profile.env. Anything
+    that is not a plain DNS label is refused here, before a render exists.
+    """
+    tool_server = write.get("toolServer") or {}
+    if not isinstance(tool_server, dict):
+        raise AccessError("write.toolServer must be a mapping")
+
+    for field, value in (
+        ("write.toolServer.namespace", tool_server.get("namespace")),
+        ("write.toolServer.releaseName", tool_server.get("releaseName")),
+        ("write.agentName", write.get("agentName")),
+    ):
+        if value is None:
+            raise AccessError(f"{field} is required")
+        if not isinstance(value, str) or not DNS_LABEL.match(value):
+            raise AccessError(
+                f"{field} must be a plain DNS-1123 label (a-z, 0-9, '-'); got {value!r}. "
+                "This name is written to profile.env, which the installer sources."
+            )
+
+    for field, value in (
+        ("write.toolServer.port", tool_server.get("port")),
+        ("write.toolServer.metricsPort", tool_server.get("metricsPort")),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+            raise AccessError(f"{field} must be an integer between 1 and 65535; got {value!r}")
+
+
+def check_profile(path: Path) -> None:
+    """Assert the generated profile.env is safe to `.` from a shell.
+
+    validate_ok129 constrains the config, but this checks the artefact that is
+    actually sourced, so a renderer change cannot reintroduce shell syntax
+    without failing here first.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise AccessError(f"profile not found: {path}") from exc
+
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not PROFILE_LINE.match(stripped):
+            raise AccessError(
+                f"{path}:{number} is not a plain assignment and must not be sourced: {line!r}"
+            )
 
 
 def yaml_documents(path: Path) -> list[dict[str, Any]]:
@@ -299,6 +377,42 @@ class Runtime:
     def helm(self, args: list[str], *, capture: bool = False) -> str:
         return self.run(["helm", f"--kubeconfig={self.kubeconfig}", *args], capture=capture)
 
+    def can_i(self, check: PermissionCheck) -> bool:
+        """Answer one `kubectl auth can-i`, honouring its exit-code contract.
+
+        `auth can-i` reports a denial as exit status 1 — that is its documented
+        interface, not a failure. Running it through a checked subprocess would
+        raise on exactly the answer a revocation check wants to see, so this
+        never uses check=True: the printed answer decides, and the exit status
+        is only used to tell a real error apart from a denial.
+        """
+        argv = [
+            "kubectl",
+            f"--kubeconfig={self.kubeconfig}",
+            "auth",
+            "can-i",
+            check.verb,
+            check.resource,
+            f"--as={check.subject}",
+        ]
+        if check.namespace is None:
+            argv.append("--all-namespaces")
+        else:
+            argv += ["--namespace", check.namespace]
+
+        completed = subprocess.run(
+            argv, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        lines = [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+        answer = lines[-1] if lines else ""
+        if answer in {"yes", "no"} and completed.returncode in {0, 1}:
+            return answer == "yes"
+        raise AccessError(
+            f"kubectl auth can-i {check.verb} {check.resource} --as={check.subject} "
+            f"failed (exit {completed.returncode}): "
+            + ((completed.stderr or "").strip() or answer or "no output")
+        )
+
     def get_json(
         self,
         resource: str,
@@ -410,8 +524,108 @@ def assert_clean(runtime: Runtime) -> None:
         for item in _items(document):
             location = f"{_namespace(item)}/" if _namespace(item) else ""
             leftovers.append(f"{resource}/{location}{_name(item)}")
+
+    # Label-independent: a write tool server from a run that predates the
+    # ownership labels has no label to select on, but it still has a release.
+    for namespace, names in sorted(discover_tool_releases(runtime).items()):
+        for name in sorted(names):
+            leftovers.append(f"helm-release/{namespace}/{name}")
+
     if leftovers:
         raise AccessError("managed write objects remain: " + ", ".join(sorted(leftovers)))
+
+
+def subject_namespaces(
+    bindings: Iterable[dict[str, Any]], cluster_bindings: Iterable[dict[str, Any]]
+) -> set[str]:
+    """Namespaces that host a bound write ServiceAccount.
+
+    A tool-server namespace created before the manifests carried ownership
+    labels is invisible to a label selector, but the RoleBinding that granted it
+    permissions names it in its subject. That is a second, independent path to
+    the same namespace.
+    """
+    found: set[str] = set()
+    for binding in (*bindings, *cluster_bindings):
+        for subject in binding.get("subjects") or []:
+            if subject.get("kind") != "ServiceAccount":
+                continue
+            namespace = str(subject.get("namespace") or "")
+            if namespace:
+                found.add(namespace)
+    return found
+
+
+def discover_tool_releases(runtime: Runtime) -> dict[str, list[str]]:
+    """Namespace -> write tool-server release names, found by chart name.
+
+    Third path to a legacy namespace: even with every label and RoleBinding
+    already gone, the Helm release itself still identifies where the write tool
+    server lives.
+    """
+    raw = runtime.helm(["list", "--all-namespaces", "--output", "json"], capture=True)
+    releases = json.loads(raw.strip() or "[]")
+    found: dict[str, list[str]] = {}
+    for release in releases:
+        if not str(release.get("chart", "")).startswith(TOOLS_CHART_PREFIX):
+            continue
+        namespace = str(release.get("namespace") or "")
+        name = str(release.get("name") or "")
+        if namespace and name:
+            found.setdefault(namespace, []).append(name)
+    return found
+
+
+def protected_namespaces(*object_groups: Iterable[dict[str, Any]]) -> set[str]:
+    """Namespaces cleanup must never delete.
+
+    The install namespace (it hosts the Agent and RemoteMCPServer) and the write
+    targets (they host the Roles and RoleBindings, and are owned by the read
+    path) are derived from the discovered objects themselves rather than named,
+    so a renamed profile keeps the same protection.
+    """
+    protected = set(NEVER_DELETE_NAMESPACES)
+    for group in object_groups:
+        for item in group:
+            namespace = _namespace(item)
+            if namespace:
+                protected.add(namespace)
+    return protected
+
+
+def tool_namespaces(
+    labelled: Iterable[str],
+    subjects: Iterable[str],
+    releases: Iterable[str],
+    protected: Iterable[str],
+) -> list[str]:
+    """The union of all three discovery paths, minus what must never be deleted."""
+    blocked = set(protected)
+    candidates = {*labelled, *subjects, *releases}
+    return sorted(
+        namespace
+        for namespace in candidates
+        if namespace
+        and namespace not in blocked
+        and not namespace.startswith(NEVER_DELETE_PREFIXES)
+    )
+
+
+def _uninstall_release(runtime: Runtime, name: str, namespace: str) -> None:
+    """Remove one Helm release, tolerating a release that vanished meanwhile.
+
+    `helm uninstall` exits non-zero when the release is already gone, which is
+    the desired end state, not a failure.
+    """
+    try:
+        runtime.helm(
+            ["uninstall", name, "--namespace", namespace, "--wait", "--timeout", "5m"],
+            capture=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        message = ((exc.stderr or "") + (exc.stdout or "")).lower()
+        if "not found" not in message:
+            raise AccessError((exc.stderr or str(exc)).strip()) from exc
 
 
 def cleanup(runtime: Runtime) -> None:
@@ -423,10 +637,20 @@ def cleanup(runtime: Runtime) -> None:
     )
     cluster_roles = _items(runtime.get_json("clusterroles.rbac.authorization.k8s.io"))
     cluster_bindings = _items(runtime.get_json("clusterrolebindings.rbac.authorization.k8s.io"))
-    namespaces = _items(runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR))
+    labelled = _items(runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR))
 
+    # Everything is discovered before anything is deleted: the RoleBinding
+    # subjects and the rules are the only record of where the write identity
+    # lived and what it could do.
     permission_checks = discover_permission_checks(
         roles, bindings, cluster_roles, cluster_bindings
+    )
+    tool_releases = discover_tool_releases(runtime)
+    targets = tool_namespaces(
+        labelled=[_name(item) for item in labelled],
+        subjects=subject_namespaces(bindings, cluster_bindings),
+        releases=tool_releases.keys(),
+        protected=protected_namespaces(agents, servers, roles, bindings),
     )
 
     _delete_namespaced(runtime, "agents.kagent.dev", agents)
@@ -436,23 +660,9 @@ def cleanup(runtime: Runtime) -> None:
     _delete_namespaced(runtime, "roles.rbac.authorization.k8s.io", roles)
     _delete_cluster(runtime, "clusterroles.rbac.authorization.k8s.io", cluster_roles)
 
-    for namespace in sorted({_name(item) for item in namespaces}):
-        releases = json.loads(
-            runtime.helm(["list", "--namespace", namespace, "--output", "json"], capture=True)
-        )
-        for release in releases:
-            if str(release.get("chart", "")).startswith("kagent-tools-"):
-                runtime.helm(
-                    [
-                        "uninstall",
-                        str(release["name"]),
-                        "--namespace",
-                        namespace,
-                        "--wait",
-                        "--timeout",
-                        "5m",
-                    ]
-                )
+    for namespace in targets:
+        for name in sorted(tool_releases.get(namespace, [])):
+            _uninstall_release(runtime, name, namespace)
         runtime.kubectl(
             [
                 "delete",
@@ -470,13 +680,7 @@ def cleanup(runtime: Runtime) -> None:
         permission_checks,
         key=lambda value: (value.subject, value.namespace or "", value.resource, value.verb),
     ):
-        args = ["auth", "can-i", check.verb, check.resource, f"--as={check.subject}"]
-        if check.namespace is None:
-            args.append("--all-namespaces")
-        else:
-            args += ["--namespace", check.namespace]
-        result = runtime.kubectl(args, capture=True).strip()
-        if result != "no":
+        if runtime.can_i(check):
             failures.append(
                 f"{check.subject} can still {check.verb} {check.resource} "
                 f"in {check.namespace or 'all namespaces'}"
@@ -537,6 +741,9 @@ def main(argv: list[str] | None = None) -> int:
     matrix_parser.add_argument("--rbac", required=True, type=Path)
     matrix_parser.add_argument("--out", required=True, type=Path)
 
+    profile_parser = subparsers.add_parser("check-profile")
+    profile_parser.add_argument("--profile", required=True, type=Path)
+
     for name in ("cleanup", "assert-clean"):
         runtime_parser = subparsers.add_parser(name)
         runtime_parser.add_argument("--kubeconfig", required=True, type=Path)
@@ -557,6 +764,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "matrix":
             raw = load_config(args.config)
             write_matrix(raw, args.rbac, args.out)
+        elif args.command == "check-profile":
+            check_profile(args.profile)
         elif args.command == "cleanup":
             cleanup(Runtime(args.kubeconfig))
         elif args.command == "assert-clean":

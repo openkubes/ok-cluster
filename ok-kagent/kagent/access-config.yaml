@@ -10,7 +10,7 @@
 #   make verify-access       # assert the boundary against the API server
 #
 # Reference and supported values: see the generator's README at
-# openkubes/platform/ai/kagent-standalone/access/README.md
+# openkubes/research/kagent-standalone/access/README.md
 kind: KagentAccessProfile
 
 # read-only  : diagnosis only. No write identity, Role, tool server or Agent.

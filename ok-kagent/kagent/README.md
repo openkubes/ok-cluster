@@ -55,7 +55,7 @@ renderer. It refuses cluster scope, ungated writes, resources other than
 ConfigMaps, and targets other than `kagent-lab`. The generic renderer's broader
 schema therefore cannot silently widen this evidenced lab profile.
 
-Full reference: `openkubes/platform/ai/kagent-standalone/access/README.md`.
+Full reference: `openkubes/research/kagent-standalone/access/README.md`.
 
 ## Where the boundary really is
 
@@ -68,12 +68,39 @@ server rather than reading manifests:
 - write identity: every verb found in the rendered ConfigMap Role is tested in
   `kagent-lab`, denied outside it, and mutations of a representative
   non-configured workload resource remain denied;
-- read-only mode: no label-owned write Agent, `RemoteMCPServer`, RBAC object, or
-  write-tools namespace may exist.
+- read-only mode: no write Agent, `RemoteMCPServer`, RBAC object, write-tools
+  namespace or `kagent-tools` release may exist.
 
 The executable verification matrix is generated from the rendered Role, not
 from a second permission list in the Makefile. A renderer or chart change that
 quietly widens RBAC fails the target.
+
+## Removing a write profile
+
+`make install` on a read-only profile removes the previous write path, and does
+not trust the profile that replaced it. Managed objects are found by ownership
+label and deleted by the names the API returns, so a previous profile with a
+different release, namespace or Agent name is still removed.
+
+The tool-server namespace is found on three independent paths, because a run
+from before the manifests carried ownership labels has no label to select on:
+
+1. the `openkubes.io/purpose=kagent-write-tools` label;
+2. the ServiceAccount namespace named in the discovered RoleBindings;
+3. any namespace holding a `kagent-tools-*` Helm release.
+
+The install namespace and the write targets are derived from the discovered
+objects and never deleted, as are `default` and `kube-*`.
+
+Afterwards the former ServiceAccount identity is re-tested for every mutating
+permission it used to hold. `kubectl auth can-i` reports a denial as exit
+status 1, which is the answer this check wants — the installer reads the printed
+answer and only treats other exit codes as a failure.
+
+`profile.env` is generated and then sourced by the Makefile, so both the config
+and the generated file are constrained: names must be plain DNS labels, and
+`make render-access` refuses a `profile.env` line that is anything other than a
+quoted or bare assignment.
 
 `make status` and every successful `make verify-access` write
 `.access.local/evidence.json`. It records the `ok-cluster` commit, the coupled
@@ -82,9 +109,9 @@ versions, dirty-worktree flags, and the observation result.
 
 ## Layout and prerequisites
 
-Generic manifests and the renderer live in `openkubes`; only cluster-specific
-values live here. The installer expects both repositories as siblings, or an
-explicit path:
+Generic manifests and the renderer live in `openkubes` under
+`research/kagent-standalone`; only cluster-specific values live here. The
+installer expects both repositories as siblings, or an explicit path:
 
 ```bash
 make install OPENKUBES_DIR=/path/to/openkubes

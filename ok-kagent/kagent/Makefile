@@ -32,7 +32,7 @@ ACCESS_CONFIG  ?= access-config.yaml
 ACCESS_OUT     := .access.local
 PROFILE_ENV    := $(ACCESS_OUT)/profile.env
 OPENKUBES_DIR  ?= $(abspath ../../../openkubes)
-KAGENT_ASSETS  := $(OPENKUBES_DIR)/platform/ai/kagent-standalone
+KAGENT_ASSETS  := $(OPENKUBES_DIR)/research/kagent-standalone
 RENDER_ACCESS  := $(KAGENT_ASSETS)/access/render-access.py
 OK129_ACCESS   := $(abspath ok129_access.py)
 OK_CLUSTER_DIR := $(abspath ../..)
@@ -127,6 +127,7 @@ render-access: assets-check
 	  --config "$(ACCESS_CONFIG)" \
 	  --out "$(ACCESS_OUT)" \
 	  --tools-image-tag "$(TOOLS_VERSION)"
+	@python3 "$(OK129_ACCESS)" check-profile --profile "$(PROFILE_ENV)"
 	@python3 "$(OK129_ACCESS)" matrix \
 	  --config "$(ACCESS_CONFIG)" \
 	  --rbac "$(RBAC_RENDERED)" \
@@ -134,6 +135,9 @@ render-access: assets-check
 
 # Same render, without the per-file chatter — for targets that only need the
 # output to be current. Boundary warnings are still printed.
+#
+# check-profile runs before anything sources $(PROFILE_ENV): the guard validates
+# the config, but this asserts the artefact the shell actually reads.
 render-access-quiet: assets-check
 	@python3 "$(OK129_ACCESS)" validate --config "$(ACCESS_CONFIG)"
 	@python3 "$(RENDER_ACCESS)" \
@@ -141,6 +145,7 @@ render-access-quiet: assets-check
 	  --out "$(ACCESS_OUT)" \
 	  --tools-image-tag "$(TOOLS_VERSION)" \
 	  --quiet
+	@python3 "$(OK129_ACCESS)" check-profile --profile "$(PROFILE_ENV)"
 	@python3 "$(OK129_ACCESS)" matrix \
 	  --config "$(ACCESS_CONFIG)" \
 	  --rbac "$(RBAC_RENDERED)" \
