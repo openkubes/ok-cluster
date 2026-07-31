@@ -38,3 +38,6 @@ ok-flatcar.yaml
 /ok-kagent/cluster-v2.yaml
 /ok-kagent/cluster-config.local.yaml
 /ok-kagent/kagent/.values.local.yaml
+# Access profile output is generated from access-config.yaml on every run.
+# Committing it would create a second, drifting source of truth for RBAC.
+/ok-kagent/kagent/.access.local/

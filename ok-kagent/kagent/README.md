@@ -4,48 +4,88 @@ Cluster-specific lifecycle for kagent on the disposable `ok-kagent` lab.
 
 ```bash
 export OLLAMA_URL='<private endpoint>'
-make -C ok-kagent/kagent install ACCESS_MODE=read-only
-make -C ok-kagent/kagent status
-make -C ok-kagent/kagent dashboard
-make -C ok-kagent/kagent uninstall
+
+make preflight        # local tools, access config, openkubes assets
+make access-summary   # what would the current profile grant?
+make install          # kagent + the access profile
+make verify-access    # prove the boundary against the API server
+make status
+make dashboard
+make uninstall
 ```
 
 `OLLAMA_URL` is substituted into `.values.local.yaml`, which is mode `0600` and
 Git-ignored. Never place the private endpoint or credentials in the committed
 template.
 
-The Helm path is the recommended reproducible path. The kagent CLI install is
-also exercised once for OK-129, but it is not the source of truth because its
-generated configuration is less reviewable than the versioned Helm values.
+Helm is the recommended reproducible path. The kagent CLI install was exercised
+once for OK-129 but is not the source of truth: its generated configuration is
+less reviewable than versioned Helm values, `--profile minimal` still installs
+Grafana-MCP and Querydoc, and `kagent uninstall` leaves the namespace behind.
 
-`ACCESS_MODE` is mandatory in operating procedures but defaults safely to
-`read-only` for unattended invocations:
+## Permissions live in `access-config.yaml`
 
-- `read-only`: the diagnostic Agent can inspect supported workload resources
-  cluster-wide, but cannot write or read Secrets.
-- `read-write`: keeps the read-only Agent and adds an approval-gated operator.
-  The operator can change only ConfigMaps and Deployments in `kagent-lab`; it
-  cannot read Secrets or write into another namespace.
+One file decides what the deployment may do. `make install` renders RBAC, the
+scoped write tool server and the write Agent from it — nothing is configured by
+hand, so nothing can drift out of sync with the documentation.
 
-The write profile deliberately does not set the upstream chart's
-`rbac.readOnly=false`, because that setting grants the tool server cluster-admin
-permissions. Instead it installs a second tool server with an explicit
-namespace Role:
+| Knob | Values | Effect |
+|---|---|---|
+| `mode` | `read-only` \| `read-write` | whether a write identity exists at all |
+| `write.scope` | `namespaces` \| `cluster` | Role per namespace, or one ClusterRole |
+| `write.namespaces` | list | the maintained set of write targets |
+| `write.resources` | list | which kinds may be changed |
+| `write.requireApproval` | `true` \| `false` | Approve/Reject gate per write tool |
 
-```bash
-export OLLAMA_URL='<private endpoint>'
-make -C ok-kagent/kagent install ACCESS_MODE=read-write
-make -C ok-kagent/kagent verify-access ACCESS_MODE=read-write
-```
-
-The installer expects the `openkubes` and `ok-cluster` repositories to be
-sibling directories. For another layout, pass the public repository explicitly:
+Switch a profile:
 
 ```bash
-make -C ok-kagent/kagent install \
-  ACCESS_MODE=read-write \
-  OPENKUBES_DIR=/path/to/openkubes
+# diagnosis only
+sed -i'' -e 's/^mode: .*/mode: read-only/' access-config.yaml
+make install          # removes the write identity, Role, tool server and Agent
+
+# approval-gated writes in two namespaces
+$EDITOR access-config.yaml   # mode: read-write, write.namespaces: [kagent-lab, team-a]
+make install
+make verify-access
 ```
 
-Switching back to `ACCESS_MODE=read-only` removes the gated Agent, its scoped
-tool server, Role, and RoleBinding. The read-only diagnostic Agent remains.
+Refused by design, whatever the config says: Secrets in any scope; RBAC objects,
+ServiceAccounts, Namespaces, Nodes, CRDs and webhooks; `*` as a resource; the
+`kagent` install namespace as a write target; `kube-*` namespaces; and an ungated
+cluster-wide writer. The renderer exits non-zero and generates nothing.
+
+Full reference: `openkubes/platform/ai/kagent-standalone/access/README.md`.
+
+## Where the boundary really is
+
+Kubernetes calls are executed by the **tool server's ServiceAccount**, not by the
+Agent pod. `toolNames`, `requireApproval` and the system prompt shape intent; RBAC
+decides what is possible. `make verify-access` therefore asserts against the API
+server rather than reading manifests:
+
+- read identity: reads yes, writes no, Secrets no, wildcard no;
+- write identity: works inside its configured scope, denied outside it, no
+  Secrets, cannot create RoleBindings;
+- read-only mode: the write Agent, its `RemoteMCPServer` and the
+  `kagent-write` namespace must not exist.
+
+A chart upgrade that quietly widens RBAC fails that target. That is the point of
+having it.
+
+## Layout and prerequisites
+
+Generic manifests and the renderer live in `openkubes`; only cluster-specific
+values live here. The installer expects both repositories as siblings, or an
+explicit path:
+
+```bash
+make install OPENKUBES_DIR=/path/to/openkubes
+```
+
+Local tools: `kubectl`, `helm`, `python3` with PyYAML. `make preflight` checks
+them. The targets use POSIX tools plus python3 only — no ripgrep, no `envsubst`,
+no BSD-only `stat` flags — so they behave the same on macOS and Linux.
+
+Git-ignored, generated, never committed: `.values.local.yaml` (private endpoint)
+and `.access.local/` (rendered access profile).
