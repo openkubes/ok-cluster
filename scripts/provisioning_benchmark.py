@@ -162,12 +162,12 @@ def validate_envelope(config: dict, os_name: str, cluster: str) -> dict:
         ),
         "controlPlane.disk": (
             config.get("controlPlane", {}).get("disk"),
-            "20Gi",
+            "50Gi",
         ),
         "workers.replicas": (config.get("workers", {}).get("replicas"), 1),
         "workers.cores": (config.get("workers", {}).get("cores"), 2),
         "workers.memory": (config.get("workers", {}).get("memory"), "4Gi"),
-        "workers.disk": (config.get("workers", {}).get("disk"), "20Gi"),
+        "workers.disk": (config.get("workers", {}).get("disk"), "50Gi"),
         "nodeSelector": (config.get("nodeSelector"), EXPECTED_NODE),
     }
     for key, (actual, expected) in checks.items():
@@ -199,6 +199,7 @@ def validate_envelope(config: dict, os_name: str, cluster: str) -> dict:
         "worker_replicas": 1,
         "expected_nodes": EXPECTED_NODES,
         "node_selector": EXPECTED_NODE,
+        "boot_disk_capacity": "50Gi",
     }
 
 

@@ -34,7 +34,7 @@ EXPECTED_PROFILE = {
     "identity": (
         "sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb"
     ),
-    "profile_revision": 4,
+    "profile_revision": 5,
     "golden_namespace": "ok-images",
     "golden_claim": "flatcar-stable-4593-2-4-amd64-kubevirt",
     "golden_target_storage_class": "ok-storage-block",
@@ -44,17 +44,18 @@ EXPECTED_CONTROL_PLANE = {
     "replicas": 1,
     "cores": 2,
     "memory": "4Gi",
-    "disk": "20Gi",
+    "disk": "50Gi",
 }
 EXPECTED_WORKERS = {
     "replicas": 1,
     "cores": 2,
     "memory": "4Gi",
-    "disk": "20Gi",
+    "disk": "50Gi",
 }
 DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
 EXPECTED_CLONE_TARGET = {
     "storage_class": "ok-storage-block",
+    "boot_disk_capacity": "50Gi",
     "provisioner": "driver.longhorn.io",
     "access_mode": "ReadWriteOnce",
     "volume_mode": "Filesystem",

@@ -355,13 +355,13 @@ make install CLUSTER=ok1
 Consumes only the promoted `ok-linux` `flatcar-kubevirt` profile. The ordinary
 resolver is fail-closed to the exact amd64/KubeVirt envelope and uses
 replacement-only Day-2 convergence without SSH or guest mutation.
-Its immutable Golden PVC remains in `ok-images`; profile revision 4 creates
+Its immutable Golden PVC remains in `ok-images`; profile revision 5 creates
 control-plane and worker CDI snapshot clones on Longhorn
-`ok-storage-block`. The preflight requires the exact StorageClass/CDI
-StorageProfile, `ok-storage-block-snapshot`, and KubeVirt `ExpandDisks`
-contracts. The supported teardown removes retained clone PVs, Longhorn
-volumes, temporary CDI snapshots, and clone RBAC while preserving the shared
-Golden PVC.
+`ok-storage-block` with 50 GiB boot capacity. The preflight requires the exact
+StorageClass/CDI StorageProfile, `ok-storage-block-snapshot`, and KubeVirt
+`ExpandDisks` contracts. The supported teardown removes retained clone PVs,
+Longhorn volumes, temporary CDI snapshots, and clone RBAC while preserving the
+shared Golden PVC.
 See [Constrained Flatcar Cluster](#constrained-flatcar-cluster) for the
 canonical scaffold, preflight, install, and verified-runtime procedure.
 

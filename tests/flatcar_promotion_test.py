@@ -44,13 +44,13 @@ def base_config() -> dict:
             "replicas": 1,
             "cores": 2,
             "memory": "4Gi",
-            "disk": "20Gi",
+            "disk": "50Gi",
         },
         "workers": {
             "replicas": 1,
             "cores": 2,
             "memory": "4Gi",
-            "disk": "20Gi",
+            "disk": "50Gi",
         },
         "versions": {"kubernetes": "v1.34.1"},
         "network": {
@@ -271,17 +271,28 @@ def main() -> int:
             and all(
                 item["spec"]["storage"]["storageClassName"]
                 == "ok-storage-block"
+                and item["spec"]["storage"]["resources"]["requests"][
+                    "storage"
+                ]
+                == "50Gi"
                 and item["metadata"]["name"].endswith(
                     f"{revision_suffix}-boot"
                 )
                 for item in data_volume_templates
             ),
-            "templates and boot clones bind profile revision 4 to Longhorn",
+            "templates and 50Gi boot clones bind profile revision 5 to Longhorn",
         )
 
     lifecycle_source = (
         ROOT / "scripts" / "flatcar_lifecycle.py"
     ).read_text(encoding="utf-8")
+    scaffold_source = (ROOT / "new-cluster.sh").read_text(encoding="utf-8")
+    check(
+        '"$TYPE" == "flatcar" || "$TYPE" == "talos"' in scaffold_source
+        and 'CP_DISK="${CP_DISK:-50Gi}"' in scaffold_source
+        and 'WORKER_DISK="50Gi"' in scaffold_source,
+        "scaffold materializes explicit 50Gi Flatcar and Talos benchmark disks",
+    )
     check(
         all(
             term in lifecycle_source

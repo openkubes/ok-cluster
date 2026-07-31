@@ -1197,6 +1197,7 @@ def self_test() -> int:
         or EXPECTED_PROFILE["node_selector"] != "ok-infra"
         or EXPECTED_PROFILE["golden_target_storage_class"]
         != "ok-storage-block"
+        or EXPECTED_CLONE_TARGET["boot_disk_capacity"] != "50Gi"
         or EXPECTED_CLONE_TARGET["kubevirt_feature_gates"] != ["ExpandDisks"]
         or EXPECTED_CILIUM_CHART_SHA256
         != "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179"
