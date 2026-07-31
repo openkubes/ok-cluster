@@ -38,7 +38,11 @@ if [[ -z "$WORKER_DISK" ]]; then
 fi
 NODE_SELECTOR="${NODE_SELECTOR:-${NODE:-}}"   # OK-82: NODE= accepted as alias
 START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
-GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-local-path}"
+if [[ "$TYPE" == "flatcar" ]]; then
+  GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-ok-storage-block}"
+else
+  GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-local-path}"
+fi
 
 if [[ -z "$CLUSTER" ]]; then
   echo "ERROR: CLUSTER is required."
@@ -168,7 +172,8 @@ os:
   profile: flatcar-kubevirt
   architecture: ${ARCHITECTURE}
 
-# KubeVirt consumer mechanics remain owned by ok-cluster.
+# The Flatcar profile owns the supported clone-target storage contract;
+# ok-cluster implements it with KubeVirt/CDI.
 providerProfile:
   goldenImageStorageClass: ${GOLDEN_IMAGE_STORAGE_CLASS}
 FLATCARBLOCK

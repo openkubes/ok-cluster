@@ -34,10 +34,10 @@ EXPECTED_PROFILE = {
     "identity": (
         "sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb"
     ),
-    "profile_revision": 1,
+    "profile_revision": 4,
     "golden_namespace": "ok-images",
     "golden_claim": "flatcar-stable-4593-2-4-amd64-kubevirt",
-    "golden_target_storage_class": "local-path",
+    "golden_target_storage_class": "ok-storage-block",
     "node_selector": "ok-infra",
 }
 EXPECTED_CONTROL_PLANE = {
@@ -53,6 +53,16 @@ EXPECTED_WORKERS = {
     "disk": "20Gi",
 }
 DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
+EXPECTED_CLONE_TARGET = {
+    "storage_class": "ok-storage-block",
+    "provisioner": "driver.longhorn.io",
+    "access_mode": "ReadWriteOnce",
+    "volume_mode": "Filesystem",
+    "reclaim_policy": "Retain",
+    "volume_binding_mode": "Immediate",
+    "allow_volume_expansion": True,
+    "kubevirt_feature_gates": ["ExpandDisks"],
+}
 
 
 class FlatcarProfileError(ValueError):
@@ -128,6 +138,7 @@ def validate_profile(profile: dict) -> None:
         or support.get("provider") != "kubevirt"
         or support.get("runtime_validated_topology")
         != {"control_plane_replicas": 1, "worker_replicas": 1}
+        or support.get("clone_target") != EXPECTED_CLONE_TARGET
         or support.get("continuous_control_plane_api_slo") is not False
         or "arm64" not in support.get("exclusions", [])
     ):

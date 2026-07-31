@@ -179,9 +179,7 @@ def validate_envelope(config: dict, os_name: str, cluster: str) -> dict:
             f"versions.kubernetes={version!r}, expected {EXPECTED_KUBERNETES!r}"
         )
     golden = config.get("os", {}).get("goldenImage", {})
-    expected_storage = (
-        "local-path" if os_name == "flatcar" else EXPECTED_STORAGE_CLASS
-    )
+    expected_storage = EXPECTED_STORAGE_CLASS
     storage = golden.get("storageClass")
     if storage not in (None, expected_storage):
         failures.append(

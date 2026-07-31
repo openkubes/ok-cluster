@@ -113,7 +113,7 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}
+  name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}
   namespace: ${CLUSTER_NAME}
   labels:
     openkubes.io/type: flatcar
@@ -147,7 +147,7 @@ spec:
           runStrategy: Always
           dataVolumeTemplates:
             - metadata:
-                name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-boot
+                name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}-boot
               spec:
                 source:
                   pvc:
@@ -187,7 +187,7 @@ spec:
               evictionStrategy: External
               volumes:
                 - dataVolume:
-                    name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-boot
+                    name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}-boot
                   name: rootdisk
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta2
@@ -216,7 +216,7 @@ spec:
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
-        name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}
+        name: ${CLUSTER_NAME}-cp-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}
   kubeadmConfigSpec:
     format: ${BOOTSTRAP_FORMAT}
     ignition:
@@ -287,7 +287,7 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
+  name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}
   namespace: ${CLUSTER_NAME}
   labels:
     openkubes.io/type: flatcar
@@ -321,7 +321,7 @@ spec:
           runStrategy: Always
           dataVolumeTemplates:
             - metadata:
-                name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-boot
+                name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}-boot
               spec:
                 source:
                   pvc:
@@ -361,13 +361,13 @@ spec:
               evictionStrategy: External
               volumes:
                 - dataVolume:
-                    name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-boot
+                    name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}-boot
                   name: rootdisk
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
 kind: KubeadmConfigTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
+  name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}
   namespace: ${CLUSTER_NAME}
   labels:
     openkubes.io/type: flatcar
@@ -474,8 +474,8 @@ spec:
         configRef:
           apiGroup: bootstrap.cluster.x-k8s.io
           kind: KubeadmConfigTemplate
-          name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
+          name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
-        name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}
+        name: ${CLUSTER_NAME}-workers-${OS_IDENTITY_SHORT}-r${OS_PROFILE_REVISION}

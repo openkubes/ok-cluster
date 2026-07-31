@@ -59,7 +59,7 @@ def base_config() -> dict:
             "serviceCIDR": "10.112.0.0/20",
         },
         "nodeSelector": "ok-infra",
-        "providerProfile": {"goldenImageStorageClass": "local-path"},
+        "providerProfile": {"goldenImageStorageClass": "ok-storage-block"},
         "os": {
             "profile": "flatcar-kubevirt",
             "architecture": "amd64",
@@ -109,7 +109,7 @@ def negative_cases() -> None:
     cases.append(("KubeVirt scheduling override", cfg))
 
     cfg = base_config()
-    cfg["providerProfile"]["goldenImageStorageClass"] = "ok-storage-block"
+    cfg["providerProfile"]["goldenImageStorageClass"] = "local-path"
     cases.append(("target storage override", cfg))
 
     cfg = base_config()
@@ -192,7 +192,7 @@ def main() -> int:
             "namespace": "ok-images",
             "claim": "flatcar-stable-4593-2-4-amd64-kubevirt",
             "published": True,
-            "storageClass": "local-path",
+            "storageClass": "ok-storage-block",
         },
         "bootstrap and KubeVirt image transport remain profile-bound",
     )
@@ -248,6 +248,53 @@ def main() -> int:
             and "https://" not in rendered,
             "promoted render contains no secret, SSH, or public fetch input",
         )
+        revision_suffix = (
+            resolved["os"]["identity"].removeprefix("sha256:")[:12]
+            + f"-r{resolved['os']['profileRevision']}"
+        )
+        machine_templates = [
+            item for item in docs if item.get("kind") == "KubevirtMachineTemplate"
+        ]
+        data_volume_templates = [
+            data_volume
+            for item in machine_templates
+            for data_volume in item["spec"]["template"]["spec"][
+                "virtualMachineTemplate"
+            ]["spec"]["dataVolumeTemplates"]
+        ]
+        check(
+            len(machine_templates) == 2
+            and all(
+                item["metadata"]["name"].endswith(revision_suffix)
+                for item in machine_templates
+            )
+            and all(
+                item["spec"]["storage"]["storageClassName"]
+                == "ok-storage-block"
+                and item["metadata"]["name"].endswith(
+                    f"{revision_suffix}-boot"
+                )
+                for item in data_volume_templates
+            ),
+            "templates and boot clones bind profile revision 4 to Longhorn",
+        )
+
+    lifecycle_source = (
+        ROOT / "scripts" / "flatcar_lifecycle.py"
+    ).read_text(encoding="utf-8")
+    check(
+        all(
+            term in lifecycle_source
+            for term in (
+                '"ExpandDisks"',
+                '"ok-storage-block-snapshot"',
+                '"cloneStrategy") != "snapshot"',
+                '"volumes.longhorn.io"',
+                '"cdi.kubevirt.io/OwnedByUID"',
+            )
+        ),
+        "preflight and teardown guard Longhorn snapshot-clone lifecycle",
+    )
 
     allowlist = subprocess.run(
         [
