@@ -214,7 +214,7 @@ spec:
                 resources:
                   requests:
                     storage: ${CP_DISK}
-                storageClassName: ok-storage-block
+                storageClassName: ${OS_CLONE_TARGET_STORAGE_CLASS}
               source:
                 pvc:
                   namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
@@ -270,7 +270,7 @@ spec:
                 resources:
                   requests:
                     storage: ${WORKER_DISK}
-                storageClassName: ok-storage-block
+                storageClassName: ${OS_CLONE_TARGET_STORAGE_CLASS}
               source:
                 pvc:
                   namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}

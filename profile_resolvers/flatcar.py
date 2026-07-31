@@ -64,6 +64,26 @@ EXPECTED_CLONE_TARGET = {
     "allow_volume_expansion": True,
     "kubevirt_feature_gates": ["ExpandDisks"],
 }
+EXPECTED_DEMO_PROFILES = {
+    "gpu-single-replica": {
+        "lifecycle": "demonstration-only",
+        "high_availability": False,
+        "node_selector": "ok-gpu",
+        "clone_target": {
+            "storage_class": "ok-storage-block-gpu-test",
+            "boot_disk_capacity": "50Gi",
+            "provisioner": "driver.longhorn.io",
+            "replica_count": 1,
+            "node_tag": "openkubes-gpu-demo",
+            "access_mode": "ReadWriteOnce",
+            "volume_mode": "Filesystem",
+            "reclaim_policy": "Delete",
+            "volume_binding_mode": "Immediate",
+            "allow_volume_expansion": True,
+            "kubevirt_feature_gates": ["ExpandDisks"],
+        },
+    }
+}
 
 
 class FlatcarProfileError(ValueError):
@@ -140,6 +160,7 @@ def validate_profile(profile: dict) -> None:
         or support.get("runtime_validated_topology")
         != {"control_plane_replicas": 1, "worker_replicas": 1}
         or support.get("clone_target") != EXPECTED_CLONE_TARGET
+        or profile.get("demo_profiles") != EXPECTED_DEMO_PROFILES
         or support.get("continuous_control_plane_api_slo") is not False
         or "arm64" not in support.get("exclusions", [])
     ):
@@ -201,6 +222,7 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
         "network",
         "nodeSelector",
         "providerProfile",
+        "demoProfile",
         "os",
         "bootstrap",
         "upgrade",
@@ -218,6 +240,10 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
     kubernetes = profile["artifacts"]["kubernetes_payload"]
     runtime = boot["runtime_distribution"]
     identity = profile["identity"]
+    demo_name = resolved.get("demoProfile")
+    if demo_name is not None and demo_name not in EXPECTED_DEMO_PROFILES:
+        raise FlatcarProfileError(f"unsupported Flatcar demoProfile: {demo_name!r}")
+    demo = EXPECTED_DEMO_PROFILES.get(demo_name)
 
     set_exact(
         resolved,
@@ -238,17 +264,22 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
     set_exact(
         resolved,
         "nodeSelector",
-        EXPECTED_PROFILE["node_selector"],
+        demo["node_selector"] if demo else EXPECTED_PROFILE["node_selector"],
         "nodeSelector",
     )
     provider_profile = resolved.setdefault("providerProfile", {})
+    expected_provider_profile = {
+        "goldenImageStorageClass": EXPECTED_PROFILE[
+            "golden_target_storage_class"
+        ]
+    }
+    if demo:
+        expected_provider_profile["cloneTargetStorageClass"] = demo[
+            "clone_target"
+        ]["storage_class"]
     exact_mapping(
         provider_profile,
-        {
-            "goldenImageStorageClass": EXPECTED_PROFILE[
-                "golden_target_storage_class"
-            ]
-        },
+        expected_provider_profile,
         "providerProfile",
     )
 
@@ -322,6 +353,11 @@ def preflight_new(args: argparse.Namespace) -> int:
         },
         "os": {"architecture": args.architecture},
     }
+    if args.demo_profile:
+        cfg["demoProfile"] = args.demo_profile
+        cfg["providerProfile"]["cloneTargetStorageClass"] = (
+            "ok-storage-block-gpu-test"
+        )
     resolve_flatcar_config(cfg, Path(args.ok_linux_path))
     print("PASS Flatcar scaffold matches the exact ADR-009 envelope")
     return 0
@@ -346,6 +382,7 @@ def main() -> int:
     preflight.add_argument("--worker-disk", required=True)
     preflight.add_argument("--node-selector", required=True)
     preflight.add_argument("--golden-image-storage-class", required=True)
+    preflight.add_argument("--demo-profile", default="")
     preflight.set_defaults(func=preflight_new)
     args = parser.parse_args()
     return args.func(args)

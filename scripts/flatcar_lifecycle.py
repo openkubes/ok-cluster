@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from profile_resolvers.flatcar import (  # noqa: E402
     EXPECTED_CLONE_TARGET,
+    EXPECTED_DEMO_PROFILES,
     EXPECTED_PROFILE,
     resolve_flatcar_config,
     validate_cluster_name,
@@ -393,6 +394,12 @@ def management_preflight(
     kubectl_bin: str,
 ) -> None:
     progress("checking source state and management-cluster preconditions")
+    demo_name = config.get("demoProfile")
+    clone_target = (
+        EXPECTED_DEMO_PROFILES[demo_name]["clone_target"]
+        if demo_name
+        else EXPECTED_CLONE_TARGET
+    )
     states = {
         "ok-cluster": source_state(ROOT),
         "ok-linux": source_state(paths["ok_linux"]),
@@ -446,7 +453,7 @@ def management_preflight(
         kubevirt_status.get("phase") != "Deployed"
         or kubevirt_status.get("observedKubeVirtVersion") != "v1.8.1"
         or kubevirt_status.get("targetKubeVirtVersion") != "v1.8.1"
-        or kubevirt_gates != EXPECTED_CLONE_TARGET["kubevirt_feature_gates"]
+        or kubevirt_gates != clone_target["kubevirt_feature_gates"]
     ):
         raise FlatcarLifecycleError(
             "management KubeVirt must be v1.8.1 with only ExpandDisks enabled"
@@ -455,7 +462,7 @@ def management_preflight(
     storage_class = kubectl_json(
         kubectl_bin,
         paths["management"],
-        ["get", "storageclass", EXPECTED_CLONE_TARGET["storage_class"]],
+        ["get", "storageclass", clone_target["storage_class"]],
     )
     observed_storage = {
         "provisioner": storage_class.get("provisioner"),
@@ -464,9 +471,18 @@ def management_preflight(
         "allow_volume_expansion": storage_class.get("allowVolumeExpansion"),
     }
     expected_storage = {
-        key: EXPECTED_CLONE_TARGET[key]
+        key: clone_target[key]
         for key in observed_storage
     }
+    if demo_name:
+        observed_storage["replica_count"] = int(
+            storage_class.get("parameters", {}).get("numberOfReplicas", "0")
+        )
+        observed_storage["node_tag"] = storage_class.get("parameters", {}).get(
+            "nodeSelector"
+        )
+        expected_storage["replica_count"] = clone_target["replica_count"]
+        expected_storage["node_tag"] = clone_target["node_tag"]
     if observed_storage != expected_storage:
         raise FlatcarLifecycleError(
             f"clone-target StorageClass contract mismatch: {observed_storage}"
@@ -488,7 +504,7 @@ def management_preflight(
     )
     if (
         snapshot_class is None
-        or snapshot_class.get("driver") != EXPECTED_CLONE_TARGET["provisioner"]
+        or snapshot_class.get("driver") != clone_target["provisioner"]
         or snapshot_class.get("deletionPolicy") != "Delete"
         or snapshot_class.get("parameters") != {"type": "snap"}
     ):
@@ -502,27 +518,28 @@ def management_preflight(
         [
             "get",
             "storageprofile.cdi.kubevirt.io",
-            EXPECTED_CLONE_TARGET["storage_class"],
+            clone_target["storage_class"],
         ],
     ).get("status", {})
     if (
         storage_profile.get("provisioner")
-        != EXPECTED_CLONE_TARGET["provisioner"]
+        != clone_target["provisioner"]
         or storage_profile.get("storageClass")
-        != EXPECTED_CLONE_TARGET["storage_class"]
+        != clone_target["storage_class"]
         or storage_profile.get("snapshotClass")
         != "ok-storage-block-snapshot"
         or storage_profile.get("cloneStrategy") != "snapshot"
         or storage_profile.get("claimPropertySets")
         != [
             {
-                "accessModes": [EXPECTED_CLONE_TARGET["access_mode"]],
-                "volumeMode": EXPECTED_CLONE_TARGET["volume_mode"],
+                "accessModes": [clone_target["access_mode"]],
+                "volumeMode": clone_target["volume_mode"],
             }
         ]
     ):
         raise FlatcarLifecycleError(
-            "CDI ok-storage-block profile is not the expected snapshot clone path"
+            f"CDI {clone_target['storage_class']} profile is not the expected "
+            "snapshot clone path"
         )
 
     for expected_deployment in GATE_DEPLOYMENTS:

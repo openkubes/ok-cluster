@@ -159,7 +159,7 @@ spec:
                   resources:
                     requests:
                       storage: ${CP_DISK}
-                  storageClassName: ${OS_GOLDEN_IMAGE_STORAGE_CLASS}
+                  storageClassName: ${OS_CLONE_TARGET_STORAGE_CLASS}
           template:
             metadata:
               labels:
@@ -333,7 +333,7 @@ spec:
                   resources:
                     requests:
                       storage: ${WORKER_DISK}
-                  storageClassName: ${OS_GOLDEN_IMAGE_STORAGE_CLASS}
+                  storageClassName: ${OS_CLONE_TARGET_STORAGE_CLASS}
           template:
             metadata:
               labels:

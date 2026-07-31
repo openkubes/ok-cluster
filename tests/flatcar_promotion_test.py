@@ -113,6 +113,19 @@ def negative_cases() -> None:
     cases.append(("target storage override", cfg))
 
     cfg = base_config()
+    cfg["demoProfile"] = "gpu-single-replica"
+    cfg["providerProfile"]["cloneTargetStorageClass"] = (
+        "ok-storage-block-gpu-test"
+    )
+    cases.append(("GPU demo with wrong scheduling node", cfg))
+
+    cfg = base_config()
+    cfg["providerProfile"]["cloneTargetStorageClass"] = (
+        "ok-storage-block-gpu-test"
+    )
+    cases.append(("GPU test storage without explicit demo profile", cfg))
+
+    cfg = base_config()
     cfg["os"]["imageDigest"] = "sha256:" + ("0" * 64)
     cases.append(("image identity override", cfg))
 
@@ -281,6 +294,45 @@ def main() -> int:
                 for item in data_volume_templates
             ),
             "templates and 50Gi boot clones bind profile revision 5 to Longhorn",
+        )
+
+    demo_config = base_config()
+    demo_config["demoProfile"] = "gpu-single-replica"
+    demo_config["nodeSelector"] = "ok-gpu"
+    demo_config["providerProfile"]["cloneTargetStorageClass"] = (
+        "ok-storage-block-gpu-test"
+    )
+    demo = resolve_flatcar_config(demo_config, OK_LINUX)
+    with tempfile.TemporaryDirectory(
+        prefix=".flatcar-gpu-demo-", dir=ROOT
+    ) as demo_name:
+        output = Path(demo_name)
+        renderer.render_cluster(demo["name"], output, demo)
+        resources = objects(output / "cluster-v2.yaml")
+        machine_templates = [
+            item
+            for item in resources
+            if item.get("kind") == "KubevirtMachineTemplate"
+        ]
+        clone_storage = [
+            data_volume["spec"]["storage"]["storageClassName"]
+            for item in machine_templates
+            for data_volume in item["spec"]["template"]["spec"][
+                "virtualMachineTemplate"
+            ]["spec"]["dataVolumeTemplates"]
+        ]
+        scheduling = [
+            item["spec"]["template"]["spec"]["virtualMachineTemplate"][
+                "spec"
+            ]["template"]["spec"]["nodeSelector"]["kubernetes.io/hostname"]
+            for item in machine_templates
+        ]
+        check(
+            demo["os"]["goldenImage"]["storageClass"] == "ok-storage-block"
+            and clone_storage
+            == ["ok-storage-block-gpu-test", "ok-storage-block-gpu-test"]
+            and scheduling == ["ok-gpu", "ok-gpu"],
+            "Flatcar GPU demo keeps the Golden source and isolates disposable clones",
         )
 
     lifecycle_source = (

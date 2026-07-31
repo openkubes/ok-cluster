@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Keep these in sync with render.py's OK_LINUX_DEFAULT_* constants.
 OK_LINUX_DEFAULT_PROFILE="kubevirt"
 OK_LINUX_DEFAULT_SCHEMATIC_ID="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
-OK_LINUX_DEFAULT_TALOS_VERSION="v1.9.5"
+OK_LINUX_DEFAULT_TALOS_VERSION="v1.9.6"
 OK_LINUX_PATH="${OK_LINUX_PATH:-${SCRIPT_DIR}/../ok-linux}"
 
 CLUSTER="${CLUSTER:-}"
@@ -41,11 +41,30 @@ if [[ -z "$WORKER_DISK" ]]; then
   fi
 fi
 NODE_SELECTOR="${NODE_SELECTOR:-${NODE:-}}"   # OK-82: NODE= accepted as alias
+DEMO_PROFILE="${DEMO_PROFILE:-}"
 START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
 if [[ "$TYPE" == "flatcar" ]]; then
   GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-ok-storage-block}"
 else
   GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-local-path}"
+fi
+CLONE_TARGET_STORAGE_CLASS="ok-storage-block"
+
+if [[ -n "$DEMO_PROFILE" ]]; then
+  if [[ "$DEMO_PROFILE" != "gpu-single-replica" ]]; then
+    echo "ERROR: unsupported DEMO_PROFILE=${DEMO_PROFILE}"
+    exit 1
+  fi
+  if [[ "$TYPE" != "talos" && "$TYPE" != "flatcar" ]]; then
+    echo "ERROR: gpu-single-replica is supported only for talos or flatcar"
+    exit 1
+  fi
+  if [[ -n "$NODE_SELECTOR" && "$NODE_SELECTOR" != "ok-gpu" ]]; then
+    echo "ERROR: gpu-single-replica requires NODE_SELECTOR=ok-gpu"
+    exit 1
+  fi
+  NODE_SELECTOR="ok-gpu"
+  CLONE_TARGET_STORAGE_CLASS="ok-storage-block-gpu-test"
 fi
 
 if [[ -z "$CLUSTER" ]]; then
@@ -86,7 +105,8 @@ if [[ "$TYPE" == "flatcar" ]]; then
     --worker-memory "${WORKER_MEMORY}" \
     --worker-disk "${WORKER_DISK}" \
     --node-selector "${NODE_SELECTOR}" \
-    --golden-image-storage-class "${GOLDEN_IMAGE_STORAGE_CLASS}"
+    --golden-image-storage-class "${GOLDEN_IMAGE_STORAGE_CLASS}" \
+    --demo-profile "${DEMO_PROFILE}"
 fi
 
 CLUSTER_DIR="${SCRIPT_DIR}/${CLUSTER}"
@@ -142,6 +162,7 @@ cat > "$CFG" <<YAML
 name: ${CLUSTER}
 type: ${TYPE}
 $(if [[ "$TYPE" == "flatcar" ]]; then echo "provider: ${PROVIDER}"; fi)
+$(if [[ -n "$DEMO_PROFILE" ]]; then echo "demoProfile: ${DEMO_PROFILE}"; fi)
 
 controlPlane:
   replicas: ${CP_REPLICAS}
@@ -180,7 +201,16 @@ os:
 # ok-cluster implements it with KubeVirt/CDI.
 providerProfile:
   goldenImageStorageClass: ${GOLDEN_IMAGE_STORAGE_CLASS}
+$(if [[ -n "$DEMO_PROFILE" ]]; then echo "  cloneTargetStorageClass: ${CLONE_TARGET_STORAGE_CLASS}"; fi)
 FLATCARBLOCK
+fi)
+$(if [[ "$TYPE" == "talos" && -n "$DEMO_PROFILE" ]]; then cat <<TALOSDEMOBLOCK
+
+# Explicit non-HA demo clone target. The immutable Golden Image remains on
+# ok-storage-block; only cluster-owned boot clones use this disposable class.
+providerProfile:
+  cloneTargetStorageClass: ${CLONE_TARGET_STORAGE_CLASS}
+TALOSDEMOBLOCK
 fi)
 
 network:

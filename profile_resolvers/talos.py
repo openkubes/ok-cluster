@@ -11,6 +11,37 @@ import yaml
 
 
 PROFILE_RELATIVE_PATH = Path("profiles/kubevirt/profile.yaml")
+EXPECTED_CLONE_TARGET = {
+    "storage_class": "ok-storage-block",
+    "provisioner": "driver.longhorn.io",
+    "replica_count": 2,
+    "access_mode": "ReadWriteOnce",
+    "volume_mode": "Filesystem",
+    "reclaim_policy": "Retain",
+    "volume_binding_mode": "Immediate",
+    "allow_volume_expansion": True,
+    "kubevirt_feature_gates": ["ExpandDisks"],
+}
+EXPECTED_DEMO_PROFILES = {
+    "gpu-single-replica": {
+        "lifecycle": "demonstration-only",
+        "high_availability": False,
+        "node_selector": "ok-gpu",
+        "clone_target": {
+            "storage_class": "ok-storage-block-gpu-test",
+            "boot_disk_capacity": "50Gi",
+            "provisioner": "driver.longhorn.io",
+            "replica_count": 1,
+            "node_tag": "openkubes-gpu-demo",
+            "access_mode": "ReadWriteOnce",
+            "volume_mode": "Filesystem",
+            "reclaim_policy": "Delete",
+            "volume_binding_mode": "Immediate",
+            "allow_volume_expansion": True,
+            "kubevirt_feature_gates": ["ExpandDisks"],
+        },
+    }
+}
 
 
 class TalosProfileError(ValueError):
@@ -58,6 +89,8 @@ def resolve_talos_config(cfg: dict, ok_linux_path: Path) -> dict:
         return resolved
 
     profile = load_profile(ok_linux_path)
+    if profile.get("demo_profiles") != EXPECTED_DEMO_PROFILES:
+        raise TalosProfileError("ok-linux Talos demo profiles differ from contract")
     talos = profile.get("talos", {})
     artifact = talos.get("boot_artifact", {})
     golden = artifact.get("golden_image", {})
@@ -96,6 +129,31 @@ def resolve_talos_config(cfg: dict, ok_linux_path: Path) -> dict:
     ).hexdigest()
     if identity != artifact["identity"]:
         raise TalosProfileError("Talos artifact identity is invalid")
+
+    demo_name = resolved.get("demoProfile")
+    if demo_name is not None and demo_name not in EXPECTED_DEMO_PROFILES:
+        raise TalosProfileError(f"unsupported Talos demoProfile: {demo_name!r}")
+    demo = EXPECTED_DEMO_PROFILES.get(demo_name)
+    if demo:
+        expected_node = demo["node_selector"]
+        if resolved.get("nodeSelector", expected_node) != expected_node:
+            raise TalosProfileError(
+                f"{demo_name} requires nodeSelector: {expected_node}"
+            )
+        resolved["nodeSelector"] = expected_node
+        expected_provider = {
+            "cloneTargetStorageClass": demo["clone_target"]["storage_class"]
+        }
+        provider = resolved.setdefault("providerProfile", {})
+        if provider and provider != expected_provider:
+            raise TalosProfileError(
+                f"{demo_name} clone target differs from reviewed profile"
+            )
+        resolved["providerProfile"] = expected_provider
+    elif "providerProfile" in resolved:
+        raise TalosProfileError(
+            "Talos providerProfile overrides require an explicit demoProfile"
+        )
 
     versions = resolved.setdefault("versions", {})
     if versions.get("talos", talos["version"]) != talos["version"]:

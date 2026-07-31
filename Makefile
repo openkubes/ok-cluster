@@ -21,6 +21,7 @@ ARCHITECTURE  ?= amd64
 # OK-82: NODE= is an accepted alias for NODE_SELECTOR= (explicit NODE_SELECTOR wins)
 NODE          ?=
 NODE_SELECTOR ?= $(NODE)
+DEMO_PROFILE  ?=
 START_IP      ?=
 DRY_RUN       ?= false
 
@@ -137,7 +138,7 @@ new: require-cluster require-type
 	@CLUSTER=$(CLUSTER) TYPE=$(TYPE) HA=$(HA) WORKERS=$(WORKERS) \
 	 K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
 	 PROVIDER=$(PROVIDER) ARCHITECTURE=$(ARCHITECTURE) \
-	 NODE_SELECTOR=$(NODE_SELECTOR) START_IP=$(START_IP) \
+	 NODE_SELECTOR=$(NODE_SELECTOR) DEMO_PROFILE=$(DEMO_PROFILE) START_IP=$(START_IP) \
 	 OK_LINUX_PATH=$(OK_LINUX_PATH) \
 	 bash $(SCRIPT_DIR)/new-cluster.sh
 
@@ -160,7 +161,7 @@ cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test ok135-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test ok135-test gpu-demo-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -208,6 +209,8 @@ flatcar-promotion-test: ## Offline-test the exact ordinary Flatcar profile
 		python3 $(SCRIPT_DIR)/tests/flatcar_promotion_test.py
 
 ok135-test: flatcar-promotion-test ok128-benchmark-test ## Offline-test Flatcar Longhorn clone contract
+
+gpu-demo-test: flatcar-promotion-test ok130-test ## Offline-test Talos and Flatcar GPU demo profiles
 
 flatcar-preflight: require-cluster ## Read-only production Flatcar preflight
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
@@ -660,14 +663,14 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
 	DV_UIDS=$$($(OKB) get datavolumes -n $(CLUSTER) -o jsonpath='{range .items[*]}{.metadata.uid}{","}{end}' 2>/dev/null); \
 	if [ -n "$$PVS" ]; then \
-		echo "  VM disks use ok-storage-* (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
+		echo "  These cluster-owned VM disk PV(s) will be cleaned up here if the StorageClass has not already removed them:"; \
 		echo "$$PVS" | sed 's/^/    /'; \
 	fi; \
 	if [ "$(CONFIRM)" != "yes" ]; then \
 		printf "⚠️  This will TEAR DOWN %s: Cluster object, namespace, local render directory" "$(CLUSTER)"; \
 		if [ -n "$$PVS" ]; then \
 			PVCOUNT=$$(echo "$$PVS" | grep -c .); \
-			printf ", and %s Retain-policy PV(s)/Longhorn volume(s)" "$$PVCOUNT"; \
+			printf ", and %s cluster-owned PV(s)/Longhorn volume(s)" "$$PVCOUNT"; \
 		fi; \
 		echo "."; \
 		printf "Are you sure you want to tear down %s? [y/N] " "$(CLUSTER)"; \
@@ -691,7 +694,7 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 	echo "Removing local cluster directory..."; \
 	rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
 	if [ -n "$$PVS" ]; then \
-		echo "Cleaning up Retain-policy PVs and their underlying Longhorn volumes..."; \
+		echo "Cleaning up any remaining cluster-owned PVs and Longhorn volumes..."; \
 		for pv in $$PVS; do \
 			echo "  Deleting PV $$pv..."; \
 			$(OKB) delete pv $$pv --ignore-not-found; \
@@ -699,7 +702,7 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 			$(OKB) -n longhorn-system delete volumes.longhorn.io $$pv --ignore-not-found 2>/dev/null || true; \
 		done; \
 	fi; \
-	echo "✅ Talos cluster $(CLUSTER) torn down (including Retain-policy PV cleanup)."
+	echo "✅ Talos cluster $(CLUSTER) torn down (including cluster-owned PV cleanup)."
 
 # ── e2e ───────────────────────────────────────────────────────────────────────
 MGMT_CLUSTER       ?= ok-mgmt
@@ -945,9 +948,10 @@ help:
 	@echo ""
 	@echo "── Talos Workflow ───────────────────────────────────────────────────"
 	@echo "  make prepare-cilium-chart       # pinned .tools/cilium-1.19.6.tgz"
-	@echo "  make new       CLUSTER=ok-ai TYPE=talos [WORKERS=2] [K8S_VERSION=v1.36.2] [TALOS_VERSION=v1.13.4]"
+	@echo "  make new       CLUSTER=ok-ai TYPE=talos [WORKERS=2] [K8S_VERSION=v1.34.1] [TALOS_VERSION=v1.9.6]"
 	@echo "  make bootstrap CLUSTER=ok-ai   # apply + annotate PVCs + Cilium CNI"
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
+	@echo "  GPU demo: DEMO_PROFILE=gpu-single-replica CP_DISK=50Gi WORKER_DISK=50Gi"
 	@echo ""
 	@echo "── Constrained Flatcar Workflow (ADR-009) ───────────────────────────"
 	@echo "  make prepare-cilium-chart"
@@ -956,10 +960,13 @@ help:
 	@echo "  make install-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART=$(CILIUM_CHART) FLATCAR_APPLY=yes"
 	@echo "  make teardown-flatcar CLUSTER=ok-flatcar FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes"
 	@echo "  Envelope: Flatcar 4593.2.4, amd64, KubeVirt, Kubernetes v1.34.1, 1 CP + 1 worker"
+	@echo "  GPU demo: DEMO_PROFILE=gpu-single-replica CP_DISK=50Gi WORKER_DISK=50Gi"
+	@echo "  Runbook: docs/gpu-demo-runbook.md (non-HA meetup workflow)"
 	@echo ""
 	@echo "── All targets ──────────────────────────────────────────────────────"
 	@echo "  make prepare-cilium-chart [CILIUM_CHART_SOURCE=<predownloaded.tgz>]"
 	@echo "  make verify-cilium-chart"
+	@echo "  make gpu-demo-test                         # offline Talos + Flatcar demo guards"
 	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"

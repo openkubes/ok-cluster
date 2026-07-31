@@ -132,6 +132,27 @@ def main() -> int:
         resolve_talos_config(openstack, OK_LINUX) == openstack,
         "non-KubeVirt Talos provider semantics are unchanged",
     )
+    demo_raw = copy.deepcopy(raw)
+    demo_raw["demoProfile"] = "gpu-single-replica"
+    demo_raw["nodeSelector"] = "ok-gpu"
+    demo_raw["providerProfile"] = {
+        "cloneTargetStorageClass": "ok-storage-block-gpu-test"
+    }
+    demo_resolved = resolve_talos_config(demo_raw, OK_LINUX)
+    wrong_demo_node = copy.deepcopy(demo_raw)
+    wrong_demo_node["nodeSelector"] = "ok-infra"
+    expect_failure(
+        wrong_demo_node,
+        "Talos GPU demo rejects a non-GPU scheduling target",
+    )
+    unscoped_storage = copy.deepcopy(raw)
+    unscoped_storage["providerProfile"] = {
+        "cloneTargetStorageClass": "ok-storage-block-gpu-test"
+    }
+    expect_failure(
+        unscoped_storage,
+        "Talos GPU test storage requires an explicit demo profile",
+    )
 
     management = load(ROOT / "ok-mgmt" / "cluster-config.yaml")
     with tempfile.TemporaryDirectory(
@@ -258,6 +279,7 @@ def main() -> int:
             and not [item for item in resources if item["kind"] == "Secret"],
             "Talos machine configuration and secrets remain dynamic",
         )
+
         check(
             worker["metadata"]["name"].endswith("v1-9-6")
             and [
@@ -474,6 +496,41 @@ def main() -> int:
             ]
         },
     ]
+    with tempfile.TemporaryDirectory(
+        prefix=".ok130-gpu-demo-", dir=ROOT
+    ) as temp:
+        output = Path(temp)
+        render.render_cluster(demo_resolved["name"], output, demo_resolved)
+        manifest = output / "cluster-base.yaml"
+        validate_manifest(demo_resolved, manifest)
+        resources = docs(manifest)
+        machine_templates = [
+            item
+            for item in resources
+            if item["kind"] == "KubevirtMachineTemplate"
+        ]
+        clone_storage = [
+            data_volume["spec"]["pvc"]["storageClassName"]
+            for item in machine_templates
+            for data_volume in item["spec"]["template"]["spec"][
+                "virtualMachineTemplate"
+            ]["spec"]["dataVolumeTemplates"]
+        ]
+        scheduling = [
+            item["spec"]["template"]["spec"]["virtualMachineTemplate"][
+                "spec"
+            ]["template"]["spec"]["nodeSelector"]["kubernetes.io/hostname"]
+            for item in machine_templates
+        ]
+        check(
+            demo_resolved["os"]["goldenImage"]["storageClass"]
+            == "ok-storage-block"
+            and clone_storage
+            == ["ok-storage-block-gpu-test", "ok-storage-block-gpu-test"]
+            and scheduling == ["ok-gpu", "ok-gpu"],
+            "Talos GPU demo keeps the Golden source and isolates disposable clones",
+        )
+
     replacement_proof = verify_timeline(
         replacement_timeline, "v1.9.5", "v1.9.6", "7f5dd4276432"
     )
@@ -619,9 +676,10 @@ def main() -> int:
         "warm evidence uses comparable CAPI, Node, Cilium milestones",
     )
     check(
-        '["get", "node", "ok-infra"]' in lifecycle_source
-        and "ok-infra is not Ready and schedulable" in lifecycle_source,
-        "management preflight verifies the reviewed scheduling target",
+        'expected_node = config.get("nodeSelector") or "ok-infra"'
+        in lifecycle_source
+        and "verify_clone_storage(config, kubeconfig)" in lifecycle_source,
+        "management preflight verifies the profile-bound node and clone storage",
     )
     check(
         '"ExpandDisks" not in gates' in lifecycle_source

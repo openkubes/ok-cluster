@@ -19,6 +19,8 @@ EVIDENCE_DIR = ROOT / "docs" / "adoption" / "OK-130" / ".evidence"
 sys.path.insert(0, str(ROOT))
 
 from profile_resolvers.talos import (  # noqa: E402
+    EXPECTED_CLONE_TARGET,
+    EXPECTED_DEMO_PROFILES,
     TalosProfileError,
     resolve_talos_config,
 )
@@ -44,6 +46,13 @@ def load_yaml(path: Path) -> dict:
 def objects(path: Path) -> list[dict]:
     with path.open(encoding="utf-8") as stream:
         return [value for value in yaml.safe_load_all(stream) if value]
+
+
+def clone_target(config: dict) -> dict:
+    demo_name = config.get("demoProfile")
+    if demo_name:
+        return EXPECTED_DEMO_PROFILES[demo_name]["clone_target"]
+    return EXPECTED_CLONE_TARGET
 
 
 def run(
@@ -144,6 +153,26 @@ def validate_manifest(config: dict, manifest_path: Path) -> None:
         ]
     ):
         raise TalosLifecycleError("clone authorization is not least privilege")
+    expected_storage = clone_target(config)["storage_class"]
+    machine_templates = [
+        item for item in docs if item.get("kind") == "KubevirtMachineTemplate"
+    ]
+    rendered_storage = [
+        data_volume.get("spec", {}).get("pvc", {}).get("storageClassName")
+        for item in machine_templates
+        for data_volume in item.get("spec", {})
+        .get("template", {})
+        .get("spec", {})
+        .get("virtualMachineTemplate", {})
+        .get("spec", {})
+        .get("dataVolumeTemplates", [])
+    ]
+    if len(rendered_storage) != 2 or any(
+        value != expected_storage for value in rendered_storage
+    ):
+        raise TalosLifecycleError(
+            f"Talos clone targets must use {expected_storage}: {rendered_storage}"
+        )
 
 
 def verify_golden(config: dict, kubeconfig: Path) -> dict:
@@ -169,8 +198,9 @@ def verify_golden(config: dict, kubeconfig: Path) -> dict:
     }
 
 
-def verify_scheduling(kubeconfig: Path) -> dict:
-    node = kubectl_json(kubeconfig, ["get", "node", "ok-infra"])
+def verify_scheduling(config: dict, kubeconfig: Path) -> dict:
+    expected_node = config.get("nodeSelector") or "ok-infra"
+    node = kubectl_json(kubeconfig, ["get", "node", expected_node])
     ready = next(
         (
             condition
@@ -184,13 +214,77 @@ def verify_scheduling(kubeconfig: Path) -> dict:
         or ready is None
         or ready.get("status") != "True"
     ):
-        raise TalosLifecycleError("ok-infra is not Ready and schedulable")
+        raise TalosLifecycleError(
+            f"{expected_node} is not Ready and schedulable"
+        )
     return {
         "name": node["metadata"]["name"],
         "uid": node["metadata"]["uid"],
         "ready": True,
         "schedulable": True,
     }
+
+
+def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
+    expected = clone_target(config)
+    name = expected["storage_class"]
+    storage = kubectl_json(kubeconfig, ["get", "storageclass", name])
+    observed = {
+        "provisioner": storage.get("provisioner"),
+        "reclaim_policy": storage.get("reclaimPolicy"),
+        "volume_binding_mode": storage.get("volumeBindingMode"),
+        "allow_volume_expansion": storage.get("allowVolumeExpansion"),
+    }
+    required = {key: expected[key] for key in observed}
+    if config.get("demoProfile"):
+        parameters = storage.get("parameters", {})
+        observed.update(
+            {
+                "replica_count": int(parameters.get("numberOfReplicas", "0")),
+                "node_tag": parameters.get("nodeSelector"),
+            }
+        )
+        required.update(
+            {
+                "replica_count": expected["replica_count"],
+                "node_tag": expected["node_tag"],
+            }
+        )
+    if observed != required:
+        raise TalosLifecycleError(
+            f"Talos clone StorageClass contract mismatch: {observed}"
+        )
+    snapshot = kubectl_json(
+        kubeconfig,
+        ["get", "volumesnapshotclass", "ok-storage-block-snapshot"],
+    )
+    if (
+        snapshot.get("driver") != expected["provisioner"]
+        or snapshot.get("deletionPolicy") != "Delete"
+        or snapshot.get("parameters") != {"type": "snap"}
+    ):
+        raise TalosLifecycleError("Longhorn snapshot clone class is invalid")
+    profile = kubectl_json(
+        kubeconfig,
+        ["get", "storageprofile.cdi.kubevirt.io", name],
+    ).get("status", {})
+    if (
+        profile.get("provisioner") != expected["provisioner"]
+        or profile.get("storageClass") != name
+        or profile.get("snapshotClass") != "ok-storage-block-snapshot"
+        or profile.get("cloneStrategy") != "snapshot"
+        or profile.get("claimPropertySets")
+        != [
+            {
+                "accessModes": [expected["access_mode"]],
+                "volumeMode": expected["volume_mode"],
+            }
+        ]
+    ):
+        raise TalosLifecycleError(
+            f"CDI {name} profile is not the expected snapshot clone path"
+        )
+    return {"storage_class": name, "snapshot_clone": True}
 
 
 def verify_kubevirt(kubeconfig: Path) -> dict:
@@ -366,7 +460,8 @@ def runtime_evidence(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
     kubevirt = verify_kubevirt(kubeconfig)
-    scheduling = verify_scheduling(kubeconfig)
+    scheduling = verify_scheduling(config, kubeconfig)
+    verify_clone_storage(config, kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster_name = config["name"]
     namespace = kubectl_json(
@@ -468,7 +563,8 @@ def preflight(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
     kubevirt = verify_kubevirt(kubeconfig)
-    scheduling = verify_scheduling(kubeconfig)
+    scheduling = verify_scheduling(config, kubeconfig)
+    verify_clone_storage(config, kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster = config["name"]
     namespace = kubectl(
@@ -513,7 +609,8 @@ def replacement_preflight(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
     kubevirt = verify_kubevirt(kubeconfig)
-    scheduling = verify_scheduling(kubeconfig)
+    scheduling = verify_scheduling(config, kubeconfig)
+    verify_clone_storage(config, kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster_name = config["name"]
     cluster = kubectl_json(
@@ -731,7 +828,8 @@ def replacement_wait(args: argparse.Namespace) -> int:
                     "annotate",
                     "pvc",
                     name,
-                    "volume.kubernetes.io/selected-node=ok-infra",
+                    "volume.kubernetes.io/selected-node="
+                    + (config.get("nodeSelector") or "ok-infra"),
                     "--overwrite",
                 ],
                 expected=(0, 1),

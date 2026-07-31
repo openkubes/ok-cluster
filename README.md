@@ -473,6 +473,10 @@ ok-cluster/
 
 > Rendered cluster directories (`my-cluster/`) contain only non-sensitive private IPs and may be committed deliberately. Secret material (Talos configs, kubeconfigs) is generated at runtime and never enters Git — the cluster instances themselves are reachable via VPN only.
 
+For the explicitly non-HA, single-replica `ok-gpu` meetup workflow, follow the
+[GPU demo runbook](docs/gpu-demo-runbook.md). It is an opt-in demonstration
+profile and does not change the default production or benchmark storage contract.
+
 ---
 
 ## Part of OpenKubes

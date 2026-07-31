@@ -199,6 +199,7 @@ def build_context(cfg: dict) -> dict:
     _osp = cfg.get("openstack", {})
     os_cfg = cfg.get("os", {})
     golden_image = os_cfg.get("goldenImage", {})
+    provider_profile = cfg.get("providerProfile", {})
     bootstrap = cfg.get("bootstrap", {})
     identity = str(os_cfg.get("identity", ""))
     identity_hex = identity.removeprefix("sha256:")
@@ -258,6 +259,9 @@ def build_context(cfg: dict) -> dict:
             golden_image.get("published", False)
         ).lower(),
         "OS_GOLDEN_IMAGE_STORAGE_CLASS": golden_image.get("storageClass", ""),
+        "OS_CLONE_TARGET_STORAGE_CLASS": provider_profile.get(
+            "cloneTargetStorageClass", golden_image.get("storageClass", "")
+        ),
         "BOOTSTRAP_FORMAT": bootstrap.get("format", ""),
         "VM_BOOTSTRAP_CHECK_STRATEGY": bootstrap.get(
             "virtualMachineBootstrapCheck", ""
