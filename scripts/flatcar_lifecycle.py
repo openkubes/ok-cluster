@@ -933,10 +933,30 @@ def teardown(
         management,
         ["get", "persistentvolume"],
     ).get("items", [])
-    owned_pvs = sorted(
-        item["metadata"]["name"]
+    owned_pv_objects = [
+        item
         for item in pvs
         if item.get("spec", {}).get("claimRef", {}).get("namespace") == cluster
+    ]
+    invalid_pvs = [
+        item.get("metadata", {}).get("name", "<unnamed>")
+        for item in owned_pv_objects
+        if (
+            item.get("spec", {}).get("storageClassName")
+            != EXPECTED_CLONE_TARGET["storage_class"]
+            or item.get("spec", {}).get("csi", {}).get("driver")
+            != EXPECTED_CLONE_TARGET["provisioner"]
+            or item.get("spec", {}).get("csi", {}).get("volumeHandle")
+            != item.get("metadata", {}).get("name")
+            or not item.get("spec", {}).get("claimRef", {}).get("name")
+        )
+    ]
+    if invalid_pvs:
+        raise FlatcarLifecycleError(
+            f"refusing cleanup: non-profile PVs are cluster-bound: {invalid_pvs}"
+        )
+    owned_pvs = sorted(
+        item["metadata"]["name"] for item in owned_pv_objects
     )
     data_volumes = kubectl_json(
         kubectl_bin,
@@ -950,22 +970,60 @@ def teardown(
             "name": golden_source["claim"],
         }
     }
-    if any(
-        item.get("spec", {}).get("source") != expected_source
+    invalid_data_volumes = [
+        item.get("metadata", {}).get("name", "<unnamed>")
         for item in data_volumes
-    ):
+        if (
+            item.get("spec", {}).get("source") != expected_source
+            or item.get("spec", {})
+            .get("storage", {})
+            .get("storageClassName")
+            != EXPECTED_CLONE_TARGET["storage_class"]
+            or not item.get("metadata", {}).get("uid")
+        )
+    ]
+    if invalid_data_volumes:
         raise FlatcarLifecycleError(
-            "refusing cleanup: a cluster DataVolume has a non-Golden source"
+            "refusing cleanup: invalid cluster DataVolumes: "
+            f"{invalid_data_volumes}"
         )
     data_volume_uids = {
         item.get("metadata", {}).get("uid") for item in data_volumes
     } - {None}
+    longhorn_volumes = {}
+    for pv in owned_pv_objects:
+        name = pv["metadata"]["name"]
+        volume = kubectl_json(
+            kubectl_bin,
+            management,
+            [
+                "-n",
+                "longhorn-system",
+                "get",
+                "volumes.longhorn.io",
+                name,
+            ],
+        )
+        kubernetes_status = volume.get("status", {}).get(
+            "kubernetesStatus", {}
+        )
+        if (
+            kubernetes_status.get("namespace") != cluster
+            or kubernetes_status.get("pvName") != name
+            or kubernetes_status.get("pvcName")
+            != pv["spec"]["claimRef"]["name"]
+        ):
+            raise FlatcarLifecycleError(
+                f"refusing cleanup: Longhorn ownership mismatch for {name}"
+            )
+        longhorn_volumes[name] = volume["metadata"]["uid"]
     clone_name = f"{cluster}-golden-image-cloner"
     golden_namespace = config["os"]["goldenImage"]["namespace"]
     progress(
         "teardown targets: "
         f"namespace={cluster}, clone_authorization="
-        f"{golden_namespace}/{clone_name}, pvs={owned_pvs}"
+        f"{golden_namespace}/{clone_name}, pvs={owned_pvs}, "
+        f"longhorn_uids={longhorn_volumes}"
     )
 
     kubectl(

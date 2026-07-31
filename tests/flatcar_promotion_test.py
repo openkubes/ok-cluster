@@ -291,6 +291,8 @@ def main() -> int:
                 '"cloneStrategy") != "snapshot"',
                 '"volumes.longhorn.io"',
                 '"cdi.kubevirt.io/OwnedByUID"',
+                '"refusing cleanup: non-profile PVs are cluster-bound',
+                '"refusing cleanup: Longhorn ownership mismatch',
             )
         ),
         "preflight and teardown guard Longhorn snapshot-clone lifecycle",
