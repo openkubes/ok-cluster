@@ -58,6 +58,7 @@ branches are reviewed, committed, pushed and clean:
 make prepare-cilium-chart
 make new CLUSTER=ok135-flatcar TYPE=flatcar WORKERS=1 \
   K8S_VERSION=v1.34.1 PROVIDER=kubevirt ARCHITECTURE=amd64 \
+  CP_DISK=50Gi WORKER_DISK=50Gi \
   NODE_SELECTOR=ok-infra START_IP=<approved-ip>
 
 make flatcar-preflight CLUSTER=ok135-flatcar \

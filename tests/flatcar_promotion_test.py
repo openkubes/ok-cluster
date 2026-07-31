@@ -286,6 +286,13 @@ def main() -> int:
     lifecycle_source = (
         ROOT / "scripts" / "flatcar_lifecycle.py"
     ).read_text(encoding="utf-8")
+    scaffold_source = (ROOT / "new-cluster.sh").read_text(encoding="utf-8")
+    check(
+        '"$TYPE" == "flatcar" || "$TYPE" == "talos"' in scaffold_source
+        and 'CP_DISK="${CP_DISK:-50Gi}"' in scaffold_source
+        and 'WORKER_DISK="50Gi"' in scaffold_source,
+        "scaffold materializes explicit 50Gi Flatcar and Talos benchmark disks",
+    )
     check(
         all(
             term in lifecycle_source

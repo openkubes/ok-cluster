@@ -57,12 +57,14 @@ unused endpoints/CIDRs appropriate for the approved runtime:
 ```sh
 make new CLUSTER=ok128-flatcar TYPE=flatcar WORKERS=1 \
   K8S_VERSION=v1.34.1 PROVIDER=kubevirt ARCHITECTURE=amd64 \
+  CP_DISK=50Gi WORKER_DISK=50Gi \
   NODE_SELECTOR=ok-infra START_IP=<approved-ip>
 make render CLUSTER=ok128-flatcar
 
 make new CLUSTER=ok128-talos TYPE=talos WORKERS=1 \
   K8S_VERSION=v1.34.1 TALOS_VERSION=v1.9.5 \
   PROVIDER=kubevirt ARCHITECTURE=amd64 \
+  CP_DISK=50Gi WORKER_DISK=50Gi \
   NODE_SELECTOR=ok-infra START_IP=<approved-ip>
 make render CLUSTER=ok128-talos
 ```

@@ -147,7 +147,7 @@ controlPlane:
   replicas: ${CP_REPLICAS}
   cores: ${CP_CORES}
   memory: ${CP_MEMORY}
-$(if [[ "$TYPE" == "flatcar" ]]; then echo "  disk: ${CP_DISK}"; fi)
+$(if [[ "$TYPE" == "flatcar" || "$TYPE" == "talos" ]]; then echo "  disk: ${CP_DISK}"; fi)
 
 workers:
   replicas: ${WORKERS}
