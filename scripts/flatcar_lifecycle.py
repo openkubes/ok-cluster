@@ -50,6 +50,13 @@ EXPECTED_PROVIDER_INVENTORY = {
         "InfrastructureProvider",
     ): "v0.11.2",
 }
+
+
+def expected_clone_target(config: dict) -> dict:
+    demo_name = config.get("demoProfile")
+    if demo_name:
+        return EXPECTED_DEMO_PROFILES[demo_name]["clone_target"]
+    return EXPECTED_CLONE_TARGET
 GATE_DEPLOYMENTS = (
     {
         "namespace": "capi-kubeadm-bootstrap-system",
@@ -394,12 +401,7 @@ def management_preflight(
     kubectl_bin: str,
 ) -> None:
     progress("checking source state and management-cluster preconditions")
-    demo_name = config.get("demoProfile")
-    clone_target = (
-        EXPECTED_DEMO_PROFILES[demo_name]["clone_target"]
-        if demo_name
-        else EXPECTED_CLONE_TARGET
-    )
+    clone_target = expected_clone_target(config)
     states = {
         "ok-cluster": source_state(ROOT),
         "ok-linux": source_state(paths["ok_linux"]),
@@ -925,6 +927,7 @@ def teardown(
     cluster = args.cluster
     management = paths["management"]
     config = paths["resolved"]
+    clone_target = expected_clone_target(config)
     namespace = kubectl_json(
         kubectl_bin,
         management,
@@ -960,9 +963,9 @@ def teardown(
         for item in owned_pv_objects
         if (
             item.get("spec", {}).get("storageClassName")
-            != EXPECTED_CLONE_TARGET["storage_class"]
+            != clone_target["storage_class"]
             or item.get("spec", {}).get("csi", {}).get("driver")
-            != EXPECTED_CLONE_TARGET["provisioner"]
+            != clone_target["provisioner"]
             or item.get("spec", {}).get("csi", {}).get("volumeHandle")
             != item.get("metadata", {}).get("name")
             or not item.get("spec", {}).get("claimRef", {}).get("name")
@@ -995,7 +998,7 @@ def teardown(
             or item.get("spec", {})
             .get("storage", {})
             .get("storageClassName")
-            != EXPECTED_CLONE_TARGET["storage_class"]
+            != clone_target["storage_class"]
             or not item.get("metadata", {}).get("uid")
         )
     ]

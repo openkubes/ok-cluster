@@ -21,7 +21,10 @@ from profile_resolvers.flatcar import (  # noqa: E402
     FlatcarProfileError,
     resolve_flatcar_config,
 )
-from scripts.flatcar_lifecycle import workload_kubeconfig_owned  # noqa: E402
+from scripts.flatcar_lifecycle import (  # noqa: E402
+    expected_clone_target,
+    workload_kubeconfig_owned,
+)
 
 
 OK_LINUX = Path(
@@ -160,6 +163,15 @@ def negative_cases() -> None:
 
 
 def main() -> int:
+    check(
+        expected_clone_target(base_config())["storage_class"]
+        == "ok-storage-block"
+        and expected_clone_target(
+            {"demoProfile": "gpu-single-replica"}
+        )["storage_class"]
+        == "ok-storage-block-gpu-test",
+        "cleanup selects the profile-bound clone target",
+    )
     generated_kubeconfig_shape = {
         "current-context": (
             "flatcar-production-test-admin@flatcar-production-test"
