@@ -341,6 +341,11 @@ make new CLUSTER=ok-ai TYPE=talos WORKERS=2
 make bootstrap CLUSTER=ok-ai
 ```
 
+For a complete disposable `ok-infra` meetup deployment with independent
+control-plane/worker sizing, timed warm provisioning, runtime verification,
+and Golden-Image-preserving cleanup, see the
+[Talos on `ok-infra` meetup demo runbook](docs/ok-talos-infra-node-meetup-demo-runbook.md).
+
 ### Ubuntu (kubeadm, flexible)
 
 Uses [CAPK container disk images](https://quay.io/repository/capk/ubuntu-2404-container-disk) — nodes are ready in ~2 minutes.
