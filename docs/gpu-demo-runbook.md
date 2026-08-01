@@ -1,7 +1,8 @@
 # Talos and Flatcar GPU demo runbook
 
 This runbook creates disposable 1-control-plane/1-worker clusters on `ok-gpu`
-with 20 GiB boot disks. The opt-in profile uses one Longhorn replica and is
+with a 20 GiB control-plane disk and a 30 GiB worker disk. The opt-in profile
+uses one Longhorn replica and is
 therefore **not highly available**. It is intended only for the OpenKubes meetup
 demo. Golden Images remain immutable on `ok-storage-block`; only the per-cluster
 clone PVCs use `ok-storage-block-gpu-test`.
@@ -62,7 +63,7 @@ make new \
   TYPE=talos \
   WORKERS=1 \
   CP_DISK=20Gi \
-  WORKER_DISK=20Gi \
+  WORKER_DISK=30Gi \
   DEMO_PROFILE=gpu-single-replica \
   START_IP="$DEMO_START_IP"
 
@@ -122,7 +123,7 @@ make new \
   TYPE=flatcar \
   WORKERS=1 \
   CP_DISK=20Gi \
-  WORKER_DISK=20Gi \
+  WORKER_DISK=30Gi \
   DEMO_PROFILE=gpu-single-replica \
   START_IP="$DEMO_START_IP"
 

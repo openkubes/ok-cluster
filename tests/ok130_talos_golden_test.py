@@ -139,7 +139,7 @@ def main() -> int:
         "cloneTargetStorageClass": "ok-storage-block-gpu-test"
     }
     demo_raw["controlPlane"]["disk"] = "20Gi"
-    demo_raw["workers"]["disk"] = "20Gi"
+    demo_raw["workers"]["disk"] = "30Gi"
     demo_resolved = resolve_talos_config(demo_raw, OK_LINUX)
     wrong_demo_node = copy.deepcopy(demo_raw)
     wrong_demo_node["nodeSelector"] = "ok-infra"
@@ -542,9 +542,9 @@ def main() -> int:
             == "ok-storage-block"
             and clone_storage
             == ["ok-storage-block-gpu-test", "ok-storage-block-gpu-test"]
-            and clone_sizes == ["20Gi", "20Gi"]
+            and clone_sizes == ["20Gi", "30Gi"]
             and scheduling == ["ok-gpu", "ok-gpu"],
-            "Talos GPU demo renders two isolated 20Gi disposable clones",
+            "Talos GPU demo renders isolated 20Gi CP and 30Gi worker clones",
         )
 
     replacement_proof = verify_timeline(

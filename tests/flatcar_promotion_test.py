@@ -118,7 +118,7 @@ def negative_cases() -> None:
         "ok-storage-block-gpu-test"
     )
     cfg["controlPlane"]["disk"] = "20Gi"
-    cfg["workers"]["disk"] = "20Gi"
+    cfg["workers"]["disk"] = "30Gi"
     cases.append(("GPU demo with wrong scheduling node", cfg))
 
     cfg = base_config()
@@ -313,7 +313,7 @@ def main() -> int:
         "ok-storage-block-gpu-test"
     )
     demo_config["controlPlane"]["disk"] = "20Gi"
-    demo_config["workers"]["disk"] = "20Gi"
+    demo_config["workers"]["disk"] = "30Gi"
     demo = resolve_flatcar_config(demo_config, OK_LINUX)
     with tempfile.TemporaryDirectory(
         prefix=".flatcar-gpu-demo-", dir=ROOT
@@ -350,9 +350,9 @@ def main() -> int:
             demo["os"]["goldenImage"]["storageClass"] == "ok-storage-block"
             and clone_storage
             == ["ok-storage-block-gpu-test", "ok-storage-block-gpu-test"]
-            and clone_sizes == ["20Gi", "20Gi"]
+            and clone_sizes == ["20Gi", "30Gi"]
             and scheduling == ["ok-gpu", "ok-gpu"],
-            "Flatcar GPU demo renders two isolated 20Gi disposable clones",
+            "Flatcar GPU demo renders isolated 20Gi CP and 30Gi worker clones",
         )
 
     lifecycle_source = (

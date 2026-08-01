@@ -332,7 +332,7 @@ spec:
                     - ReadWriteOnce
                   resources:
                     requests:
-                      storage: 20Gi
+                      storage: 30Gi
                   storageClassName: ok-storage-block-gpu-test
           template:
             metadata:

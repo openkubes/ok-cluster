@@ -41,11 +41,11 @@ WORKER_CORES="${WORKER_CORES:-2}"
 WORKER_MEMORY="${WORKER_MEMORY:-4Gi}"
 WORKER_DISK="${WORKER_DISK:-}"
 if [[ "$DEMO_PROFILE" == "gpu-single-replica" ]]; then
-  if [[ -n "$WORKER_DISK" && "$WORKER_DISK" != "20Gi" ]]; then
-    echo "ERROR: gpu-single-replica requires WORKER_DISK=20Gi"
+  if [[ -n "$WORKER_DISK" && "$WORKER_DISK" != "30Gi" ]]; then
+    echo "ERROR: gpu-single-replica requires WORKER_DISK=30Gi"
     exit 1
   fi
-  WORKER_DISK="20Gi"
+  WORKER_DISK="30Gi"
 elif [[ -z "$WORKER_DISK" ]]; then
   if [[ "$TYPE" == "flatcar" ]]; then
     WORKER_DISK="50Gi"

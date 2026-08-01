@@ -1,3 +1,6 @@
+bootstrap:
+  format: ignition
+  virtualMachineBootstrapCheck: none
 controlPlane:
   cores: 2
   disk: 20Gi
@@ -12,21 +15,21 @@ network:
 nodeSelector: ok-gpu
 os:
   architecture: amd64
-  profile: flatcar-kubevirt
   contractRef: ADR-Platform-016
-  distribution: flatcar
-  version: 4593.2.4
-  imageDigest: sha256:49b72cf26d27d4747d6252c64582f17fdbd7d629993beebbcf997794333a978a
-  identity: sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb
-  profileRevision: 5
-  status: production-constrained
   deployable: true
-  supportDecision: docs/adr/ADR-009-flatcar-kubevirt-constrained-support.md
+  distribution: flatcar
   goldenImage:
     namespace: ok-images
     claim: flatcar-stable-4593-2-4-amd64-kubevirt
     published: true
     storageClass: ok-storage-block
+  identity: sha256:afd862491620adbaeb3c25aa82ae89a3bd748ae5976cf66fbf9613a732ba35bb
+  imageDigest: sha256:49b72cf26d27d4747d6252c64582f17fdbd7d629993beebbcf997794333a978a
+  profile: flatcar-kubevirt
+  profileRevision: 5
+  status: production-constrained
+  supportDecision: docs/adr/ADR-009-flatcar-kubevirt-constrained-support.md
+  version: 4593.2.4
 provider: kubevirt
 providerProfile:
   cloneTargetStorageClass: ok-storage-block-gpu-test
@@ -41,9 +44,6 @@ versions:
   kubernetes: v1.34.1
 workers:
   cores: 2
-  disk: 20Gi
+  disk: 30Gi
   memory: 4Gi
   replicas: 1
-bootstrap:
-  format: ignition
-  virtualMachineBootstrapCheck: none
