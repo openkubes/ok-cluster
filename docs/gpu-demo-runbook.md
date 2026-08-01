@@ -102,6 +102,8 @@ make teardown \
   CONFIRM=yes \
   TALOS_INFRA_KUBECONFIG="$HOME/.kube/ok-infra.yaml"
 
+rm -f -- "$HOME/.kube/meetup-talos.yaml"
+
 kubectl --kubeconfig "$HOME/.kube/ok-infra.yaml" \
   get namespace meetup-talos --ignore-not-found
 kubectl --kubeconfig "$HOME/.kube/ok-infra.yaml" \
@@ -113,19 +115,24 @@ The shared Talos Golden Image in `ok-images` is deliberately preserved.
 
 ## 4. Record the Flatcar video
 
-Re-check that the selected IP is free before reusing it:
+`meetup-flatcar` is a committed, pushed render because the guarded Flatcar
+lifecycle requires clean and remotely attributable source revisions. Do not
+run `make new` for this cluster before recording; use the committed render.
+Re-check its intent and that the selected IP is free:
 
 ```bash
 cd /Users/arash/temp/kubernauts/ok/ok-cluster
 
-make new \
-  CLUSTER=meetup-flatcar \
-  TYPE=flatcar \
-  WORKERS=1 \
-  CP_DISK=20Gi \
-  WORKER_DISK=30Gi \
-  DEMO_PROFILE=gpu-single-replica \
-  START_IP="$DEMO_START_IP"
+git status -sb
+python3 -c '
+import yaml
+c=yaml.safe_load(open("meetup-flatcar/cluster-config.yaml"))
+print(c["network"]["endpoint"], c["controlPlane"]["disk"], c["workers"]["disk"])
+'
+
+START_IP=192.168.100.214 \
+OKB_KUBECONFIG="$HOME/.kube/ok-infra.yaml" \
+python3 render.py next-ip --cluster meetup-flatcar
 
 make flatcar-preflight \
   CLUSTER=meetup-flatcar \
@@ -163,6 +170,16 @@ FLATCAR_TEARDOWN=yes make teardown-flatcar \
   CLUSTER=meetup-flatcar \
   FLATCAR_INFRA_KUBECONFIG="$HOME/.kube/ok-infra.yaml" \
   FLATCAR_WORKLOAD_KUBECONFIG="$HOME/.kube/meetup-flatcar.yaml"
+
+rm -f -- "$HOME/.kube/meetup-flatcar.yaml"
+
+# The lifecycle removes its local render; restore the committed video inputs.
+git restore --source=HEAD -- \
+  meetup-flatcar/cilium-values.yaml \
+  meetup-flatcar/cluster-config.yaml \
+  meetup-flatcar/cluster-v2.yaml
+
+git status -sb
 ```
 
 ## 5. Remove demo storage (separate Cleanup-GO)
