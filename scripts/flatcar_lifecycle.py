@@ -402,6 +402,7 @@ def management_preflight(
 ) -> None:
     progress("checking source state and management-cluster preconditions")
     clone_target = expected_clone_target(config)
+    demo_name = config.get("demoProfile")
     states = {
         "ok-cluster": source_state(ROOT),
         "ok-linux": source_state(paths["ok_linux"]),

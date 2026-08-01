@@ -370,6 +370,10 @@ def main() -> int:
     lifecycle_source = (
         ROOT / "scripts" / "flatcar_lifecycle.py"
     ).read_text(encoding="utf-8")
+    check(
+        lifecycle_source.count('demo_name = config.get("demoProfile")') >= 2,
+        "management and cleanup resolve the explicit demo profile",
+    )
     scaffold_source = (ROOT / "new-cluster.sh").read_text(encoding="utf-8")
     check(
         '"$TYPE" == "flatcar" || "$TYPE" == "talos"' in scaffold_source
