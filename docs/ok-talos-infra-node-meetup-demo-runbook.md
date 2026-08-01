@@ -99,6 +99,7 @@ Create the cluster configuration and rendered manifests:
 make new \
   CLUSTER=ok-talos-infra-node-meetup-demo \
   TYPE=talos \
+  TALOS_VERSION=v1.9.6 \
   NODE_SELECTOR=ok-infra \
   CP_CORES=2 \
   CP_MEMORY=4Gi \
