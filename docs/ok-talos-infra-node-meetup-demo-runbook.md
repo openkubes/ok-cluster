@@ -31,7 +31,7 @@ demo only.
 Run from a clean checkout of the `ok-cluster` `main` branch:
 
 ```bash
-cd /Users/arash/temp/kubernauts/ok/ok-cluster
+cd "$HOME/temp/kubernauts/ok/ok-cluster"
 git switch main
 git status --short --branch
 ```
@@ -68,7 +68,7 @@ make verify-cilium-chart
 Expected artifact:
 
 ```text
-/Users/arash/temp/kubernauts/ok/ok-cluster/.tools/cilium-1.19.6.tgz
+$HOME/temp/kubernauts/ok/ok-cluster/.tools/cilium-1.19.6.tgz
 ```
 
 For an offline or pre-downloaded artifact:
