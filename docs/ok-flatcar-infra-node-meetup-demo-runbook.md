@@ -204,6 +204,20 @@ The guarded lifecycle:
 A controlled 2026-07-30 run of the same supported lifecycle completed in
 `188.22` seconds. This is an observed baseline, not a service-level guarantee.
 
+### Meetup recording result (2026-08-02)
+
+The approved meetup recording completed successfully with:
+
+```text
+real 297.86
+user 10.53
+sys  3.48
+```
+
+Both Flatcar Nodes reached Ready and Cilium reached desired/current/ready
+`2/2/2`. This is another single observed warm run, not an SLO. The terminal
+recording preserves the exact POSIX result.
+
 ## 6. Verify the workload cluster
 
 ```bash
@@ -235,8 +249,12 @@ kubectl --kubeconfig "$HOME/.kube/ok-infra.yaml" \
   -o custom-columns=NAME:.metadata.name,NODE:.status.nodeName,CPU:.spec.domain.cpu.cores,MEMORY:.spec.domain.memory.guest,PHASE:.status.phase
 
 kubectl --kubeconfig "$HOME/.kube/ok-infra.yaml" \
+  -n ok-flatcar-infra-node-meetup-demo get datavolume \
+  -o custom-columns=NAME:.metadata.name,DV_REQUEST:.spec.storage.resources.requests.storage,PHASE:.status.phase
+
+kubectl --kubeconfig "$HOME/.kube/ok-infra.yaml" \
   -n ok-flatcar-infra-node-meetup-demo get pvc \
-  -o custom-columns=NAME:.metadata.name,SIZE:.spec.resources.requests.storage,SC:.spec.storageClassName,PHASE:.status.phase
+  -o custom-columns=NAME:.metadata.name,PVC_REQUEST:.spec.resources.requests.storage,CAPACITY:.status.capacity.storage,SC:.spec.storageClassName,PHASE:.status.phase
 
 kubectl --kubeconfig "$HOME/.kube/ok-infra.yaml" \
   -n ok-images get pvc flatcar-stable-4593-2-4-amd64-kubevirt
@@ -244,10 +262,15 @@ kubectl --kubeconfig "$HOME/.kube/ok-infra.yaml" \
 
 Expected result:
 
-| Role | Node | CPU | Memory | Disk | StorageClass | State |
-|---|---|---:|---:|---:|---|---|
-| control plane | `ok-infra` | 2 | 4Gi | 50Gi | `ok-storage-block` | Running/Bound |
-| worker | `ok-infra` | 2 | 4Gi | 50Gi | `ok-storage-block` | Running/Bound |
+| Role | Node | CPU | Memory | Declared disk | PVC capacity | StorageClass | State |
+|---|---|---:|---:|---:|---:|---|---|
+| control plane | `ok-infra` | 2 | 4Gi | 50Gi | 53Gi | `ok-storage-block` | Running/Bound |
+| worker | `ok-infra` | 2 | 4Gi | 50Gi | 53Gi | `ok-storage-block` | Running/Bound |
+
+The DataVolumes retain the exact profile request of `50Gi`. CDI accounts for
+filesystem overhead by expanding the resulting PVC request to `56908316672`
+bytes, reported by Kubernetes as `53Gi` capacity. This is storage backing for
+the declared 50 GiB virtual boot disk, not a profile change.
 
 The shared 15 GiB Golden Image remains `Bound`; the larger clone capacities
 are enabled by the reviewed KubeVirt `ExpandDisks` contract.
@@ -277,6 +300,19 @@ The tape records the real install duration. Post-processing may accelerate
 only the waiting interval; the displayed POSIX `real` value must remain the
 unmodified runtime evidence. The SRT assumes an exact 2:29 final cut and must
 be checked against the resulting edit before it is uploaded.
+
+The approved recording produced:
+
+| Artifact | Duration | SHA-256 |
+|---|---:|---|
+| master MP4 | 339.800 s | `be3359bb6127ab50b97cfdf3010b10fdcad71e6fea428523a48ceb69a9b3aa07` |
+| meetup-cut MP4 | 149.040 s | `71d0cbf022cfe7721153aa4c20b09bc3fc794d3921e990d44fdaee10446943bc` |
+| meetup-cut MP4 with soft English subtitles | 149.040 s | `0e5ba1fffa232e9e086c977d4c965c3a00b197be6adc432df9ef98334dfc5374` |
+| English SRT | 149.000 s | `21f3178a5f6656a2d52d809354fdfada645f19319a995e1c9a0d7c80257a221d` |
+
+The cut keeps seconds `0–30` and `290–339.8` at normal speed. Only seconds
+`30–290`, the provisioning wait, are accelerated approximately 3.76 times.
+The visible `real 297.86` result is unchanged.
 
 ## 9. Guarded teardown
 
