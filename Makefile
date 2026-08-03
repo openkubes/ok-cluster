@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -67,6 +67,15 @@ OBSERVABILITY_VALUES  ?= $(OK_OBSERVABILITY_PATH)/$(CLUSTER).provider-values.yam
 # = unpinned, and the resolved sha is printed as gate evidence either way
 # (ADR-Platform-024 open item 1, OK-109).
 OK_OBSERVABILITY_REF  ?= $(shell cat $(SCRIPT_DIR)/ok-observability.ref 2>/dev/null)
+
+# ── central identity: Keycloak on ok-shared (OK-81, ADR-Platform-020) ─────────
+# Same consumer-declares-what-it-consumes rule as the observability pin above: the
+# revision lives here, not in openkubes, because a checkout can only ever report its
+# own sha and so could never detect drift.
+OK_KEYCLOAK_PATH      ?= $(SCRIPT_DIR)/../openkubes
+OK_KEYCLOAK_REF       ?= $(shell cat $(SCRIPT_DIR)/ok-keycloak.ref 2>/dev/null)
+OK_KEYCLOAK_MODE      ?= pinned
+KEYCLOAK_NAMESPACE    ?= keycloak
 
 # ── datacenter secret profile: Vault + VSO (ADR-Platform-025, OK-117) ─────────
 # Which mechanism populates ok-observability-credentials:
@@ -573,6 +582,16 @@ install-vso: require-cluster kubeconfig ## Install the pinned Vault Secrets Oper
 		--wait --timeout 5m
 	@echo "✅ Vault Secrets Operator $(VSO_CHART_VERSION) installed on $(CLUSTER)"
 
+install-keycloak: require-cluster kubeconfig ## Install central Keycloak from a pinned openkubes revision; stops before the approval-gated steps
+	@CLUSTER=$(CLUSTER) \
+	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
+	 MGMT_KUBECONFIG=$(HOME)/.kube/ok-mgmt.yaml \
+	 OPENKUBES_PATH=$(OK_KEYCLOAK_PATH) \
+	 OK_KEYCLOAK_REF=$(OK_KEYCLOAK_REF) \
+	 OK_KEYCLOAK_MODE=$(OK_KEYCLOAK_MODE) \
+	 KEYCLOAK_NAMESPACE=$(KEYCLOAK_NAMESPACE) \
+	 bash $(SCRIPT_DIR)/install-keycloak.sh
+
 install-observability: require-cluster kubeconfig ## Install ok-observability-standard profile + run the gated Contract Test (OK-79). Vars: OBSERVABILITY_SECRET_SOURCE=file|vault, OK_OBSERVABILITY_PATH, OK_OBSERVABILITY_REF, OBSERVABILITY_VALUES, CONTRACT_TEST_TIMEOUT, CONTRACT_TEST_RECEIVER_CAPTURE_URL
 	@CLUSTER=$(CLUSTER) \
 	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
@@ -966,6 +985,7 @@ help:
 	@echo "  make install-storage CLUSTER=ok-ai # local-path StorageClass (Talos)"
 	@echo "  make install-ingress CLUSTER=ok-ai # ingress controller (Traefik) + IngressClass ok-ingress"
 	@echo "  make install-observability CLUSTER=ok-ai [OBSERVABILITY_VALUES=<path>] # OK-79: ok-observability-standard + gated contract test"
+	@echo "  make install-keycloak CLUSTER=ok-shared # OK-81: central Keycloak from a pinned openkubes revision (stops before the approval-gated steps)"
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok-ai  # annotate PVCs manually"
