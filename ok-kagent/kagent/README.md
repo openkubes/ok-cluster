@@ -50,10 +50,10 @@ make install
 make verify-access
 ```
 
-The cluster installer adds a fail-closed OK-129 guard before the generic
-renderer. It refuses cluster scope, ungated writes, resources other than
-ConfigMaps, and targets other than `kagent-lab`. The generic renderer's broader
-schema therefore cannot silently widen this evidenced lab profile.
+The cluster installer adds an independent fail-closed OK-129 guard before the
+shared renderer. Both layers refuse cluster scope, ungated writes, resources
+other than ConfigMaps, and targets other than `kagent-lab`, so a future
+cross-repository drift cannot silently widen this evidenced lab profile.
 
 Full reference: `openkubes/research/kagent-standalone/access/README.md`.
 
@@ -89,8 +89,16 @@ from before the manifests carried ownership labels has no label to select on:
 2. the ServiceAccount namespace named in the discovered RoleBindings;
 3. any namespace holding a `kagent-tools-*` Helm release.
 
-The install namespace and the write targets are derived from the discovered
-objects and never deleted, as are `default` and `kube-*`.
+Objects from before the `managed-by` label are also found by their older
+`part-of` + ticket labels. The read-only `cluster-inspector` shares those labels,
+so legacy Agent discovery additionally requires a write-server reference or an
+approval-gated tool reference.
+
+Release removal and namespace deletion are separate decisions. Every discovered
+write-tools release is uninstalled, including a historical release that ran
+directly in `kagent-lab`; only a positively identified, unprotected tool-server
+namespace is deleted. The install namespace and write targets are derived from
+the discovered objects and never deleted, as are `default` and `kube-*`.
 
 Afterwards the former ServiceAccount identity is re-tested for every mutating
 permission it used to hold. `kubectl auth can-i` reports a denial as exit

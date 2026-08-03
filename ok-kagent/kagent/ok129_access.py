@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """OK-129-specific access validation, verification data, and cleanup.
 
-The generic access renderer deliberately supports more profiles than the
-evidenced OK-129 lab.  This installer-side guard narrows that generic schema to
-the capability actually exercised here: approval-gated ConfigMap changes in
-the kagent-lab namespace.
+The shared access renderer and this installer-side guard both enforce the
+capability exercised here: approval-gated ConfigMap changes in the kagent-lab
+namespace. The second validation layer prevents a future renderer/consumer
+drift from silently widening the installed profile.
 
 Verification expectations are derived from the rendered RBAC rules.  Cleanup
 discovers managed objects by stable labels and uses their returned names, so it
@@ -29,6 +29,12 @@ import yaml
 
 MANAGED_SELECTOR = (
     "app.kubernetes.io/managed-by=render-access.py,openkubes.io/ticket=OK-129"
+)
+# Objects rendered before `managed-by` was added still carry these two labels.
+# The selector also matches current objects, so discovery deduplicates by
+# namespace/name and filters Agents to keep the read-only cluster-inspector.
+LEGACY_SELECTOR = (
+    "app.kubernetes.io/part-of=kagent-standalone,openkubes.io/ticket=OK-129"
 )
 TOOLS_NAMESPACE_SELECTOR = MANAGED_SELECTOR + ",openkubes.io/purpose=kagent-write-tools"
 ALLOWED_WRITE_NAMESPACES = {"kagent-lab"}
@@ -117,8 +123,9 @@ def validate_ok129(raw: dict[str, Any]) -> None:
 def _validate_sourced_names(write: dict[str, Any]) -> None:
     """Constrain every name that ends up in profile.env, which a shell sources.
 
-    The generic renderer validates its namespace fields but not the release or
-    Agent name, and the Makefile sources the generated profile.env. Anything
+    The shared renderer validates these fields too, while this independent
+    installer guard protects against a future cross-repository drift. The
+    Makefile sources the generated profile.env, so anything
     that is not a plain DNS label is refused here, before a render exists.
     """
     tool_server = write.get("toolServer") or {}
@@ -506,30 +513,108 @@ def _delete_cluster(runtime: Runtime, resource: str, objects: Iterable[dict[str,
         runtime.kubectl(["delete", resource, _name(item), "--ignore-not-found"])
 
 
-def assert_clean(runtime: Runtime) -> None:
-    leftovers: list[str] = []
-    for resource, all_namespaces in (
-        ("agents.kagent.dev", True),
-        ("remotemcpservers.kagent.dev", True),
-        ("roles.rbac.authorization.k8s.io", True),
-        ("rolebindings.rbac.authorization.k8s.io", True),
-        ("clusterroles.rbac.authorization.k8s.io", False),
-        ("clusterrolebindings.rbac.authorization.k8s.io", False),
-        ("namespaces", False),
-    ):
-        selector = TOOLS_NAMESPACE_SELECTOR if resource == "namespaces" else MANAGED_SELECTOR
-        document = runtime.get_json(
-            resource, all_namespaces=all_namespaces, selector=selector
+def _merge_objects(*groups: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate one resource kind returned by overlapping label selectors."""
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for group in groups:
+        for item in group:
+            merged[(_namespace(item), _name(item))] = item
+    return list(merged.values())
+
+
+def _agent_references_write_server(
+    agent: dict[str, Any], server_names: set[str]
+) -> bool:
+    """Distinguish a legacy write Agent from the read-only cluster-inspector."""
+    declarative = ((agent.get("spec") or {}).get("declarative") or {})
+    for tool in declarative.get("tools") or []:
+        mcp = tool.get("mcpServer") or {}
+        if mcp.get("requireApproval") or str(mcp.get("name") or "") in server_names:
+            return True
+    return False
+
+
+def discover_write_objects(runtime: Runtime) -> dict[str, list[dict[str, Any]]]:
+    """Find both current and pre-`managed-by` OK-129 write objects.
+
+    Legacy RBAC is safe to take as a whole: the read path never created custom
+    Roles or bindings. Legacy Agents need correlation because cluster-inspector
+    deliberately shares the ticket/part-of labels; a write Agent either carries
+    `requireApproval` or references a legacy write RemoteMCPServer.
+    """
+    resources = {
+        "agents": "agents.kagent.dev",
+        "servers": "remotemcpservers.kagent.dev",
+        "roles": "roles.rbac.authorization.k8s.io",
+        "bindings": "rolebindings.rbac.authorization.k8s.io",
+        "cluster_roles": "clusterroles.rbac.authorization.k8s.io",
+        "cluster_bindings": "clusterrolebindings.rbac.authorization.k8s.io",
+    }
+    all_namespaced = {"agents", "servers", "roles", "bindings"}
+    current: dict[str, list[dict[str, Any]]] = {}
+    legacy: dict[str, list[dict[str, Any]]] = {}
+    for key, resource in resources.items():
+        current[key] = _items(
+            runtime.get_json(
+                resource,
+                all_namespaces=key in all_namespaced,
+                selector=MANAGED_SELECTOR,
+            )
         )
-        for item in _items(document):
+        legacy[key] = _items(
+            runtime.get_json(
+                resource,
+                all_namespaces=key in all_namespaced,
+                selector=LEGACY_SELECTOR,
+            )
+        )
+
+    servers = _merge_objects(current["servers"], legacy["servers"])
+    server_names = {_name(server) for server in servers}
+    legacy_write_agents = [
+        agent
+        for agent in legacy["agents"]
+        if _agent_references_write_server(agent, server_names)
+    ]
+
+    return {
+        "agents": _merge_objects(current["agents"], legacy_write_agents),
+        "servers": servers,
+        "roles": _merge_objects(current["roles"], legacy["roles"]),
+        "bindings": _merge_objects(current["bindings"], legacy["bindings"]),
+        "cluster_roles": _merge_objects(
+            current["cluster_roles"], legacy["cluster_roles"]
+        ),
+        "cluster_bindings": _merge_objects(
+            current["cluster_bindings"], legacy["cluster_bindings"]
+        ),
+    }
+
+
+def assert_clean(runtime: Runtime) -> None:
+    leftovers: set[str] = set()
+    discovered = discover_write_objects(runtime)
+    for key, resource in (
+        ("agents", "agents.kagent.dev"),
+        ("servers", "remotemcpservers.kagent.dev"),
+        ("roles", "roles.rbac.authorization.k8s.io"),
+        ("bindings", "rolebindings.rbac.authorization.k8s.io"),
+        ("cluster_roles", "clusterroles.rbac.authorization.k8s.io"),
+        ("cluster_bindings", "clusterrolebindings.rbac.authorization.k8s.io"),
+    ):
+        for item in discovered[key]:
             location = f"{_namespace(item)}/" if _namespace(item) else ""
-            leftovers.append(f"{resource}/{location}{_name(item)}")
+            leftovers.add(f"{resource}/{location}{_name(item)}")
+
+    namespaces = runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR)
+    for item in _items(namespaces):
+        leftovers.add(f"namespaces/{_name(item)}")
 
     # Label-independent: a write tool server from a run that predates the
     # ownership labels has no label to select on, but it still has a release.
     for namespace, names in sorted(discover_tool_releases(runtime).items()):
         for name in sorted(names):
-            leftovers.append(f"helm-release/{namespace}/{name}")
+            leftovers.add(f"helm-release/{namespace}/{name}")
 
     if leftovers:
         raise AccessError("managed write objects remain: " + ", ".join(sorted(leftovers)))
@@ -629,14 +714,13 @@ def _uninstall_release(runtime: Runtime, name: str, namespace: str) -> None:
 
 
 def cleanup(runtime: Runtime) -> None:
-    agents = _items(runtime.get_json("agents.kagent.dev", all_namespaces=True))
-    servers = _items(runtime.get_json("remotemcpservers.kagent.dev", all_namespaces=True))
-    roles = _items(runtime.get_json("roles.rbac.authorization.k8s.io", all_namespaces=True))
-    bindings = _items(
-        runtime.get_json("rolebindings.rbac.authorization.k8s.io", all_namespaces=True)
-    )
-    cluster_roles = _items(runtime.get_json("clusterroles.rbac.authorization.k8s.io"))
-    cluster_bindings = _items(runtime.get_json("clusterrolebindings.rbac.authorization.k8s.io"))
+    discovered = discover_write_objects(runtime)
+    agents = discovered["agents"]
+    servers = discovered["servers"]
+    roles = discovered["roles"]
+    bindings = discovered["bindings"]
+    cluster_roles = discovered["cluster_roles"]
+    cluster_bindings = discovered["cluster_bindings"]
     labelled = _items(runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR))
 
     # Everything is discovered before anything is deleted: the RoleBinding
@@ -660,9 +744,15 @@ def cleanup(runtime: Runtime) -> None:
     _delete_namespaced(runtime, "roles.rbac.authorization.k8s.io", roles)
     _delete_cluster(runtime, "clusterroles.rbac.authorization.k8s.io", cluster_roles)
 
-    for namespace in targets:
-        for name in sorted(tool_releases.get(namespace, [])):
+    # A legacy tool release may have been installed directly in a write target
+    # such as kagent-lab. Uninstall every discovered release, but only delete a
+    # namespace when the independent protection calculation says it is the
+    # dedicated tool namespace. Conflating those decisions deleted lab fixtures.
+    for namespace, names in sorted(tool_releases.items()):
+        for name in sorted(names):
             _uninstall_release(runtime, name, namespace)
+
+    for namespace in targets:
         runtime.kubectl(
             [
                 "delete",

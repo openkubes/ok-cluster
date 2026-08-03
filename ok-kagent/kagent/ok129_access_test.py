@@ -382,6 +382,7 @@ if args[0] == "get" and "--output" in args:
                 "rules": obj.get("rules") or [],
                 "roleRef": obj.get("roleRef") or {},
                 "subjects": obj.get("subjects") or [],
+                "spec": obj.get("spec") or {},
             }
         )
     save()
@@ -444,7 +445,12 @@ sys.exit(0)
 '''
 
 MANAGED = {
+    "app.kubernetes.io/part-of": "kagent-standalone",
     "app.kubernetes.io/managed-by": "render-access.py",
+    "openkubes.io/ticket": "OK-129",
+}
+LEGACY = {
+    "app.kubernetes.io/part-of": "kagent-standalone",
     "openkubes.io/ticket": "OK-129",
 }
 TOOLS_NS_LABELS = dict(MANAGED, **{"openkubes.io/purpose": "kagent-write-tools"})
@@ -512,7 +518,25 @@ def labelled_write_profile(
     """One installed write profile, as the renderer would leave it behind."""
     subject = {"kind": "ServiceAccount", "name": release, "namespace": tool_namespace}
     return {
-        "agents.kagent.dev": [{"name": agent, "ns": install_namespace, "labels": dict(MANAGED)}],
+        "agents.kagent.dev": [
+            {
+                "name": agent,
+                "ns": install_namespace,
+                "labels": dict(MANAGED),
+                "spec": {
+                    "declarative": {
+                        "tools": [
+                            {
+                                "mcpServer": {
+                                    "name": release,
+                                    "requireApproval": ["k8s_apply_manifest"],
+                                }
+                            }
+                        ]
+                    }
+                },
+            }
+        ],
         "remotemcpservers.kagent.dev": [
             {"name": release, "ns": install_namespace, "labels": dict(MANAGED)}
         ],
@@ -685,6 +709,113 @@ class CleanupAgainstStubClusterTests(StubClusterTestCase):
         deleted = self.read_state()["deleted"]
         self.assertIn("helm/orphan-write-ns/orphan-release", deleted)
         self.assertIn("namespaces/-/orphan-write-ns", deleted)
+
+    def test_colocated_legacy_release_is_removed_without_deleting_write_target(self):
+        """Regression for the real pre-renderer state found in kagent-lab.
+
+        The old chart release and its ServiceAccount lived in the write target
+        itself. Its Role/RoleBinding had ticket/part-of labels but no managed-by
+        label. Cleanup must remove the whole write path while preserving the
+        namespace and its failure fixtures.
+        """
+        objects = labelled_write_profile(
+            tool_namespace="kagent-lab",
+            tool_labels=None,
+            release="kagent-lab-tools",
+            agent="cluster-operator-gated",
+            target="kagent-lab",
+        )
+        for resource in (
+            "agents.kagent.dev",
+            "remotemcpservers.kagent.dev",
+            "roles.rbac.authorization.k8s.io",
+            "rolebindings.rbac.authorization.k8s.io",
+        ):
+            for item in objects[resource]:
+                item["labels"] = dict(LEGACY)
+        objects["namespaces"] = [{"name": "kagent-lab", "labels": {}}]
+        # This is the dangerous historical permission observed on the cluster.
+        objects["roles.rbac.authorization.k8s.io"][0]["rules"].append(
+            {"resources": ["deployments"], "verbs": ["patch"]}
+        )
+        runtime = self.build(
+            objects=objects,
+            releases=[
+                {
+                    "name": "kagent-lab-tools",
+                    "namespace": "kagent-lab",
+                    "chart": "kagent-tools-0.2.1",
+                }
+            ],
+        )
+
+        access.cleanup(runtime)
+
+        deleted = self.read_state()["deleted"]
+        self.assertIn("helm/kagent-lab/kagent-lab-tools", deleted)
+        self.assertIn(
+            "rolebindings.rbac.authorization.k8s.io/kagent-lab/kagent-lab-tools",
+            deleted,
+        )
+        self.assertIn(
+            "roles.rbac.authorization.k8s.io/kagent-lab/kagent-lab-tools",
+            deleted,
+        )
+        self.assertNotIn("namespaces/-/kagent-lab", deleted)
+        self.assertTrue(
+            any(
+                call[:4] == ["auth", "can-i", "patch", "deployments"]
+                for call in self.read_state()["calls"]
+                if isinstance(call, list)
+            )
+        )
+
+    def test_legacy_read_agent_is_not_mistaken_for_a_write_agent(self):
+        runtime = self.build(
+            objects={
+                "agents.kagent.dev": [
+                    {
+                        "name": "cluster-inspector",
+                        "ns": "kagent",
+                        "labels": dict(LEGACY),
+                        "spec": {
+                            "declarative": {
+                                "tools": [
+                                    {"mcpServer": {"name": "kagent-tool-server"}}
+                                ]
+                            }
+                        },
+                    }
+                ]
+            }
+        )
+
+        access.cleanup(runtime)
+
+        self.assertNotIn(
+            "agents.kagent.dev/kagent/cluster-inspector",
+            self.read_state()["deleted"],
+        )
+
+    def test_assert_clean_reports_legacy_rbac_after_release_is_gone(self):
+        objects = labelled_write_profile(
+            tool_namespace="kagent-lab",
+            tool_labels=None,
+            release="kagent-lab-tools",
+            agent="legacy-agent",
+            target="kagent-lab",
+        )
+        objects["agents.kagent.dev"] = []
+        objects["remotemcpservers.kagent.dev"] = []
+        for resource in (
+            "roles.rbac.authorization.k8s.io",
+            "rolebindings.rbac.authorization.k8s.io",
+        ):
+            objects[resource][0]["labels"] = dict(LEGACY)
+        runtime = self.build(objects=objects)
+
+        with self.assertRaisesRegex(access.AccessError, "kagent-lab-tools"):
+            access.assert_clean(runtime)
 
     def test_assert_clean_reports_a_leftover_release_without_any_label(self):
         runtime = self.build(
