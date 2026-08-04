@@ -21,7 +21,7 @@ EVIDENCE_DIR = ROOT / "docs" / "adoption" / "OK-130" / ".evidence"
 sys.path.insert(0, str(ROOT))
 
 from profile_resolvers.talos import (  # noqa: E402
-    EXPECTED_CLONE_TARGET,
+    EXPECTED_PROVIDER_PROFILES,
     TalosProfileError,
     resolve_talos_config,
 )
@@ -407,7 +407,9 @@ def verify_scheduling(config: dict, kubeconfig: Path) -> dict:
 
 def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
     provider = config["providerProfile"]
-    expected = EXPECTED_CLONE_TARGET
+    expected = EXPECTED_PROVIDER_PROFILES["profiles"][provider["name"]][
+        "clone_target"
+    ]
     storage = kubectl_json(
         kubeconfig, ["get", "storageclass", provider["cloneTargetStorageClass"]]
     )
@@ -420,7 +422,11 @@ def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
         "allow_volume_expansion": storage.get("allowVolumeExpansion"),
     }
     required = {key: expected[key] for key in observed}
-    if observed != required or parameters.get("nodeSelector") not in (None, ""):
+    if (
+        observed != required
+        or parameters.get("nodeSelector", "")
+        != expected.get("node_tag", "")
+    ):
         raise TalosLifecycleError(
             f"clone-target StorageClass contract mismatch: {observed}"
         )

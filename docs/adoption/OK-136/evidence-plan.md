@@ -1,10 +1,11 @@
 # OK-136 configurable KubeVirt scheduling evidence plan
 
 OK-136 introduces an explicit production scheduling profile for ordinary Talos
-workload clusters on `ok-gpu`. It does not turn the historical
-`gpu-single-replica` meetup profile or `ok-storage-block-gpu-test` into a
-production contract. Flatcar remains constrained to its independently owned
-and validated `ok-infra` profile.
+workload clusters on `ok-gpu` and a separately named development/demo profile
+for single-node environments. `ok-gpu-single-replica` may consume the
+historical `ok-storage-block-gpu-test`, but neither becomes a production
+contract. Flatcar remains constrained to its independently owned and validated
+`ok-infra` profile.
 
 ## Contract boundary
 
@@ -14,6 +15,8 @@ and validated `ok-infra` profile.
 2. Both profiles consume the stable `ok-storage-block` contract. The immutable
    Talos Golden PVC stays in `ok-images` and keeps its existing artifact
    identity, digest and claim name.
+   The additional `ok-gpu-single-replica` profile instead consumes the isolated
+   one-replica `ok-storage-block-gpu-test` class and is explicitly non-HA.
 3. `ok-cluster` rejects free-form Talos KubeVirt scheduling. An explicit
    `NODE_SELECTOR` must match the selected reviewed provider profile.
 4. The `ok-gpu` provider identity is included in immutable KubeVirt machine,
@@ -45,12 +48,15 @@ The suite must prove:
 - omitted scheduling selects the unchanged `ok-infra` production profile;
 - `SCHEDULING_PROFILE=ok-gpu` materializes exactly `nodeSelector: ok-gpu` and
   clone target `ok-storage-block`;
+- `SCHEDULING_PROFILE=ok-gpu-single-replica` materializes exactly
+  `nodeSelector: ok-gpu`, one replica and clone target
+  `ok-storage-block-gpu-test` without changing the Golden identity;
 - free-form or mismatched node/storage inputs fail closed;
-- the Golden artifact identity and source PVC are byte-identical across both
+- the Golden artifact identity and source PVC are byte-identical across all
   scheduling profiles;
 - CP and worker resource sizes remain independently configurable;
-- CP and worker boot DataVolumes are local CDI clones using
-  `ok-storage-block`;
+- CP and worker boot DataVolumes are local CDI clones using the selected
+  profile's exact clone-target StorageClass;
 - `ok-gpu` uses new immutable provider-bound template names while legacy
   `ok-infra` template names remain unchanged;
 - Flatcar and non-KubeVirt semantics are not broadened;
@@ -65,12 +71,13 @@ Using an explicit `ok-infra` kubeconfig, the read-only preflight must verify:
 - requested CP/worker CPU and memory fit the node's allocatable capacity after
   current Pod requests, or fail with the observed/requested bound;
 - KubeVirt v1.8.1 is deployed with `ExpandDisks`;
-- `ok-storage-block` is Longhorn-backed, two-replica, expandable,
-  `Retain`/`Immediate`, and has no node-tag restriction;
+- the selected StorageClass exactly matches its profile: production
+  `ok-storage-block` is two-replica and unrestricted; the development/demo
+  class is one-replica and selects only `openkubes-gpu-demo`;
 - CDI selects the reviewed local `ok-storage-block-snapshot` clone path;
-- at least two Ready and schedulable Longhorn nodes have enough available
-  capacity for all requested boot volumes after applying the live reserved,
-  scheduled, minimum-free-space and over-provisioning scheduler bounds;
+- the profile-required number of Ready and schedulable Longhorn nodes has
+  enough capacity for all requested boot volumes after applying the live
+  reserved, scheduled, minimum-free-space and over-provisioning bounds;
 - the selected node is an eligible Longhorn attachment/storage node;
 - the exact Talos Golden PVC is Bound with its reviewed UID, digest and OS
   identity;
@@ -88,7 +95,8 @@ Live mutation requires a separate Runtime-GO. The intended reviewed input is:
 make new \
   CLUSTER=ok-iot \
   TYPE=talos \
-  SCHEDULING_PROFILE=ok-gpu \
+  SCHEDULING_PROFILE=ok-gpu-single-replica \
+  WORKERS=3 \
   CP_DISK=<approved-size> \
   WORKER_DISK=<approved-size>
 
@@ -99,15 +107,15 @@ make talos-golden-preflight \
 
 After Runtime-GO, bootstrap and prove:
 
-1. the CP and worker VMIs both run on `ok-gpu`;
-2. both DataVolumes clone the existing Talos Golden PVC, reach `Succeeded`,
-   and use `ok-storage-block` with zero public image imports;
+1. the CP and all three worker VMIs run on `ok-gpu`;
+2. all four DataVolumes clone the existing Talos Golden PVC, reach `Succeeded`,
+   and use `ok-storage-block-gpu-test` with zero public image imports;
 3. the requested CPU, memory and disk sizes are visible in KubeVirt/PVC state;
-4. the two workload Nodes report Talos v1.9.6 and Kubernetes v1.34.1 and become
+4. all four workload Nodes report Talos v1.9.6 and Kubernetes v1.34.1 and become
    Ready;
-5. Cilium 1.19.6 reaches two Ready agents and a Ready operator;
-6. Longhorn volumes are `healthy` with two running replica objects on distinct
-   Longhorn nodes; a merely requested replica count or `degraded` volume fails;
+5. Cilium 1.19.6 reaches four Ready agents and a Ready operator;
+6. every Longhorn volume is `healthy` with exactly one running replica on
+   `ok-gpu`;
 7. runtime evidence records CAPI, Node and Cilium milestones as observations,
    not an SLO.
 
@@ -121,8 +129,8 @@ same UID, digest and OS identity.
 
 ## Stop conditions
 
-Do not bootstrap when the production `ok-storage-block` contract cannot place
-two replicas with sufficient capacity, when `ok-gpu` lacks bounded CPU or
-memory capacity, or when any provider/profile input is not represented by the
-reviewed `ok-linux` source of truth. Do not substitute the demonstration-only
-single-replica StorageClass to bypass a production preflight failure.
+Do not bootstrap when `ok-gpu` lacks bounded CPU, memory or profile-specific
+Longhorn capacity, or when any provider/profile input is not represented by the
+reviewed `ok-linux` source of truth. The single-replica StorageClass may only be
+selected by the explicit development/demo profile; it must never appear as an
+automatic fallback for a failed production preflight.

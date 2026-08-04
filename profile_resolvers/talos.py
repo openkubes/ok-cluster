@@ -36,6 +36,25 @@ EXPECTED_PROVIDER_PROFILES = {
         for name in ("ok-infra", "ok-gpu")
     },
 }
+EXPECTED_PROVIDER_PROFILES["profiles"]["ok-gpu-single-replica"] = {
+    "lifecycle": "development-demo",
+    "node_selector": "ok-gpu",
+    "preserve_legacy_template_names": False,
+    "clone_target": {
+        "storage_class": "ok-storage-block-gpu-test",
+        "provisioner": "driver.longhorn.io",
+        "replica_count": 1,
+        "node_tag": "openkubes-gpu-demo",
+        "access_mode": "ReadWriteOnce",
+        "volume_mode": "Filesystem",
+        "reclaim_policy": "Delete",
+        "volume_binding_mode": "Immediate",
+        "allow_volume_expansion": True,
+        "snapshot_class": "ok-storage-block-snapshot",
+        "snapshot_type": "snap",
+        "kubevirt_feature_gates": ["ExpandDisks"],
+    },
+}
 
 
 class TalosProfileError(ValueError):

@@ -1,17 +1,19 @@
 # `ok-iot` Talos-on-`ok-gpu` runbook
 
 This runbook creates, verifies, records evidence for, and removes the persistent
-Talos workload-cluster test used by OK-136. The reviewed production contract is:
+Talos workload-cluster test used by OK-136. The explicit development/demo
+contract is:
 
-- scheduling profile and KubeVirt node: `ok-gpu`;
+- scheduling profile: `ok-gpu-single-replica`; KubeVirt node: `ok-gpu`;
 - control plane: 2 vCPU, 4 GiB memory, 20 GiB boot disk;
-- worker: 4 vCPU, 8 GiB memory, 30 GiB boot disk;
-- boot clones: Longhorn `ok-storage-block`, two replicas;
+- workers: three replicas, each 2 vCPU, 4 GiB memory, 30 GiB boot disk;
+- boot clones: Longhorn `ok-storage-block-gpu-test`, one replica on `ok-gpu`;
 - source: the existing immutable Talos v1.9.6 Golden PVC in `ok-images`;
 - Kubernetes v1.34.1 and the locally verified Cilium 1.19.6 chart.
 
-This is not the historical `gpu-single-replica` meetup profile and does not use
-`ok-storage-block-gpu-test`. The Golden Image contains no cluster credentials;
+This deliberately trades node and disk failure tolerance for deterministic
+local development placement. It does not change the stable two-replica
+`ok-storage-block` contract. The Golden Image contains no cluster credentials;
 Talos configuration, bootstrap secrets and the workload kubeconfig are created
 dynamically for each cluster.
 
@@ -26,11 +28,26 @@ git status --short --branch
 
 git -C ../ok-linux switch feature/ok-136-gpu-scheduling-contract
 git -C ../ok-linux status --short --branch
+
+git -C ../ok-storage switch feature/ok-136-gpu-scheduling-contract
+git -C ../ok-storage status --short --branch
 ```
 
 Required tools and inputs are `make`, `python3`, `kubectl`, `helm`, management
 kubeconfig `$HOME/.kube/ok-infra.yaml`, and working KubeVirt, CDI and Longhorn
 services on the management cluster.
+
+Verify the separately guarded GPU StorageClass and node tag. Apply is required
+only when the read-only verification says they are absent:
+
+```bash
+make -C ../ok-storage gpu-demo-verify \
+  KUBECONFIG_FILE="$HOME/.kube/ok-infra.yaml"
+
+# Mutating, only when explicitly approved:
+GPU_DEMO_APPLY=yes make -C ../ok-storage gpu-demo-apply \
+  KUBECONFIG_FILE="$HOME/.kube/ok-infra.yaml"
+```
 
 Acquire or reuse the pinned chart. Both commands fail closed unless its SHA-256
 is `21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179`:
@@ -58,12 +75,13 @@ cd "$HOME/temp/kubernauts/ok/ok-cluster"
 make new \
   CLUSTER=ok-iot \
   TYPE=talos \
-  SCHEDULING_PROFILE=ok-gpu \
+  SCHEDULING_PROFILE=ok-gpu-single-replica \
+  WORKERS=3 \
   CP_CORES=2 \
   CP_MEMORY=4Gi \
   CP_DISK=20Gi \
-  WORKER_CORES=4 \
-  WORKER_MEMORY=8Gi \
+  WORKER_CORES=2 \
+  WORKER_MEMORY=4Gi \
   WORKER_DISK=30Gi
 ```
 
@@ -93,8 +111,8 @@ make talos-golden-preflight \
 
 Continue only after `PASS`. The guard checks namespace, endpoint and kubeconfig
 collisions; `ok-gpu` readiness and available CPU/memory; the exact Golden PVC;
-KubeVirt `ExpandDisks`; and sufficient eligible Longhorn capacity for two
-replicas of both boot volumes. Longhorn capacity is not host `df` output: the
+KubeVirt `ExpandDisks`; and sufficient `ok-gpu` Longhorn capacity for one
+replica of all four boot volumes. Longhorn capacity is not host `df` output: the
 guard applies the live minimum-free-space and over-provisioning settings to
 each disk's reserved, already scheduled, maximum and available bytes.
 
@@ -139,14 +157,13 @@ Expected state:
 
 | Role | KubeVirt node | CPU | Memory | Disk | StorageClass |
 |---|---|---:|---:|---:|---|
-| control plane | `ok-gpu` | 2 | 4Gi | 20Gi | `ok-storage-block` |
-| worker | `ok-gpu` | 4 | 8Gi | 30Gi | `ok-storage-block` |
+| control plane | `ok-gpu` | 2 | 4Gi | 20Gi | `ok-storage-block-gpu-test` |
+| each of 3 workers | `ok-gpu` | 2 | 4Gi | 30Gi | `ok-storage-block-gpu-test` |
 
-Both workload nodes must be Ready, both VMIs Running, both PVCs Bound, both
-DataVolumes Succeeded, and Cilium must report two Ready agents. Each Longhorn
-volume must additionally be `healthy`, contain two running replica objects,
-and place those replicas on two distinct Longhorn nodes. `degraded` is not an
-accepted production result even when the VM and workload node are Ready.
+All four workload nodes must be Ready, all four VMIs Running, all four PVCs
+Bound, all four DataVolumes Succeeded, and Cilium must report four Ready
+agents. Each Longhorn volume must be `healthy` with exactly one running replica
+on `ok-gpu`.
 
 Record the normalized runtime evidence:
 
@@ -173,9 +190,9 @@ make teardown \
 ```
 
 Review the cluster name and enumerated PVs, then answer `y`. The command removes
-the CAPI cluster, namespace, clone authorization, cluster-owned retained PVs and
-Longhorn volumes, workload kubeconfig, and local `ok-iot` render. It preserves
-the shared Golden PVC.
+the CAPI cluster, namespace, clone authorization, any cluster-owned PVs or
+Longhorn volumes not already removed by the `Delete` policy, workload
+kubeconfig, and local `ok-iot` render. It preserves the shared Golden PVC.
 
 Verify cleanup:
 

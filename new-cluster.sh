@@ -65,16 +65,22 @@ if [[ "$TYPE" == "talos" ]]; then
     fi
     SCHEDULING_PROFILE="ok-infra"
   fi
-  if [[ "$SCHEDULING_PROFILE" != "ok-infra" && "$SCHEDULING_PROFILE" != "ok-gpu" ]]; then
+  if [[ "$SCHEDULING_PROFILE" != "ok-infra" && "$SCHEDULING_PROFILE" != "ok-gpu" && "$SCHEDULING_PROFILE" != "ok-gpu-single-replica" ]]; then
     echo "ERROR: unsupported Talos SCHEDULING_PROFILE=${SCHEDULING_PROFILE}"
     exit 1
   fi
-  if [[ -n "$NODE_SELECTOR" && "$NODE_SELECTOR" != "$SCHEDULING_PROFILE" ]]; then
-    echo "ERROR: SCHEDULING_PROFILE=${SCHEDULING_PROFILE} requires NODE_SELECTOR=${SCHEDULING_PROFILE}"
+  PROFILE_NODE_SELECTOR="$SCHEDULING_PROFILE"
+  PROFILE_STORAGE_CLASS="ok-storage-block"
+  if [[ "$SCHEDULING_PROFILE" == "ok-gpu-single-replica" ]]; then
+    PROFILE_NODE_SELECTOR="ok-gpu"
+    PROFILE_STORAGE_CLASS="ok-storage-block-gpu-test"
+  fi
+  if [[ -n "$NODE_SELECTOR" && "$NODE_SELECTOR" != "$PROFILE_NODE_SELECTOR" ]]; then
+    echo "ERROR: SCHEDULING_PROFILE=${SCHEDULING_PROFILE} requires NODE_SELECTOR=${PROFILE_NODE_SELECTOR}"
     exit 1
   fi
-  NODE_SELECTOR="$SCHEDULING_PROFILE"
-  echo "  INFO: Talos KubeVirt provider profile ${SCHEDULING_PROFILE} uses ok-storage-block"
+  NODE_SELECTOR="$PROFILE_NODE_SELECTOR"
+  echo "  INFO: Talos KubeVirt provider profile ${SCHEDULING_PROFILE} uses ${PROFILE_STORAGE_CLASS}"
 elif [[ -n "$SCHEDULING_PROFILE" ]]; then
   echo "ERROR: SCHEDULING_PROFILE is currently supported only for ordinary Talos KubeVirt clusters"
   exit 1

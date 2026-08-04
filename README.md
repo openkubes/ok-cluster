@@ -122,6 +122,24 @@ The historical `gpu-single-replica` meetup profile and
 `ok-storage-block-gpu-test` remain demonstration-only and are not production
 fallbacks.
 
+For local development and disposable demonstrations, the explicit
+`ok-gpu-single-replica` profile selects that isolated StorageClass without
+weakening either production profile:
+
+```bash
+make new \
+  CLUSTER=ok-iot \
+  TYPE=talos \
+  SCHEDULING_PROFILE=ok-gpu-single-replica \
+  WORKERS=3 \
+  CP_CORES=2 CP_MEMORY=4Gi CP_DISK=20Gi \
+  WORKER_CORES=2 WORKER_MEMORY=4Gi WORKER_DISK=30Gi
+```
+
+This profile places every VM and its single boot-volume replica on `ok-gpu`.
+It provides no node or disk failure tolerance and must not be presented as the
+stable `ok-storage-block` contract.
+
 ### Ubuntu Cluster
 
 ```bash

@@ -125,6 +125,21 @@ def main() -> int:
         },
         "ordinary Talos defaults to the reviewed ok-infra provider profile",
     )
+    single_raw = copy.deepcopy(raw)
+    single_raw["providerProfile"] = {"name": "ok-gpu-single-replica"}
+    single_raw["nodeSelector"] = "ok-gpu"
+    single_raw["workers"]["replicas"] = 3
+    single_raw["workers"]["disk"] = "30Gi"
+    single = resolve_talos_config(single_raw, OK_LINUX)
+    check(
+        single["providerProfile"]["name"] == "ok-gpu-single-replica"
+        and single["providerProfile"]["nodeSelector"] == "ok-gpu"
+        and single["providerProfile"]["cloneTargetStorageClass"]
+        == "ok-storage-block-gpu-test"
+        and single["providerProfile"]["replicaCount"] == 1
+        and single["os"]["identity"] == resolved["os"]["identity"],
+        "development profile isolates single-replica GPU clones from the Golden identity",
+    )
     unreviewed_node = copy.deepcopy(raw)
     unreviewed_node["nodeSelector"] = "another-node"
     expect_failure(
@@ -492,6 +507,25 @@ def main() -> int:
         validate_manifest(gpu, gpu_base)
         check(True, "ok-gpu lifecycle manifest guard accepts the render")
 
+    with tempfile.TemporaryDirectory(
+        prefix=".ok136-gpu-single-", dir=ROOT
+    ) as temp:
+        output = Path(temp)
+        render.render_cluster(single["name"], output, single)
+        single_base = output / "cluster-base.yaml"
+        single_docs = docs(single_base)
+        check(
+            set(nested(single_docs, "storageClassName"))
+            == {"ok-storage-block-gpu-test"}
+            and set(nested(single_docs, "kubernetes.io/hostname"))
+            == {"ok-gpu"}
+            and {item["spec"]["replicas"] for item in single_docs if item.get("kind") == "MachineDeployment"}
+            == {3},
+            "single-replica GPU profile renders one CP and three workers on isolated storage",
+        )
+        validate_manifest(single, single_base)
+        check(True, "single-replica GPU lifecycle manifest guard accepts the render")
+
     resource_bound = requested_resources(gpu)
     used_cpu, used_memory = pod_requests(
         [
@@ -726,6 +760,43 @@ def main() -> int:
             and scaffold.get("controlPlane", {}).get("cores") == 3
             and scaffold.get("workers", {}).get("disk") == "30Gi",
             "reviewed ok-gpu scaffold materializes exact role resources",
+        )
+        shutil.rmtree(scaffold_dir, ignore_errors=True)
+        single_scaffold = subprocess.run(
+            [
+                "make",
+                "--no-print-directory",
+                "new",
+                f"CLUSTER={scaffold_name}",
+                "TYPE=talos",
+                "SCHEDULING_PROFILE=ok-gpu-single-replica",
+                "WORKERS=3",
+                "CP_DISK=20Gi",
+                "WORKER_DISK=30Gi",
+                "START_IP=192.168.100.254",
+            ],
+            cwd=ROOT,
+            env=scaffold_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        single_scaffold_config = (
+            load(scaffold_dir / "cluster-config.yaml")
+            if single_scaffold.returncode == 0
+            else {}
+        )
+        check(
+            single_scaffold.returncode == 0
+            and single_scaffold_config.get("providerProfile", {}).get("name")
+            == "ok-gpu-single-replica"
+            and single_scaffold_config.get("nodeSelector") == "ok-gpu"
+            and single_scaffold_config.get("workers", {}).get("replicas") == 3
+            and single_scaffold_config.get("providerProfile", {}).get(
+                "cloneTargetStorageClass"
+            )
+            == "ok-storage-block-gpu-test",
+            "single-replica GPU scaffold materializes one CP and three workers",
         )
     finally:
         shutil.rmtree(scaffold_dir, ignore_errors=True)

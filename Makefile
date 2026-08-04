@@ -1,5 +1,5 @@
 # OpenKubes Cluster Templating — Makefile
-# Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu]
+# Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
 .PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
 .DEFAULT_GOAL := help
@@ -949,7 +949,8 @@ help:
 	@echo ""
 	@echo "── Talos Workflow ───────────────────────────────────────────────────"
 	@echo "  make prepare-cilium-chart       # pinned .tools/cilium-1.19.6.tgz"
-	@echo "  make new       CLUSTER=ok-ai TYPE=talos [WORKERS=2] [K8S_VERSION=v1.36.2] [TALOS_VERSION=v1.13.4]"
+	@echo "  make new       CLUSTER=ok-ai TYPE=talos [WORKERS=2] [K8S_VERSION=v1.34.1] [TALOS_VERSION=v1.9.6]"
+	@echo "  make new       CLUSTER=ok-iot TYPE=talos WORKERS=3 SCHEDULING_PROFILE=ok-gpu-single-replica"
 	@echo "  make bootstrap CLUSTER=ok-ai   # apply + annotate PVCs + Cilium CNI"
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo ""
