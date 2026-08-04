@@ -34,7 +34,7 @@ OKB_KUBECONFIG = os.environ.get(
 # Verified against the running ok1-talos cluster (ok-linux v0.1.0).
 OK_LINUX_DEFAULT_PROFILE = "kubevirt"
 OK_LINUX_DEFAULT_SCHEMATIC_ID = "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
-OK_LINUX_DEFAULT_TALOS_VERSION = "v1.9.5"
+OK_LINUX_DEFAULT_TALOS_VERSION = "v1.9.6"
 OK_LINUX_PATH = Path(
     os.environ.get("OK_LINUX_PATH", SCRIPT_DIR.parent / "ok-linux")
 ).resolve()
@@ -199,9 +199,18 @@ def build_context(cfg: dict) -> dict:
     _osp = cfg.get("openstack", {})
     os_cfg = cfg.get("os", {})
     golden_image = os_cfg.get("goldenImage", {})
+    provider_profile = cfg.get("providerProfile", {})
     bootstrap = cfg.get("bootstrap", {})
     identity = str(os_cfg.get("identity", ""))
     identity_hex = identity.removeprefix("sha256:")
+    provider_identity = str(provider_profile.get("identity", ""))
+    provider_identity_hex = provider_identity.removeprefix("sha256:")
+    provider_name = str(provider_profile.get("name", ""))
+    machine_template_id = identity_hex[:12]
+    if provider_name and provider_name != "ok-infra":
+        machine_template_id = (
+            f"{machine_template_id}-{provider_identity_hex[:8]}"
+        )
     talos_version = str(
         ver.get("talos", OK_LINUX_DEFAULT_TALOS_VERSION)
     )
@@ -237,6 +246,12 @@ def build_context(cfg: dict) -> dict:
         "TALOS_VERSION_NAME": talos_version_name,
         "UPGRADE_STRATEGY":   upg.get("strategy", "blue-green"),
         "NODE_SELECTOR":      cfg.get("nodeSelector", ""),
+        "PROVIDER_PROFILE_NAME": provider_name,
+        "PROVIDER_PROFILE_IDENTITY": provider_identity,
+        "MACHINE_TEMPLATE_ID": machine_template_id,
+        "CLONE_TARGET_STORAGE_CLASS": provider_profile.get(
+            "cloneTargetStorageClass", "ok-storage-block"
+        ),
         # Generic, explicit OS/profile inputs. The shared renderer does not
         # assign Flatcar defaults; profile semantics stay in ok-linux and the
         # selected templates/<type> directory.

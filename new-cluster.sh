@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Keep these in sync with render.py's OK_LINUX_DEFAULT_* constants.
 OK_LINUX_DEFAULT_PROFILE="kubevirt"
 OK_LINUX_DEFAULT_SCHEMATIC_ID="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
-OK_LINUX_DEFAULT_TALOS_VERSION="v1.9.5"
+OK_LINUX_DEFAULT_TALOS_VERSION="v1.9.6"
 OK_LINUX_PATH="${OK_LINUX_PATH:-${SCRIPT_DIR}/../ok-linux}"
 
 CLUSTER="${CLUSTER:-}"
@@ -41,6 +41,7 @@ if [[ -z "$WORKER_DISK" ]]; then
   fi
 fi
 NODE_SELECTOR="${NODE_SELECTOR:-${NODE:-}}"   # OK-82: NODE= accepted as alias
+SCHEDULING_PROFILE="${SCHEDULING_PROFILE:-}"
 START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
 if [[ "$TYPE" == "flatcar" ]]; then
   GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-ok-storage-block}"
@@ -53,10 +54,30 @@ if [[ -z "$CLUSTER" ]]; then
   exit 1
 fi
 
-# The OK-130 Talos Golden Image and its clones use ok-storage-block on ok-infra.
-if [[ "$TYPE" == "talos" && -z "$NODE_SELECTOR" ]]; then
-  NODE_SELECTOR="ok-infra"
-  echo "  INFO: Talos KubeVirt Golden-Image path defaults to ok-infra"
+# The OK-136 Talos KubeVirt path uses reviewed provider profiles rather than a
+# free-form node selector. Existing ok-infra behavior remains the default.
+if [[ "$TYPE" == "talos" ]]; then
+  if [[ -z "$SCHEDULING_PROFILE" ]]; then
+    if [[ -n "$NODE_SELECTOR" && "$NODE_SELECTOR" != "ok-infra" ]]; then
+      echo "ERROR: Talos NODE_SELECTOR=${NODE_SELECTOR} is not a reviewed implicit profile."
+      echo "       Select an explicit profile, for example SCHEDULING_PROFILE=ok-gpu."
+      exit 1
+    fi
+    SCHEDULING_PROFILE="ok-infra"
+  fi
+  if [[ "$SCHEDULING_PROFILE" != "ok-infra" && "$SCHEDULING_PROFILE" != "ok-gpu" ]]; then
+    echo "ERROR: unsupported Talos SCHEDULING_PROFILE=${SCHEDULING_PROFILE}"
+    exit 1
+  fi
+  if [[ -n "$NODE_SELECTOR" && "$NODE_SELECTOR" != "$SCHEDULING_PROFILE" ]]; then
+    echo "ERROR: SCHEDULING_PROFILE=${SCHEDULING_PROFILE} requires NODE_SELECTOR=${SCHEDULING_PROFILE}"
+    exit 1
+  fi
+  NODE_SELECTOR="$SCHEDULING_PROFILE"
+  echo "  INFO: Talos KubeVirt provider profile ${SCHEDULING_PROFILE} uses ok-storage-block"
+elif [[ -n "$SCHEDULING_PROFILE" ]]; then
+  echo "ERROR: SCHEDULING_PROFILE is currently supported only for ordinary Talos KubeVirt clusters"
+  exit 1
 fi
 if [[ "$TYPE" == "talos-mgmt" && -z "$NODE_SELECTOR" ]]; then
   NODE_SELECTOR="ok-gpu"
@@ -167,6 +188,13 @@ os:
   profile: ${OS_PROFILE}
   schematic_id: ${OS_SCHEMATIC_ID}
 OSBLOCK
+fi)
+$(if [[ "$TYPE" == "talos" ]]; then cat <<TALOSPROVIDERBLOCK
+
+# Reviewed KubeVirt scheduling/storage profile — owned by ok-linux.
+providerProfile:
+  name: ${SCHEDULING_PROFILE}
+TALOSPROVIDERBLOCK
 fi)
 $(if [[ "$TYPE" == "flatcar" ]]; then cat <<FLATCARBLOCK
 

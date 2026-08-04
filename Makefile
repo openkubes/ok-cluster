@@ -1,5 +1,5 @@
 # OpenKubes Cluster Templating — Makefile
-# Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu]
+# Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu]
 #        TYPE is REQUIRED — no silent default (OK-119).
 .PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
 .DEFAULT_GOAL := help
@@ -21,6 +21,7 @@ ARCHITECTURE  ?= amd64
 # OK-82: NODE= is an accepted alias for NODE_SELECTOR= (explicit NODE_SELECTOR wins)
 NODE          ?=
 NODE_SELECTOR ?= $(NODE)
+SCHEDULING_PROFILE ?=
 START_IP      ?=
 DRY_RUN       ?= false
 
@@ -137,7 +138,8 @@ new: require-cluster require-type
 	@CLUSTER=$(CLUSTER) TYPE=$(TYPE) HA=$(HA) WORKERS=$(WORKERS) \
 	 K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
 	 PROVIDER=$(PROVIDER) ARCHITECTURE=$(ARCHITECTURE) \
-	 NODE_SELECTOR=$(NODE_SELECTOR) START_IP=$(START_IP) \
+	 NODE_SELECTOR=$(NODE_SELECTOR) SCHEDULING_PROFILE=$(SCHEDULING_PROFILE) \
+	 START_IP=$(START_IP) \
 	 OK_LINUX_PATH=$(OK_LINUX_PATH) \
 	 bash $(SCRIPT_DIR)/new-cluster.sh
 
@@ -160,7 +162,7 @@ cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test ok135-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test ok135-test ok136-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -342,6 +344,8 @@ ok128-benchmark-cleanup-verify: require-cluster ## Read-only cleanup/Golden-PVC 
 ok130-test: ## Offline-test the Talos Golden-Image resolver/render/lifecycle
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok130_talos_golden_test.py
+
+ok136-test: ok130-test ## Offline-test reviewed Talos KubeVirt scheduling profiles
 
 configure-kubevirt-expand-disks: ## Guardedly enable ExpandDisks on ok-infra (requires APPLY=yes)
 	@if [ "$(KUBEVIRT_EXPAND_DISKS_APPLY)" != "yes" ]; then \

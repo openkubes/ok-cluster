@@ -5,14 +5,14 @@
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubeVirtMachineTemplate
 metadata:
-  name: ${CLUSTER_NAME}-cp-v2-${MACHINE_TEMPLATE_ID}
-  namespace: ${CLUSTER_NAME}
+  name: ok-iot-cp-v2-7f5dd4276432-dc9767fa
+  namespace: ok-iot
   annotations:
-    openkubes.io/talos-schematic: ${TALOS_SCHEMATIC_ID}
-    openkubes.io/os-identity-full: ${OS_IDENTITY}
-    openkubes.io/os-image-digest: ${OS_IMAGE_DIGEST}
-    openkubes.io/provider-profile: ${PROVIDER_PROFILE_NAME}
-    openkubes.io/provider-profile-identity: ${PROVIDER_PROFILE_IDENTITY}
+    openkubes.io/talos-schematic: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+    openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
+    openkubes.io/provider-profile: ok-gpu
+    openkubes.io/provider-profile-identity: sha256:dc9767fa3ff70c232f892ed5a999bbe998fcc08b099a736f4486600a04181226
 spec:
   template:
     spec:
@@ -23,27 +23,27 @@ spec:
             spec:
               domain:
                 cpu:
-                  cores: ${CP_CORES}
+                  cores: 2
                 resources:
                   requests:
-                    memory: ${CP_MEMORY}
+                    memory: 4Gi
               volumes:
                 - name: bootvolume
                   dataVolume:
-                    name: ${CLUSTER_NAME}-cp-v2-${MACHINE_TEMPLATE_ID}-boot
+                    name: ok-iot-cp-v2-7f5dd4276432-dc9767fa-boot
                 - name: cloudinitdisk
                   cloudInitConfigDrive: {}
               dataVolumeTemplates:
                 - metadata:
-                    name: ${CLUSTER_NAME}-cp-v2-${MACHINE_TEMPLATE_ID}-boot
+                    name: ok-iot-cp-v2-7f5dd4276432-dc9767fa-boot
                   spec:
                     pvc:
                       accessModes: [ReadWriteOnce]
                       resources:
                         requests:
-                          storage: ${CP_DISK}
-                      storageClassName: ${CLONE_TARGET_STORAGE_CLASS}
+                          storage: 20Gi
+                      storageClassName: ok-storage-block
                     source:
                       pvc:
-                        namespace: ${OS_GOLDEN_IMAGE_NAMESPACE}
-                        name: ${OS_GOLDEN_IMAGE_CLAIM}
+                        namespace: ok-images
+                        name: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64

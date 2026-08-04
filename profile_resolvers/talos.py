@@ -11,6 +11,31 @@ import yaml
 
 
 PROFILE_RELATIVE_PATH = Path("profiles/kubevirt/profile.yaml")
+EXPECTED_CLONE_TARGET = {
+    "storage_class": "ok-storage-block",
+    "provisioner": "driver.longhorn.io",
+    "replica_count": 2,
+    "access_mode": "ReadWriteOnce",
+    "volume_mode": "Filesystem",
+    "reclaim_policy": "Retain",
+    "volume_binding_mode": "Immediate",
+    "allow_volume_expansion": True,
+    "snapshot_class": "ok-storage-block-snapshot",
+    "snapshot_type": "snap",
+    "kubevirt_feature_gates": ["ExpandDisks"],
+}
+EXPECTED_PROVIDER_PROFILES = {
+    "default": "ok-infra",
+    "profiles": {
+        name: {
+            "lifecycle": "production",
+            "node_selector": name,
+            "preserve_legacy_template_names": name == "ok-infra",
+            "clone_target": EXPECTED_CLONE_TARGET,
+        }
+        for name in ("ok-infra", "ok-gpu")
+    },
+}
 
 
 class TalosProfileError(ValueError):
@@ -47,6 +72,61 @@ def golden_claim(talos: dict, artifact: dict) -> str:
         f"talos-{version}-{str(talos['schematic_id'])[:12]}-"
         f"{str(artifact['sha256'])[:12]}-{artifact['architecture']}"
     )
+
+
+def provider_identity(name: str, profile: dict) -> str:
+    clone = profile["clone_target"]
+    material = "|".join(
+        (
+            "talos-kubevirt-provider",
+            name,
+            profile["node_selector"],
+            clone["storage_class"],
+            str(clone["replica_count"]),
+            clone["snapshot_class"],
+        )
+    )
+    return "sha256:" + hashlib.sha256(material.encode()).hexdigest()
+
+
+def resolve_provider_profile(resolved: dict, talos: dict) -> dict:
+    provider_profiles = talos.get("provider_profiles")
+    if provider_profiles != EXPECTED_PROVIDER_PROFILES:
+        raise TalosProfileError(
+            "ok-linux Talos provider profiles differ from the reviewed "
+            "OK-136 contract"
+        )
+    supplied = resolved.get("providerProfile") or {}
+    if not isinstance(supplied, dict):
+        raise TalosProfileError("providerProfile must be a mapping")
+    name = supplied.get("name", provider_profiles["default"])
+    profile = provider_profiles["profiles"].get(name)
+    if profile is None:
+        raise TalosProfileError(
+            f"unreviewed Talos KubeVirt provider profile: {name!r}"
+        )
+    identity = provider_identity(name, profile)
+    expected = {
+        "name": name,
+        "identity": identity,
+        "nodeSelector": profile["node_selector"],
+        "cloneTargetStorageClass": profile["clone_target"]["storage_class"],
+        "replicaCount": profile["clone_target"]["replica_count"],
+        "snapshotClass": profile["clone_target"]["snapshot_class"],
+    }
+    if supplied and supplied not in ({"name": name}, expected):
+        raise TalosProfileError(
+            "Talos providerProfile differs from its reviewed source of truth"
+        )
+    selected_node = resolved.get("nodeSelector")
+    if selected_node not in (None, "", profile["node_selector"]):
+        raise TalosProfileError(
+            f"provider profile {name} requires nodeSelector: "
+            f"{profile['node_selector']}"
+        )
+    resolved["nodeSelector"] = profile["node_selector"]
+    resolved["providerProfile"] = expected
+    return profile
 
 
 def resolve_talos_config(cfg: dict, ok_linux_path: Path) -> dict:
@@ -96,6 +176,8 @@ def resolve_talos_config(cfg: dict, ok_linux_path: Path) -> dict:
     ).hexdigest()
     if identity != artifact["identity"]:
         raise TalosProfileError("Talos artifact identity is invalid")
+
+    resolve_provider_profile(resolved, talos)
 
     versions = resolved.setdefault("versions", {})
     if versions.get("talos", talos["version"]) != talos["version"]:
