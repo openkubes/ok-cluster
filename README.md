@@ -80,6 +80,66 @@ make install-observability CLUSTER=my-cluster
 make register-cluster CLUSTER=my-cluster
 ```
 
+#### Reviewed Talos KubeVirt scheduling profiles
+
+Ordinary Talos clusters default to the existing production profile
+`ok-infra`. To place both control-plane and worker VMs on `ok-gpu`, select the
+reviewed provider profile explicitly:
+
+```bash
+make new \
+  CLUSTER=ok-iot \
+  TYPE=talos \
+  SCHEDULING_PROFILE=ok-gpu \
+  CP_CORES=2 \
+  CP_MEMORY=4Gi \
+  CP_DISK=20Gi \
+  WORKER_CORES=4 \
+  WORKER_MEMORY=8Gi \
+  WORKER_DISK=30Gi
+
+make talos-golden-preflight \
+  CLUSTER=ok-iot \
+  TALOS_INFRA_KUBECONFIG="$HOME/.kube/ok-infra.yaml"
+
+make bootstrap \
+  CLUSTER=ok-iot \
+  TALOS_INFRA_KUBECONFIG="$HOME/.kube/ok-infra.yaml" \
+  CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz"
+```
+
+Both `ok-infra` and `ok-gpu` use the stable, replicated
+`ok-storage-block` contract and the same immutable Talos Golden Image. CPU,
+memory and disk sizes remain independently configurable for control-plane and
+worker VMs. The read-only preflight checks the selected node's remaining
+compute capacity, two-replica Longhorn capacity, KubeVirt disk expansion and
+the CDI snapshot-clone path before bootstrap.
+
+Free-form Talos KubeVirt placement fails closed. For example,
+`NODE_SELECTOR=ok-gpu` without `SCHEDULING_PROFILE=ok-gpu`, a mismatched node,
+an arbitrary StorageClass or an unknown profile is rejected before rendering.
+The historical `gpu-single-replica` meetup profile and
+`ok-storage-block-gpu-test` remain demonstration-only and are not production
+fallbacks.
+
+For local development and disposable demonstrations, the explicit
+`ok-gpu-single-replica` profile selects that isolated StorageClass without
+weakening either production profile:
+
+```bash
+make new \
+  CLUSTER=ok-iot \
+  TYPE=talos \
+  SCHEDULING_PROFILE=ok-gpu-single-replica \
+  WORKERS=3 \
+  CP_CORES=2 CP_MEMORY=4Gi CP_DISK=20Gi \
+  WORKER_CORES=2 WORKER_MEMORY=4Gi WORKER_DISK=30Gi
+```
+
+This profile places every VM and its single boot-volume replica on `ok-gpu`.
+It provides no node or disk failure tolerance and must not be presented as the
+stable `ok-storage-block` contract.
+
 ### Ubuntu Cluster
 
 ```bash

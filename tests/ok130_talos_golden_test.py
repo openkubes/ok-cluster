@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,14 +25,24 @@ sys.path.insert(0, str(ROOT))
 
 import render  # noqa: E402
 from profile_resolvers.talos import (  # noqa: E402
+    EXPECTED_PROVIDER_PROFILES,
     TalosProfileError,
     golden_claim,
     identity_material,
+    provider_identity,
     resolve_talos_config,
 )
 from scripts.talos_golden_lifecycle import (  # noqa: E402
     TalosLifecycleError,
+    cpu_millis,
+    endpoint_collisions,
+    longhorn_disk_schedulable_bytes,
+    longhorn_runtime_state,
+    pod_requests,
+    quantity_bytes,
+    requested_resources,
     replacement_data_volume_state,
+    runtime_infrastructure_state,
     validate_manifest,
 )
 from scripts import talos_replacement_runtime  # noqa: E402
@@ -98,6 +110,56 @@ def main() -> int:
             "storageClass": "ok-storage-block",
         },
         "resolver consumes the exact ok-linux Talos artifact identity",
+    )
+    default_provider = EXPECTED_PROVIDER_PROFILES["profiles"]["ok-infra"]
+    check(
+        resolved["nodeSelector"] == "ok-infra"
+        and resolved["providerProfile"]
+        == {
+            "name": "ok-infra",
+            "identity": provider_identity("ok-infra", default_provider),
+            "nodeSelector": "ok-infra",
+            "cloneTargetStorageClass": "ok-storage-block",
+            "replicaCount": 2,
+            "snapshotClass": "ok-storage-block-snapshot",
+        },
+        "ordinary Talos defaults to the reviewed ok-infra provider profile",
+    )
+    single_raw = copy.deepcopy(raw)
+    single_raw["providerProfile"] = {"name": "ok-gpu-single-replica"}
+    single_raw["nodeSelector"] = "ok-gpu"
+    single_raw["workers"]["replicas"] = 3
+    single_raw["workers"]["disk"] = "30Gi"
+    single = resolve_talos_config(single_raw, OK_LINUX)
+    check(
+        single["providerProfile"]["name"] == "ok-gpu-single-replica"
+        and single["providerProfile"]["nodeSelector"] == "ok-gpu"
+        and single["providerProfile"]["cloneTargetStorageClass"]
+        == "ok-storage-block-gpu-test"
+        and single["providerProfile"]["replicaCount"] == 1
+        and single["os"]["identity"] == resolved["os"]["identity"],
+        "development profile isolates single-replica GPU clones from the Golden identity",
+    )
+    unreviewed_node = copy.deepcopy(raw)
+    unreviewed_node["nodeSelector"] = "another-node"
+    expect_failure(
+        unreviewed_node,
+        "free-form Talos KubeVirt scheduling fails closed",
+    )
+    mismatched_gpu = copy.deepcopy(raw)
+    mismatched_gpu["providerProfile"] = {"name": "ok-gpu"}
+    expect_failure(
+        mismatched_gpu,
+        "provider profile and node selector must match",
+    )
+    storage_override = copy.deepcopy(raw)
+    storage_override["providerProfile"] = {
+        "name": "ok-infra",
+        "cloneTargetStorageClass": "local-path",
+    }
+    expect_failure(
+        storage_override,
+        "consumer-side Talos storage overrides fail closed",
     )
     profile = load(OK_LINUX / "profiles" / "kubevirt" / "profile.yaml")
     current_talos = profile["talos"]
@@ -392,6 +454,353 @@ def main() -> int:
                 "replacement wait rejects excess current-template machines",
             )
 
+    gpu_raw = copy.deepcopy(raw)
+    gpu_raw["providerProfile"] = {"name": "ok-gpu"}
+    gpu_raw["nodeSelector"] = "ok-gpu"
+    gpu_raw["controlPlane"].update(
+        {"cores": 3, "memory": "6Gi", "disk": "20Gi"}
+    )
+    gpu_raw["workers"].update(
+        {"cores": 4, "memory": "8Gi", "disk": "30Gi"}
+    )
+    gpu = resolve_talos_config(gpu_raw, OK_LINUX)
+    with tempfile.TemporaryDirectory(prefix=".ok136-gpu-", dir=ROOT) as temp:
+        output = Path(temp)
+        render.render_cluster(gpu["name"], output, gpu)
+        gpu_base = output / "cluster-base.yaml"
+        gpu_docs = docs(gpu_base)
+        gpu_templates = [
+            item
+            for item in gpu_docs
+            if item.get("kind") == "KubevirtMachineTemplate"
+        ]
+        gpu_production_templates = [
+            item
+            for item in gpu_templates
+            if "-v2-" not in item["metadata"]["name"]
+        ]
+        check(
+            len(gpu_production_templates) == 2
+            and all(
+                item["metadata"]["annotations"][
+                    "openkubes.io/provider-profile"
+                ]
+                == "ok-gpu"
+                and item["metadata"]["name"].endswith(
+                    gpu["providerProfile"]["identity"]
+                    .removeprefix("sha256:")[:8]
+                )
+                for item in gpu_production_templates
+            )
+            and set(nested(gpu_docs, "storageClassName"))
+            == {"ok-storage-block"}
+            and set(nested(gpu_docs, "kubernetes.io/hostname"))
+            == {"ok-gpu"},
+            "ok-gpu renders provider-bound templates on production storage",
+        )
+        check(
+            set(nested(gpu_docs, "cores")) >= {3, 4}
+            and {"6Gi", "8Gi"}.issubset(set(nested(gpu_docs, "guest")))
+            and {"20Gi", "30Gi"}.issubset(set(nested(gpu_docs, "storage"))),
+            "ok-gpu preserves independent CP and worker resources",
+        )
+        validate_manifest(gpu, gpu_base)
+        check(True, "ok-gpu lifecycle manifest guard accepts the render")
+
+    with tempfile.TemporaryDirectory(
+        prefix=".ok136-gpu-single-", dir=ROOT
+    ) as temp:
+        output = Path(temp)
+        render.render_cluster(single["name"], output, single)
+        single_base = output / "cluster-base.yaml"
+        single_docs = docs(single_base)
+        check(
+            set(nested(single_docs, "storageClassName"))
+            == {"ok-storage-block-gpu-test"}
+            and set(nested(single_docs, "kubernetes.io/hostname"))
+            == {"ok-gpu"}
+            and {item["spec"]["replicas"] for item in single_docs if item.get("kind") == "MachineDeployment"}
+            == {3},
+            "single-replica GPU profile renders one CP and three workers on isolated storage",
+        )
+        validate_manifest(single, single_base)
+        check(True, "single-replica GPU lifecycle manifest guard accepts the render")
+
+    resource_bound = requested_resources(gpu)
+    used_cpu, used_memory = pod_requests(
+        [
+            {
+                "spec": {
+                    "containers": [
+                        {
+                            "resources": {
+                                "requests": {"cpu": "250m", "memory": "256Mi"}
+                            }
+                        }
+                    ],
+                    "overhead": {"cpu": "10m", "memory": "16Mi"},
+                }
+            }
+        ]
+    )
+    check(
+        resource_bound["cpu_millis"] == 7000
+        and resource_bound["memory_bytes"] == 15 * 1024**3
+        and resource_bound["storage_bytes_per_replica"] == 55 * 1024**3
+        and used_cpu == 260
+        and used_memory == 272 * 1024**2,
+        "management capacity calculations are deterministic and bounded",
+    )
+    check(
+        quantity_bytes("2048M") == 2_048_000_000
+        and quantity_bytes("2Gi") == 2 * 1024**3
+        and cpu_millis("250m") == 250
+        and cpu_millis("500000u") == 500,
+        "management capacity parser accepts Kubernetes decimal and binary quantities",
+    )
+    check(
+        longhorn_disk_schedulable_bytes(
+            {"storageReserved": 149_171_559_628},
+            {
+                "storageAvailable": 337_536_614_400,
+                "storageMaximum": 497_238_532_096,
+                "storageScheduled": 342_523_641_856,
+            },
+            15,
+            100,
+        )
+        == 5_543_330_612,
+        "management preflight honors Longhorn reserved and scheduled capacity",
+    )
+    check(
+        endpoint_collisions(
+            gpu,
+            [
+                {
+                    "metadata": {"namespace": "ai-services", "name": "ollama"},
+                    "status": {
+                        "loadBalancer": {
+                            "ingress": [{"ip": gpu["network"]["endpoint"]}]
+                        }
+                    },
+                }
+            ],
+            [],
+        )
+        == ["Service ai-services/ollama"]
+        and endpoint_collisions(gpu, [], []) == [],
+        "management preflight detects live endpoint collisions",
+    )
+    golden_source = {
+        "pvc": {
+            "namespace": gpu["os"]["goldenImage"]["namespace"],
+            "name": gpu["os"]["goldenImage"]["claim"],
+        }
+    }
+    runtime_data_volumes = [
+        {
+            "metadata": {"name": f"gpu-{role}-disk", "uid": f"dv-{role}"},
+            "spec": {
+                "source": golden_source,
+                "pvc": {"storageClassName": "ok-storage-block"},
+            },
+            "status": {"phase": "Succeeded"},
+        }
+        for role in ("cp", "worker")
+    ]
+    runtime_vmis = [
+        {
+            "metadata": {"name": f"gpu-{role}", "uid": f"vmi-{role}"},
+            "status": {"phase": "Running", "nodeName": "ok-gpu"},
+        }
+        for role in ("cp", "worker")
+    ]
+    runtime_pvcs = [
+        {
+            "metadata": {"name": "gpu-cp-disk", "uid": "pvc-cp"},
+            "spec": {
+                "storageClassName": "ok-storage-block",
+                "resources": {"requests": {"storage": "21Gi"}},
+            },
+            "status": {"phase": "Bound"},
+        },
+        {
+            "metadata": {"name": "gpu-worker-disk", "uid": "pvc-worker"},
+            "spec": {
+                "storageClassName": "ok-storage-block",
+                "resources": {"requests": {"storage": "32Gi"}},
+            },
+            "status": {"phase": "Bound"},
+        },
+    ]
+    runtime_state = runtime_infrastructure_state(
+        gpu, runtime_data_volumes, runtime_vmis, runtime_pvcs
+    )
+    check(
+        {item["node"] for item in runtime_state["virtual_machine_instances"]}
+        == {"ok-gpu"}
+        and {item["role"] for item in runtime_state["persistent_volume_claims"]}
+        == {"control-plane", "worker"},
+        "runtime evidence binds VM placement and role-sized boot clones",
+    )
+    wrong_runtime_vmis = copy.deepcopy(runtime_vmis)
+    wrong_runtime_vmis[0]["status"]["nodeName"] = "ok-infra"
+    try:
+        runtime_infrastructure_state(
+            gpu, runtime_data_volumes, wrong_runtime_vmis, runtime_pvcs
+        )
+    except TalosLifecycleError:
+        check(True, "runtime evidence rejects cross-profile VMI placement")
+    else:
+        check(False, "runtime evidence rejects cross-profile VMI placement")
+
+    for index, item in enumerate(runtime_pvcs):
+        item["spec"]["volumeName"] = f"pv-{index}"
+    healthy_volumes = [
+        {
+            "metadata": {"name": f"pv-{index}"},
+            "spec": {"numberOfReplicas": 2},
+            "status": {"state": "attached", "robustness": "healthy"},
+        }
+        for index in range(2)
+    ]
+    healthy_replicas = [
+        {
+            "metadata": {
+                "name": f"pv-{volume}-{node}",
+                "labels": {"longhornvolume": f"pv-{volume}"},
+            },
+            "spec": {"nodeID": node, "desireState": "running"},
+            "status": {"started": True},
+        }
+        for volume in range(2)
+        for node in ("ok-gpu", "ok-infra")
+    ]
+    check(
+        len(
+            longhorn_runtime_state(
+                gpu, runtime_pvcs, healthy_volumes, healthy_replicas
+            )
+        )
+        == 2,
+        "runtime evidence proves healthy replicas on distinct Longhorn nodes",
+    )
+    degraded_volumes = copy.deepcopy(healthy_volumes)
+    degraded_volumes[0]["status"]["robustness"] = "degraded"
+    try:
+        longhorn_runtime_state(
+            gpu, runtime_pvcs, degraded_volumes, healthy_replicas
+        )
+    except TalosLifecycleError:
+        check(True, "runtime evidence rejects degraded Longhorn boot volumes")
+    else:
+        check(False, "runtime evidence rejects degraded Longhorn boot volumes")
+
+    scaffold_name = "ok136-scaffold-test"
+    scaffold_dir = ROOT / scaffold_name
+    shutil.rmtree(scaffold_dir, ignore_errors=True)
+    scaffold_env = {
+        **os.environ,
+        "INFRA_KUBECONFIG": "/private/tmp/ok136-no-management-kubeconfig",
+        "OKB_KUBECONFIG": "/private/tmp/ok136-no-management-kubeconfig",
+    }
+    unsafe_scaffold = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "new",
+            f"CLUSTER={scaffold_name}",
+            "TYPE=talos",
+            "NODE_SELECTOR=ok-gpu",
+        ],
+        cwd=ROOT,
+        env=scaffold_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    check(
+        unsafe_scaffold.returncode != 0
+        and "SCHEDULING_PROFILE=ok-gpu"
+        in (unsafe_scaffold.stdout + unsafe_scaffold.stderr),
+        "ordinary scaffold rejects free-form ok-gpu placement",
+    )
+    try:
+        reviewed_scaffold = subprocess.run(
+            [
+                "make",
+                "--no-print-directory",
+                "new",
+                f"CLUSTER={scaffold_name}",
+                "TYPE=talos",
+                "SCHEDULING_PROFILE=ok-gpu",
+                "CP_CORES=3",
+                "CP_MEMORY=6Gi",
+                "CP_DISK=20Gi",
+                "WORKER_CORES=4",
+                "WORKER_MEMORY=8Gi",
+                "WORKER_DISK=30Gi",
+                "START_IP=192.168.100.254",
+            ],
+            cwd=ROOT,
+            env=scaffold_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        scaffold = (
+            load(scaffold_dir / "cluster-config.yaml")
+            if reviewed_scaffold.returncode == 0
+            else {}
+        )
+        check(
+            reviewed_scaffold.returncode == 0
+            and scaffold.get("providerProfile", {}).get("name") == "ok-gpu"
+            and scaffold.get("nodeSelector") == "ok-gpu"
+            and scaffold.get("controlPlane", {}).get("cores") == 3
+            and scaffold.get("workers", {}).get("disk") == "30Gi",
+            "reviewed ok-gpu scaffold materializes exact role resources",
+        )
+        shutil.rmtree(scaffold_dir, ignore_errors=True)
+        single_scaffold = subprocess.run(
+            [
+                "make",
+                "--no-print-directory",
+                "new",
+                f"CLUSTER={scaffold_name}",
+                "TYPE=talos",
+                "SCHEDULING_PROFILE=ok-gpu-single-replica",
+                "WORKERS=3",
+                "CP_DISK=20Gi",
+                "WORKER_DISK=30Gi",
+                "START_IP=192.168.100.254",
+            ],
+            cwd=ROOT,
+            env=scaffold_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        single_scaffold_config = (
+            load(scaffold_dir / "cluster-config.yaml")
+            if single_scaffold.returncode == 0
+            else {}
+        )
+        check(
+            single_scaffold.returncode == 0
+            and single_scaffold_config.get("providerProfile", {}).get("name")
+            == "ok-gpu-single-replica"
+            and single_scaffold_config.get("nodeSelector") == "ok-gpu"
+            and single_scaffold_config.get("workers", {}).get("replicas") == 3
+            and single_scaffold_config.get("providerProfile", {}).get(
+                "cloneTargetStorageClass"
+            )
+            == "ok-storage-block-gpu-test",
+            "single-replica GPU scaffold materializes one CP and three workers",
+        )
+    finally:
+        shutil.rmtree(scaffold_dir, ignore_errors=True)
+
     profile_test = subprocess.run(
         ["make", "--no-print-directory", "-s", "ok130-profile-test"],
         cwd=OK_LINUX,
@@ -619,9 +1028,15 @@ def main() -> int:
         "warm evidence uses comparable CAPI, Node, Cilium milestones",
     )
     check(
-        '["get", "node", "ok-infra"]' in lifecycle_source
-        and "ok-infra is not Ready and schedulable" in lifecycle_source,
-        "management preflight verifies the reviewed scheduling target",
+        'config["providerProfile"]["nodeSelector"]' in lifecycle_source
+        and "capacity is insufficient" in lifecycle_source
+        and "Longhorn capacity/placement is insufficient" in lifecycle_source,
+        "management preflight verifies profile-bound compute and storage",
+    )
+    check(
+        "require_create_capacity: bool = True" in lifecycle_source
+        and "require_create_capacity=False" in lifecycle_source,
+        "runtime evidence does not require capacity for a duplicate cluster",
     )
     check(
         '"ExpandDisks" not in gates' in lifecycle_source

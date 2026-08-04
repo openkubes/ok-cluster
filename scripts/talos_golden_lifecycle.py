@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import yaml
@@ -19,6 +21,7 @@ EVIDENCE_DIR = ROOT / "docs" / "adoption" / "OK-130" / ".evidence"
 sys.path.insert(0, str(ROOT))
 
 from profile_resolvers.talos import (  # noqa: E402
+    EXPECTED_PROVIDER_PROFILES,
     TalosProfileError,
     resolve_talos_config,
 )
@@ -144,6 +147,57 @@ def validate_manifest(config: dict, manifest_path: Path) -> None:
         ]
     ):
         raise TalosLifecycleError("clone authorization is not least privilege")
+    provider = config["providerProfile"]
+    machine_templates = [
+        item for item in docs if item.get("kind") == "KubevirtMachineTemplate"
+    ]
+    node_selectors = [
+        item.get("spec", {})
+        .get("template", {})
+        .get("spec", {})
+        .get("virtualMachineTemplate", {})
+        .get("spec", {})
+        .get("template", {})
+        .get("spec", {})
+        .get("nodeSelector", {})
+        .get("kubernetes.io/hostname")
+        for item in machine_templates
+        if "-v2-" not in item.get("metadata", {}).get("name", "")
+    ]
+    storage_classes = [
+        data_volume.get("spec", {})
+        .get("pvc", {})
+        .get("storageClassName")
+        for item in machine_templates
+        if "-v2-" not in item.get("metadata", {}).get("name", "")
+        for data_volume in item.get("spec", {})
+        .get("template", {})
+        .get("spec", {})
+        .get("virtualMachineTemplate", {})
+        .get("spec", {})
+        .get("dataVolumeTemplates", [])
+    ]
+    if (
+        len(node_selectors) != 2
+        or set(node_selectors) != {provider["nodeSelector"]}
+        or len(storage_classes) != 2
+        or set(storage_classes) != {provider["cloneTargetStorageClass"]}
+        or any(
+            item.get("metadata", {}).get("annotations", {}).get(
+                "openkubes.io/provider-profile"
+            )
+            != provider["name"]
+            or item.get("metadata", {}).get("annotations", {}).get(
+                "openkubes.io/provider-profile-identity"
+            )
+            != provider["identity"]
+            for item in machine_templates
+            if "-v2-" not in item.get("metadata", {}).get("name", "")
+        )
+    ):
+        raise TalosLifecycleError(
+            "Talos machine templates differ from the reviewed provider profile"
+        )
 
 
 def verify_golden(config: dict, kubeconfig: Path) -> dict:
@@ -169,8 +223,143 @@ def verify_golden(config: dict, kubeconfig: Path) -> dict:
     }
 
 
-def verify_scheduling(kubeconfig: Path) -> dict:
-    node = kubectl_json(kubeconfig, ["get", "node", "ok-infra"])
+def quantity_bytes(value: str) -> int:
+    match = re.fullmatch(
+        r"([0-9]+(?:\.[0-9]+)?)(Ki|Mi|Gi|Ti|Pi|Ei|k|K|M|G|T|P|E)?",
+        str(value),
+    )
+    if not match:
+        raise TalosLifecycleError(f"unsupported storage/memory quantity: {value}")
+    try:
+        number = Decimal(match.group(1))
+    except InvalidOperation as error:
+        raise TalosLifecycleError(
+            f"unsupported storage/memory quantity: {value}"
+        ) from error
+    suffix = match.group(2)
+    binary_power = {
+        "Ki": 1,
+        "Mi": 2,
+        "Gi": 3,
+        "Ti": 4,
+        "Pi": 5,
+        "Ei": 6,
+    }.get(suffix)
+    if binary_power is not None:
+        return int(number * (1024**binary_power))
+    decimal_power = {
+        None: 0,
+        "k": 1,
+        "K": 1,
+        "M": 2,
+        "G": 3,
+        "T": 4,
+        "P": 5,
+        "E": 6,
+    }[suffix]
+    return int(number * (1000**decimal_power))
+
+
+def cpu_millis(value: str | int | float) -> int:
+    text = str(value)
+    suffix_scale = {"n": Decimal("0.000001"), "u": Decimal("0.001"), "m": Decimal(1)}
+    if text[-1:] in suffix_scale:
+        return int(Decimal(text[:-1]) * suffix_scale[text[-1]])
+    return int(Decimal(text) * 1000)
+
+
+def requested_resources(config: dict) -> dict:
+    cp = config["controlPlane"]
+    workers = config["workers"]
+    machines = int(cp["replicas"]) + int(workers["replicas"])
+    return {
+        "cpu_millis": (
+            int(cp["replicas"]) * int(cp["cores"])
+            + int(workers["replicas"]) * int(workers["cores"])
+        )
+        * 1000,
+        "memory_bytes": (
+            int(cp["replicas"]) * quantity_bytes(cp["memory"])
+            + int(workers["replicas"]) * quantity_bytes(workers["memory"])
+            + machines * quantity_bytes("512Mi")
+        ),
+        "storage_bytes_per_replica": (
+            (
+                int(cp["replicas"]) * quantity_bytes(cp["disk"])
+                + int(workers["replicas"]) * quantity_bytes(workers["disk"])
+            )
+            * 110
+            + 99
+        )
+        // 100,
+    }
+
+
+def longhorn_disk_schedulable_bytes(
+    disk_spec: dict,
+    disk_status: dict,
+    minimum_available_percentage: int,
+    over_provisioning_percentage: int,
+) -> int:
+    """Return the conservative Longhorn scheduler budget for one disk."""
+    maximum = int(disk_status.get("storageMaximum", 0))
+    available = int(disk_status.get("storageAvailable", 0))
+    scheduled = int(disk_status.get("storageScheduled", 0))
+    reserved = int(disk_spec.get("storageReserved", 0))
+    physical_budget = available - (
+        maximum * minimum_available_percentage // 100
+    )
+    scheduled_budget = (
+        (maximum - reserved) * over_provisioning_percentage // 100
+    ) - scheduled
+    return max(0, min(physical_budget, scheduled_budget))
+
+
+def pod_requests(pods: list[dict]) -> tuple[int, int]:
+    cpu = 0
+    memory = 0
+    for pod in pods:
+        containers = pod.get("spec", {}).get("containers", [])
+        init_containers = pod.get("spec", {}).get("initContainers", [])
+        regular_cpu = sum(
+            cpu_millis(item.get("resources", {}).get("requests", {}).get("cpu", 0))
+            for item in containers
+        )
+        regular_memory = sum(
+            quantity_bytes(
+                item.get("resources", {}).get("requests", {}).get("memory", "0")
+            )
+            for item in containers
+        )
+        init_cpu = max(
+            [
+                cpu_millis(item.get("resources", {}).get("requests", {}).get("cpu", 0))
+                for item in init_containers
+            ]
+            or [0]
+        )
+        init_memory = max(
+            [
+                quantity_bytes(
+                    item.get("resources", {}).get("requests", {}).get("memory", "0")
+                )
+                for item in init_containers
+            ]
+            or [0]
+        )
+        overhead = pod.get("spec", {}).get("overhead", {})
+        cpu += max(regular_cpu, init_cpu) + cpu_millis(overhead.get("cpu", 0))
+        memory += max(regular_memory, init_memory) + quantity_bytes(
+            overhead.get("memory", "0")
+        )
+    return cpu, memory
+
+
+def verify_scheduling(
+    config: dict, kubeconfig: Path, *, require_create_capacity: bool = True
+) -> dict:
+    expected_node = config["providerProfile"]["nodeSelector"]
+    node = kubectl_json(kubeconfig, ["get", "node", expected_node])
     ready = next(
         (
             condition
@@ -184,12 +373,170 @@ def verify_scheduling(kubeconfig: Path) -> dict:
         or ready is None
         or ready.get("status") != "True"
     ):
-        raise TalosLifecycleError("ok-infra is not Ready and schedulable")
+        raise TalosLifecycleError(
+            f"{expected_node} is not Ready and schedulable"
+        )
+    requests = requested_resources(config)
+    pods = kubectl_json(
+        kubeconfig,
+        ["get", "pods", "-A", "--field-selector", f"spec.nodeName={expected_node}"],
+    ).get("items", [])
+    used_cpu, used_memory = pod_requests(pods)
+    allocatable = node.get("status", {}).get("allocatable", {})
+    available_cpu = cpu_millis(allocatable.get("cpu", 0)) - used_cpu
+    available_memory = quantity_bytes(allocatable.get("memory", "0")) - used_memory
+    if require_create_capacity and (
+        available_cpu < requests["cpu_millis"]
+        or available_memory < requests["memory_bytes"]
+    ):
+        raise TalosLifecycleError(
+            f"{expected_node} capacity is insufficient: "
+            f"cpu requested={requests['cpu_millis']}m available={available_cpu}m, "
+            f"memory requested={requests['memory_bytes']}B "
+            f"available={available_memory}B"
+        )
     return {
         "name": node["metadata"]["name"],
         "uid": node["metadata"]["uid"],
         "ready": True,
         "schedulable": True,
+        "available_cpu_millis": available_cpu,
+        "requested_cpu_millis": requests["cpu_millis"],
+        "available_memory_bytes": available_memory,
+        "requested_memory_bytes": requests["memory_bytes"],
+        "create_capacity_required": require_create_capacity,
+    }
+
+
+def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
+    provider = config["providerProfile"]
+    expected = EXPECTED_PROVIDER_PROFILES["profiles"][provider["name"]][
+        "clone_target"
+    ]
+    storage = kubectl_json(
+        kubeconfig, ["get", "storageclass", provider["cloneTargetStorageClass"]]
+    )
+    parameters = storage.get("parameters", {})
+    observed = {
+        "provisioner": storage.get("provisioner"),
+        "replica_count": int(parameters.get("numberOfReplicas", "0")),
+        "reclaim_policy": storage.get("reclaimPolicy"),
+        "volume_binding_mode": storage.get("volumeBindingMode"),
+        "allow_volume_expansion": storage.get("allowVolumeExpansion"),
+    }
+    required = {key: expected[key] for key in observed}
+    if (
+        observed != required
+        or parameters.get("nodeSelector", "")
+        != expected.get("node_tag", "")
+    ):
+        raise TalosLifecycleError(
+            f"clone-target StorageClass contract mismatch: {observed}"
+        )
+    snapshot = kubectl_json(
+        kubeconfig,
+        ["get", "volumesnapshotclass", expected["snapshot_class"]],
+    )
+    if (
+        snapshot.get("driver") != expected["provisioner"]
+        or snapshot.get("deletionPolicy") != "Delete"
+        or snapshot.get("parameters") != {"type": expected["snapshot_type"]}
+    ):
+        raise TalosLifecycleError("Longhorn snapshot clone class is invalid")
+    storage_profile = kubectl_json(
+        kubeconfig,
+        [
+            "get",
+            "storageprofile.cdi.kubevirt.io",
+            expected["storage_class"],
+        ],
+    ).get("status", {})
+    if (
+        storage_profile.get("provisioner") != expected["provisioner"]
+        or storage_profile.get("storageClass") != expected["storage_class"]
+        or storage_profile.get("snapshotClass") != expected["snapshot_class"]
+        or storage_profile.get("cloneStrategy") != "snapshot"
+    ):
+        raise TalosLifecycleError("CDI clone strategy differs from the contract")
+    longhorn_nodes = kubectl_json(
+        kubeconfig, ["-n", "longhorn-system", "get", "nodes.longhorn.io"]
+    ).get("items", [])
+    minimum_available_percentage = int(
+        kubectl_json(
+            kubeconfig,
+            [
+                "-n",
+                "longhorn-system",
+                "get",
+                "settings.longhorn.io",
+                "storage-minimal-available-percentage",
+            ],
+        ).get("value", "")
+    )
+    over_provisioning_percentage = int(
+        kubectl_json(
+            kubeconfig,
+            [
+                "-n",
+                "longhorn-system",
+                "get",
+                "settings.longhorn.io",
+                "storage-over-provisioning-percentage",
+            ],
+        ).get("value", "")
+    )
+    needed = requested_resources(config)["storage_bytes_per_replica"]
+    eligible = []
+    for item in longhorn_nodes:
+        ready = next(
+            (
+                condition
+                for condition in item.get("status", {}).get("conditions", [])
+                if condition.get("type") == "Ready"
+            ),
+            None,
+        )
+        schedulable = sum(
+            longhorn_disk_schedulable_bytes(
+                item.get("spec", {}).get("disks", {}).get(disk_name, {}),
+                status,
+                minimum_available_percentage,
+                over_provisioning_percentage,
+            )
+            for disk_name, status in item.get("status", {}).get("diskStatus", {}).items()
+            if item.get("spec", {}).get("disks", {}).get(disk_name, {}).get(
+                "allowScheduling"
+            )
+            is True
+        )
+        if (
+            item.get("spec", {}).get("allowScheduling") is True
+            and ready is not None
+            and ready.get("status") == "True"
+            and schedulable >= needed
+        ):
+            eligible.append(
+                {
+                    "name": item["metadata"]["name"],
+                    "schedulable_bytes": schedulable,
+                }
+            )
+    if (
+        len(eligible) < expected["replica_count"]
+        or provider["nodeSelector"] not in {item["name"] for item in eligible}
+    ):
+        raise TalosLifecycleError(
+            "Longhorn capacity/placement is insufficient: "
+            f"requested_per_replica={needed}B eligible={eligible}"
+        )
+    return {
+        "storage_class": expected["storage_class"],
+        "replica_count": expected["replica_count"],
+        "requested_bytes_per_replica": needed,
+        "eligible_nodes": eligible,
+        "minimum_available_percentage": minimum_available_percentage,
+        "over_provisioning_percentage": over_provisioning_percentage,
+        "snapshot_clone": True,
     }
 
 
@@ -229,6 +576,61 @@ def verify_kubevirt(kubeconfig: Path) -> dict:
         "version": "v1.8.1",
         "expand_disks": True,
     }
+
+
+def endpoint_collisions(
+    config: dict, services: list[dict], clusters: list[dict]
+) -> list[str]:
+    endpoint = config["network"]["endpoint"]
+    collisions = []
+    for item in services:
+        metadata = item.get("metadata", {})
+        if metadata.get("namespace") == config["name"]:
+            continue
+        addresses = {
+            item.get("spec", {}).get("loadBalancerIP"),
+            *[
+                ingress.get("ip")
+                for ingress in (
+                    item.get("status", {})
+                    .get("loadBalancer", {})
+                    .get("ingress", [])
+                    or []
+                )
+            ],
+        }
+        if endpoint in addresses:
+            collisions.append(
+                f"Service {metadata.get('namespace')}/{metadata.get('name')}"
+            )
+    for item in clusters:
+        metadata = item.get("metadata", {})
+        if metadata.get("name") == config["name"]:
+            continue
+        observed = (
+            item.get("spec", {}).get("controlPlaneEndpoint", {}).get("host")
+        )
+        if observed == endpoint:
+            collisions.append(
+                f"Cluster {metadata.get('namespace')}/{metadata.get('name')}"
+            )
+    return sorted(collisions)
+
+
+def verify_endpoint_available(config: dict, kubeconfig: Path) -> dict:
+    services = kubectl_json(kubeconfig, ["get", "services", "-A"]).get(
+        "items", []
+    )
+    clusters = kubectl_json(kubeconfig, ["get", "clusters", "-A"]).get(
+        "items", []
+    )
+    collisions = endpoint_collisions(config, services, clusters)
+    if collisions:
+        raise TalosLifecycleError(
+            f"endpoint {config['network']['endpoint']} is already used by "
+            + ", ".join(collisions)
+        )
+    return {"endpoint": config["network"]["endpoint"], "available": True}
 
 
 def true_condition(resource: dict, *types: str) -> dict | None:
@@ -361,12 +763,189 @@ def cilium_runtime(
     }
 
 
+def runtime_infrastructure_state(
+    config: dict,
+    data_volumes: list[dict],
+    virtual_machine_instances: list[dict],
+    persistent_volume_claims: list[dict],
+) -> dict:
+    expected_count = (
+        int(config["controlPlane"]["replicas"])
+        + int(config["workers"]["replicas"])
+    )
+    provider = config["providerProfile"]
+    golden = config["os"]["goldenImage"]
+    expected_source = {
+        "pvc": {"namespace": golden["namespace"], "name": golden["claim"]}
+    }
+    if len(data_volumes) != expected_count:
+        raise TalosLifecycleError(
+            f"expected {expected_count} boot DataVolumes, observed "
+            f"{len(data_volumes)}"
+        )
+    data_volume_evidence = []
+    for item in data_volumes:
+        spec = item.get("spec", {})
+        storage_class = (
+            spec.get("pvc", {}).get("storageClassName")
+            or spec.get("storage", {}).get("storageClassName")
+        )
+        if (
+            spec.get("source") != expected_source
+            or storage_class != provider["cloneTargetStorageClass"]
+            or item.get("status", {}).get("phase") != "Succeeded"
+        ):
+            raise TalosLifecycleError(
+                "runtime DataVolume source, storage or phase is invalid"
+            )
+        data_volume_evidence.append(
+            {
+                "name": item["metadata"]["name"],
+                "uid": item["metadata"]["uid"],
+                "storage_class": storage_class,
+                "phase": "Succeeded",
+            }
+        )
+    if len(virtual_machine_instances) != expected_count or any(
+        item.get("status", {}).get("phase") != "Running"
+        or item.get("status", {}).get("nodeName") != provider["nodeSelector"]
+        for item in virtual_machine_instances
+    ):
+        raise TalosLifecycleError(
+            "runtime VMI count, phase or provider-profile placement is invalid"
+        )
+    expected_sizes = {
+        "control-plane": config["controlPlane"]["disk"],
+        "worker": config["workers"]["disk"],
+    }
+    pvc_evidence = []
+    boot_pvcs = [
+        item
+        for item in persistent_volume_claims
+        if item.get("spec", {}).get("storageClassName")
+        == provider["cloneTargetStorageClass"]
+    ]
+    if len(boot_pvcs) != expected_count:
+        raise TalosLifecycleError(
+            f"expected {expected_count} boot PVCs, observed {len(boot_pvcs)}"
+        )
+    for item in boot_pvcs:
+        name = item["metadata"]["name"]
+        role = "control-plane" if "-cp-" in name else "worker"
+        requested = item.get("spec", {}).get("resources", {}).get(
+            "requests", {}
+        ).get("storage")
+        if item.get("status", {}).get("phase") != "Bound":
+            raise TalosLifecycleError(f"runtime boot PVC {name} is not Bound")
+        # CDI may add filesystem overhead to the PVC request. The declared
+        # role size remains authoritative and is proven on the DataVolume
+        # template; the runtime PVC must be at least that large.
+        if quantity_bytes(requested) < quantity_bytes(expected_sizes[role]):
+            raise TalosLifecycleError(
+                f"runtime boot PVC {name} is smaller than {expected_sizes[role]}"
+            )
+        pvc_evidence.append(
+            {
+                "name": name,
+                "uid": item["metadata"]["uid"],
+                "role": role,
+                "requested": requested,
+                "declared": expected_sizes[role],
+                "phase": "Bound",
+            }
+        )
+    return {
+        "data_volumes": data_volume_evidence,
+        "virtual_machine_instances": [
+            {
+                "name": item["metadata"]["name"],
+                "uid": item["metadata"]["uid"],
+                "node": item["status"]["nodeName"],
+                "phase": "Running",
+            }
+            for item in virtual_machine_instances
+        ],
+        "persistent_volume_claims": pvc_evidence,
+    }
+
+
+def longhorn_runtime_state(
+    config: dict,
+    persistent_volume_claims: list[dict],
+    volumes: list[dict],
+    replicas: list[dict],
+) -> list[dict]:
+    """Prove requested Longhorn replicas actually exist and are healthy."""
+    expected_replicas = int(config["providerProfile"]["replicaCount"])
+    volume_names = {
+        item.get("spec", {}).get("volumeName")
+        for item in persistent_volume_claims
+        if item.get("spec", {}).get("storageClassName")
+        == config["providerProfile"]["cloneTargetStorageClass"]
+    }
+    volume_names.discard(None)
+    observed = {
+        item.get("metadata", {}).get("name"): item
+        for item in volumes
+        if item.get("metadata", {}).get("name") in volume_names
+    }
+    if set(observed) != volume_names:
+        raise TalosLifecycleError(
+            "runtime Longhorn volumes do not match the boot PVCs"
+        )
+    evidence = []
+    for name in sorted(volume_names):
+        volume = observed[name]
+        matching_replicas = [
+            item
+            for item in replicas
+            if item.get("metadata", {}).get("labels", {}).get(
+                "longhornvolume"
+            )
+            == name
+        ]
+        replica_nodes = {
+            item.get("spec", {}).get("nodeID") for item in matching_replicas
+        }
+        replica_nodes.discard(None)
+        if (
+            int(volume.get("spec", {}).get("numberOfReplicas", 0))
+            != expected_replicas
+            or volume.get("status", {}).get("state") != "attached"
+            or volume.get("status", {}).get("robustness") != "healthy"
+            or len(matching_replicas) != expected_replicas
+            or len(replica_nodes) != expected_replicas
+            or any(
+                item.get("spec", {}).get("desireState") != "running"
+                or item.get("status", {}).get("started") is not True
+                for item in matching_replicas
+            )
+        ):
+            raise TalosLifecycleError(
+                f"runtime Longhorn volume {name} is not healthy with "
+                f"{expected_replicas} replicas on distinct nodes"
+            )
+        evidence.append(
+            {
+                "name": name,
+                "state": "attached",
+                "robustness": "healthy",
+                "replica_count": expected_replicas,
+                "replica_nodes": sorted(replica_nodes),
+            }
+        )
+    return evidence
+
+
 def runtime_evidence(args: argparse.Namespace) -> int:
     """Record a read-only warm-provisioning result, separate from publication."""
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
     kubevirt = verify_kubevirt(kubeconfig)
-    scheduling = verify_scheduling(kubeconfig)
+    scheduling = verify_scheduling(
+        config, kubeconfig, require_create_capacity=False
+    )
+    storage = verify_clone_storage(config, kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster_name = config["name"]
     namespace = kubectl_json(
@@ -385,22 +964,29 @@ def runtime_evidence(args: argparse.Namespace) -> int:
     expected_count = (
         config["controlPlane"]["replicas"] + config["workers"]["replicas"]
     )
-    golden_source = config["os"]["goldenImage"]
-    if len(data_volumes) < expected_count:
-        raise TalosLifecycleError("expected Talos boot DataVolumes are absent")
-    sources = [item.get("spec", {}).get("source", {}) for item in data_volumes]
-    if any(
-        source != {
-            "pvc": {
-                "namespace": golden_source["namespace"],
-                "name": golden_source["claim"],
-            }
-        }
-        for source in sources
-    ):
-        raise TalosLifecycleError(
-            "runtime DataVolume used a non-Golden or public source"
-        )
+    persistent_volume_claims = kubectl_json(
+        kubeconfig, ["-n", cluster_name, "get", "pvc"]
+    ).get("items", [])
+    infrastructure = runtime_infrastructure_state(
+        config,
+        data_volumes,
+        kubectl_json(
+            kubeconfig, ["-n", cluster_name, "get", "vmi"]
+        ).get("items", []),
+        persistent_volume_claims,
+    )
+    infrastructure["longhorn_volumes"] = longhorn_runtime_state(
+        config,
+        persistent_volume_claims,
+        kubectl_json(
+            kubeconfig,
+            ["-n", "longhorn-system", "get", "volumes.longhorn.io"],
+        ).get("items", []),
+        kubectl_json(
+            kubeconfig,
+            ["-n", "longhorn-system", "get", "replicas.longhorn.io"],
+        ).get("items", []),
+    )
     started_at = namespace["metadata"]["creationTimestamp"]
     ready_at = available["lastTransitionTime"]
     duration = (parse_time(ready_at) - parse_time(started_at)).total_seconds()
@@ -437,6 +1023,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
         "identity": config["os"]["identity"],
         "golden": golden,
         "scheduling": scheduling,
+        "storage": storage,
         "kubevirt": kubevirt,
         "started_at": started_at,
         "capi_available_at": ready_at,
@@ -448,6 +1035,7 @@ def runtime_evidence(args: argparse.Namespace) -> int:
             "end_to_end_cilium_ready": round(end_to_end_duration, 3),
         },
         "boot_data_volumes": len(data_volumes),
+        "infrastructure": infrastructure,
         "nodes": nodes,
         "cilium": cilium,
         "public_import_count": 0,
@@ -468,8 +1056,10 @@ def preflight(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
     kubevirt = verify_kubevirt(kubeconfig)
-    scheduling = verify_scheduling(kubeconfig)
+    scheduling = verify_scheduling(config, kubeconfig)
+    storage = verify_clone_storage(config, kubeconfig)
     golden = verify_golden(config, kubeconfig)
+    endpoint = verify_endpoint_available(config, kubeconfig)
     cluster = config["name"]
     namespace = kubectl(
         kubeconfig,
@@ -479,6 +1069,11 @@ def preflight(args: argparse.Namespace) -> int:
     if namespace.returncode == 0:
         raise TalosLifecycleError(
             f"namespace {cluster} already exists; refusing create-overwrite"
+        )
+    workload_kubeconfig = Path.home() / ".kube" / f"{cluster}.yaml"
+    if workload_kubeconfig.exists():
+        raise TalosLifecycleError(
+            f"workload kubeconfig collision: {workload_kubeconfig} already exists"
         )
     authorization = f"{cluster}-talos-golden-image-cloner"
     golden_namespace = config["os"]["goldenImage"]["namespace"]
@@ -503,7 +1098,10 @@ def preflight(args: argparse.Namespace) -> int:
     print(
         f"PASS Talos Golden preflight cluster={cluster} "
         f"node={scheduling['name']} kubevirt={kubevirt['version']} "
-        f"expand_disks={kubevirt['expand_disks']} golden_uid={golden['uid']}"
+        f"expand_disks={kubevirt['expand_disks']} "
+        f"storage={storage['storage_class']} replicas={storage['replica_count']} "
+        f"endpoint={endpoint['endpoint']} "
+        f"golden_uid={golden['uid']}"
     )
     return 0
 
@@ -513,7 +1111,8 @@ def replacement_preflight(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
     kubevirt = verify_kubevirt(kubeconfig)
-    scheduling = verify_scheduling(kubeconfig)
+    scheduling = verify_scheduling(config, kubeconfig)
+    verify_clone_storage(config, kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster_name = config["name"]
     cluster = kubectl_json(

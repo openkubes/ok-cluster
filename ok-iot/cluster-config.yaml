@@ -1,0 +1,44 @@
+controlPlane:
+  cores: 2
+  disk: 20Gi
+  memory: 4Gi
+  replicas: 1
+name: ok-iot
+network:
+  endpoint: 192.168.100.212
+  podCIDR: 10.36.0.0/16
+  serviceCIDR: 10.96.64.0/20
+nodeSelector: ok-gpu
+os:
+  distribution: ok-linux
+  profile: kubevirt
+  schematic_id: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+  architecture: amd64
+  imageDigest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
+  identity: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+  goldenImage:
+    namespace: ok-images
+    claim: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64
+    published: true
+    storageClass: ok-storage-block
+providerProfile:
+  name: ok-gpu-single-replica
+  identity: sha256:1c5a2efd4cb83cf883d41e26e7b2dfa6b1ac88028588748d92f528c4212819d4
+  nodeSelector: ok-gpu
+  cloneTargetStorageClass: ok-storage-block-gpu-test
+  replicaCount: 1
+  snapshotClass: ok-storage-block-snapshot
+type: talos
+upgrade:
+  strategy: blue-green
+  workloadMigration:
+    stateful: app-native
+    stateless: gitops
+versions:
+  kubernetes: v1.34.1
+  talos: v1.9.6
+workers:
+  cores: 2
+  disk: 30Gi
+  memory: 4Gi
+  replicas: 3
