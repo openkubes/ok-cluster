@@ -69,7 +69,8 @@ Using an explicit `ok-infra` kubeconfig, the read-only preflight must verify:
   `Retain`/`Immediate`, and has no node-tag restriction;
 - CDI selects the reviewed local `ok-storage-block-snapshot` clone path;
 - at least two Ready and schedulable Longhorn nodes have enough available
-  capacity for all requested boot volumes;
+  capacity for all requested boot volumes after applying the live reserved,
+  scheduled, minimum-free-space and over-provisioning scheduler bounds;
 - the selected node is an eligible Longhorn attachment/storage node;
 - the exact Talos Golden PVC is Bound with its reviewed UID, digest and OS
   identity;
@@ -105,7 +106,8 @@ After Runtime-GO, bootstrap and prove:
 4. the two workload Nodes report Talos v1.9.6 and Kubernetes v1.34.1 and become
    Ready;
 5. Cilium 1.19.6 reaches two Ready agents and a Ready operator;
-6. Longhorn volumes have the reviewed two-replica placement;
+6. Longhorn volumes are `healthy` with two running replica objects on distinct
+   Longhorn nodes; a merely requested replica count or `degraded` volume fails;
 7. runtime evidence records CAPI, Node and Cilium milestones as observations,
    not an SLO.
 

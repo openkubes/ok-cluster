@@ -36,6 +36,8 @@ from scripts.talos_golden_lifecycle import (  # noqa: E402
     TalosLifecycleError,
     cpu_millis,
     endpoint_collisions,
+    longhorn_disk_schedulable_bytes,
+    longhorn_runtime_state,
     pod_requests,
     quantity_bytes,
     requested_resources,
@@ -523,6 +525,20 @@ def main() -> int:
         "management capacity parser accepts Kubernetes decimal and binary quantities",
     )
     check(
+        longhorn_disk_schedulable_bytes(
+            {"storageReserved": 149_171_559_628},
+            {
+                "storageAvailable": 337_536_614_400,
+                "storageMaximum": 497_238_532_096,
+                "storageScheduled": 342_523_641_856,
+            },
+            15,
+            100,
+        )
+        == 5_543_330_612,
+        "management preflight honors Longhorn reserved and scheduled capacity",
+    )
+    check(
         endpoint_collisions(
             gpu,
             [
@@ -603,6 +619,48 @@ def main() -> int:
         check(True, "runtime evidence rejects cross-profile VMI placement")
     else:
         check(False, "runtime evidence rejects cross-profile VMI placement")
+
+    for index, item in enumerate(runtime_pvcs):
+        item["spec"]["volumeName"] = f"pv-{index}"
+    healthy_volumes = [
+        {
+            "metadata": {"name": f"pv-{index}"},
+            "spec": {"numberOfReplicas": 2},
+            "status": {"state": "attached", "robustness": "healthy"},
+        }
+        for index in range(2)
+    ]
+    healthy_replicas = [
+        {
+            "metadata": {
+                "name": f"pv-{volume}-{node}",
+                "labels": {"longhornvolume": f"pv-{volume}"},
+            },
+            "spec": {"nodeID": node, "desireState": "running"},
+            "status": {"started": True},
+        }
+        for volume in range(2)
+        for node in ("ok-gpu", "ok-infra")
+    ]
+    check(
+        len(
+            longhorn_runtime_state(
+                gpu, runtime_pvcs, healthy_volumes, healthy_replicas
+            )
+        )
+        == 2,
+        "runtime evidence proves healthy replicas on distinct Longhorn nodes",
+    )
+    degraded_volumes = copy.deepcopy(healthy_volumes)
+    degraded_volumes[0]["status"]["robustness"] = "degraded"
+    try:
+        longhorn_runtime_state(
+            gpu, runtime_pvcs, degraded_volumes, healthy_replicas
+        )
+    except TalosLifecycleError:
+        check(True, "runtime evidence rejects degraded Longhorn boot volumes")
+    else:
+        check(False, "runtime evidence rejects degraded Longhorn boot volumes")
 
     scaffold_name = "ok136-scaffold-test"
     scaffold_dir = ROOT / scaffold_name

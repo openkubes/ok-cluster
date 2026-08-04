@@ -295,6 +295,26 @@ def requested_resources(config: dict) -> dict:
     }
 
 
+def longhorn_disk_schedulable_bytes(
+    disk_spec: dict,
+    disk_status: dict,
+    minimum_available_percentage: int,
+    over_provisioning_percentage: int,
+) -> int:
+    """Return the conservative Longhorn scheduler budget for one disk."""
+    maximum = int(disk_status.get("storageMaximum", 0))
+    available = int(disk_status.get("storageAvailable", 0))
+    scheduled = int(disk_status.get("storageScheduled", 0))
+    reserved = int(disk_spec.get("storageReserved", 0))
+    physical_budget = available - (
+        maximum * minimum_available_percentage // 100
+    )
+    scheduled_budget = (
+        (maximum - reserved) * over_provisioning_percentage // 100
+    ) - scheduled
+    return max(0, min(physical_budget, scheduled_budget))
+
+
 def pod_requests(pods: list[dict]) -> tuple[int, int]:
     cpu = 0
     memory = 0
@@ -432,6 +452,30 @@ def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
     longhorn_nodes = kubectl_json(
         kubeconfig, ["-n", "longhorn-system", "get", "nodes.longhorn.io"]
     ).get("items", [])
+    minimum_available_percentage = int(
+        kubectl_json(
+            kubeconfig,
+            [
+                "-n",
+                "longhorn-system",
+                "get",
+                "settings.longhorn.io",
+                "storage-minimal-available-percentage",
+            ],
+        ).get("value", "")
+    )
+    over_provisioning_percentage = int(
+        kubectl_json(
+            kubeconfig,
+            [
+                "-n",
+                "longhorn-system",
+                "get",
+                "settings.longhorn.io",
+                "storage-over-provisioning-percentage",
+            ],
+        ).get("value", "")
+    )
     needed = requested_resources(config)["storage_bytes_per_replica"]
     eligible = []
     for item in longhorn_nodes:
@@ -443,8 +487,13 @@ def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
             ),
             None,
         )
-        available = sum(
-            int(status.get("storageAvailable", 0))
+        schedulable = sum(
+            longhorn_disk_schedulable_bytes(
+                item.get("spec", {}).get("disks", {}).get(disk_name, {}),
+                status,
+                minimum_available_percentage,
+                over_provisioning_percentage,
+            )
             for disk_name, status in item.get("status", {}).get("diskStatus", {}).items()
             if item.get("spec", {}).get("disks", {}).get(disk_name, {}).get(
                 "allowScheduling"
@@ -455,10 +504,13 @@ def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
             item.get("spec", {}).get("allowScheduling") is True
             and ready is not None
             and ready.get("status") == "True"
-            and available >= needed
+            and schedulable >= needed
         ):
             eligible.append(
-                {"name": item["metadata"]["name"], "available_bytes": available}
+                {
+                    "name": item["metadata"]["name"],
+                    "schedulable_bytes": schedulable,
+                }
             )
     if (
         len(eligible) < expected["replica_count"]
@@ -473,6 +525,8 @@ def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
         "replica_count": expected["replica_count"],
         "requested_bytes_per_replica": needed,
         "eligible_nodes": eligible,
+        "minimum_available_percentage": minimum_available_percentage,
+        "over_provisioning_percentage": over_provisioning_percentage,
         "snapshot_clone": True,
     }
 
@@ -806,6 +860,74 @@ def runtime_infrastructure_state(
     }
 
 
+def longhorn_runtime_state(
+    config: dict,
+    persistent_volume_claims: list[dict],
+    volumes: list[dict],
+    replicas: list[dict],
+) -> list[dict]:
+    """Prove requested Longhorn replicas actually exist and are healthy."""
+    expected_replicas = int(config["providerProfile"]["replicaCount"])
+    volume_names = {
+        item.get("spec", {}).get("volumeName")
+        for item in persistent_volume_claims
+        if item.get("spec", {}).get("storageClassName")
+        == config["providerProfile"]["cloneTargetStorageClass"]
+    }
+    volume_names.discard(None)
+    observed = {
+        item.get("metadata", {}).get("name"): item
+        for item in volumes
+        if item.get("metadata", {}).get("name") in volume_names
+    }
+    if set(observed) != volume_names:
+        raise TalosLifecycleError(
+            "runtime Longhorn volumes do not match the boot PVCs"
+        )
+    evidence = []
+    for name in sorted(volume_names):
+        volume = observed[name]
+        matching_replicas = [
+            item
+            for item in replicas
+            if item.get("metadata", {}).get("labels", {}).get(
+                "longhornvolume"
+            )
+            == name
+        ]
+        replica_nodes = {
+            item.get("spec", {}).get("nodeID") for item in matching_replicas
+        }
+        replica_nodes.discard(None)
+        if (
+            int(volume.get("spec", {}).get("numberOfReplicas", 0))
+            != expected_replicas
+            or volume.get("status", {}).get("state") != "attached"
+            or volume.get("status", {}).get("robustness") != "healthy"
+            or len(matching_replicas) != expected_replicas
+            or len(replica_nodes) != expected_replicas
+            or any(
+                item.get("spec", {}).get("desireState") != "running"
+                or item.get("status", {}).get("started") is not True
+                for item in matching_replicas
+            )
+        ):
+            raise TalosLifecycleError(
+                f"runtime Longhorn volume {name} is not healthy with "
+                f"{expected_replicas} replicas on distinct nodes"
+            )
+        evidence.append(
+            {
+                "name": name,
+                "state": "attached",
+                "robustness": "healthy",
+                "replica_count": expected_replicas,
+                "replica_nodes": sorted(replica_nodes),
+            }
+        )
+    return evidence
+
+
 def runtime_evidence(args: argparse.Namespace) -> int:
     """Record a read-only warm-provisioning result, separate from publication."""
     config, manifest, kubeconfig = inputs(args)
@@ -831,14 +953,27 @@ def runtime_evidence(args: argparse.Namespace) -> int:
     expected_count = (
         config["controlPlane"]["replicas"] + config["workers"]["replicas"]
     )
+    persistent_volume_claims = kubectl_json(
+        kubeconfig, ["-n", cluster_name, "get", "pvc"]
+    ).get("items", [])
     infrastructure = runtime_infrastructure_state(
         config,
         data_volumes,
         kubectl_json(
             kubeconfig, ["-n", cluster_name, "get", "vmi"]
         ).get("items", []),
+        persistent_volume_claims,
+    )
+    infrastructure["longhorn_volumes"] = longhorn_runtime_state(
+        config,
+        persistent_volume_claims,
         kubectl_json(
-            kubeconfig, ["-n", cluster_name, "get", "pvc"]
+            kubeconfig,
+            ["-n", "longhorn-system", "get", "volumes.longhorn.io"],
+        ).get("items", []),
+        kubectl_json(
+            kubeconfig,
+            ["-n", "longhorn-system", "get", "replicas.longhorn.io"],
         ).get("items", []),
     )
     started_at = namespace["metadata"]["creationTimestamp"]
