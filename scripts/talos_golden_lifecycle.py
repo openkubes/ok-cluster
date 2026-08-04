@@ -355,7 +355,9 @@ def pod_requests(pods: list[dict]) -> tuple[int, int]:
     return cpu, memory
 
 
-def verify_scheduling(config: dict, kubeconfig: Path) -> dict:
+def verify_scheduling(
+    config: dict, kubeconfig: Path, *, require_create_capacity: bool = True
+) -> dict:
     expected_node = config["providerProfile"]["nodeSelector"]
     node = kubectl_json(kubeconfig, ["get", "node", expected_node])
     ready = next(
@@ -383,7 +385,7 @@ def verify_scheduling(config: dict, kubeconfig: Path) -> dict:
     allocatable = node.get("status", {}).get("allocatable", {})
     available_cpu = cpu_millis(allocatable.get("cpu", 0)) - used_cpu
     available_memory = quantity_bytes(allocatable.get("memory", "0")) - used_memory
-    if (
+    if require_create_capacity and (
         available_cpu < requests["cpu_millis"]
         or available_memory < requests["memory_bytes"]
     ):
@@ -402,6 +404,7 @@ def verify_scheduling(config: dict, kubeconfig: Path) -> dict:
         "requested_cpu_millis": requests["cpu_millis"],
         "available_memory_bytes": available_memory,
         "requested_memory_bytes": requests["memory_bytes"],
+        "create_capacity_required": require_create_capacity,
     }
 
 
@@ -939,7 +942,9 @@ def runtime_evidence(args: argparse.Namespace) -> int:
     config, manifest, kubeconfig = inputs(args)
     validate_manifest(config, manifest)
     kubevirt = verify_kubevirt(kubeconfig)
-    scheduling = verify_scheduling(config, kubeconfig)
+    scheduling = verify_scheduling(
+        config, kubeconfig, require_create_capacity=False
+    )
     storage = verify_clone_storage(config, kubeconfig)
     golden = verify_golden(config, kubeconfig)
     cluster_name = config["name"]

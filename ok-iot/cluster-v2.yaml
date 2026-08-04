@@ -5,14 +5,14 @@
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubeVirtMachineTemplate
 metadata:
-  name: ok-iot-cp-v2-7f5dd4276432-dc9767fa
+  name: ok-iot-cp-v2-7f5dd4276432-1c5a2efd
   namespace: ok-iot
   annotations:
     openkubes.io/talos-schematic: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
     openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
     openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
-    openkubes.io/provider-profile: ok-gpu
-    openkubes.io/provider-profile-identity: sha256:dc9767fa3ff70c232f892ed5a999bbe998fcc08b099a736f4486600a04181226
+    openkubes.io/provider-profile: ok-gpu-single-replica
+    openkubes.io/provider-profile-identity: sha256:1c5a2efd4cb83cf883d41e26e7b2dfa6b1ac88028588748d92f528c4212819d4
 spec:
   template:
     spec:
@@ -30,19 +30,19 @@ spec:
               volumes:
                 - name: bootvolume
                   dataVolume:
-                    name: ok-iot-cp-v2-7f5dd4276432-dc9767fa-boot
+                    name: ok-iot-cp-v2-7f5dd4276432-1c5a2efd-boot
                 - name: cloudinitdisk
                   cloudInitConfigDrive: {}
               dataVolumeTemplates:
                 - metadata:
-                    name: ok-iot-cp-v2-7f5dd4276432-dc9767fa-boot
+                    name: ok-iot-cp-v2-7f5dd4276432-1c5a2efd-boot
                   spec:
                     pvc:
                       accessModes: [ReadWriteOnce]
                       resources:
                         requests:
                           storage: 20Gi
-                      storageClassName: ok-storage-block
+                      storageClassName: ok-storage-block-gpu-test
                     source:
                       pvc:
                         namespace: ok-images

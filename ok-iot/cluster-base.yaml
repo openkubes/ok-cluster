@@ -95,7 +95,7 @@ spec:
   infrastructureTemplate:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
-    name: ok-iot-cp-7f5dd4276432-dc9767fa
+    name: ok-iot-cp-7f5dd4276432-1c5a2efd
     namespace: ok-iot
   controlPlaneConfig:
     controlplane:
@@ -146,7 +146,7 @@ metadata:
   namespace: ok-iot
 spec:
   clusterName: ok-iot
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: ok-iot
@@ -162,12 +162,12 @@ spec:
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
-        name: ok-iot-workers-7f5dd4276432-dc9767fa
+        name: ok-iot-workers-7f5dd4276432-1c5a2efd
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ok-iot-cp-7f5dd4276432-dc9767fa
+  name: ok-iot-cp-7f5dd4276432-1c5a2efd
   namespace: ok-iot
   labels:
     openkubes.io/type: talos
@@ -175,8 +175,8 @@ metadata:
   annotations:
     openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
     openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
-    openkubes.io/provider-profile: ok-gpu
-    openkubes.io/provider-profile-identity: sha256:dc9767fa3ff70c232f892ed5a999bbe998fcc08b099a736f4486600a04181226
+    openkubes.io/provider-profile: ok-gpu-single-replica
+    openkubes.io/provider-profile-identity: sha256:1c5a2efd4cb83cf883d41e26e7b2dfa6b1ac88028588748d92f528c4212819d4
 spec:
   template:
     spec:
@@ -203,11 +203,11 @@ spec:
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ok-iot-cp-7f5dd4276432-dc9767fa-disk
+                  name: ok-iot-cp-7f5dd4276432-1c5a2efd-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ok-iot-cp-7f5dd4276432-dc9767fa-disk
+              name: ok-iot-cp-7f5dd4276432-1c5a2efd-disk
               namespace: ok-iot
             spec:
               pvc:
@@ -216,7 +216,7 @@ spec:
                 resources:
                   requests:
                     storage: 20Gi
-                storageClassName: ok-storage-block
+                storageClassName: ok-storage-block-gpu-test
               source:
                 pvc:
                   namespace: ok-images
@@ -225,7 +225,7 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ok-iot-workers-7f5dd4276432-dc9767fa
+  name: ok-iot-workers-7f5dd4276432-1c5a2efd
   namespace: ok-iot
   labels:
     openkubes.io/type: talos
@@ -233,8 +233,8 @@ metadata:
   annotations:
     openkubes.io/os-identity-full: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
     openkubes.io/os-image-digest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
-    openkubes.io/provider-profile: ok-gpu
-    openkubes.io/provider-profile-identity: sha256:dc9767fa3ff70c232f892ed5a999bbe998fcc08b099a736f4486600a04181226
+    openkubes.io/provider-profile: ok-gpu-single-replica
+    openkubes.io/provider-profile-identity: sha256:1c5a2efd4cb83cf883d41e26e7b2dfa6b1ac88028588748d92f528c4212819d4
 spec:
   template:
     spec:
@@ -249,7 +249,7 @@ spec:
                 kubernetes.io/hostname: ok-gpu
               domain:
                 cpu:
-                  cores: 4
+                  cores: 2
                 devices:
                   disks:
                   - disk:
@@ -257,15 +257,15 @@ spec:
                     name: talos
                   networkInterfaceMultiqueue: true
                 memory:
-                  guest: 8Gi
+                  guest: 4Gi
               evictionStrategy: External
               volumes:
               - dataVolume:
-                  name: ok-iot-worker-7f5dd4276432-dc9767fa-disk
+                  name: ok-iot-worker-7f5dd4276432-1c5a2efd-disk
                 name: talos
           dataVolumeTemplates:
           - metadata:
-              name: ok-iot-worker-7f5dd4276432-dc9767fa-disk
+              name: ok-iot-worker-7f5dd4276432-1c5a2efd-disk
               namespace: ok-iot
             spec:
               pvc:
@@ -274,7 +274,7 @@ spec:
                 resources:
                   requests:
                     storage: 30Gi
-                storageClassName: ok-storage-block
+                storageClassName: ok-storage-block-gpu-test
               source:
                 pvc:
                   namespace: ok-images

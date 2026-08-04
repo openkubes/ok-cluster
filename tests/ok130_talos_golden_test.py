@@ -1034,6 +1034,11 @@ def main() -> int:
         "management preflight verifies profile-bound compute and storage",
     )
     check(
+        "require_create_capacity: bool = True" in lifecycle_source
+        and "require_create_capacity=False" in lifecycle_source,
+        "runtime evidence does not require capacity for a duplicate cluster",
+    )
+    check(
         '"ExpandDisks" not in gates' in lifecycle_source
         and "KubeVirt v1.8.1 must be Deployed with ExpandDisks"
         in lifecycle_source,
