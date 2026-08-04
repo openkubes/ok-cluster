@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import stat
@@ -692,8 +694,8 @@ class CleanupAgainstStubClusterTests(StubClusterTestCase):
         self.assertIn("namespaces/-/pre-fix-write-ns", deleted)
         self.assertIn("helm/pre-fix-write-ns/pre-fix-release", deleted)
 
-    def test_legacy_namespace_is_found_via_the_helm_release_alone(self):
-        """Labels gone, RBAC already removed — only the release is left."""
+    def test_release_only_candidate_is_reported_but_not_changed(self):
+        """A chart-name match alone is not ownership evidence."""
         runtime = self.build(
             objects={"namespaces": [{"name": "orphan-write-ns", "labels": {}}]},
             releases=[
@@ -704,11 +706,15 @@ class CleanupAgainstStubClusterTests(StubClusterTestCase):
                 }
             ],
         )
-        access.cleanup(runtime)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            access.cleanup(runtime)
 
         deleted = self.read_state()["deleted"]
-        self.assertIn("helm/orphan-write-ns/orphan-release", deleted)
-        self.assertIn("namespaces/-/orphan-write-ns", deleted)
+        self.assertNotIn("helm/orphan-write-ns/orphan-release", deleted)
+        self.assertNotIn("namespaces/-/orphan-write-ns", deleted)
+        self.assertIn("unowned kagent-tools release candidate", stderr.getvalue())
+        self.assertIn("orphan-write-ns/orphan-release", stderr.getvalue())
 
     def test_colocated_legacy_release_is_removed_without_deleting_write_target(self):
         """Regression for the real pre-renderer state found in kagent-lab.
@@ -817,14 +823,16 @@ class CleanupAgainstStubClusterTests(StubClusterTestCase):
         with self.assertRaisesRegex(access.AccessError, "kagent-lab-tools"):
             access.assert_clean(runtime)
 
-    def test_assert_clean_reports_a_leftover_release_without_any_label(self):
+    def test_assert_clean_surfaces_unowned_candidate_without_failing(self):
         runtime = self.build(
             releases=[
                 {"name": "orphan", "namespace": "orphan-ns", "chart": "kagent-tools-0.2.1"}
             ]
         )
-        with self.assertRaisesRegex(access.AccessError, "helm-release/orphan-ns/orphan"):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
             access.assert_clean(runtime)
+        self.assertIn("orphan-ns/orphan", stderr.getvalue())
 
     def test_a_vanished_release_is_not_an_error(self):
         runtime = self.build(
@@ -841,15 +849,14 @@ class CleanupAgainstStubClusterTests(StubClusterTestCase):
 
 
 class NamespaceDiscoveryTests(unittest.TestCase):
-    def test_union_of_all_three_discovery_paths(self):
+    def test_union_of_the_two_ownership_proven_discovery_paths(self):
         self.assertEqual(
             access.tool_namespaces(
                 labelled=["by-label"],
                 subjects={"by-subject"},
-                releases=["by-release"],
                 protected=set(),
             ),
-            ["by-label", "by-release", "by-subject"],
+            ["by-label", "by-subject"],
         )
 
     def test_install_and_target_namespaces_are_never_deleted(self):
@@ -860,7 +867,6 @@ class NamespaceDiscoveryTests(unittest.TestCase):
             access.tool_namespaces(
                 labelled=["kagent", "kagent-lab", "kagent-write"],
                 subjects={"kagent-lab"},
-                releases=["kagent"],
                 protected=protected,
             ),
             ["kagent-write"],
@@ -871,7 +877,6 @@ class NamespaceDiscoveryTests(unittest.TestCase):
             access.tool_namespaces(
                 labelled=["kube-system", "kube-anything", "default", "keep-me"],
                 subjects=set(),
-                releases=[],
                 protected=access.protected_namespaces(),
             ),
             ["keep-me"],
@@ -890,6 +895,32 @@ class NamespaceDiscoveryTests(unittest.TestCase):
                 )
 
         self.assertEqual(access.discover_tool_releases(OnlyHelm()), {"wns": ["w"]})
+
+    def test_release_candidates_require_namespace_or_subject_ownership(self):
+        candidates = {
+            "label-owned": ["release-a"],
+            "subject-owned": ["release-b", "same-chart-but-not-bound"],
+            "unrelated": ["release-c"],
+        }
+        owned, unowned = access.classify_tool_releases(
+            candidates,
+            labelled_namespaces={"label-owned"},
+            subject_identities={("subject-owned", "release-b")},
+        )
+        self.assertEqual(
+            owned,
+            {
+                "label-owned": ["release-a"],
+                "subject-owned": ["release-b"],
+            },
+        )
+        self.assertEqual(
+            unowned,
+            {
+                "subject-owned": ["same-chart-but-not-bound"],
+                "unrelated": ["release-c"],
+            },
+        )
 
 
 class SubjectDiscoveryTests(unittest.TestCase):

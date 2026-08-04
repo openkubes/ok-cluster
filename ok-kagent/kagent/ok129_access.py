@@ -41,12 +41,12 @@ ALLOWED_WRITE_NAMESPACES = {"kagent-lab"}
 ALLOWED_WRITE_RESOURCES = {"configmaps"}
 READ_VERBS = {"get", "list", "watch"}
 
-# Only the standalone write tool server uses this chart. The read path ships
-# kagent-tools as a subchart of the `kagent` release, whose chart is kagent-*,
-# so this prefix cannot match the read path.
+# Candidate detector only. Other teams may install the same upstream chart, so
+# this prefix must never be treated as ownership evidence by itself. The bundled
+# read path is a kagent subchart and therefore does not appear as kagent-tools-*.
 TOOLS_CHART_PREFIX = "kagent-tools-"
 
-# Namespaces cleanup must never delete, whatever a label or release claims.
+# Namespaces cleanup must never delete, whatever discovery claims.
 NEVER_DELETE_NAMESPACES = {"default", "kube-system", "kube-public", "kube-node-lease"}
 NEVER_DELETE_PREFIXES = ("kube-",)
 
@@ -591,7 +591,12 @@ def discover_write_objects(runtime: Runtime) -> dict[str, list[dict[str, Any]]]:
     }
 
 
-def assert_clean(runtime: Runtime) -> None:
+def assert_clean(
+    runtime: Runtime,
+    known_owned_releases: dict[str, list[str]] | None = None,
+    *,
+    warn_candidates: bool = True,
+) -> None:
     leftovers: set[str] = set()
     discovered = discover_write_objects(runtime)
     for key, resource in (
@@ -606,13 +611,25 @@ def assert_clean(runtime: Runtime) -> None:
             location = f"{_namespace(item)}/" if _namespace(item) else ""
             leftovers.add(f"{resource}/{location}{_name(item)}")
 
-    namespaces = runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR)
-    for item in _items(namespaces):
+    namespaces = _items(
+        runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR)
+    )
+    labelled_namespaces = {_name(item) for item in namespaces}
+    for item in namespaces:
         leftovers.add(f"namespaces/{_name(item)}")
 
-    # Label-independent: a write tool server from a run that predates the
-    # ownership labels has no label to select on, but it still has a release.
-    for namespace, names in sorted(discover_tool_releases(runtime).items()):
+    candidates = discover_tool_releases(runtime)
+    owned_releases, unowned_candidates = classify_tool_releases(
+        candidates,
+        labelled_namespaces=labelled_namespaces,
+        subject_identities=service_account_subjects(
+            discovered["bindings"], discovered["cluster_bindings"]
+        ),
+        trusted_identities=release_identities(known_owned_releases or {}),
+    )
+    if warn_candidates:
+        warn_unowned_release_candidates(unowned_candidates)
+    for namespace, names in sorted(owned_releases.items()):
         for name in sorted(names):
             leftovers.add(f"helm-release/{namespace}/{name}")
 
@@ -620,33 +637,42 @@ def assert_clean(runtime: Runtime) -> None:
         raise AccessError("managed write objects remain: " + ", ".join(sorted(leftovers)))
 
 
-def subject_namespaces(
+def service_account_subjects(
     bindings: Iterable[dict[str, Any]], cluster_bindings: Iterable[dict[str, Any]]
-) -> set[str]:
-    """Namespaces that host a bound write ServiceAccount.
+) -> set[tuple[str, str]]:
+    """ServiceAccount identities grounded in discovered write bindings.
 
     A tool-server namespace created before the manifests carried ownership
     labels is invisible to a label selector, but the RoleBinding that granted it
-    permissions names it in its subject. That is a second, independent path to
-    the same namespace.
+    permissions names the exact namespace and ServiceAccount in its subject.
     """
-    found: set[str] = set()
+    found: set[tuple[str, str]] = set()
     for binding in (*bindings, *cluster_bindings):
         for subject in binding.get("subjects") or []:
             if subject.get("kind") != "ServiceAccount":
                 continue
             namespace = str(subject.get("namespace") or "")
-            if namespace:
-                found.add(namespace)
+            name = str(subject.get("name") or "")
+            if namespace and name:
+                found.add((namespace, name))
     return found
 
 
-def discover_tool_releases(runtime: Runtime) -> dict[str, list[str]]:
-    """Namespace -> write tool-server release names, found by chart name.
+def subject_namespaces(
+    bindings: Iterable[dict[str, Any]], cluster_bindings: Iterable[dict[str, Any]]
+) -> set[str]:
+    return {
+        namespace
+        for namespace, _ in service_account_subjects(bindings, cluster_bindings)
+    }
 
-    Third path to a legacy namespace: even with every label and RoleBinding
-    already gone, the Helm release itself still identifies where the write tool
-    server lives.
+
+def discover_tool_releases(runtime: Runtime) -> dict[str, list[str]]:
+    """Namespace -> untrusted kagent-tools release candidates by chart name.
+
+    A chart-name match is useful for surfacing a possible leftover, but is not
+    ownership evidence. Callers must classify candidates against a labelled
+    namespace or an exact ServiceAccount subject before changing anything.
     """
     raw = runtime.helm(["list", "--all-namespaces", "--output", "json"], capture=True)
     releases = json.loads(raw.strip() or "[]")
@@ -659,6 +685,49 @@ def discover_tool_releases(runtime: Runtime) -> dict[str, list[str]]:
         if namespace and name:
             found.setdefault(namespace, []).append(name)
     return found
+
+
+def release_identities(releases: dict[str, list[str]]) -> set[tuple[str, str]]:
+    return {
+        (namespace, name)
+        for namespace, names in releases.items()
+        for name in names
+    }
+
+
+def classify_tool_releases(
+    candidates: dict[str, list[str]],
+    *,
+    labelled_namespaces: Iterable[str],
+    subject_identities: Iterable[tuple[str, str]],
+    trusted_identities: Iterable[tuple[str, str]] = (),
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Separate proven-owned releases from chart-name-only candidates."""
+    labelled = set(labelled_namespaces)
+    exact = {*subject_identities, *trusted_identities}
+    owned: dict[str, list[str]] = {}
+    unowned: dict[str, list[str]] = {}
+    for namespace, names in candidates.items():
+        for name in names:
+            destination = (
+                owned
+                if namespace in labelled or (namespace, name) in exact
+                else unowned
+            )
+            destination.setdefault(namespace, []).append(name)
+    return owned, unowned
+
+
+def warn_unowned_release_candidates(candidates: dict[str, list[str]]) -> None:
+    for namespace, names in sorted(candidates.items()):
+        for name in sorted(names):
+            print(
+                "WARNING: unowned kagent-tools release candidate "
+                f"{namespace}/{name} was not changed. A chart-name match alone "
+                "does not authorize release uninstall or namespace deletion; "
+                "confirm ownership and remove it manually if it is an OK-129 leftover.",
+                file=sys.stderr,
+            )
 
 
 def protected_namespaces(*object_groups: Iterable[dict[str, Any]]) -> set[str]:
@@ -681,12 +750,11 @@ def protected_namespaces(*object_groups: Iterable[dict[str, Any]]) -> set[str]:
 def tool_namespaces(
     labelled: Iterable[str],
     subjects: Iterable[str],
-    releases: Iterable[str],
     protected: Iterable[str],
 ) -> list[str]:
-    """The union of all three discovery paths, minus what must never be deleted."""
+    """Ownership-proven namespace paths, minus what must never be deleted."""
     blocked = set(protected)
-    candidates = {*labelled, *subjects, *releases}
+    candidates = {*labelled, *subjects}
     return sorted(
         namespace
         for namespace in candidates
@@ -729,11 +797,18 @@ def cleanup(runtime: Runtime) -> None:
     permission_checks = discover_permission_checks(
         roles, bindings, cluster_roles, cluster_bindings
     )
-    tool_releases = discover_tool_releases(runtime)
+    candidate_releases = discover_tool_releases(runtime)
+    subject_identities = service_account_subjects(bindings, cluster_bindings)
+    labelled_namespaces = {_name(item) for item in labelled}
+    owned_releases, unowned_candidates = classify_tool_releases(
+        candidate_releases,
+        labelled_namespaces=labelled_namespaces,
+        subject_identities=subject_identities,
+    )
+    warn_unowned_release_candidates(unowned_candidates)
     targets = tool_namespaces(
-        labelled=[_name(item) for item in labelled],
-        subjects=subject_namespaces(bindings, cluster_bindings),
-        releases=tool_releases.keys(),
+        labelled=labelled_namespaces,
+        subjects={namespace for namespace, _ in subject_identities},
         protected=protected_namespaces(agents, servers, roles, bindings),
     )
 
@@ -745,10 +820,10 @@ def cleanup(runtime: Runtime) -> None:
     _delete_cluster(runtime, "clusterroles.rbac.authorization.k8s.io", cluster_roles)
 
     # A legacy tool release may have been installed directly in a write target
-    # such as kagent-lab. Uninstall every discovered release, but only delete a
-    # namespace when the independent protection calculation says it is the
-    # dedicated tool namespace. Conflating those decisions deleted lab fixtures.
-    for namespace, names in sorted(tool_releases.items()):
+    # such as kagent-lab. Uninstall every ownership-proven release, but never act
+    # on a bare chart-name candidate. Namespace deletion is independently limited
+    # to the label/subject paths above.
+    for namespace, names in sorted(owned_releases.items()):
         for name in sorted(names):
             _uninstall_release(runtime, name, namespace)
 
@@ -764,7 +839,11 @@ def cleanup(runtime: Runtime) -> None:
             ]
         )
 
-    assert_clean(runtime)
+    assert_clean(
+        runtime,
+        known_owned_releases=owned_releases,
+        warn_candidates=False,
+    )
     failures: list[str] = []
     for check in sorted(
         permission_checks,
