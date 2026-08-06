@@ -58,9 +58,20 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(access.AccessError, "requireApproval=true"):
             access.validate_ok129(profile(requireApproval=False))
 
-    def test_non_evidenced_resource_is_refused(self):
-        with self.assertRaisesRegex(access.AccessError, "exactly: configmaps"):
-            access.validate_ok129(profile(resources=["configmaps", "deployments"]))
+    def test_supported_resource_subset_is_allowed(self):
+        access.validate_ok129(profile(resources=["deployments", "pods", "services"]))
+
+    def test_unsupported_resource_is_refused(self):
+        with self.assertRaisesRegex(access.AccessError, "unsupported resource"):
+            access.validate_ok129(profile(resources=["configmaps", "widgets"]))
+
+    def test_empty_resource_list_is_refused(self):
+        with self.assertRaisesRegex(access.AccessError, "non-empty list"):
+            access.validate_ok129(profile(resources=[]))
+
+    def test_duplicate_resource_is_refused(self):
+        with self.assertRaisesRegex(access.AccessError, "duplicate"):
+            access.validate_ok129(profile(resources=["pods", "pods"]))
 
     def test_non_lab_namespace_is_refused(self):
         with self.assertRaisesRegex(access.AccessError, "exactly: kagent-lab"):
@@ -189,18 +200,12 @@ class MatrixTests(unittest.TestCase):
             (row[2], row[3]) for row in rows if row[0] == "configured-allow"
         }
         self.assertEqual(allowed, {("get", "configmaps"), ("patch", "configmaps")})
-        self.assertIn(
-            (
-                "nonconfigured-denied",
-                "system:serviceaccount:custom-write-ns:custom-tools",
-                "patch",
-                "deployments",
-                "no",
-                "namespace",
-                "kagent-lab",
-            ),
-            rows,
-        )
+        denied = [row for row in rows if row[0] == "nonconfigured-denied"]
+        self.assertEqual(len(denied), 1)
+        self.assertEqual(denied[0][1], "system:serviceaccount:custom-write-ns:custom-tools")
+        self.assertEqual(denied[0][2], "patch")
+        self.assertNotIn(denied[0][3], profile()["write"]["resources"])
+        self.assertEqual(denied[0][4:], ("no", "namespace", "kagent-lab"))
 
     def test_every_configured_namespace_is_tested(self):
         """The matrix must not stop at the first configured namespace."""

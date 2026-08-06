@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """OK-129-specific access validation, verification data, and cleanup.
 
-The shared access renderer and this installer-side guard both enforce the
-capability exercised here: approval-gated ConfigMap changes in the kagent-lab
-namespace. The second validation layer prevents a future renderer/consumer
-drift from silently widening the installed profile.
+The shared access renderer and this installer-side guard both enforce an
+approval-gated, configurable set of supported namespaced resources in
+``kagent-lab``. The second validation layer prevents a future
+renderer/consumer drift from silently widening the supported set.
 
 Verification expectations are derived from the rendered RBAC rules.  Cleanup
 discovers managed objects by stable labels and uses their returned names, so it
@@ -38,7 +38,18 @@ LEGACY_SELECTOR = (
 )
 TOOLS_NAMESPACE_SELECTOR = MANAGED_SELECTOR + ",openkubes.io/purpose=kagent-write-tools"
 ALLOWED_WRITE_NAMESPACES = {"kagent-lab"}
-ALLOWED_WRITE_RESOURCES = {"configmaps"}
+ALLOWED_WRITE_RESOURCES = {
+    "configmaps",
+    "pods",
+    "services",
+    "deployments",
+    "statefulsets",
+    "daemonsets",
+    "replicasets",
+    "jobs",
+    "cronjobs",
+    "ingresses",
+}
 READ_VERBS = {"get", "list", "watch"}
 
 # Candidate detector only. Other teams may install the same upstream chart, so
@@ -108,10 +119,21 @@ def validate_ok129(raw: dict[str, Any]) -> None:
             "OK-129 write.namespaces must be exactly: "
             + ", ".join(sorted(ALLOWED_WRITE_NAMESPACES))
         )
-    expected_resources = sorted(ALLOWED_WRITE_RESOURCES)
-    if resources != expected_resources:
+    if not isinstance(resources, list) or not resources:
         raise AccessError(
-            "OK-129 write.resources must be exactly: "
+            "OK-129 write.resources must be a non-empty list"
+        )
+    if any(not isinstance(resource, str) for resource in resources):
+        raise AccessError("OK-129 write.resources entries must be strings")
+    normalized_resources = [resource.lower() for resource in resources]
+    if len(normalized_resources) != len(set(normalized_resources)):
+        raise AccessError("OK-129 write.resources contains a duplicate entry")
+    unsupported = sorted(set(normalized_resources) - ALLOWED_WRITE_RESOURCES)
+    if unsupported:
+        raise AccessError(
+            "OK-129 write.resources contains unsupported resource(s): "
+            + ", ".join(unsupported)
+            + ". Supported: "
             + ", ".join(sorted(ALLOWED_WRITE_RESOURCES))
         )
     if approval is not True:
@@ -283,7 +305,7 @@ def verification_matrix(
 
     write = raw["write"]
     namespaces = [str(value) for value in write["namespaces"]]
-    resources = set(write["resources"])
+    resources = {str(resource).lower() for resource in write["resources"]}
     docs = yaml_documents(rbac_path)
     writers: set[str] = set()
 
@@ -314,18 +336,20 @@ def verification_matrix(
                 if verb not in READ_VERBS:
                     mutating_verbs.add(verb)
 
-        for verb in sorted(mutating_verbs):
-            rows.append(
-                _matrix_row(
-                    "nonconfigured-denied",
-                    writer,
-                    verb,
-                    "deployments",
-                    "no",
-                    "namespace",
-                    namespace,
+        unconfigured = sorted(ALLOWED_WRITE_RESOURCES - resources)
+        if unconfigured:
+            for verb in sorted(mutating_verbs):
+                rows.append(
+                    _matrix_row(
+                        "nonconfigured-denied",
+                        writer,
+                        verb,
+                        unconfigured[0],
+                        "no",
+                        "namespace",
+                        namespace,
+                    )
                 )
-            )
 
     if len(writers) != 1:
         raise AccessError(

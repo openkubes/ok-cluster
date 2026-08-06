@@ -34,7 +34,7 @@ hand, so nothing can drift out of sync with the documentation.
 | `mode` | `read-only` \| `read-write` | whether a write identity exists at all |
 | `write.scope` | `namespaces` | cluster scope is refused by this installer |
 | `write.namespaces` | `[kagent-lab]` | the only evidenced write target |
-| `write.resources` | `[configmaps]` | the only evidenced mutable kind |
+| `write.resources` | supported resource list | exact namespaced kinds that may be changed |
 | `write.requireApproval` | `true` | Approve/Reject gate per write tool |
 
 Switch a profile:
@@ -44,16 +44,17 @@ Switch a profile:
 sed -i'' -e 's/^mode: .*/mode: read-only/' access-config.yaml
 make install          # removes the write identity, Role, tool server and Agent
 
-# approval-gated ConfigMap writes in the lab namespace
-$EDITOR access-config.yaml   # mode: read-write; keep the constrained write block
+# approval-gated writes for selected kinds in the lab namespace
+$EDITOR access-config.yaml   # mode: read-write; select write.resources
 make install
 make verify-access
 ```
 
 The cluster installer adds an independent fail-closed OK-129 guard before the
-shared renderer. Both layers refuse cluster scope, ungated writes, resources
-other than ConfigMaps, and targets other than `kagent-lab`, so a future
-cross-repository drift cannot silently widen this evidenced lab profile.
+shared renderer. Both layers refuse cluster scope, ungated writes, unsupported
+or sensitive resources, and targets other than `kagent-lab`. Supported kinds
+are ConfigMaps, Pods, Services, Deployments, StatefulSets, DaemonSets,
+ReplicaSets, Jobs, CronJobs and Ingresses; any non-empty subset can be selected.
 
 Full reference: `openkubes/research/kagent-standalone/access/README.md`.
 
@@ -65,7 +66,7 @@ decides what is possible. `make verify-access` therefore asserts against the API
 server rather than reading manifests:
 
 - read identity: reads yes, writes no, Secrets no, wildcard no;
-- write identity: every verb found in the rendered ConfigMap Role is tested in
+- write identity: every verb found in the rendered Role is tested in
   `kagent-lab`, denied outside it, and mutations of a representative
   non-configured workload resource remain denied;
 - read-only mode: no write Agent, `RemoteMCPServer`, RBAC object, write-tools
