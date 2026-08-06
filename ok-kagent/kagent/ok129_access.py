@@ -1,0 +1,983 @@
+#!/usr/bin/env python3
+"""OK-129-specific access validation, verification data, and cleanup.
+
+The shared access renderer and this installer-side guard both enforce an
+approval-gated, configurable set of supported namespaced resources in
+``kagent-lab``. The second validation layer prevents a future
+renderer/consumer drift from silently widening the supported set.
+
+Verification expectations are derived from the rendered RBAC rules.  Cleanup
+discovers managed objects by stable labels and uses their returned names, so it
+does not depend on a newly rendered profile or historical defaults.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+import yaml
+
+
+MANAGED_SELECTOR = (
+    "app.kubernetes.io/managed-by=render-access.py,openkubes.io/ticket=OK-129"
+)
+# Objects rendered before `managed-by` was added still carry these two labels.
+# The selector also matches current objects, so discovery deduplicates by
+# namespace/name and filters Agents to keep the read-only cluster-inspector.
+LEGACY_SELECTOR = (
+    "app.kubernetes.io/part-of=kagent-standalone,openkubes.io/ticket=OK-129"
+)
+TOOLS_NAMESPACE_SELECTOR = MANAGED_SELECTOR + ",openkubes.io/purpose=kagent-write-tools"
+ALLOWED_WRITE_NAMESPACES = {"kagent-lab"}
+ALLOWED_WRITE_RESOURCES = {
+    "configmaps",
+    "pods",
+    "services",
+    "deployments",
+    "statefulsets",
+    "daemonsets",
+    "replicasets",
+    "jobs",
+    "cronjobs",
+    "ingresses",
+}
+READ_VERBS = {"get", "list", "watch"}
+
+# Candidate detector only. Other teams may install the same upstream chart, so
+# this prefix must never be treated as ownership evidence by itself. The bundled
+# read path is a kagent subchart and therefore does not appear as kagent-tools-*.
+TOOLS_CHART_PREFIX = "kagent-tools-"
+
+# Namespaces cleanup must never delete, whatever discovery claims.
+NEVER_DELETE_NAMESPACES = {"default", "kube-system", "kube-public", "kube-node-lease"}
+NEVER_DELETE_PREFIXES = ("kube-",)
+
+# RFC 1123 label. Every name that reaches profile.env — and from there a shell —
+# must match this, so the sourced file cannot carry shell syntax.
+DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+# The only shape a generated profile.env line may have: an upper-case key and a
+# bare, single- or double-quoted value built from DNS-safe characters and spaces.
+# No command substitution, no expansion, no metacharacters. Single quotes are the
+# renderer's current form and the strongest one — nothing expands inside them.
+PROFILE_LINE = re.compile(
+    r"^[A-Z][A-Z0-9_]*=(?:'[a-zA-Z0-9 ._:-]*'|\"[a-zA-Z0-9 ._:-]*\"|[a-zA-Z0-9._:-]*)$"
+)
+
+
+class AccessError(RuntimeError):
+    """A fail-closed validation, discovery, or verification error."""
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AccessError(f"access config not found: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise AccessError(f"invalid access config YAML: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise AccessError("access config must be a YAML mapping")
+    return raw
+
+
+def validate_ok129(raw: dict[str, Any]) -> None:
+    """Refuse every write capability not evidenced by OK-129."""
+    mode = raw.get("mode")
+    if mode not in {"read-only", "read-write"}:
+        raise AccessError("mode must be read-only or read-write")
+
+    write = raw.get("write") or {}
+    if not isinstance(write, dict):
+        raise AccessError("write must be a mapping")
+    if not write:
+        if mode == "read-write":
+            raise AccessError("write is required in read-write mode")
+        return
+
+    scope = write.get("scope")
+    namespaces = write.get("namespaces")
+    resources = write.get("resources")
+    approval = write.get("requireApproval")
+
+    if scope != "namespaces":
+        raise AccessError(
+            "OK-129 only supports write.scope=namespaces; cluster scope is not evidenced"
+        )
+    expected_namespaces = sorted(ALLOWED_WRITE_NAMESPACES)
+    if namespaces != expected_namespaces:
+        raise AccessError(
+            "OK-129 write.namespaces must be exactly: "
+            + ", ".join(sorted(ALLOWED_WRITE_NAMESPACES))
+        )
+    if not isinstance(resources, list) or not resources:
+        raise AccessError(
+            "OK-129 write.resources must be a non-empty list"
+        )
+    if any(not isinstance(resource, str) for resource in resources):
+        raise AccessError("OK-129 write.resources entries must be strings")
+    normalized_resources = [resource.lower() for resource in resources]
+    if len(normalized_resources) != len(set(normalized_resources)):
+        raise AccessError("OK-129 write.resources contains a duplicate entry")
+    unsupported = sorted(set(normalized_resources) - ALLOWED_WRITE_RESOURCES)
+    if unsupported:
+        raise AccessError(
+            "OK-129 write.resources contains unsupported resource(s): "
+            + ", ".join(unsupported)
+            + ". Supported: "
+            + ", ".join(sorted(ALLOWED_WRITE_RESOURCES))
+        )
+    if approval is not True:
+        raise AccessError("OK-129 requires write.requireApproval=true")
+
+    _validate_sourced_names(write)
+
+
+def _validate_sourced_names(write: dict[str, Any]) -> None:
+    """Constrain every name that ends up in profile.env, which a shell sources.
+
+    The shared renderer validates these fields too, while this independent
+    installer guard protects against a future cross-repository drift. The
+    Makefile sources the generated profile.env, so anything
+    that is not a plain DNS label is refused here, before a render exists.
+    """
+    tool_server = write.get("toolServer") or {}
+    if not isinstance(tool_server, dict):
+        raise AccessError("write.toolServer must be a mapping")
+
+    for field, value in (
+        ("write.toolServer.namespace", tool_server.get("namespace")),
+        ("write.toolServer.releaseName", tool_server.get("releaseName")),
+        ("write.agentName", write.get("agentName")),
+    ):
+        if value is None:
+            raise AccessError(f"{field} is required")
+        if not isinstance(value, str) or not DNS_LABEL.match(value):
+            raise AccessError(
+                f"{field} must be a plain DNS-1123 label (a-z, 0-9, '-'); got {value!r}. "
+                "This name is written to profile.env, which the installer sources."
+            )
+
+    for field, value in (
+        ("write.toolServer.port", tool_server.get("port")),
+        ("write.toolServer.metricsPort", tool_server.get("metricsPort")),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+            raise AccessError(f"{field} must be an integer between 1 and 65535; got {value!r}")
+
+
+def check_profile(path: Path) -> None:
+    """Assert the generated profile.env is safe to `.` from a shell.
+
+    validate_ok129 constrains the config, but this checks the artefact that is
+    actually sourced, so a renderer change cannot reintroduce shell syntax
+    without failing here first.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise AccessError(f"profile not found: {path}") from exc
+
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not PROFILE_LINE.match(stripped):
+            raise AccessError(
+                f"{path}:{number} is not a plain assignment and must not be sourced: {line!r}"
+            )
+
+
+def yaml_documents(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+    return [doc for doc in docs if isinstance(doc, dict)]
+
+
+def _matrix_row(
+    label: str,
+    subject: str,
+    verb: str,
+    resource: str,
+    expected: str,
+    scope: str,
+    namespace: str = "-",
+) -> tuple[str, ...]:
+    fields = (label, subject, verb, resource, expected, scope, namespace)
+    if any("\t" in field or "\n" in field for field in fields):
+        raise AccessError("verification matrix fields may not contain tabs or newlines")
+    return fields
+
+
+def _declared_verbs(
+    docs: list[dict[str, Any]], namespace: str, resources: set[str]
+) -> dict[str, set[str]]:
+    """Read the verbs the rendered Role actually grants in one namespace."""
+    roles = [
+        doc
+        for doc in docs
+        if doc.get("kind") == "Role"
+        and (doc.get("metadata") or {}).get("namespace") == namespace
+    ]
+    if len(roles) != 1:
+        raise AccessError(
+            f"expected exactly one rendered Role in {namespace}, found {len(roles)}"
+        )
+
+    declared: dict[str, set[str]] = {resource: set() for resource in resources}
+    nonconfigured_mutating: set[str] = set()
+    for rule in roles[0].get("rules") or []:
+        verbs = {str(verb) for verb in (rule.get("verbs") or [])}
+        for resource in (str(value) for value in (rule.get("resources") or [])):
+            if resource in declared:
+                declared[resource].update(verbs)
+            elif verbs - READ_VERBS:
+                nonconfigured_mutating.add(resource)
+
+    missing = sorted(resource for resource, verbs in declared.items() if not verbs)
+    if missing:
+        raise AccessError(
+            f"rendered Role in {namespace} has no rules for configured resource(s): "
+            + ", ".join(missing)
+        )
+    if nonconfigured_mutating:
+        raise AccessError(
+            f"rendered Role in {namespace} grants mutations to non-configured resource(s): "
+            + ", ".join(sorted(nonconfigured_mutating))
+        )
+    return declared
+
+
+def _rendered_writer(docs: list[dict[str, Any]], namespace: str) -> str:
+    """The ServiceAccount identity the rendered RoleBinding actually binds."""
+    for binding in docs:
+        if binding.get("kind") != "RoleBinding":
+            continue
+        if (binding.get("metadata") or {}).get("namespace") != namespace:
+            continue
+        service_accounts = [
+            item
+            for item in (binding.get("subjects") or [])
+            if item.get("kind") == "ServiceAccount"
+        ]
+        if len(service_accounts) == 1:
+            subject = service_accounts[0]
+            return (
+                "system:serviceaccount:"
+                f"{subject.get('namespace')}:{subject.get('name')}"
+            )
+    raise AccessError(f"rendered RBAC has no ServiceAccount subject in {namespace}")
+
+
+def verification_matrix(
+    raw: dict[str, Any], rbac_path: Path
+) -> list[tuple[str, ...]]:
+    """Build executable checks from the rendered policy rules."""
+    validate_ok129(raw)
+    install_ns = str((raw.get("install") or {}).get("namespace", "kagent"))
+    reader = f"system:serviceaccount:{install_ns}:kagent-tools"
+    rows = [
+        _matrix_row("reader-read", reader, "get", "pods", "yes", "all-namespaces"),
+        _matrix_row("reader-write-denied", reader, "patch", "deployments", "no", "all-namespaces"),
+        _matrix_row(
+            "reader-delete-denied",
+            reader,
+            "delete",
+            "deployments",
+            "no",
+            "all-namespaces",
+        ),
+        _matrix_row("reader-secrets-denied", reader, "get", "secrets", "no", "all-namespaces"),
+        _matrix_row("reader-wildcard-denied", reader, "*", "*", "no", "all-namespaces"),
+    ]
+    if raw.get("mode") == "read-only":
+        return rows
+
+    write = raw["write"]
+    namespaces = [str(value) for value in write["namespaces"]]
+    resources = {str(resource).lower() for resource in write["resources"]}
+    docs = yaml_documents(rbac_path)
+    writers: set[str] = set()
+
+    for namespace in namespaces:
+        declared = _declared_verbs(docs, namespace, resources)
+        writer = _rendered_writer(docs, namespace)
+        writers.add(writer)
+
+        mutating_verbs: set[str] = set()
+        for resource in sorted(declared):
+            for verb in sorted(declared[resource]):
+                rows.append(
+                    _matrix_row(
+                        "configured-allow", writer, verb, resource, "yes", "namespace", namespace
+                    )
+                )
+                rows.append(
+                    _matrix_row(
+                        "outside-scope-denied",
+                        writer,
+                        verb,
+                        resource,
+                        "no",
+                        "namespace",
+                        install_ns,
+                    )
+                )
+                if verb not in READ_VERBS:
+                    mutating_verbs.add(verb)
+
+        unconfigured = sorted(ALLOWED_WRITE_RESOURCES - resources)
+        if unconfigured:
+            for verb in sorted(mutating_verbs):
+                rows.append(
+                    _matrix_row(
+                        "nonconfigured-denied",
+                        writer,
+                        verb,
+                        unconfigured[0],
+                        "no",
+                        "namespace",
+                        namespace,
+                    )
+                )
+
+    if len(writers) != 1:
+        raise AccessError(
+            "rendered RBAC binds more than one write identity: " + ", ".join(sorted(writers))
+        )
+    writer = writers.pop()
+    rows.extend(
+        [
+            _matrix_row("writer-secrets-denied", writer, "get", "secrets", "no", "all-namespaces"),
+            _matrix_row(
+                "writer-rbac-denied",
+                writer,
+                "create",
+                "rolebindings",
+                "no",
+                "all-namespaces",
+            ),
+            _matrix_row("writer-wildcard-denied", writer, "*", "*", "no", "all-namespaces"),
+        ]
+    )
+    return rows
+
+
+def write_matrix(raw: dict[str, Any], rbac_path: Path, out_path: Path) -> None:
+    rows = verification_matrix(raw, rbac_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join("\t".join(row) for row in rows) + "\n"
+    out_path.write_text(text, encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class PermissionCheck:
+    subject: str
+    verb: str
+    resource: str
+    namespace: str | None
+
+
+class Runtime:
+    def __init__(self, kubeconfig: Path):
+        self.kubeconfig = str(kubeconfig)
+
+    def run(self, argv: list[str], *, capture: bool = False) -> str:
+        completed = subprocess.run(
+            argv,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+        return completed.stdout if capture else ""
+
+    def kubectl(self, args: list[str], *, capture: bool = False) -> str:
+        return self.run(["kubectl", f"--kubeconfig={self.kubeconfig}", *args], capture=capture)
+
+    def helm(self, args: list[str], *, capture: bool = False) -> str:
+        return self.run(["helm", f"--kubeconfig={self.kubeconfig}", *args], capture=capture)
+
+    def can_i(self, check: PermissionCheck) -> bool:
+        """Answer one `kubectl auth can-i`, honouring its exit-code contract.
+
+        `auth can-i` reports a denial as exit status 1 — that is its documented
+        interface, not a failure. Running it through a checked subprocess would
+        raise on exactly the answer a revocation check wants to see, so this
+        never uses check=True: the printed answer decides, and the exit status
+        is only used to tell a real error apart from a denial.
+        """
+        argv = [
+            "kubectl",
+            f"--kubeconfig={self.kubeconfig}",
+            "auth",
+            "can-i",
+            check.verb,
+            check.resource,
+            f"--as={check.subject}",
+        ]
+        if check.namespace is None:
+            argv.append("--all-namespaces")
+        else:
+            argv += ["--namespace", check.namespace]
+
+        completed = subprocess.run(
+            argv, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        lines = [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+        answer = lines[-1] if lines else ""
+        if answer in {"yes", "no"} and completed.returncode in {0, 1}:
+            return answer == "yes"
+        raise AccessError(
+            f"kubectl auth can-i {check.verb} {check.resource} --as={check.subject} "
+            f"failed (exit {completed.returncode}): "
+            + ((completed.stderr or "").strip() or answer or "no output")
+        )
+
+    def get_json(
+        self,
+        resource: str,
+        *,
+        all_namespaces: bool = False,
+        selector: str = MANAGED_SELECTOR,
+    ) -> dict[str, Any]:
+        args = ["get", resource]
+        if all_namespaces:
+            args.append("--all-namespaces")
+        args += ["--selector", selector, "--output", "json"]
+        try:
+            return json.loads(self.kubectl(args, capture=True))
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or "").lower()
+            if (
+                "doesn't have a resource type" in message
+                or "could not find the requested resource" in message
+            ):
+                return {"items": []}
+            raise AccessError((exc.stderr or str(exc)).strip()) from exc
+
+
+def _items(document: dict[str, Any]) -> list[dict[str, Any]]:
+    values = document.get("items") or []
+    return [value for value in values if isinstance(value, dict)]
+
+
+def _name(item: dict[str, Any]) -> str:
+    return str((item.get("metadata") or {}).get("name", ""))
+
+
+def _namespace(item: dict[str, Any]) -> str:
+    return str((item.get("metadata") or {}).get("namespace", ""))
+
+
+def discover_permission_checks(
+    roles: Iterable[dict[str, Any]],
+    bindings: Iterable[dict[str, Any]],
+    cluster_roles: Iterable[dict[str, Any]],
+    cluster_bindings: Iterable[dict[str, Any]],
+) -> set[PermissionCheck]:
+    role_map = {(_namespace(role), _name(role)): role for role in roles}
+    cluster_role_map = {_name(role): role for role in cluster_roles}
+    checks: set[PermissionCheck] = set()
+
+    def add(binding: dict[str, Any], role: dict[str, Any] | None, namespace: str | None) -> None:
+        if role is None:
+            return
+        subjects = binding.get("subjects") or []
+        for subject in subjects:
+            if subject.get("kind") != "ServiceAccount":
+                continue
+            identity = (
+                "system:serviceaccount:"
+                f"{subject.get('namespace')}:{subject.get('name')}"
+            )
+            for rule in role.get("rules") or []:
+                for verb in rule.get("verbs") or []:
+                    if verb in READ_VERBS:
+                        continue
+                    for resource in rule.get("resources") or []:
+                        checks.add(PermissionCheck(identity, str(verb), str(resource), namespace))
+
+    for binding in bindings:
+        ref = binding.get("roleRef") or {}
+        namespace = _namespace(binding)
+        add(binding, role_map.get((namespace, str(ref.get("name", "")))), namespace)
+    for binding in cluster_bindings:
+        ref = binding.get("roleRef") or {}
+        add(binding, cluster_role_map.get(str(ref.get("name", ""))), None)
+    return checks
+
+
+def _delete_namespaced(runtime: Runtime, resource: str, objects: Iterable[dict[str, Any]]) -> None:
+    for item in objects:
+        runtime.kubectl(
+            [
+                "delete",
+                resource,
+                _name(item),
+                "--namespace",
+                _namespace(item),
+                "--ignore-not-found",
+            ]
+        )
+
+
+def _delete_cluster(runtime: Runtime, resource: str, objects: Iterable[dict[str, Any]]) -> None:
+    for item in objects:
+        runtime.kubectl(["delete", resource, _name(item), "--ignore-not-found"])
+
+
+def _merge_objects(*groups: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate one resource kind returned by overlapping label selectors."""
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for group in groups:
+        for item in group:
+            merged[(_namespace(item), _name(item))] = item
+    return list(merged.values())
+
+
+def _agent_references_write_server(
+    agent: dict[str, Any], server_names: set[str]
+) -> bool:
+    """Distinguish a legacy write Agent from the read-only cluster-inspector."""
+    declarative = ((agent.get("spec") or {}).get("declarative") or {})
+    for tool in declarative.get("tools") or []:
+        mcp = tool.get("mcpServer") or {}
+        if mcp.get("requireApproval") or str(mcp.get("name") or "") in server_names:
+            return True
+    return False
+
+
+def discover_write_objects(runtime: Runtime) -> dict[str, list[dict[str, Any]]]:
+    """Find both current and pre-`managed-by` OK-129 write objects.
+
+    Legacy RBAC is safe to take as a whole: the read path never created custom
+    Roles or bindings. Legacy Agents need correlation because cluster-inspector
+    deliberately shares the ticket/part-of labels; a write Agent either carries
+    `requireApproval` or references a legacy write RemoteMCPServer.
+    """
+    resources = {
+        "agents": "agents.kagent.dev",
+        "servers": "remotemcpservers.kagent.dev",
+        "roles": "roles.rbac.authorization.k8s.io",
+        "bindings": "rolebindings.rbac.authorization.k8s.io",
+        "cluster_roles": "clusterroles.rbac.authorization.k8s.io",
+        "cluster_bindings": "clusterrolebindings.rbac.authorization.k8s.io",
+    }
+    all_namespaced = {"agents", "servers", "roles", "bindings"}
+    current: dict[str, list[dict[str, Any]]] = {}
+    legacy: dict[str, list[dict[str, Any]]] = {}
+    for key, resource in resources.items():
+        current[key] = _items(
+            runtime.get_json(
+                resource,
+                all_namespaces=key in all_namespaced,
+                selector=MANAGED_SELECTOR,
+            )
+        )
+        legacy[key] = _items(
+            runtime.get_json(
+                resource,
+                all_namespaces=key in all_namespaced,
+                selector=LEGACY_SELECTOR,
+            )
+        )
+
+    servers = _merge_objects(current["servers"], legacy["servers"])
+    server_names = {_name(server) for server in servers}
+    legacy_write_agents = [
+        agent
+        for agent in legacy["agents"]
+        if _agent_references_write_server(agent, server_names)
+    ]
+
+    return {
+        "agents": _merge_objects(current["agents"], legacy_write_agents),
+        "servers": servers,
+        "roles": _merge_objects(current["roles"], legacy["roles"]),
+        "bindings": _merge_objects(current["bindings"], legacy["bindings"]),
+        "cluster_roles": _merge_objects(
+            current["cluster_roles"], legacy["cluster_roles"]
+        ),
+        "cluster_bindings": _merge_objects(
+            current["cluster_bindings"], legacy["cluster_bindings"]
+        ),
+    }
+
+
+def assert_clean(
+    runtime: Runtime,
+    known_owned_releases: dict[str, list[str]] | None = None,
+    *,
+    warn_candidates: bool = True,
+) -> None:
+    leftovers: set[str] = set()
+    discovered = discover_write_objects(runtime)
+    for key, resource in (
+        ("agents", "agents.kagent.dev"),
+        ("servers", "remotemcpservers.kagent.dev"),
+        ("roles", "roles.rbac.authorization.k8s.io"),
+        ("bindings", "rolebindings.rbac.authorization.k8s.io"),
+        ("cluster_roles", "clusterroles.rbac.authorization.k8s.io"),
+        ("cluster_bindings", "clusterrolebindings.rbac.authorization.k8s.io"),
+    ):
+        for item in discovered[key]:
+            location = f"{_namespace(item)}/" if _namespace(item) else ""
+            leftovers.add(f"{resource}/{location}{_name(item)}")
+
+    namespaces = _items(
+        runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR)
+    )
+    labelled_namespaces = {_name(item) for item in namespaces}
+    for item in namespaces:
+        leftovers.add(f"namespaces/{_name(item)}")
+
+    candidates = discover_tool_releases(runtime)
+    owned_releases, unowned_candidates = classify_tool_releases(
+        candidates,
+        labelled_namespaces=labelled_namespaces,
+        subject_identities=service_account_subjects(
+            discovered["bindings"], discovered["cluster_bindings"]
+        ),
+        trusted_identities=release_identities(known_owned_releases or {}),
+    )
+    if warn_candidates:
+        warn_unowned_release_candidates(unowned_candidates)
+    for namespace, names in sorted(owned_releases.items()):
+        for name in sorted(names):
+            leftovers.add(f"helm-release/{namespace}/{name}")
+
+    if leftovers:
+        raise AccessError("managed write objects remain: " + ", ".join(sorted(leftovers)))
+
+
+def service_account_subjects(
+    bindings: Iterable[dict[str, Any]], cluster_bindings: Iterable[dict[str, Any]]
+) -> set[tuple[str, str]]:
+    """ServiceAccount identities grounded in discovered write bindings.
+
+    A tool-server namespace created before the manifests carried ownership
+    labels is invisible to a label selector, but the RoleBinding that granted it
+    permissions names the exact namespace and ServiceAccount in its subject.
+    """
+    found: set[tuple[str, str]] = set()
+    for binding in (*bindings, *cluster_bindings):
+        for subject in binding.get("subjects") or []:
+            if subject.get("kind") != "ServiceAccount":
+                continue
+            namespace = str(subject.get("namespace") or "")
+            name = str(subject.get("name") or "")
+            if namespace and name:
+                found.add((namespace, name))
+    return found
+
+
+def subject_namespaces(
+    bindings: Iterable[dict[str, Any]], cluster_bindings: Iterable[dict[str, Any]]
+) -> set[str]:
+    return {
+        namespace
+        for namespace, _ in service_account_subjects(bindings, cluster_bindings)
+    }
+
+
+def discover_tool_releases(runtime: Runtime) -> dict[str, list[str]]:
+    """Namespace -> untrusted kagent-tools release candidates by chart name.
+
+    A chart-name match is useful for surfacing a possible leftover, but is not
+    ownership evidence. Callers must classify candidates against a labelled
+    namespace or an exact ServiceAccount subject before changing anything.
+    """
+    raw = runtime.helm(["list", "--all-namespaces", "--output", "json"], capture=True)
+    releases = json.loads(raw.strip() or "[]")
+    found: dict[str, list[str]] = {}
+    for release in releases:
+        if not str(release.get("chart", "")).startswith(TOOLS_CHART_PREFIX):
+            continue
+        namespace = str(release.get("namespace") or "")
+        name = str(release.get("name") or "")
+        if namespace and name:
+            found.setdefault(namespace, []).append(name)
+    return found
+
+
+def release_identities(releases: dict[str, list[str]]) -> set[tuple[str, str]]:
+    return {
+        (namespace, name)
+        for namespace, names in releases.items()
+        for name in names
+    }
+
+
+def classify_tool_releases(
+    candidates: dict[str, list[str]],
+    *,
+    labelled_namespaces: Iterable[str],
+    subject_identities: Iterable[tuple[str, str]],
+    trusted_identities: Iterable[tuple[str, str]] = (),
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Separate proven-owned releases from chart-name-only candidates."""
+    labelled = set(labelled_namespaces)
+    exact = {*subject_identities, *trusted_identities}
+    owned: dict[str, list[str]] = {}
+    unowned: dict[str, list[str]] = {}
+    for namespace, names in candidates.items():
+        for name in names:
+            destination = (
+                owned
+                if namespace in labelled or (namespace, name) in exact
+                else unowned
+            )
+            destination.setdefault(namespace, []).append(name)
+    return owned, unowned
+
+
+def warn_unowned_release_candidates(candidates: dict[str, list[str]]) -> None:
+    for namespace, names in sorted(candidates.items()):
+        for name in sorted(names):
+            print(
+                "WARNING: unowned kagent-tools release candidate "
+                f"{namespace}/{name} was not changed. A chart-name match alone "
+                "does not authorize release uninstall or namespace deletion; "
+                "confirm ownership and remove it manually if it is an OK-129 leftover.",
+                file=sys.stderr,
+            )
+
+
+def protected_namespaces(*object_groups: Iterable[dict[str, Any]]) -> set[str]:
+    """Namespaces cleanup must never delete.
+
+    The install namespace (it hosts the Agent and RemoteMCPServer) and the write
+    targets (they host the Roles and RoleBindings, and are owned by the read
+    path) are derived from the discovered objects themselves rather than named,
+    so a renamed profile keeps the same protection.
+    """
+    protected = set(NEVER_DELETE_NAMESPACES)
+    for group in object_groups:
+        for item in group:
+            namespace = _namespace(item)
+            if namespace:
+                protected.add(namespace)
+    return protected
+
+
+def tool_namespaces(
+    labelled: Iterable[str],
+    subjects: Iterable[str],
+    protected: Iterable[str],
+) -> list[str]:
+    """Ownership-proven namespace paths, minus what must never be deleted."""
+    blocked = set(protected)
+    candidates = {*labelled, *subjects}
+    return sorted(
+        namespace
+        for namespace in candidates
+        if namespace
+        and namespace not in blocked
+        and not namespace.startswith(NEVER_DELETE_PREFIXES)
+    )
+
+
+def _uninstall_release(runtime: Runtime, name: str, namespace: str) -> None:
+    """Remove one Helm release, tolerating a release that vanished meanwhile.
+
+    `helm uninstall` exits non-zero when the release is already gone, which is
+    the desired end state, not a failure.
+    """
+    try:
+        runtime.helm(
+            ["uninstall", name, "--namespace", namespace, "--wait", "--timeout", "5m"],
+            capture=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        message = ((exc.stderr or "") + (exc.stdout or "")).lower()
+        if "not found" not in message:
+            raise AccessError((exc.stderr or str(exc)).strip()) from exc
+
+
+def cleanup(runtime: Runtime) -> None:
+    discovered = discover_write_objects(runtime)
+    agents = discovered["agents"]
+    servers = discovered["servers"]
+    roles = discovered["roles"]
+    bindings = discovered["bindings"]
+    cluster_roles = discovered["cluster_roles"]
+    cluster_bindings = discovered["cluster_bindings"]
+    labelled = _items(runtime.get_json("namespaces", selector=TOOLS_NAMESPACE_SELECTOR))
+
+    # Everything is discovered before anything is deleted: the RoleBinding
+    # subjects and the rules are the only record of where the write identity
+    # lived and what it could do.
+    permission_checks = discover_permission_checks(
+        roles, bindings, cluster_roles, cluster_bindings
+    )
+    candidate_releases = discover_tool_releases(runtime)
+    subject_identities = service_account_subjects(bindings, cluster_bindings)
+    labelled_namespaces = {_name(item) for item in labelled}
+    owned_releases, unowned_candidates = classify_tool_releases(
+        candidate_releases,
+        labelled_namespaces=labelled_namespaces,
+        subject_identities=subject_identities,
+    )
+    warn_unowned_release_candidates(unowned_candidates)
+    targets = tool_namespaces(
+        labelled=labelled_namespaces,
+        subjects={namespace for namespace, _ in subject_identities},
+        protected=protected_namespaces(agents, servers, roles, bindings),
+    )
+
+    _delete_namespaced(runtime, "agents.kagent.dev", agents)
+    _delete_namespaced(runtime, "remotemcpservers.kagent.dev", servers)
+    _delete_namespaced(runtime, "rolebindings.rbac.authorization.k8s.io", bindings)
+    _delete_cluster(runtime, "clusterrolebindings.rbac.authorization.k8s.io", cluster_bindings)
+    _delete_namespaced(runtime, "roles.rbac.authorization.k8s.io", roles)
+    _delete_cluster(runtime, "clusterroles.rbac.authorization.k8s.io", cluster_roles)
+
+    # A legacy tool release may have been installed directly in a write target
+    # such as kagent-lab. Uninstall every ownership-proven release, but never act
+    # on a bare chart-name candidate. Namespace deletion is independently limited
+    # to the label/subject paths above.
+    for namespace, names in sorted(owned_releases.items()):
+        for name in sorted(names):
+            _uninstall_release(runtime, name, namespace)
+
+    for namespace in targets:
+        runtime.kubectl(
+            [
+                "delete",
+                "namespace",
+                namespace,
+                "--ignore-not-found",
+                "--wait=true",
+                "--timeout=3m",
+            ]
+        )
+
+    assert_clean(
+        runtime,
+        known_owned_releases=owned_releases,
+        warn_candidates=False,
+    )
+    failures: list[str] = []
+    for check in sorted(
+        permission_checks,
+        key=lambda value: (value.subject, value.namespace or "", value.resource, value.verb),
+    ):
+        if runtime.can_i(check):
+            failures.append(
+                f"{check.subject} can still {check.verb} {check.resource} "
+                f"in {check.namespace or 'all namespaces'}"
+            )
+    if failures:
+        raise AccessError("cleanup left former write permissions: " + "; ".join(failures))
+
+
+def git_value(repo: Path, args: list[str]) -> str:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        raise AccessError((exc.stderr or str(exc)).strip()) from exc
+
+
+def evidence(
+    ok_cluster: Path,
+    openkubes: Path,
+    config: Path,
+    out: Path,
+    kagent_version: str,
+    tools_version: str,
+    result: str,
+) -> None:
+    data = {
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "result": result,
+        "ok_cluster_commit": git_value(ok_cluster, ["rev-parse", "HEAD"]),
+        "ok_cluster_dirty": bool(git_value(ok_cluster, ["status", "--porcelain"])),
+        "openkubes_assets_commit": git_value(openkubes, ["rev-parse", "HEAD"]),
+        "openkubes_assets_dirty": bool(git_value(openkubes, ["status", "--porcelain"])),
+        "access_config_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+        "versions": {
+            "kagent_chart": kagent_version,
+            "kagent_tools_chart": tools_version,
+        },
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(data, indent=2, sort_keys=True))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("--config", required=True, type=Path)
+
+    matrix_parser = subparsers.add_parser("matrix")
+    matrix_parser.add_argument("--config", required=True, type=Path)
+    matrix_parser.add_argument("--rbac", required=True, type=Path)
+    matrix_parser.add_argument("--out", required=True, type=Path)
+
+    profile_parser = subparsers.add_parser("check-profile")
+    profile_parser.add_argument("--profile", required=True, type=Path)
+
+    for name in ("cleanup", "assert-clean"):
+        runtime_parser = subparsers.add_parser(name)
+        runtime_parser.add_argument("--kubeconfig", required=True, type=Path)
+
+    evidence_parser = subparsers.add_parser("evidence")
+    evidence_parser.add_argument("--ok-cluster", required=True, type=Path)
+    evidence_parser.add_argument("--openkubes", required=True, type=Path)
+    evidence_parser.add_argument("--config", required=True, type=Path)
+    evidence_parser.add_argument("--out", required=True, type=Path)
+    evidence_parser.add_argument("--kagent-version", required=True)
+    evidence_parser.add_argument("--tools-version", required=True)
+    evidence_parser.add_argument("--result", default="OBSERVED")
+
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "validate":
+            validate_ok129(load_config(args.config))
+        elif args.command == "matrix":
+            raw = load_config(args.config)
+            write_matrix(raw, args.rbac, args.out)
+        elif args.command == "check-profile":
+            check_profile(args.profile)
+        elif args.command == "cleanup":
+            cleanup(Runtime(args.kubeconfig))
+        elif args.command == "assert-clean":
+            assert_clean(Runtime(args.kubeconfig))
+        elif args.command == "evidence":
+            evidence(
+                args.ok_cluster,
+                args.openkubes,
+                args.config,
+                args.out,
+                args.kagent_version,
+                args.tools_version,
+                args.result,
+            )
+    except (AccessError, OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

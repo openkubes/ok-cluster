@@ -1,0 +1,37 @@
+# Public, allocation-safe source configuration for the disposable OK-129 lab.
+# Resolved endpoints and CIDRs belong in cluster-config.local.yaml (git-ignored).
+name: ok-kagent
+type: talos
+
+controlPlane:
+  replicas: 1
+  cores: 2
+  memory: 4Gi
+
+workers:
+  replicas: 2
+  cores: 2
+  memory: 4Gi
+  disk: 50Gi
+
+versions:
+  kubernetes: v1.34.1
+  talos: v1.9.5
+
+os:
+  distribution: ok-linux
+  profile: kubevirt
+  schematic_id: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+
+network:
+  endpoint: auto
+  podCIDR: auto
+  serviceCIDR: auto
+
+nodeSelector: ok-gpu
+
+upgrade:
+  strategy: blue-green
+  workloadMigration:
+    stateless: gitops
+    stateful: app-native
