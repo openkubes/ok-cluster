@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -171,7 +171,7 @@ cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
-.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test ok135-test ok136-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
+.PHONY: ok125-render ok125-management-test ok125-management-ignition ok125-runtime-test ok125-runtime-preflight ok125-node-ready ok125-replacement ok125-cleanup flatcar-promotion-test flatcar-preflight install-flatcar teardown-flatcar ok128-benchmark-test ok128-benchmark-preflight ok128-benchmark-flatcar ok128-benchmark-talos ok128-benchmark-compare ok128-benchmark-cleanup-verify ok130-test ok135-test ok136-test ok138-observability-metrics-test talos-golden-preflight talos-golden-runtime-evidence talos-golden-replacement-preflight talos-golden-replacement-apply
 ok125-render: ## Render and validate the non-deployable OK-125 Flatcar candidate
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/tests/ok125_flatcar_render_test.py \
@@ -219,6 +219,10 @@ flatcar-promotion-test: ## Offline-test the exact ordinary Flatcar profile
 		python3 $(SCRIPT_DIR)/tests/flatcar_promotion_test.py
 
 ok135-test: flatcar-promotion-test ok128-benchmark-test ## Offline-test Flatcar Longhorn clone contract
+
+ok138-observability-metrics-test: ## Offline-test metrics-only render and live-verifier guards
+	@PYTHONDONTWRITEBYTECODE=1 \
+		python3 $(SCRIPT_DIR)/tests/ok138_observability_metrics_test.py
 
 flatcar-preflight: require-cluster ## Read-only production Flatcar preflight
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
@@ -619,6 +623,29 @@ install-observability: require-cluster kubeconfig ## Install ok-observability-st
 	 CONTRACT_TEST_RECEIVER_CAPTURE_URL=$(CONTRACT_TEST_RECEIVER_CAPTURE_URL) \
 	 bash $(SCRIPT_DIR)/install-observability.sh
 
+install-observability-metrics: require-cluster kubeconfig ## Install metrics + alerting only and verify zot scraping (OK-138). Vars: OK_OBSERVABILITY_PATH, OK_OBSERVABILITY_REF, OBSERVABILITY_HELM_VALUES, OBSERVABILITY_METRICS_VERIFY_TIMEOUT
+	@CLUSTER=$(CLUSTER) \
+	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
+	 OK_OBSERVABILITY_PATH=$(OK_OBSERVABILITY_PATH) \
+	 OK_OBSERVABILITY_REF=$(OK_OBSERVABILITY_REF) \
+	 OBSERVABILITY_VALUES=$(OBSERVABILITY_VALUES) \
+	 OBSERVABILITY_HELM_VALUES=$(OBSERVABILITY_HELM_VALUES) \
+	 OBSERVABILITY_SECRET_SOURCE=$(OBSERVABILITY_SECRET_SOURCE) \
+	 OBSERVABILITY_SECRET_SOURCES="$(OBSERVABILITY_SECRET_SOURCES)" \
+	 VAULT_ADDR=$(VAULT_ADDR) \
+	 VAULT_TLS_SERVER_NAME=$(VAULT_TLS_SERVER_NAME) \
+	 VAULT_CA_SECRET=$(VAULT_CA_SECRET) \
+	 KV_MOUNT=$(KV_MOUNT) \
+	 KV_PATH=$(KV_PATH) \
+	 VAULT_ROLE=$(VAULT_ROLE) \
+	 VSO_SERVICE_ACCOUNT=$(VSO_SERVICE_ACCOUNT) \
+	 REFRESH_AFTER=$(REFRESH_AFTER) \
+	 CONTRACT_TEST_TIMEOUT=$(CONTRACT_TEST_TIMEOUT) \
+	 CONTRACT_TEST_RECEIVER_CAPTURE_URL=$(CONTRACT_TEST_RECEIVER_CAPTURE_URL) \
+	 OBSERVABILITY_COMPONENTS=metrics \
+	 OBSERVABILITY_METRICS_VERIFY_TIMEOUT=$(OBSERVABILITY_METRICS_VERIFY_TIMEOUT) \
+	 bash $(SCRIPT_DIR)/install-observability.sh
+
 bootstrap: require-not-flatcar
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
 	@$(MAKE) --no-print-directory talos-golden-preflight CLUSTER=$(CLUSTER)
@@ -642,6 +669,7 @@ bootstrap: require-not-flatcar
 	@echo "   make install-storage       CLUSTER=$(CLUSTER)"
 	@echo "   make install-ingress       CLUSTER=$(CLUSTER)"
 	@echo "   make install-observability CLUSTER=$(CLUSTER)   # OK-79: deploy + gated contract test"
+	@echo "   make install-observability-metrics CLUSTER=$(CLUSTER) # OK-138: Prometheus + zot scrape verification"
 	@echo "   make status                CLUSTER=$(CLUSTER)"
 
 annotate-pvcs: require-cluster
@@ -992,6 +1020,7 @@ help:
 	@echo "  make install-storage CLUSTER=ok-ai # local-path StorageClass (Talos)"
 	@echo "  make install-ingress CLUSTER=ok-ai # ingress controller (Traefik) + IngressClass ok-ingress"
 	@echo "  make install-observability CLUSTER=ok-ai [OBSERVABILITY_VALUES=<path>] # OK-79: ok-observability-standard + gated contract test"
+	@echo "  make install-observability-metrics CLUSTER=ok-shared # OK-138: Prometheus + Alertmanager only; verify zot scraping"
 	@echo "  make install-keycloak CLUSTER=ok-shared # OK-81: central Keycloak from a pinned openkubes revision (stops before the approval-gated steps)"
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"

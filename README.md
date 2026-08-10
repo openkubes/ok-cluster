@@ -331,6 +331,7 @@ make install-cni   CLUSTER=<name>                    # install Cilium (manual)
 make install-storage CLUSTER=<name>                  # install local-path-provisioner *inside* the workload cluster
 make install-ingress CLUSTER=<name>                  # Traefik + IngressClass ok-ingress + host-cluster LB proxy
 make install-observability CLUSTER=<name> [OBSERVABILITY_VALUES=<path>]  # OK-79: deploy ok-observability-standard + run the GATED contract test
+make install-observability-metrics CLUSTER=<name>    # OK-138: Prometheus + Alertmanager only; verify zot scraping
 make register-cluster CLUSTER=<name> [KUBECONFIG_SRC=<path>] [MGMT_CLUSTER=ok-mgmt]  # register with ok-mgmt (ADR-013)
 make unregister-cluster CLUSTER=<name> [FORCE=true] [MGMT_CLUSTER=ok-mgmt]           # deregister from ok-mgmt (OK-62)
 make annotate-pvcs CLUSTER=<name>                    # annotate PVCs for node binding
@@ -376,6 +377,27 @@ make list                                            # list all defined clusters
 > ok-shared by a `VaultStaticSecret` via the Vault Secrets Operator
 > (ADR-Platform-025) instead, with no chart change. The two profiles coexist by
 > envelope rather than in sequence (Secret Contract, ADR-Platform-011).
+
+> **`install-observability-metrics` is the deliberately scoped OK-138 path.**
+> Its capability assets come from the materialized
+> `implementations/prometheus` chart and `alerting/prometheus-rules.yaml`; an
+> optional `OBSERVABILITY_HELM_VALUES` file
+> can supply cluster-specific storage, retention, and resource Provider Values.
+> It installs into namespace `ok-observability` using Helm release
+> `ok-observability-standard`, so a later full-profile install upgrades the same
+> release instead of colliding over resource ownership. This path does not
+> require provider credential values or Vault, does not create the observability
+> credential Secret or Vault resources, does not apply Grafana dashboards or
+> OpenSearch assets, and does not run the full contract test. Before install, a
+> YAML-aware render guard requires a Prometheus resource, requires the bundled
+> Grafana subchart to be explicitly disabled, and rejects any Grafana/OpenSearch
+> Deployment or StatefulSet as well as any creation or reference of
+> `ok-observability-credentials`. After install, the scoped gate connects to
+> waits for both the Prometheus and Alertmanager resources to become Available,
+> then connects to Prometheus and requires both an active `health=up` target whose discovered
+> Kubernetes namespace and Service are `zot`, and a real sample returned by
+> `{__name__=~"zot_.+"}`; it prints the selected target discriminator and metric
+> value.
 
 ---
 
