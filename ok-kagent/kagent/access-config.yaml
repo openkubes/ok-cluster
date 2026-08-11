@@ -1,0 +1,73 @@
+# Access profile for kagent on the disposable ok-kagent lab (OK-129).
+#
+# This is the ONE file that decides what the deployment may do. `make install`
+# renders RBAC, the scoped write tool server and the write Agent from it. Nothing
+# here is private — no endpoints, no credentials.
+#
+# Change something, then:
+#   make access-summary      # see what the profile would grant
+#   make install             # apply it; the boundary follows the config
+#   make verify-access       # assert the boundary against the API server
+#
+# Reference and supported values: see the generator's README at
+# openkubes/research/kagent-standalone/access/README.md
+kind: KagentAccessProfile
+
+# read-only  : diagnosis only. No write identity, Role, tool server or Agent.
+# read-write : additionally deploys one scoped write path (see `write:` below).
+mode: read-write
+
+install:
+  namespace: kagent
+
+read:
+  scope: cluster        # cluster-wide read is the only implemented read scope
+  secrets: false        # refused if set to true — no tool identity gets Secrets
+  tools:
+    - k8s_get_resources
+    - k8s_describe_resource
+    - k8s_get_events
+    - k8s_get_pod_logs
+    - k8s_get_resource_yaml
+
+write:
+  # OK-129 is deliberately narrower than the generic renderer: only the
+  # explicit kagent-lab namespace is accepted by this installer.
+  scope: namespaces
+
+  # The installer refuses any target outside this evidenced lab namespace.
+  namespaces:
+    - kagent-lab
+
+  # Select any non-empty subset of the supported namespaced resource kinds.
+  # Unlisted kinds are denied; Secrets, RBAC and cluster-scoped resources are
+  # never grantable by this installer.
+  resources:
+    - configmaps
+    - deployments
+    - statefulsets
+    - daemonsets
+    - replicasets
+    - jobs
+    - cronjobs
+    - pods
+    - services
+    - ingresses
+
+  # Approve/Reject in the UI for every write tool. The installer refuses false.
+  requireApproval: true
+
+  toolServer:
+    # Deliberately its own namespace: the write identity stays separately
+    # auditable and the agent cannot modify the tool server it uses.
+    namespace: kagent-write
+    releaseName: kagent-write-tools
+    port: 8084
+    metricsPort: 8085
+
+  agentName: cluster-operator-gated
+
+  tools:
+    - k8s_apply_manifest
+    - k8s_patch_resource
+    - k8s_delete_resource
