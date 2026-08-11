@@ -423,6 +423,19 @@ make new CLUSTER=ok-ai TYPE=talos WORKERS=2
 make bootstrap CLUSTER=ok-ai
 ```
 
+### Opt-in trust for the shared internal registry
+
+Talos clusters that pull from `registry.ok-shared.internal` opt in explicitly:
+
+```bash
+make new CLUSTER=my-cluster TYPE=talos REGISTRY_TRUST=true
+make bootstrap CLUSTER=my-cluster
+```
+
+The CA and ingress address are resolved only at execution time; neither is
+stored in rendered files. Existing clusters use the review/dry-run/apply
+targets documented in [Talos registry trust](docs/registry-trust.md).
+
 For a complete disposable `ok-infra` meetup deployment with independent
 control-plane/worker sizing, timed warm provisioning, runtime verification,
 and Golden-Image-preserving cleanup, see the

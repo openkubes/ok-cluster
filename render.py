@@ -138,8 +138,46 @@ def next_free_svc_cidr(used):
             return str(net)
     raise RuntimeError("Service CIDR space exhausted")
 
+
+def validate_registry_trust(cfg: dict) -> None:
+    """Validate the opt-in shape without resolving runtime CA/address values."""
+    if "registryTrust" not in cfg:
+        return
+    trust = cfg["registryTrust"]
+    if not isinstance(trust, dict) or trust.get("enabled") is not True:
+        raise SystemExit(
+            "ERROR: registryTrust must be absent or set enabled: true explicitly"
+        )
+    if cfg.get("type") != "talos":
+        raise SystemExit("ERROR: registryTrust is supported only for type: talos")
+    required = {
+        "host": trust.get("host"),
+        "caSecret.namespace": (trust.get("caSecret") or {}).get("namespace"),
+        "caSecret.name": (trust.get("caSecret") or {}).get("name"),
+        "caSecret.key": (trust.get("caSecret") or {}).get("key"),
+        "address.serviceNamespace": (trust.get("address") or {}).get(
+            "serviceNamespace"
+        ),
+        "address.serviceName": (trust.get("address") or {}).get("serviceName"),
+        "talosconfigSecret.namespace": (trust.get("talosconfigSecret") or {}).get(
+            "namespace"
+        ),
+        "talosconfigSecret.name": (trust.get("talosconfigSecret") or {}).get("name"),
+        "talosconfigSecret.key": (trust.get("talosconfigSecret") or {}).get("key"),
+    }
+    missing = [key for key, value in required.items() if not isinstance(value, str) or not value]
+    if missing:
+        raise SystemExit(
+            "ERROR: registryTrust is incomplete: " + ", ".join(missing)
+        )
+    if trust["host"] != "registry.ok-shared.internal":
+        raise SystemExit(
+            "ERROR: registryTrust.host must be registry.ok-shared.internal"
+        )
+
 def resolve_config(cfg: dict, cluster_name: str) -> dict:
     cfg = yaml.safe_load(yaml.dump(cfg))
+    validate_registry_trust(cfg)
     clusters = discover_clusters()
     others = [c for c in clusters if c["name"] != cluster_name]
     net = cfg.setdefault("network", {})
