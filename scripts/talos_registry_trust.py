@@ -430,7 +430,10 @@ def get_machine_config(node: str, talosconfig: bytes) -> dict[str, Any]:
     try:
         resource = json.loads(raw)
         spec = resource["spec"]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        # talosctl encodes MachineConfig.spec as a YAML string, not nested JSON.
+        if isinstance(spec, str):
+            spec = yaml.safe_load(spec)
+    except (json.JSONDecodeError, KeyError, TypeError, yaml.YAMLError) as exc:
         raise TrustError(f"Talos returned an invalid MachineConfig for node {node}") from exc
     if not isinstance(spec, dict):
         raise TrustError(f"Talos returned a non-mapping MachineConfig spec for node {node}")
