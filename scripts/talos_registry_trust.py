@@ -320,7 +320,33 @@ def probe_registry(host: str, address: str, ca: bytes) -> None:
         raise TrustError("registry /v2/ preflight returned an unexpected status")
 
 
-def discover_nodes(cluster: str, infra_kubeconfig: str) -> list[str]:
+def node_internal_ip(kubeconfig: str, node_name: str) -> str:
+    """Look up the authoritative InternalIP of a workload-cluster Node.
+
+    CAPI Machine.status.addresses can carry several entries tagged
+    InternalIP on multi-NIC nodes (a secondary network plus per-interface
+    IPv6 link-local addresses), which breaks any assumption of exactly one
+    InternalIP at the Machine level. The Kubernetes Node object itself is
+    authoritative and kubelet-reported: it always exposes exactly one
+    InternalIP. We cross-reference via the Machine's Hostname address,
+    which is identical to the Node name.
+    """
+    raw = run([
+        "kubectl", "--kubeconfig", kubeconfig, "get", "node", node_name, "-o", "json",
+    ])
+    try:
+        addresses = json.loads(raw)["status"]["addresses"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise TrustError(f"invalid Node address data for {node_name}") from exc
+    ips = sorted({
+        a["address"] for a in addresses if a.get("type") == "InternalIP"
+    })
+    if len(ips) != 1:
+        raise TrustError(f"Node {node_name} must expose exactly one InternalIP")
+    return ips[0]
+
+
+def discover_nodes(cluster: str, infra_kubeconfig: str, workload_kubeconfig: str) -> list[str]:
     raw = run([
         "kubectl", "--kubeconfig", infra_kubeconfig, "-n", cluster, "get", "machines",
         "-l", f"cluster.x-k8s.io/cluster-name={cluster}", "-o", "json",
@@ -329,21 +355,19 @@ def discover_nodes(cluster: str, infra_kubeconfig: str) -> list[str]:
         items = json.loads(raw).get("items", [])
         values = []
         for item in items:
-            machine_ips = [
+            hostnames = sorted({
                 address["address"]
                 for address in item.get("status", {}).get("addresses", [])
-                if address.get("type") == "InternalIP"
-            ]
-            if len(set(machine_ips)) != 1:
-                raise TrustError(
-                    "every CAPI Machine must expose exactly one InternalIP"
-                )
-            values.append(machine_ips[0])
+                if address.get("type") == "Hostname"
+            })
+            if len(hostnames) != 1:
+                raise TrustError("every CAPI Machine must expose exactly one Hostname")
+            values.append(node_internal_ip(workload_kubeconfig, hostnames[0]))
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise TrustError("invalid Machine address data") from exc
     nodes = sorted(set(values))
     if not nodes or len(nodes) != len(items):
-        raise TrustError("every CAPI Machine must expose exactly one unique InternalIP")
+        raise TrustError("every CAPI Machine must resolve to a unique Node InternalIP")
     for node in nodes:
         _single_ip([node], "Machine InternalIP")
     return nodes
@@ -435,12 +459,12 @@ def assert_applied(
 
 
 def runtime_talos(
-    action: str, cluster: str, trust: dict[str, Any], infra: str,
+    action: str, cluster: str, trust: dict[str, Any], infra: str, workload_kubeconfig: str,
     patch: bytes, address: str, ca: bytes,
 ) -> None:
     probe_registry(trust["host"], address, ca)
     validate_with_talosctl(patch)
-    nodes = discover_nodes(cluster, infra)
+    nodes = discover_nodes(cluster, infra, workload_kubeconfig)
     talosconfig = secret_value(infra, trust["talosconfigSecret"])
     patches: dict[str, bytes] = {}
     for node in nodes:
@@ -514,7 +538,7 @@ def main() -> int:
             if args.action == "apply" and os.environ.get("REGISTRY_TRUST_APPLY") != "yes":
                 raise TrustError("apply requires REGISTRY_TRUST_APPLY=yes")
             runtime_talos(
-                args.action, args.cluster, trust, args.infra_kubeconfig,
+                args.action, args.cluster, trust, args.infra_kubeconfig, ca_kubeconfig,
                 patch, address, ca,
             )
         return 0
