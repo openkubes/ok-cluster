@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import base64
 import ipaddress
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -79,6 +80,7 @@ class RegistryTrustTest(unittest.TestCase):
         source_cfg = yaml.safe_load(
             (ROOT / "ok-ai" / "cluster-config.yaml").read_text(encoding="utf-8")
         )
+        source_cfg.pop("registryTrust", None)
         with tempfile.TemporaryDirectory(
             prefix=".ok138-default-off-", dir=ROOT
         ) as temp:
@@ -227,6 +229,14 @@ class RegistryTrustTest(unittest.TestCase):
         self.assertIn("os.memfd_create", source)
 
     def test_talosctl_v195_complete_config_validation(self) -> None:
+        if not hasattr(os, "memfd_create"):
+            self.skipTest("complete Talos validation requires Linux anonymous memfd support")
+        try:
+            version = trust.run(["talosctl", "version", "--client"])
+        except trust.TrustError as exc:
+            self.skipTest(str(exc))
+        if b"Tag: v1.9.5" not in version:
+            self.skipTest("complete Talos validation requires talosctl v1.9.5")
         trust.validate_with_talosctl(trust.render_patch(HOST, ADDRESS, CA))
 
 

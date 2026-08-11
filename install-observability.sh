@@ -73,12 +73,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # --- preconditions --------------------------------------------------------
-for bin in kubectl helm python3 git make tar flock; do
-  command -v "$bin" >/dev/null 2>&1 || { echo "❌ required binary '$bin' not on PATH"; exit 2; }
-done
-[ -n "${CLUSTER:-}" ]              || { echo "❌ CLUSTER is required"; exit 2; }
-[ -f "${KUBECONFIG_PATH:-}" ]      || { echo "❌ kubeconfig not found: ${KUBECONFIG_PATH:-<unset>} — run 'make kubeconfig CLUSTER=${CLUSTER}' first"; exit 2; }
-[ -d "$OBSERVABILITY_SOURCE_PATH" ] || { echo "❌ ok-observability checkout not found: ${OBSERVABILITY_SOURCE_PATH:-<unset>} — set OK_OBSERVABILITY_PATH"; exit 2; }
+# Validate the requested operation before inspecting the host toolchain or
+# touching cluster inputs. This keeps invalid intent deterministic and
+# fail-closed on every supported caller platform.
 case "$OBSERVABILITY_MODE" in
   pinned|worktree) ;;
   *) echo "❌ OK_OBSERVABILITY_MODE='$OBSERVABILITY_MODE' is not one of: pinned worktree"; exit 2 ;;
@@ -97,6 +94,12 @@ if [ "$OBSERVABILITY_COMPONENTS" = metrics ]; then
     exit 2
   }
 fi
+for bin in kubectl helm python3 git make tar flock; do
+  command -v "$bin" >/dev/null 2>&1 || { echo "❌ required binary '$bin' not on PATH"; exit 2; }
+done
+[ -n "${CLUSTER:-}" ]              || { echo "❌ CLUSTER is required"; exit 2; }
+[ -f "${KUBECONFIG_PATH:-}" ]      || { echo "❌ kubeconfig not found: ${KUBECONFIG_PATH:-<unset>} — run 'make kubeconfig CLUSTER=${CLUSTER}' first"; exit 2; }
+[ -d "$OBSERVABILITY_SOURCE_PATH" ] || { echo "❌ ok-observability checkout not found: ${OBSERVABILITY_SOURCE_PATH:-<unset>} — set OK_OBSERVABILITY_PATH"; exit 2; }
 if [ "$OBSERVABILITY_MODE" = pinned ] && [ -z "${OK_OBSERVABILITY_REF:-}" ]; then
   echo "❌ OK_OBSERVABILITY_REF is required in pinned mode"
   echo "   Set it to a locally available commit/tag, or explicitly opt into the"
