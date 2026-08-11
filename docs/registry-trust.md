@@ -224,3 +224,58 @@ Failure is diagnostic:
 Do not claim OK-138's workload-pull criterion from local validation, CAPI
 hydration, a Talos dry-run, or a cached image. The criterion is met only by the
 uncached real Pod proof above.
+
+## Recreate/Recovery considerations
+
+Registry trust on `ok-shared` is self-referential: `ok-shared` hosts the very
+registry its own nodes need to trust. This creates a real bootstrap-order
+constraint that the "New clusters" flow above does not cover, plus a few other
+gotchas worth remembering before any recreate/recovery drill.
+
+1. **Bootstrap order for `ok-shared` itself.** The `caSecret`
+   (`cert-manager/ok-shared-internal-ca`) and the discovered registry address
+   (the `ok-infra`-published `ok-shared-ingress`) do not exist until
+   cert-manager, Keycloak, and zot (Increment 1) are already running. A
+   from-scratch recreate of `ok-shared` with `registryTrust.enabled: true` set
+   from the start will fail on the very first `make bootstrap`, because
+   `hydrate` tries to read a Secret from a cluster that doesn't exist yet.
+   Recreate `ok-shared` in two phases instead: bootstrap without
+   `registryTrust` and deploy Increment 1's stack, then run the
+   existing-cluster runtime procedure (`review` → `dry-run` → `apply`) against
+   the now-running nodes. The bootstrap-time `hydrate` path is only safe for
+   *new consumer clusters* that need to trust an *already-existing* `ok-shared`
+   registry, not for recreating `ok-shared` itself.
+
+2. **New or replaced nodes need a rerun.** `apply` patches live Talos machine
+   configs directly and deliberately does not touch the committed
+   `TalosControlPlane`/`TalosConfigTemplate` objects (to avoid triggering a
+   rollout). Any node created after the last `apply` — autoscaling, node
+   replacement after failure, `talosctl reset` — starts without registry trust
+   and needs `make talos-registry-trust-apply` rerun.
+
+3. **`discover_nodes()` requires the Kubernetes `Node` object to exist**, not
+   just the CAPI `Machine`. Right after a fresh bootstrap or a new worker
+   join, there's a window where the `Machine` exists but the `Node` hasn't
+   registered yet. Confirm `kubectl get nodes` shows `Ready` before running
+   `dry-run`/`apply` for that node.
+
+4. **Registry addressing self-heals, hardcoded copies don't.** The address is
+   re-discovered on every run (DNS → `ok-infra` Service status), so it adapts
+   automatically if the LoadBalancer IP changes after a recreate. Any address
+   that gets hardcoded elsewhere (a manually copied `/etc/hosts` line, a
+   pinned patch file kept around) will silently go stale instead — avoid
+   keeping such copies.
+
+5. **Push credentials also have an ordering dependency.** The `zot-machine`/
+   `zot-puller` htpasswd identities from Increment 1 don't exist until that
+   stack is deployed, same as the CA. For any scripted/CI push (recovery
+   drills included), use these htpasswd machine identities rather than the
+   Keycloak `registry-writers` OIDC group: OIDC users need a zot API key
+   generated via an authenticated browser session first — plain
+   username/password does not work for `docker login`/`podman login` against
+   an OIDC-backed identity.
+
+6. **Registry-data recovery is a separate concern.** If a drill also needs to
+   validate the registry's own stored data (not just node trust), use the
+   Increment 3 `zotctl.py` backup/restore-drill tooling for that instead of
+   manually re-pushing test images.
