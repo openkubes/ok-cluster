@@ -513,6 +513,7 @@ def main() -> int:
     parser.add_argument("--cluster", required=True)
     parser.add_argument("--infra-kubeconfig", required=True)
     parser.add_argument("--ca-kubeconfig")
+    parser.add_argument("--workload-kubeconfig")
     parser.add_argument("--address")
     args = parser.parse_args()
     try:
@@ -540,8 +541,22 @@ def main() -> int:
         else:
             if args.action == "apply" and os.environ.get("REGISTRY_TRUST_APPLY") != "yes":
                 raise TrustError("apply requires REGISTRY_TRUST_APPLY=yes")
+            # The CA lives on whichever cluster hosts the registry (ok-shared); the nodes
+            # being patched live on --cluster, which is not always the same cluster. Reusing
+            # ca_kubeconfig here silently looked up Node objects on the wrong cluster for any
+            # CLUSTER other than the one hosting the CA -- never caught before because every
+            # prior run onboarded ok-shared to itself, where the two happen to coincide.
+            workload_kubeconfig = args.workload_kubeconfig or os.environ.get(
+                "TALOS_WORKLOAD_KUBECONFIG"
+            )
+            if not workload_kubeconfig:
+                raise TrustError(
+                    "TALOS_WORKLOAD_KUBECONFIG (or --workload-kubeconfig) is required for "
+                    "dry-run/apply: it must be the kubeconfig of --cluster itself, not of "
+                    "whichever cluster hosts the registry CA"
+                )
             runtime_talos(
-                args.action, args.cluster, trust, args.infra_kubeconfig, ca_kubeconfig,
+                args.action, args.cluster, trust, args.infra_kubeconfig, workload_kubeconfig,
                 patch, address, ca,
             )
         return 0

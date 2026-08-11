@@ -48,6 +48,7 @@ FLATCAR_APPLY            ?= no
 FLATCAR_TEARDOWN         ?= no
 FLATCAR_WORKLOAD_KUBECONFIG ?=
 TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
+TALOS_WORKLOAD_KUBECONFIG ?=
 CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
 CILIUM_CHART_SOURCE ?=
 KUBEVIRT_EXPAND_DISKS_APPLY ?= no
@@ -259,6 +260,7 @@ talos-registry-trust-dry-run: require-cluster ## TLS preflight then dry-run trus
 	@REGISTRY_CA_KUBECONFIG="$(REGISTRY_CA_KUBECONFIG)" \
 	 python3 $(SCRIPT_DIR)/scripts/talos_registry_trust.py dry-run \
 		--cluster "$(CLUSTER)" --infra-kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--workload-kubeconfig "$(TALOS_WORKLOAD_KUBECONFIG)" \
 		$(if $(REGISTRY_ADDRESS),--address "$(REGISTRY_ADDRESS)")
 
 talos-registry-trust-apply: require-cluster ## Apply trust to every node, no reboot (REGISTRY_TRUST_APPLY=yes)
@@ -267,6 +269,7 @@ talos-registry-trust-apply: require-cluster ## Apply trust to every node, no reb
 	@REGISTRY_CA_KUBECONFIG="$(REGISTRY_CA_KUBECONFIG)" REGISTRY_TRUST_APPLY=yes \
 	 python3 $(SCRIPT_DIR)/scripts/talos_registry_trust.py apply \
 		--cluster "$(CLUSTER)" --infra-kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--workload-kubeconfig "$(TALOS_WORKLOAD_KUBECONFIG)" \
 		$(if $(REGISTRY_ADDRESS),--address "$(REGISTRY_ADDRESS)")
 
 flatcar-preflight: require-cluster ## Read-only production Flatcar preflight
