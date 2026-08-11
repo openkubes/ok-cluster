@@ -12,7 +12,7 @@
 
 .PHONY: help preflight install upgrade uninstall status validate logs \
         token-show connect-info connect-openwebui fix-openwebui-ollama \
-        verify-kubectl
+        verify-mcp-consumer verify-mcp-live
 .DEFAULT_GOAL := help
 
 CLUSTER     ?= ok-ai
@@ -40,11 +40,12 @@ help:
 	@echo "  make validate              # step 4: in-cluster contract test (/v1)"
 	@echo "  make connect-openwebui     # step 5: auto-register in Open WebUI (env seed)"
 	@echo "  make connect-info          # step 5 alt: values for manual Admin-UI entry"
-	@echo "  make verify-kubectl        # RBAC guardrails check inside the pod"
+	@echo "  make verify-mcp-consumer   # render the chart and verify the MCP-only boundary"
+	@echo "  make verify-mcp-live       # verify no token/kubectl and inspect MCP registration"
 	@echo ""
 	@echo "  make upgrade | logs | token-show | fix-openwebui-ollama | uninstall"
 	@echo "  Model switch: make upgrade MODEL=<name:tag>   (pull on Ollama host first)"
-	@echo "  Image build/push: see canonical component (make -C $(CHART)/../.. help)"
+	@echo "  Reusable chart/docs: see canonical component (make -C $(CHART)/../.. help)"
 
 # ── step 1 ────────────────────────────────────────────────────────────────────
 preflight:
@@ -144,19 +145,16 @@ connect-info: $(TOKEN_FILE)
 	@echo "  URL:     $(SVC_URL)/v1        (the /v1 suffix is REQUIRED)"
 	@echo "  API Key: $$(cat $(TOKEN_FILE))"
 
-# ── guardrail verification (custom image with kubectl) ───────────────────────
-verify-kubectl:
-	@echo "== kubectl present in the pod =="
-	@$(KUBECTL) -n $(NS) exec deploy/$(RELEASE) -- kubectl version --client
+# ── ADR-021 consumer guardrails ──────────────────────────────────────────────
+verify-mcp-consumer:
+	@$(MAKE) -C $(CHART)/../.. verify-mcp-consumer
+
+verify-mcp-live:
+	@echo "== no Kubernetes credential or client in the OpenClaw pod =="
+	@$(KUBECTL) -n $(NS) exec deploy/$(RELEASE) -- sh -c \
+		'test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token && ! command -v kubectl'
+	@echo "OK: ServiceAccount token and kubectl are absent"
 	@echo ""
-	@echo "== positive: Cluster Inspection Contract (read) =="
-	@$(KUBECTL) -n $(NS) exec deploy/$(RELEASE) -- kubectl auth can-i list pods --all-namespaces
-	@$(KUBECTL) -n $(NS) exec deploy/$(RELEASE) -- kubectl get pods -n $(NS)
-	@echo ""
-	@echo "== negative: guardrails (must all be denied) =="
-	@$(KUBECTL) -n $(NS) exec deploy/$(RELEASE) -- kubectl auth can-i get secrets --all-namespaces \
-		&& (echo "FAIL: secrets readable — RBAC violates the guideline, STOP (Part C)"; exit 1) \
-		|| echo "OK: secrets denied"
-	@$(KUBECTL) -n $(NS) exec deploy/$(RELEASE) -- kubectl auth can-i delete pods --all-namespaces \
-		&& (echo "FAIL: write verb allowed — RBAC violates the guideline, STOP (Part C)"; exit 1) \
-		|| echo "OK: writes denied"
+	@echo "== restricted MCP registration and adapter connectivity =="
+	@$(KUBECTL) -n $(NS) exec deploy/$(RELEASE) -- \
+		node dist/index.js mcp probe platform-diagnostics

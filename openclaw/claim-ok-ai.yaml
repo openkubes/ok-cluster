@@ -13,5 +13,7 @@ spec:
   clusterRef: ok-ai
   ollamaEndpoint: http://192.168.100.202:11434
   namespace: openclaw
+  # 0.2.0 enforces the OK-94 MCP-only, credential-less consumer boundary.
+  chartVersion: "0.2.0"
   model: gpt-oss:20b
   numCtx: 65536
