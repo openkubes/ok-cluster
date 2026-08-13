@@ -57,7 +57,7 @@ help:
 	@echo "  make verify-clean     Fail if kagent objects remain"
 	@echo ""
 	@echo "Permissions come from $(ACCESS_CONFIG) (mode: read-only | read-write)."
-	@echo "OK-129 only permits approval-gated ConfigMap writes in kagent-lab."
+	@echo "OK-129 permits approval-gated writes to the configured supported resources in kagent-lab."
 	@echo "Override with ACCESS_CONFIG=<path>"
 	@echo "to keep several profiles side by side."
 
