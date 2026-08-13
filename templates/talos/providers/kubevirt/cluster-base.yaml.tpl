@@ -80,7 +80,7 @@ metadata:
   name: ${CLUSTER_NAME}
   namespace: ${CLUSTER_NAME}
 spec:
-  controlPlaneServiceTemplate:
+${INFRA_CLUSTER_SECRET_REF}  controlPlaneServiceTemplate:
     spec:
       type: LoadBalancer
 ---
