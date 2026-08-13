@@ -49,5 +49,12 @@ network:
 # Leave empty for no pinning (workers scheduled freely).
 nodeSelector: ok-gpu      # kubernetes.io/hostname value
 
+# Set only when CAPK runs on a different cluster than the KubeVirt runtime.
+# This Secret is materialized separately on the management cluster and is
+# referenced here by identity only; never put kubeconfig bytes in this file.
+# infraClusterSecretRef:
+#   name: external-infra-kubeconfig-my-cluster
+#   namespace: my-cluster
+
 upgrade:
   strategy: blue-green    # blue-green | in-place

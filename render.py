@@ -175,6 +175,44 @@ def validate_registry_trust(cfg: dict) -> None:
             "ERROR: registryTrust.host must be registry.ok-shared.internal"
         )
 
+
+def render_infra_cluster_secret_ref(cfg: dict) -> str:
+    """Render an explicit CAPK external-infrastructure credential reference.
+
+    The reference is optional because CAPK can legitimately manage KubeVirt in
+    the management cluster itself.  When an external provider cluster is
+    intended, callers must opt in explicitly; silently inventing this reference
+    would blur the lifecycle authority boundary.
+    """
+    reference = cfg.get("infraClusterSecretRef")
+    if reference is None:
+        return ""
+    if cfg.get("type") != "talos" or cfg.get("provider", "kubevirt") != "kubevirt":
+        raise SystemExit(
+            "ERROR: infraClusterSecretRef is supported only for Talos on KubeVirt"
+        )
+    if not isinstance(reference, dict) or set(reference) != {"name", "namespace"}:
+        raise SystemExit(
+            "ERROR: infraClusterSecretRef requires exactly name and namespace"
+        )
+    name = reference["name"]
+    namespace = reference["namespace"]
+    dns_subdomain = re.compile(
+        r"^(?=.{1,253}$)[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$"
+    )
+    dns_label = re.compile(r"^(?=.{1,63}$)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
+    if not isinstance(name, str) or not dns_subdomain.fullmatch(name):
+        raise SystemExit("ERROR: infraClusterSecretRef.name is not a DNS subdomain")
+    if not isinstance(namespace, str) or not dns_label.fullmatch(namespace):
+        raise SystemExit("ERROR: infraClusterSecretRef.namespace is not a DNS label")
+    return (
+        "  infraClusterSecretRef:\n"
+        "    apiVersion: v1\n"
+        "    kind: Secret\n"
+        f"    name: {name}\n"
+        f"    namespace: {namespace}\n"
+    )
+
 def resolve_config(cfg: dict, cluster_name: str) -> dict:
     cfg = yaml.safe_load(yaml.dump(cfg))
     validate_registry_trust(cfg)
@@ -259,6 +297,7 @@ def build_context(cfg: dict) -> dict:
         "CLUSTER_NAME":       cfg["name"],
         "CLUSTER_TYPE":       cfg.get("type", "ubuntu"),
         "INFRA_PROVIDER":     cfg.get("provider", "kubevirt"),
+        "INFRA_CLUSTER_SECRET_REF": render_infra_cluster_secret_ref(cfg),
         "OS_IMAGE_NAME":      _osp.get("image", "talos-openstack-amd64"),
         "OS_CP_FLAVOR":       _osp.get("controlPlaneFlavor", "m1.large"),
         "OS_NODE_FLAVOR":     _osp.get("nodeFlavor", "m1.large"),

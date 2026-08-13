@@ -525,12 +525,24 @@ network:
 
 nodeSelector: ""     # pin VMs to a specific host node (required for Talos PVC binding)
 
+# Optional: required when CAPK runs on a separate management cluster and the
+# KubeVirt runtime is external. The referenced Secret must already exist on
+# the management cluster; ok-cluster never renders credential contents.
+infraClusterSecretRef:
+  name: external-infra-kubeconfig-my-cluster
+  namespace: my-cluster
+
 upgrade:
   strategy: blue-green
   workloadMigration:
     stateless: gitops
     stateful: app-native
 ```
+
+If `infraClusterSecretRef` is absent, CAPK intentionally uses its management
+cluster as the KubeVirt infrastructure cluster. For a split `ok-mgmt` / external
+`ok-infra` topology, bind the per-cluster Secret explicitly; otherwise CAPK can
+create the control-plane LoadBalancer Service in the wrong authority domain.
 
 ### Auto-Allocation Pools
 
