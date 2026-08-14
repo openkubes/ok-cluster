@@ -64,6 +64,14 @@ def main() -> None:
         "namespace": "disposable-ok141",
     }
     assert document["spec"]["controlPlaneServiceTemplate"]["spec"]["type"] == "LoadBalancer"
+    assert document["spec"]["controlPlaneServiceTemplate"]["metadata"] == {
+        "namespace": "disposable-ok141"
+    }
+
+    same_cluster_document = kubevirt_cluster_document(same_cluster)
+    assert same_cluster_document["spec"]["controlPlaneServiceTemplate"]["metadata"] == {
+        "namespace": "disposable-ok141"
+    }
 
     incomplete = base_config()
     incomplete["infraClusterSecretRef"] = {"name": "missing-namespace"}
