@@ -15,7 +15,7 @@ kind: KagentAccessProfile
 
 # read-only  : diagnosis only. No write identity, Role, tool server or Agent.
 # read-write : additionally deploys one scoped write path (see `write:` below).
-mode: read-write
+mode: read-only
 
 install:
   namespace: kagent
