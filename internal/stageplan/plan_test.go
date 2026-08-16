@@ -114,6 +114,21 @@ func TestLoadRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestStageRechecksInMemoryBinding(t *testing.T) {
+	binding, err := Verify(planJSON(t, validDocument()), expected())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, stageDigest, err := binding.Stage("enablement")
+	if err != nil || stage.ID != "enablement" || !strings.HasPrefix(stageDigest, "sha256:") {
+		t.Fatalf("unexpected stage binding: %#v %s %v", stage, stageDigest, err)
+	}
+	binding.Stages[3].Inputs[0].Digest = sha("0")
+	if _, _, err := binding.Stage("enablement"); err == nil {
+		t.Fatal("changed in-memory stage binding was accepted")
+	}
+}
+
 func validDocument() document {
 	stages := make([]Stage, 0, len(requiredSequence))
 	for index, rule := range requiredSequence {

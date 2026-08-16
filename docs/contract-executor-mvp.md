@@ -769,6 +769,25 @@ execution operation is still limited to its initial lifecycle submission and
 must not be activated as a complete happy-run command until separately
 authorized stage operations and receipts consume this plan.
 
+## Content-bound authorization per mutating stage
+
+Every mutating stage now has a distinct signed authorization envelope. A grant
+binds the canonical staged-plan digest, Contract identity, `R`, `E`, `P`,
+`FixtureDigest`, exact stage order and digest, operation name, authority role,
+single-use declaration and a maximum 30-minute validity window. Verification
+accepts only Ed25519 signatures from the explicitly supplied trust key.
+
+This means, for example, that `CreateCluster` authority cannot be reused for
+`CreateEnablement`, `IssueTargetCredential`, target registration or Platform
+Application submission. Read-only observation and evaluation stages reject
+mutation grants altogether. Reordering a stage or changing any immutable input
+changes its stage and plan identity and invalidates the signature.
+
+Successful verification produces only a redaction-safe receipt and a typed
+consumption binding. It does not consume the grant or execute the stage yet;
+durable single-use claims and per-stage execution receipts remain the next
+runner boundary.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

@@ -83,15 +83,21 @@ type document struct {
 // Binding is the immutable, redaction-safe result of successful verification.
 // It carries no source path, raw manifests, credentials or authorization.
 type Binding struct {
-	Format             string            `json:"format"`
-	PlanDigest         string            `json:"planDigest"`
-	ContractIdentity   contract.Identity `json:"contractIdentity"`
-	IntentRevision     string            `json:"intentRevision"`
-	EnablementRevision string            `json:"enablementRevision"`
-	PlatformRevision   string            `json:"platformRevision"`
-	ExecutionFixture   string            `json:"executionFixture"`
-	Authorities        Authorities       `json:"authorities"`
-	Stages             []Stage           `json:"stages"`
+	Format              string            `json:"format"`
+	PlanDigest          string            `json:"planDigest"`
+	ContractIdentity    contract.Identity `json:"contractIdentity"`
+	IntentRevision      string            `json:"intentRevision"`
+	EnablementRevision  string            `json:"enablementRevision"`
+	PlatformRevision    string            `json:"platformRevision"`
+	ExecutionFixture    string            `json:"executionFixture"`
+	Authorities         Authorities       `json:"authorities"`
+	Stages              []Stage           `json:"stages"`
+	verified            bool
+	verifiedDigest      string
+	verifiedIdentity    contract.Identity
+	verifiedRevisions   [4]string
+	verifiedAuthorities Authorities
+	stageDigests        map[string]string
 }
 
 type stageRule struct {
@@ -176,12 +182,23 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 	if err != nil {
 		return Binding{}, err
 	}
+	stageDigests := make(map[string]string, len(source.Stages))
+	for _, stage := range source.Stages {
+		stageDigest, err := canonicalDigest(stage)
+		if err != nil {
+			return Binding{}, err
+		}
+		stageDigests[stage.ID] = stageDigest
+	}
 	return Binding{
 		Format: BindingFormat, PlanDigest: planDigest,
 		ContractIdentity: source.ContractIdentity,
 		IntentRevision:   source.IntentRevision, EnablementRevision: source.EnablementRevision,
 		PlatformRevision: source.PlatformRevision, ExecutionFixture: source.ExecutionFixture,
 		Authorities: source.Authorities, Stages: cloneStages(source.Stages),
+		verified: true, verifiedDigest: planDigest, verifiedIdentity: source.ContractIdentity,
+		verifiedRevisions:   [4]string{source.IntentRevision, source.EnablementRevision, source.PlatformRevision, source.ExecutionFixture},
+		verifiedAuthorities: source.Authorities, stageDigests: stageDigests,
 	}, nil
 }
 
@@ -289,3 +306,27 @@ func InputNames(stage Stage) []string {
 
 // IsMutating reports whether a stage needs its own content-bound grant.
 func IsMutating(stage Stage) bool { return strings.TrimSpace(stage.GrantOperation) != "" }
+
+// Stage returns one stage and its canonical semantic digest after rechecking
+// that the in-memory binding still represents the originally verified plan.
+func (binding Binding) Stage(id string) (Stage, string, error) {
+	if !binding.verified || binding.Format != BindingFormat || binding.PlanDigest != binding.verifiedDigest || !digestPattern.MatchString(binding.PlanDigest) {
+		return Stage{}, "", errors.New("verified staged execution binding is required")
+	}
+	if binding.ContractIdentity != binding.verifiedIdentity || [4]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities {
+		return Stage{}, "", errors.New("staged execution binding changed after verification")
+	}
+	if err := validateStages(binding.Stages); err != nil {
+		return Stage{}, "", fmt.Errorf("revalidate staged execution binding: %w", err)
+	}
+	for _, stage := range binding.Stages {
+		if stage.ID == id {
+			stageDigest, err := canonicalDigest(stage)
+			if err != nil || stageDigest != binding.stageDigests[id] {
+				return Stage{}, "", errors.New("staged execution binding changed after verification")
+			}
+			return cloneStages([]Stage{stage})[0], stageDigest, nil
+		}
+	}
+	return Stage{}, "", fmt.Errorf("stage %q is not part of the verified execution plan", id)
+}
