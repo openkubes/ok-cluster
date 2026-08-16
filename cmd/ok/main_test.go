@@ -518,6 +518,88 @@ func TestStageObserveLifecyclePackageRejectsIncompleteInputs(t *testing.T) {
 	}
 }
 
+func TestStageObserveNetworkPackageWritesVerifiedOfflineArtifact(t *testing.T) {
+	previous := materializeNetworkObservationStagePackage
+	defer func() { materializeNetworkObservationStagePackage = previous }()
+	var captured runner.NetworkObservationStagePackageConfig
+	materializeNetworkObservationStagePackage = func(config runner.NetworkObservationStagePackageConfig) ([]byte, runner.NetworkObservationStagePackageReceipt, error) {
+		captured = config
+		return []byte("verified-network-package\n"), runner.NetworkObservationStagePackageReceipt{
+			Format: runner.NetworkObservationStagePackageFormat, State: "VERIFIED", StageID: "network-observation",
+			PackageDigest: testSHA("1"), InputConfigMapDigest: testSHA("2"), ReceiptPrefixDigest: testSHA("3"),
+			NetworkProfileDigest: testSHA("4"), WorkloadBindingDigest: testSHA("5"),
+			JobTemplateDigest: testSHA("6"), JobEnvelopeDigest: testSHA("7"), ObjectKinds: []string{"ConfigMap", "NetworkPolicy", "Job"},
+			AuthorizationState: "NOT_REQUIRED", MutationAllowed: false,
+		}, nil
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "network-job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-network-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "network-package.yaml")
+	arguments := stageObserveNetworkPackageArguments(template, output)
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Input.Bundle.PlanPath != "/tmp/plan.json" || len(captured.Input.Bundle.Receipts) != 4 || captured.RunID != "ok147-network-observation-01" || captured.PollTimeout != 5*time.Minute {
+		t.Fatalf("unexpected network package config: %#v", captured)
+	}
+	if string(captured.JobTemplate) != "bounded-network-template" || captured.JobTemplateDigest != digest.SHA256([]byte("bounded-network-template")) || captured.Input.ExpectedNetworkProfileDigest != testSHA("5") || captured.ExpectedWorkloadBindingDigest != testSHA("4") {
+		t.Fatalf("network semantic package inputs were not bound: %#v", captured)
+	}
+	if captured.LedgerCredentialSecret == captured.ManagementCredentialSecret || captured.LedgerCredentialSecret == captured.WorkloadCredentialSecret || captured.ManagementCredentialSecret == captured.WorkloadCredentialSecret {
+		t.Fatalf("network credential identities are not distinct: %#v", captured)
+	}
+	written, err := os.ReadFile(output)
+	if err != nil || string(written) != "verified-network-package\n" {
+		t.Fatalf("unexpected network package: %q %v", written, err)
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("network package mode is not 0600: %v %v", info, err)
+	}
+	var receipt runner.NetworkObservationStagePackageReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.AuthorizationState != "NOT_REQUIRED" || receipt.MutationAllowed {
+		t.Fatalf("unsafe network package receipt: %#v", receipt)
+	}
+	stdout.Reset()
+	if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+		t.Fatal("existing network package was overwritten")
+	}
+}
+
+func TestStageObserveNetworkPackageRejectsIncompleteInputs(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "network-job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-network-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	valid := stageObserveNetworkPackageArguments(template, filepath.Join(root, "network-package.yaml"))
+	for name, arguments := range map[string][]string{
+		"execute":                  append(append([]string{}, valid...), "--execute"),
+		"missing template digest":  removeArgumentWithValue(valid, "--job-template-digest"),
+		"missing profile digest":   removeArgumentWithValue(valid, "--network-profile-digest"),
+		"missing binding digest":   removeArgumentWithValue(valid, "--workload-binding-digest"),
+		"missing workload secret":  removeArgumentWithValue(valid, "--workload-credential-secret"),
+		"invalid workload binding": replaceArgument(valid, "--workload-binding-digest", "sha256:bad"),
+		"missing poll timeout":     removeArgumentWithValue(valid, "--poll-timeout"),
+		"interval exceeds timeout": replaceArgument(valid, "--poll-interval", "6m"),
+		"positional":               append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe network package input was accepted: %v %s", err, stdout.String())
+			}
+		})
+	}
+}
+
 func TestStageRunRequiresExplicitExecutionAndBindsOneRuntime(t *testing.T) {
 	previous := executeSubmissionStage
 	defer func() { executeSubmissionStage = previous }()
@@ -1190,6 +1272,26 @@ func stageObserveNetworkArguments() []string {
 		"--workload-binding", "/tmp/workload-binding.json", "--workload-binding-digest", testSHA("4"),
 		"--workload-token-file", "/tmp/workload-observer-token", "--workload-ca-file", "/tmp/workload-ca",
 		"--network-profile", "/tmp/network-profile.json", "--network-profile-digest", testSHA("5"),
+		"--poll-interval", "15s", "--poll-timeout", "5m",
+	)
+}
+
+func stageObserveNetworkPackageArguments(template, output string) []string {
+	resume := stageResumeArguments()
+	arguments := append([]string{"cluster", "stage", "observe", "network", "package"}, resume[3:]...)
+	return append(arguments,
+		"--receipt", "/tmp/provider.json@"+testSHA("1"),
+		"--receipt", "/tmp/lifecycle.json@"+testSHA("2"),
+		"--receipt", "/tmp/lifecycle-observation.json@"+testSHA("3"),
+		"--receipt", "/tmp/enablement.json@"+testSHA("4"),
+		"--job-template", template, "--job-template-digest", digest.SHA256([]byte("bounded-network-template")),
+		"--output", output, "--run-id", "ok147-network-observation-01",
+		"--image", "ghcr.io/openkubes/ok-cluster@"+testSHA("a"), "--input-configmap", "ok147-network-observation-input",
+		"--network-profile", "/tmp/network-profile.json", "--network-profile-digest", testSHA("5"),
+		"--ledger-api-url", "https://192.0.2.12:6443", "--ledger-api-cidr", "192.0.2.12/32", "--ledger-credential-secret", "ok147-ledger-network",
+		"--management-api-url", "https://192.0.2.12:6443", "--management-api-cidr", "192.0.2.12/32", "--management-credential-secret", "ok147-management-network",
+		"--workload-api-url", "https://192.0.2.20:6443", "--workload-api-cidr", "192.0.2.20/32", "--workload-credential-secret", "ok147-workload-network",
+		"--workload-binding", "/tmp/workload-binding.json", "--workload-binding-digest", testSHA("4"),
 		"--poll-interval", "15s", "--poll-timeout", "5m",
 	)
 }

@@ -65,6 +65,19 @@ var materializeLifecycleObservationStagePackage = func(config runner.LifecycleOb
 	return raw, receipt, err
 }
 
+var materializeNetworkObservationStagePackage = func(config runner.NetworkObservationStagePackageConfig) ([]byte, runner.NetworkObservationStagePackageReceipt, error) {
+	packaged, err := runner.BuildNetworkObservationStagePackage(config)
+	if err != nil {
+		return nil, runner.NetworkObservationStagePackageReceipt{}, err
+	}
+	raw, err := packaged.Bytes()
+	if err != nil {
+		return nil, runner.NetworkObservationStagePackageReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	return raw, receipt, err
+}
+
 var materializeEnablementStagePackage = func(config runner.EnablementStagePackageConfig) ([]byte, runner.EnablementStagePackageReceipt, error) {
 	packaged, err := runner.BuildEnablementStagePackage(config)
 	if err != nil {
@@ -501,6 +514,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "lifecycle" {
 		return runClusterStageObserveLifecycle(ctx, arguments[4:], stdout, stderr)
 	}
+	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "network" && arguments[4] == "package" {
+		return runClusterStageObserveNetworkPackage(arguments[5:], stdout, stderr)
+	}
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "network" {
 		return runClusterStageObserveNetwork(ctx, arguments[4:], stdout, stderr)
 	}
@@ -528,7 +544,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe network package ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -845,6 +861,91 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 		}
 	}
 	return runErr
+}
+
+func runClusterStageObserveNetworkPackage(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage observe network package", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	jobTemplate := flags.String("job-template", "", "path to the bounded network-observation Job template")
+	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	output := flags.String("output", "", "new local file for the verified ConfigMap/Job/NetworkPolicy package")
+	runID := flags.String("run-id", "", "bounded OK-147 network observation Job identity")
+	imageDigest := flags.String("image", "", "digest-pinned ok image")
+	inputConfigMap := flags.String("input-configmap", "", "immutable network observation input ConfigMap name")
+	networkProfile := flags.String("network-profile", "", "path to the immutable NetworkReady profile")
+	networkProfileDigest := flags.String("network-profile-digest", "", "expected NetworkReady profile digest")
+	ledgerAPIURL := flags.String("ledger-api-url", "", "exact management-ledger HTTPS IP endpoint")
+	ledgerAPICIDR := flags.String("ledger-api-cidr", "", "single-address management-ledger CIDR")
+	ledgerCredentialSecret := flags.String("ledger-credential-secret", "", "externally materialized ledger credential Secret name")
+	managementAPIURL := flags.String("management-api-url", "", "exact management-observer HTTPS IP endpoint")
+	managementAPICIDR := flags.String("management-api-cidr", "", "single-address management-observer CIDR")
+	managementCredentialSecret := flags.String("management-credential-secret", "", "externally materialized management credential Secret name")
+	workloadAPIURL := flags.String("workload-api-url", "", "exact workload-observer HTTPS IP endpoint")
+	workloadAPICIDR := flags.String("workload-api-cidr", "", "single-address workload-observer CIDR")
+	workloadCredentialSecret := flags.String("workload-credential-secret", "", "externally materialized workload credential Secret name")
+	workloadBinding := flags.String("workload-binding", "", "path to the private workload-authority binding")
+	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected workload-authority binding digest")
+	pollInterval := flags.Duration("poll-interval", 0, "bounded interval between verified Unknown observations")
+	pollTimeout := flags.Duration("poll-timeout", 0, "maximum bounded network observation duration")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	bundleConfig, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--job-template", *jobTemplate}, {"--job-template-digest", *jobTemplateDigest}, {"--output", *output},
+		{"--run-id", *runID}, {"--image", *imageDigest}, {"--input-configmap", *inputConfigMap},
+		{"--network-profile", *networkProfile}, {"--network-profile-digest", *networkProfileDigest},
+		{"--ledger-api-url", *ledgerAPIURL}, {"--ledger-api-cidr", *ledgerAPICIDR}, {"--ledger-credential-secret", *ledgerCredentialSecret},
+		{"--management-api-url", *managementAPIURL}, {"--management-api-cidr", *managementAPICIDR}, {"--management-credential-secret", *managementCredentialSecret},
+		{"--workload-api-url", *workloadAPIURL}, {"--workload-api-cidr", *workloadAPICIDR}, {"--workload-credential-secret", *workloadCredentialSecret},
+		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	for _, value := range []string{*jobTemplateDigest, *networkProfileDigest, *workloadBindingDigest} {
+		if !sha256DigestPattern.MatchString(value) {
+			return errors.New("template, network profile, and workload binding digests must be lowercase SHA-256 identities")
+		}
+	}
+	if *pollInterval < time.Second || *pollInterval > 5*time.Minute || *pollTimeout < *pollInterval || *pollTimeout > 6*time.Hour {
+		return errors.New("--poll-interval and --poll-timeout must define a valid bounded observation of at most 6h")
+	}
+	template, err := readBoundedLocalFile(*jobTemplate, 1024*1024)
+	if err != nil {
+		return fmt.Errorf("read network observation Job template: %w", err)
+	}
+	raw, receipt, err := materializeNetworkObservationStagePackage(runner.NetworkObservationStagePackageConfig{
+		Input: runner.NetworkObservationStageInputConfig{
+			Bundle: bundleConfig, NetworkProfilePath: *networkProfile,
+			ExpectedNetworkProfileDigest: *networkProfileDigest, ConfigMapName: *inputConfigMap,
+		},
+		JobTemplate: template, JobTemplateDigest: *jobTemplateDigest,
+		RunID: *runID, ImageDigest: *imageDigest,
+		LedgerAPIURL: *ledgerAPIURL, LedgerAPICIDR: *ledgerAPICIDR, LedgerCredentialSecret: *ledgerCredentialSecret,
+		ManagementAPIURL: *managementAPIURL, ManagementAPICIDR: *managementAPICIDR, ManagementCredentialSecret: *managementCredentialSecret,
+		WorkloadAPIURL: *workloadAPIURL, WorkloadAPICIDR: *workloadAPICIDR, WorkloadCredentialSecret: *workloadCredentialSecret,
+		WorkloadBindingPath: *workloadBinding, ExpectedWorkloadBindingDigest: *workloadBindingDigest,
+		PollInterval: *pollInterval, PollTimeout: *pollTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeNewLocalFile(*output, raw); err != nil {
+		return fmt.Errorf("write network observation stage package: %w", err)
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(receipt)
 }
 
 func runClusterStageObserveLifecyclePackage(arguments []string, stdout, stderr io.Writer) error {
