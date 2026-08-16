@@ -788,6 +788,24 @@ consumption binding. It does not consume the grant or execute the stage yet;
 durable single-use claims and per-stage execution receipts remain the next
 runner boundary.
 
+## Durable single-use stage claims
+
+Verified mutation grants can now be consumed through the same atomic ledger
+namespace as the original CreateCluster grant. The ledger writes an immutable
+claim before any future stage write and binds the authorization, staged plan,
+stage, operation, authority and Contract revision. Concurrent claim attempts
+produce exactly one winner.
+
+If the process disappears after that claim, inspection returns
+`CLAIMED_INDETERMINATE_STOP`; it never makes the stage available again. A
+separate immutable outcome record binds the evidence digest and mutation state,
+and exact completion replay is idempotent while conflicting completion fails
+closed. A successful mutating stage must report `ATTEMPTED`.
+
+This checkpoint still invokes no stage implementation. It provides the durable
+crash boundary needed before separately bounded HCP, target-access,
+TokenRequest, registration and Application submitters can be composed.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
