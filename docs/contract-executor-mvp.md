@@ -730,6 +730,24 @@ the workload credential, run the capability test, poll convergence, contact a
 cluster or mutate infrastructure. Producing those current single-run inputs
 remains an explicit subsequent runner boundary.
 
+## Typed first-run Platform capability boundary
+
+First-run capability production now has a separate lazy resolver from the
+resume file loader. Resolution binds only the post-submission target Cluster
+UID, R, P, execution fixture, capability contract digest and executable
+digest. It performs no probe. The resulting source is single-use and invokes
+the typed probe only when the Platform collector has already opened its
+capability gate.
+
+The probe request deliberately contains no command, argv, environment, file
+path, endpoint, credential, raw payload or arbitrary extension field. A probe
+returns only `Passed`; the runner supplies the observation time, constructs
+the complete capability assertion and computes its semantic evidence digest.
+Probe errors are redacted and consume the source, so neither caller code nor a
+transient failure can create an implicit retry. This boundary does not yet
+implement the concrete Kubernetes observability capability test, polling or
+target mutation.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
