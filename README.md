@@ -41,8 +41,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   exact-create-or-verify path and remains tokenless and RBAC-free. A unified
   non-mutating launch plan binds all six objects behind one complete preflight
   barrier and fixes their eventual create order without exposing object bodies
-  or credentials. The runner image is digest-pinned, multi-architecture,
-  non-root, SBOM- and provenance-producing behind a protected publisher.
+  or credentials. A single-use composite launcher implements the same order,
+  preserves a redaction-safe partial receipt and has no update, delete, retry
+  or rollback path; live invocation remains a separate critical boundary. The
+  runner image is digest-pinned, multi-architecture, non-root, SBOM- and
+  provenance-producing behind a protected publisher.
 
 ---
 
