@@ -1,0 +1,233 @@
+{
+  "$id": "openkubes-contract-test/v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "test.openkubes.io/v1alpha3"},
+    "kind": {"const": "ClusterIntentFixture"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "namespace"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "namespace": {"type": "string", "minLength": 1},
+        "uid": {"type": "string", "x-openkubes-semantic": false},
+        "resourceVersion": {"type": "string", "x-openkubes-semantic": false},
+        "generation": {"type": "integer", "minimum": 1, "x-openkubes-semantic": false},
+        "creationTimestamp": {"type": "string", "x-openkubes-semantic": false}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kubernetesVersion",
+        "infrastructure",
+        "operatingSystem",
+        "topology",
+        "connectivity",
+        "enablement",
+        "platform",
+        "conditions"
+      ],
+      "properties": {
+        "kubernetesVersion": {"type": "string", "minLength": 1},
+        "infrastructure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "profile", "providerAccess", "controlPlaneEndpoint"],
+          "properties": {
+            "provider": {"const": "kubevirt"},
+            "profile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "identity",
+                "nodeSelector",
+                "cloneTargetStorageClass",
+                "replicaCount",
+                "snapshotClass"
+              ],
+              "properties": {
+                "name": {"const": "ok-infra"},
+                "identity": {"type": "string", "format": "sha256"},
+                "nodeSelector": {"const": "ok-infra"},
+                "cloneTargetStorageClass": {"const": "ok-storage-block"},
+                "replicaCount": {"const": 2},
+                "snapshotClass": {"const": "ok-storage-block-snapshot"}
+              }
+            },
+            "providerAccess": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "managementPlane", "providerPlane", "secretRef", "targetNamespace"],
+              "properties": {
+                "mode": {"const": "external-cluster-secret"},
+                "managementPlane": {"const": "ok-mgmt"},
+                "providerPlane": {"const": "ok-infra"},
+                "secretRef": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["apiVersion", "kind", "name", "namespace"],
+                  "properties": {
+                    "apiVersion": {"const": "v1"},
+                    "kind": {"const": "Secret"},
+                    "name": {"type": "string", "minLength": 1},
+                    "namespace": {"type": "string", "minLength": 1}
+                  }
+                },
+                "targetNamespace": {"type": "string", "minLength": 1}
+              }
+            },
+            "controlPlaneEndpoint": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "serviceType", "addressFamily", "allocationAuthority"],
+              "properties": {
+                "mode": {"const": "provider-allocated"},
+                "serviceType": {"const": "LoadBalancer"},
+                "addressFamily": {"const": "IPv4"},
+                "allocationAuthority": {"const": "CAPK+MetalLB"}
+              }
+            }
+          }
+        },
+        "operatingSystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "distribution",
+            "profile",
+            "version",
+            "architecture",
+            "schematicID",
+            "imageDigest",
+            "identity",
+            "goldenImage"
+          ],
+          "properties": {
+            "distribution": {"const": "ok-linux"},
+            "profile": {"const": "kubevirt"},
+            "version": {"const": "v1.9.6"},
+            "architecture": {"const": "amd64"},
+            "schematicID": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "imageDigest": {"type": "string", "format": "sha256"},
+            "identity": {"type": "string", "format": "sha256"},
+            "goldenImage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["namespace", "claim", "storageClass"],
+              "properties": {
+                "namespace": {"const": "ok-images"},
+                "claim": {"type": "string", "minLength": 1},
+                "storageClass": {"const": "ok-storage-block"}
+              }
+            }
+          }
+        },
+        "topology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["controlPlane", "workers"],
+          "properties": {
+            "controlPlane": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["replicas", "machine"],
+              "properties": {
+                "replicas": {"type": "integer", "minimum": 1},
+                "machine": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["cores", "memory", "disk"],
+                  "properties": {
+                    "cores": {"type": "integer", "minimum": 1},
+                    "memory": {"type": "string", "pattern": "^[1-9][0-9]*Gi$"},
+                    "disk": {"type": "string", "pattern": "^[1-9][0-9]*Gi$"}
+                  }
+                }
+              }
+            },
+            "workers": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["replicas", "machine"],
+              "properties": {
+                "replicas": {"type": "integer", "minimum": 1},
+                "machine": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["cores", "memory", "disk"],
+                  "properties": {
+                    "cores": {"type": "integer", "minimum": 1},
+                    "memory": {"type": "string", "pattern": "^[1-9][0-9]*Gi$"},
+                    "disk": {"type": "string", "pattern": "^[1-9][0-9]*Gi$"}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "connectivity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile", "podCIDR", "serviceCIDR"],
+          "properties": {
+            "profile": {"const": "datacenter-isolated-v1"},
+            "podCIDR": {"type": "string", "format": "ipv4-cidr"},
+            "serviceCIDR": {"type": "string", "format": "ipv4-cidr"},
+            "forbiddenCIDRs": {
+              "type": "array",
+              "items": {"type": "string", "format": "ipv4-cidr"},
+              "uniqueItems": true,
+              "default": []
+            }
+          }
+        },
+        "enablement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile", "revision"],
+          "properties": {
+            "profile": {"type": "string", "minLength": 1},
+            "revision": {"type": "string", "format": "sha256"}
+          }
+        },
+        "platform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile", "revision"],
+          "properties": {
+            "profile": {"type": "string", "minLength": 1},
+            "revision": {"type": "string", "format": "sha256"}
+          }
+        },
+        "conditions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required"],
+          "properties": {
+            "required": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": ["InfrastructureReady", "ControlPlaneAvailable", "NetworkReady", "PlatformReady"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "x-openkubes-semantic": false
+    }
+  }
+}
