@@ -1,0 +1,136 @@
+name: OK-147 bounded runner publisher
+
+"on":
+  workflow_dispatch:
+    inputs:
+      source-sha:
+        description: Exact reviewed lowercase 40-character main commit
+        required: true
+        type: string
+      version:
+        description: Exact semantic runner version
+        required: true
+        default: 0.1.0-dev
+        type: string
+      publication-contract-digest:
+        description: Exact SHA-256 of build/ok147-runner-publication.json
+        required: true
+        type: string
+
+permissions:
+  artifact-metadata: write
+  attestations: write
+  contents: read
+  id-token: write
+  packages: write
+
+concurrency:
+  group: ok147-runner-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    environment: ok-147-runner-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Verify exact publication bindings
+        id: bind
+        env:
+          INPUT_SOURCE_SHA: ${{ inputs.source-sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLICATION_CONTRACT_DIGEST: ${{ inputs.publication-contract-digest }}
+        run: |
+          python3 -c 'import os,re,sys; values=(re.fullmatch(r"[0-9a-f]{40}",os.environ["INPUT_SOURCE_SHA"]),re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?",os.environ["INPUT_VERSION"]),re.fullmatch(r"sha256:[0-9a-f]{64}",os.environ["INPUT_PUBLICATION_CONTRACT_DIGEST"])); sys.exit(0 if all(values) else 2)'
+          test "$INPUT_SOURCE_SHA" = "$GITHUB_SHA"
+          actual_contract_digest="sha256:$(sha256sum build/ok147-runner-publication.json | cut -d ' ' -f1)"
+          test "$actual_contract_digest" = "$INPUT_PUBLICATION_CONTRACT_DIGEST"
+          python3 -c 'import json,sys; d=json.load(open("build/ok147-runner-publication.json")); expected={"format":"ok147-runner-publication/v1","image":"ghcr.io/openkubes/ok-cluster-runner","sourceRef":"refs/heads/main","environment":"ok-147-runner-publish","tagTemplate":"sha-<12>-run-<run-id>","platforms":["linux/amd64","linux/arm64"],"provenance":"mode=max","githubAttestation":True,"pullbackByDigest":True,"networkPublication":"workflow-dispatch-only","receiptRetentionDays":90}; sys.exit(0 if all(d.get(k)==v for k,v in expected.items()) and "@sha256:" in d["sbomGeneratorImage"] else 2)'
+          created="$(git show -s --format=%cI "$GITHUB_SHA")"
+          short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
+          printf 'created=%s\nshort_sha=%s\n' "$created" "$short_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up pinned Buildx action
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the exact multi-platform image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: Containerfile.ok147
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: generator=docker.io/docker/buildkit-syft-scanner:stable-1@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
+          tags: ghcr.io/openkubes/ok-cluster-runner:sha-${{ steps.bind.outputs.short_sha }}-run-${{ github.run_id }}
+          build-args: |
+            VERSION=${{ inputs.version }}
+            REVISION=${{ inputs.source-sha }}
+            CREATED=${{ steps.bind.outputs.created }}
+
+      - name: Attest the exact published index
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-name: ghcr.io/openkubes/ok-cluster-runner
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: true
+
+      - name: Pull back and verify by digest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/openkubes/ok-cluster-runner
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+          VERSION: ${{ inputs.version }}
+          PUBLICATION_CONTRACT_DIGEST: ${{ inputs.publication-contract-digest }}
+        run: |
+          mkdir "$RUNNER_TEMP/attestations"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > "$RUNNER_TEMP/index.json"
+          python3 scripts/verify_ok147_published_image.py list-attestations \
+            --index "$RUNNER_TEMP/index.json" \
+            --expected-digest "$DIGEST" \
+            > "$RUNNER_TEMP/attestation-digests.txt"
+          while IFS= read -r descriptor_digest; do
+            python3 -c 'import re,sys; sys.exit(0 if re.fullmatch(r"sha256:[0-9a-f]{64}",sys.argv[1]) else 2)' "$descriptor_digest"
+            docker buildx imagetools inspect "$IMAGE@$descriptor_digest" --raw \
+              > "$RUNNER_TEMP/attestations/${descriptor_digest#sha256:}.json"
+          done < "$RUNNER_TEMP/attestation-digests.txt"
+          gh attestation verify "oci://$IMAGE@$DIGEST" \
+            --repo openkubes/ok-cluster \
+            --signer-workflow openkubes/ok-cluster/.github/workflows/ok147-runner-publisher.yaml \
+            --source-ref refs/heads/main \
+            --format json > "$RUNNER_TEMP/github-attestation.json"
+          python3 scripts/verify_ok147_published_image.py receipt \
+            --index "$RUNNER_TEMP/index.json" \
+            --attestations-dir "$RUNNER_TEMP/attestations" \
+            --github-attestation "$RUNNER_TEMP/github-attestation.json" \
+            --expected-digest "$DIGEST" \
+            --publication-contract-digest "$PUBLICATION_CONTRACT_DIGEST" \
+            --image "$IMAGE" \
+            --source-sha "$SOURCE_SHA" \
+            --version "$VERSION" \
+            --workflow-run-url "https://github.com/openkubes/ok-cluster/actions/runs/$GITHUB_RUN_ID" \
+            --output "$RUNNER_TEMP/publication-receipt.json"
+
+      - name: Retain the redacted publication receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ok147-runner-publication-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/publication-receipt.json
+          if-no-files-found: error
+          retention-days: 90

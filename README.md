@@ -32,7 +32,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   fail-closed single-use receipt semantics, and an offline-tested durable
   Kubernetes ledger plus short-lived read-only Job preflight boundary; its
   container build is digest-pinned, multi-architecture, non-root, SBOM- and
-  provenance-producing, and remains local/non-publishing
+  provenance-producing, with a separate manual, protected and digest-verifying
+  GHCR publication boundary
 
 ---
 
