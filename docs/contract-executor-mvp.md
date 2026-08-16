@@ -1296,7 +1296,15 @@ ok cluster stage run enablement launch prepare
 
 It requires the complete package, private two-credential, tokenless-runtime
 and installer-candidate inputs and emits only the material and candidate
-receipts. It has no execute flag and cannot contact Kubernetes.
+receipts. The separately gated execution boundary is:
+
+```text
+ok cluster stage run enablement launch execute --execute
+```
+
+It rebuilds the same material and additionally requires the exact prepared
+candidate digest and bounded installer token/CA files. Missing `--execute`, a
+foreign digest or incomplete installer input stops before opening a launcher.
 
 `ok147-enablement-stage-launch-receipt/v1` is produced by a single-use bounded
 launcher that completes all six exact-name GETs before its first POST. It
@@ -1305,7 +1313,7 @@ objects matching exactly; every other partial state stops with zero writes.
 Creation is fixed to runtime, ConfigMap, NetworkPolicy, ledger Secret, writer
 Secret and Job. A failed create preserves the verified prefix and stops without
 retry. The launcher is currently exercised only through a fake Kubernetes API
-and launch execution is not exposed by the CLI.
+in tests; no live Enablement launch is performed by the repository suite.
 
 ## Typed Contract-to-CAPI submission stages
 

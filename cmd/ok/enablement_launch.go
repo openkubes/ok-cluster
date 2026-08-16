@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -29,6 +30,25 @@ var prepareEnablementStageLaunch = func(config runner.EnablementStageLaunchMater
 		Format: "ok147-enablement-stage-launch-preparation/v1", State: "PREPARED",
 		Material: materialReceipt, Candidate: candidateReceipt, MutationAllowed: false,
 	}, nil
+}
+
+var executeEnablementStageLaunch = func(ctx context.Context, config runner.EnablementStageLaunchMaterialConfig, authority runner.KubernetesAuthorityConfig, expectedCandidateDigest string) (runner.EnablementStageLaunchReceipt, error) {
+	material, err := runner.BuildEnablementStageLaunchMaterial(config)
+	if err != nil {
+		return runner.EnablementStageLaunchReceipt{}, err
+	}
+	candidate, err := material.CandidateReceipt()
+	if err != nil {
+		return runner.EnablementStageLaunchReceipt{}, err
+	}
+	authority.AuthorityIdentity = candidate.Authority
+	launcher, err := material.Open(runner.EnablementStageLaunchOpenConfig{
+		Authority: authority, Clock: func() time.Time { return time.Now().UTC() }, ExpectedCandidateDigest: expectedCandidateDigest,
+	})
+	if err != nil {
+		return runner.EnablementStageLaunchReceipt{}, err
+	}
+	return launcher.Launch(ctx)
 }
 
 type enablementLaunchPreparation struct {
@@ -178,4 +198,52 @@ func runClusterStageRunEnablementLaunchPrepare(arguments []string, stdout, stder
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(preparation)
+}
+
+func runClusterStageRunEnablementLaunchExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run enablement launch execute", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	materialFlags := addEnablementLaunchMaterialFlags(flags)
+	execute := flags.Bool("execute", false, "perform the exact single-use six-object Enablement launch")
+	expectedCandidateDigest := flags.String("expected-candidate-digest", "", "exact digest emitted by Enablement launch prepare")
+	installerTokenFile := flags.String("installer-token-file", "", "bounded short-lived management installer token file")
+	installerCAFile := flags.String("installer-ca-file", "", "bounded management installer CA file")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("enablement launch mutation requires explicit --execute")
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--expected-candidate-digest", *expectedCandidateDigest}, {"--installer-token-file", *installerTokenFile}, {"--installer-ca-file", *installerCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*expectedCandidateDigest) {
+		return errors.New("--expected-candidate-digest must be sha256:<64 lowercase hex>")
+	}
+	config, err := materialFlags.config()
+	if err != nil {
+		return err
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, stageLaunchTimeout)
+	defer cancel()
+	receipt, launchErr := executeEnablementStageLaunch(boundedContext, config, runner.KubernetesAuthorityConfig{
+		Endpoint: config.Candidate.AuthorityEndpoint, TokenFile: *installerTokenFile,
+		CAFile: *installerCAFile, CABundleDigest: config.Candidate.CABundleDigest,
+	}, *expectedCandidateDigest)
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return launchErr
 }
