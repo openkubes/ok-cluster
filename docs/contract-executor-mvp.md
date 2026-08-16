@@ -1,8 +1,11 @@
 # OK-147 bounded Contract Executor MVP
 
-The implementation establishes a shared, side-effect-free core for local CLI
-and future in-cluster Job execution. The second checkpoint adds verified
-projection and authorization boundaries without adding Kubernetes access.
+The implementation started with a shared, side-effect-free core for local CLI
+and in-cluster Job execution. The current boundary retains non-mutating
+Contract planning and adds exactly two separately authorized Contract-to-CAPI
+submission stages, a durable ledger, bounded observation components and an
+offline ConfigMap/Job/NetworkPolicy packager. It is still an MVP rather than a
+general lifecycle runner or controller.
 
 ```text
 versioned contract + test schema
@@ -20,7 +23,7 @@ R = SHA-256(canonical contract)
 non-mutating CreateCluster plan
 ```
 
-The command is intentionally dry-run-only:
+The `cluster create` command is intentionally dry-run-only:
 
 ```bash
 go run ./cmd/ok cluster create \
@@ -30,9 +33,9 @@ go run ./cmd/ok cluster create \
 ```
 
 It performs no cluster discovery, credential read, API contact, submission, or
-observation. A command without `--dry-run` fails closed. Submission will be
-added only after the authorization, projection, idempotency, and evidence
-interfaces have executable tests.
+observation. A command without `--dry-run` fails closed. Mutating submission is
+available only through the later, independently authorized staged execution
+path described below; it cannot be activated through `cluster create`.
 
 The emitted `ok147-create-plan/v1` document is an internal, test-only format.
 It is deliberately not shaped as a Kubernetes API object and does not establish
