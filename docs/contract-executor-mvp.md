@@ -953,6 +953,22 @@ tested with fake mutators only: no concrete Kubernetes stage implementation,
 credential resolver, dispatcher, cluster contact or CLI/Job activation exists
 at this checkpoint.
 
+## Typed Contract-to-CAPI submission stages
+
+The existing bounded exact-create submission primitive now has a typed adapter
+for the first two mutating stages only: `provider-prerequisites` selects the
+verified infrastructure plane and `cluster-lifecycle` selects the verified
+management plane. Construction binds one copied plane to its exact staged-plan
+identity and authority; the runtime request cannot switch plane or operation.
+Enablement and later writes are deliberately rejected by this adapter.
+
+A complete, validated submission receipt becomes redaction-safe stage evidence.
+A partial submission becomes durable `STOPPED` evidence, and an all-unchanged
+pass cannot claim first-run stage success because it attempted no mutation.
+Malformed or foreign receipts stop indeterminately rather than manufacturing a
+stage outcome. Tests use a fake plane submitter: Kubernetes credentials and the
+live client are not yet composed into the staged runner path.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
