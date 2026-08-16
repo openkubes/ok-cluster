@@ -429,6 +429,52 @@ not contact a cluster. A later composition adapter must combine this exact CAPI
 evidence with separately verified Network and Platform evidence before the
 aggregate evaluator can produce lifecycle success.
 
+## Deterministic NetworkReady source evaluation
+
+The next offline source boundary translates the NetworkReady semantics proven
+by OK-141 into typed Go inputs. It does not reduce NetworkReady to Helm success
+or DaemonSet availability. `NetworkReady=True` requires one current evaluation
+that correlates all of the following to the exact target Cluster UID and `E`:
+
+```text
+current HCP + exactly one owned current HRP
+        |
+        v
+exact reviewed HCP/HRP semantic digests
+        |
+        v
+all expected Nodes Ready with CiliumIsUp
+        |
+        v
+current Cilium, Envoy and operator rollouts at pinned image digests
+        |
+        v
+one ready Cilium agent Pod per Node
+        |
+        v
+complete host + health-endpoint HTTP/ICMP probe matrix
+```
+
+The functional status rule retains the Cilium v1.19.6 finding: an omitted or
+empty path status is a success candidate, while any non-empty status fails.
+Freshness uses the observed probe interval plus the bounded cache-exposure
+window instead of the disproven fixed 120-second assumption. The evaluated
+snapshot retains only normalized identities, counters, timestamps and status
+categories; no Secret, kubeconfig, token, certificate, endpoint, IP address,
+raw API object, log, or raw probe output is part of the type.
+
+Revision or convergence gaps evaluate to `Unknown`. Current invariant
+violations such as image mismatch, duplicate identity, incomplete functional
+coverage, failed paths, or stale probe evidence evaluate to `False`. The
+result is one `BoundedNetworkEvaluator` source statement carrying exact `E`
+and a deterministic snapshot digest.
+
+This checkpoint contains only the deterministic source evaluator. A later
+Kubernetes collector must obtain these inputs through separately bounded
+management/workload clients and must derive the reviewed network profile from
+a digest-bound input. No command execution, Secret read, cluster contact,
+polling, CLI/Job wiring, or mutation is introduced here.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
