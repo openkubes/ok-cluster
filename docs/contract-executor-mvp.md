@@ -1072,6 +1072,38 @@ concrete artifact/runtime path with local TLS material only. It does not run
 the command against a cluster, create credentials, install the CLI, activate a
 Job, or change live infrastructure.
 
+## Bounded submission-stage Job envelope
+
+The separate `contract-executor-stage-job.yaml.tpl` now materializes the same
+`ok cluster stage run --execute` path for either `provider-prerequisites` or
+`cluster-lifecycle`. The expected stage is independently bound in the Job and
+rechecked against the verified cursor before credentials can be opened. The
+cluster-lifecycle variant adds exactly one code-owned provider-receipt mount;
+callers cannot inject an arbitrary YAML or argument fragment.
+
+Every input ConfigMap key is mounted as an individual read-only `subPath` file.
+This deliberately presents regular files to the bounded loaders instead of the
+symlink layout of a whole projected ConfigMap volume. The ConfigMap item set is
+allowlisted; unrelated keys are not mounted. Ledger and write credentials use
+two distinct Secret names and four separate token/CA `subPath` mounts, with no
+automounted Pod token. Equal token contents are still rejected when the runtime
+opens. Supplying and expiring those short-lived Secrets remains an external
+prerequisite, not authority granted by the Job template.
+
+The non-retrying, single-completion Job runs as non-root with a read-only root
+filesystem, dropped capabilities, explicit resources and an eleven-minute Pod
+deadline around the runner's ten-minute context. Its deny-all NetworkPolicy has
+exactly two egress entries: the literal ledger API IP/port and the literal
+selected-authority API IP/port. DNS names, implicit ports and broad CIDRs fail
+materialization. Provider submission requires an authority endpoint distinct
+from the management ledger, while Cluster lifecycle requires the same
+management endpoint with a distinct credential Secret. The image remains
+SHA-256-bound.
+
+This is an offline rendering checkpoint. It creates neither the immutable
+input ConfigMap nor credential Secrets, ServiceAccount/RBAC, Job or
+NetworkPolicy, and it made no Kubernetes request.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

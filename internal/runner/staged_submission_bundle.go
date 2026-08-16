@@ -24,6 +24,7 @@ type StageReceiptSource struct {
 // paths, digests and expected identities. An explicit empty receipt slice is
 // required for the first stage.
 type SubmissionStageBundleConfig struct {
+	ExpectedStageID        string
 	PlanPath               string
 	PlanExpected           stageplan.Expected
 	Receipts               []StageReceiptSource
@@ -93,6 +94,12 @@ func LoadSubmissionStageBundle(config SubmissionStageBundleConfig) (VerifiedSubm
 	}
 	if decision.State != "NEXT" || !decision.RequiresAuthorization {
 		return VerifiedSubmissionStageBundle{}, errors.New("artifact bundle does not select a mutating next stage")
+	}
+	if config.ExpectedStageID != "provider-prerequisites" && config.ExpectedStageID != "cluster-lifecycle" {
+		return VerifiedSubmissionStageBundle{}, errors.New("expected Contract-to-CAPI stage is required")
+	}
+	if decision.StageID != config.ExpectedStageID {
+		return VerifiedSubmissionStageBundle{}, errors.New("stage cursor differs from the independently expected stage")
 	}
 	artifactName, inputName, err := submissionStageArtifact(decision.StageID)
 	if err != nil {

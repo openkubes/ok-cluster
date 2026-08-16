@@ -150,7 +150,7 @@ func Load(path string, expected Expected) (Binding, error) {
 // Verify validates plan content already held in memory. It is exported so a
 // caller can verify a plan delivered by a bounded non-filesystem transport.
 func Verify(raw []byte, expected Expected) (Binding, error) {
-	if err := validateExpected(expected); err != nil {
+	if err := ValidateExpected(expected); err != nil {
 		return Binding{}, err
 	}
 	var source document
@@ -202,7 +202,9 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 	}, nil
 }
 
-func validateExpected(expected Expected) error {
+// ValidateExpected checks independently supplied Contract, fixture and
+// topology identities without loading or accepting a staged plan.
+func ValidateExpected(expected Expected) error {
 	if expected.ContractIdentity.Name == "" || expected.ContractIdentity.Namespace == "" {
 		return errors.New("expected Contract identity is incomplete")
 	}

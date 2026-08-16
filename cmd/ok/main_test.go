@@ -128,12 +128,13 @@ func TestStageInspectBindsInputsAndEmitsNonMutatingDecision(t *testing.T) {
 		}, nil
 	}
 	arguments := stageInspectArguments()
+	arguments = replaceArgument(arguments, "--expected-stage", "cluster-lifecycle")
 	arguments = append(arguments, "--receipt", "/tmp/provider.json@"+testSHA("7"))
 	var stdout, stderr bytes.Buffer
 	if err := run(arguments, &stdout, &stderr); err != nil {
 		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
 	}
-	if captured.PlanPath != "/tmp/plan.json" || captured.PlanExpected.ContractIdentity.Name != "disposable-ok147" || len(captured.Receipts) != 1 {
+	if captured.ExpectedStageID != "cluster-lifecycle" || captured.PlanPath != "/tmp/plan.json" || captured.PlanExpected.ContractIdentity.Name != "disposable-ok147" || len(captured.Receipts) != 1 {
 		t.Fatalf("unexpected bundle config: %#v", captured)
 	}
 	if captured.Receipts[0].Path != "/tmp/provider.json" || captured.Receipts[0].Digest != testSHA("7") || !captured.EvaluationTime.Equal(time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)) {
@@ -272,6 +273,7 @@ func TestSubmissionStageAuthorityIsDerivedFromVerifiedTopology(t *testing.T) {
 func stageInspectArguments() []string {
 	return []string{
 		"cluster", "stage", "inspect",
+		"--expected-stage", "provider-prerequisites",
 		"--plan", "/tmp/plan.json", "--contract-namespace", "disposable-ok147", "--contract-name", "disposable-ok147",
 		"--intent-revision", testSHA("a"), "--enablement-revision", testSHA("b"), "--platform-revision", testSHA("c"),
 		"--execution-fixture", testSHA("d"), "--infrastructure-authority", "ok-infra", "--management-authority", "ok-mgmt", "--gitops-authority", "ok-shared",
