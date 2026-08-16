@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"time"
 
@@ -20,6 +22,9 @@ import (
 const (
 	StageFormat   = "ok147-stage-authorization/v1"
 	StageAudience = "ok-cluster-staged-executor"
+
+	maximumStageGrantBytes = 128 * 1024
+	maximumPublicKeyBytes  = 4 * 1024
 )
 
 var (
@@ -129,6 +134,21 @@ func BindStageGrant(grant VerifiedStageGrant, plan stageplan.Binding, expectedSt
 		return StageConsumptionBinding{}, errors.New("verified stage grant differs from the selected stage cursor")
 	}
 	return binding, nil
+}
+
+// LoadStage reads one bounded regular grant and trusted public-key file before
+// performing the same in-memory verification as VerifyStage. Source paths are
+// never retained in the verified grant or returned errors.
+func LoadStage(grantPath, publicKeyPath string, plan stageplan.Binding, expectedStageID string, expectedPredecessors []stagereceipt.Verified, at time.Time) (VerifiedStageGrant, error) {
+	raw, err := readStageAuthorizationFile(grantPath, maximumStageGrantBytes, "stage authorization")
+	if err != nil {
+		return VerifiedStageGrant{}, err
+	}
+	publicKeyRaw, err := readStageAuthorizationFile(publicKeyPath, maximumPublicKeyBytes, "stage authorization public key")
+	if err != nil {
+		return VerifiedStageGrant{}, err
+	}
+	return VerifyStage(raw, publicKeyRaw, plan, expectedStageID, expectedPredecessors, at)
 }
 
 // VerifyStage verifies a signature and binds it to one exact mutating stage
@@ -292,4 +312,27 @@ func verifiedStagePredecessors(expected []stagereceipt.Verified, required []stri
 		return nil, "", err
 	}
 	return bindings, digest.SHA256(canonical), nil
+}
+
+func readStageAuthorizationFile(path string, maximum int64, label string) ([]byte, error) {
+	if path == "" {
+		return nil, fmt.Errorf("%s path is required", label)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s", label)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > maximum {
+		return nil, fmt.Errorf("%s metadata is invalid", label)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s", label)
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil || len(raw) == 0 || int64(len(raw)) > maximum {
+		return nil, fmt.Errorf("read bounded %s", label)
+	}
+	return raw, nil
 }

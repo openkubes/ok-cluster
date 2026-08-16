@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +199,56 @@ func TestBindStageGrantRejectsUnverifiedGrantAndReadOnlyStage(t *testing.T) {
 	}
 	if _, err := BindStageGrant(grant, plan, "lifecycle-observation", stagePredecessorReceipts(t, plan, "lifecycle-observation", at)); err == nil {
 		t.Fatal("read-only cursor stage accepted a mutation grant")
+	}
+}
+
+func TestLoadStageReadsBoundedGrantAndTrustedKey(t *testing.T) {
+	plan := stagePlanFixture(t)
+	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	root := t.TempDir()
+	grantPath := filepath.Join(root, "stage-grant.json")
+	keyPath := filepath.Join(root, "stage-authority.pub")
+	if err := os.WriteFile(grantPath, signStage(t, stagePayloadFixture(t, plan, "enablement", at), publicKey, privateKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := LoadStage(grantPath, keyPath, plan, "enablement", stagePredecessorReceipts(t, plan, "enablement", at), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Receipt().StageID != "enablement" || grant.Receipt().State != "VERIFIED" {
+		t.Fatalf("unexpected loaded grant: %#v", grant.Receipt())
+	}
+}
+
+func TestLoadStageRejectsUnsafeFilesWithoutPathDisclosure(t *testing.T) {
+	plan := stagePlanFixture(t)
+	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	root := t.TempDir()
+	grantPath := filepath.Join(root, "stage-grant.json")
+	keyPath := filepath.Join(root, "stage-authority.pub")
+	if err := os.WriteFile(grantPath, signStage(t, stagePayloadFixture(t, plan, "enablement", at), publicKey, privateKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte(base64.StdEncoding.EncodeToString(publicKey)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(root, "grant-link")
+	if err := os.Symlink(grantPath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadStage(linkPath, keyPath, plan, "enablement", stagePredecessorReceipts(t, plan, "enablement", at), at); err == nil || strings.Contains(err.Error(), root) {
+		t.Fatalf("unsafe symlink accepted or disclosed path: %v", err)
+	}
+	if err := os.WriteFile(grantPath, []byte(strings.Repeat("x", maximumStageGrantBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadStage(grantPath, keyPath, plan, "enablement", stagePredecessorReceipts(t, plan, "enablement", at), at); err == nil || strings.Contains(err.Error(), root) {
+		t.Fatalf("oversized grant accepted or disclosed path: %v", err)
 	}
 }
 
