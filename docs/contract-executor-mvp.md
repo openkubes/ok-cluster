@@ -1129,6 +1129,24 @@ request remain external prerequisites. The Job independently reverifies all
 mounted artifacts before it opens credentials, so source races or changed
 inputs stop execution rather than authorizing them.
 
+## Coherent submission-stage package
+
+`BuildSubmissionStagePackage` now composes the immutable input ConfigMap with
+the bounded Job and NetworkPolicy as one deterministic three-object stream.
+The caller supplies only runtime object names, a digest-pinned image and exact
+API endpoint/CIDR identities. Stage ID, Contract identities, evaluation time,
+input ConfigMap identity and receipt-prefix digest are derived from the same
+verified bundle and materialization receipt, so they cannot drift across the
+two artifacts.
+
+The package receipt independently binds the complete stream, ConfigMap and
+Job/NetworkPolicy envelope digests plus the exact object-kind inventory. It is
+explicitly non-mutating (`mutationAllowed: false`): package construction does
+not read credential content, contact Kubernetes, create the externally named
+credential Secrets or apply any of its objects. Reusing a credential Secret
+name as the input ConfigMap identity is rejected in addition to the Job's
+existing distinct-credential and endpoint boundaries.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
