@@ -1927,9 +1927,26 @@ input. Opening reads bounded local files and constructs TLS clients but makes
 no API request; only the resulting private `Run` method can invoke the existing
 crash-safe observation-stage operation.
 
-This bundle remains library-only. No CLI, Job, credential issuance, cluster
-request, persistence call or infrastructure mutation was activated by its
-construction or tests.
+The local CLI can now activate exactly this bundle:
+
+```text
+ok cluster stage observe network --execute
+  + exact plan identity and four-receipt prefix
+  + distinct ledger, management and workload credentials
+  + digest-bound private workload binding and Network profile
+  + bounded poll interval and timeout
+      -> existing NetworkReady source and evaluator
+      -> immutable network-observation receipt
+```
+
+It accepts no grant, renderer, arbitrary target UID, HCP name, command or
+mutation input. `--execute` is mandatory because the command performs bounded
+reads and persists the stage receipt. The outer context is limited to the poll
+timeout plus one minute of completion overhead, and terminal `FAILED` or
+`STOPPED` receipts remain visible even though the command returns an error.
+This checkpoint adds no Job, credential issuance, infrastructure mutation,
+repair or controller loop; command tests inject the execution boundary and
+make no Kubernetes request.
 
 ## Bounded convergence observation polling
 
