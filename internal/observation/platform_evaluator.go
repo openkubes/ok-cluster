@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	PlatformProfileFormat    = "ok147-platform-profile/v1"
-	PlatformSnapshotFormat   = "ok147-platform-snapshot/v1"
-	PlatformCapabilityFormat = "ok147-platform-capability/v1"
+	PlatformProfileFormat             = "ok147-platform-profile/v1"
+	PlatformApplicationSnapshotFormat = "ok147-platform-application-snapshot/v1"
+	PlatformSnapshotFormat            = "ok147-platform-snapshot/v1"
+	PlatformCapabilityFormat          = "ok147-platform-capability/v1"
 )
 
 // PlatformProfile is the immutable, reviewed meaning of P consumed by the
@@ -58,6 +59,16 @@ type PlatformApplicationState struct {
 	AppliedSourceRevision string `json:"appliedSourceRevision"`
 	SyncStatus            string `json:"syncStatus"`
 	HealthStatus          string `json:"healthStatus"`
+}
+
+// PlatformApplicationSnapshot is the capability-execution gate. It contains
+// only exact, normalized Argo Application observations and deliberately no
+// capability assertion.
+type PlatformApplicationSnapshot struct {
+	Format           string                     `json:"format"`
+	ObservedAt       string                     `json:"observedAt"`
+	TargetClusterUID string                     `json:"targetClusterUid"`
+	Applications     []PlatformApplicationState `json:"applications"`
 }
 
 // PlatformCapabilityState is produced by a separately bounded capability
@@ -117,6 +128,49 @@ func EvaluatePlatformSnapshot(policy Policy, profile PlatformProfile, snapshot P
 	return evidence, nil
 }
 
+// EvaluatePlatformApplications determines whether capability execution may
+// begin. A True result is only possible when every exact Application is bound
+// to the current R/P/fixture and its desired revision is Synced and Healthy.
+func EvaluatePlatformApplications(policy Policy, profile PlatformProfile, snapshot PlatformApplicationSnapshot) (Evidence, error) {
+	if err := validatePolicy(policy, true); err != nil {
+		return Evidence{}, err
+	}
+	if err := validatePlatformProfile(policy, profile); err != nil {
+		return Evidence{}, err
+	}
+	if err := validatePlatformApplicationSnapshotShape(snapshot); err != nil {
+		return Evidence{}, err
+	}
+	profileDigest, err := PlatformProfileDigest(profile)
+	if err != nil {
+		return Evidence{}, err
+	}
+	snapshotDigest, err := canonicalDigest(snapshot)
+	if err != nil {
+		return Evidence{}, err
+	}
+	evidenceDigest, err := canonicalDigest(struct {
+		Format         string `json:"format"`
+		ProfileDigest  string `json:"profileDigest"`
+		SnapshotDigest string `json:"snapshotDigest"`
+	}{Format: "ok147-platform-application-gate-binding/v1", ProfileDigest: profileDigest, SnapshotDigest: snapshotDigest})
+	if err != nil {
+		return Evidence{}, err
+	}
+	status, reason, observedRevision := evaluatePlatformApplications(policy, profile, snapshot.TargetClusterUID, snapshot.Applications)
+	evidence := Evidence{
+		Type: "PlatformReady", Source: "BoundedPlatformEvaluator",
+		SourceUID:        "platform-gate-" + evidenceDigest[len("sha256:"):len("sha256:")+32],
+		TargetClusterUID: policy.TargetClusterUID, Status: status, Reason: reason,
+		DesiredRevision: policy.PlatformRevision, ObservedRevision: observedRevision,
+		EvidenceDigest: evidenceDigest,
+	}
+	if err := validateEvidenceShape(evidence); err != nil {
+		return Evidence{}, fmt.Errorf("normalize platform Application gate evidence: %w", err)
+	}
+	return evidence, nil
+}
+
 func ValidatePlatformProfile(profile PlatformProfile) error {
 	if profile.Format != PlatformProfileFormat || !validDigest(profile.IntentRevision) || !validDigest(profile.PlatformRevision) || !validDigest(profile.ExecutionFixture) || profile.TargetIdentityScheme != "capi-cluster-uid/v1" {
 		return errors.New("platform profile format or revision identity is invalid")
@@ -169,7 +223,24 @@ func validatePlatformSnapshotShape(snapshot PlatformSnapshot) error {
 	if _, err := time.Parse(time.RFC3339Nano, snapshot.ObservedAt); err != nil {
 		return errors.New("platform snapshot observation time is invalid")
 	}
-	for _, application := range snapshot.Applications {
+	if err := validatePlatformApplications(snapshot.Applications); err != nil {
+		return err
+	}
+	return ValidatePlatformCapabilityState(snapshot.Capability)
+}
+
+func validatePlatformApplicationSnapshotShape(snapshot PlatformApplicationSnapshot) error {
+	if snapshot.Format != PlatformApplicationSnapshotFormat || snapshot.ObservedAt == "" || !validUID(snapshot.TargetClusterUID) || len(snapshot.Applications) > 20 {
+		return errors.New("platform Application snapshot identity or size is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, snapshot.ObservedAt); err != nil {
+		return errors.New("platform Application snapshot observation time is invalid")
+	}
+	return validatePlatformApplications(snapshot.Applications)
+}
+
+func validatePlatformApplications(applications []PlatformApplicationState) error {
+	for _, application := range applications {
 		if !validDNSLabel(application.Name) || !validUID(application.UID) || application.ResourceVersion == "" || !validDigest(application.SpecDigest) {
 			return errors.New("platform snapshot Application identity is invalid")
 		}
@@ -182,7 +253,7 @@ func validatePlatformSnapshotShape(snapshot PlatformSnapshot) error {
 			return errors.New("platform snapshot Application state is oversized")
 		}
 	}
-	return ValidatePlatformCapabilityState(snapshot.Capability)
+	return nil
 }
 
 // ValidatePlatformCapabilityState checks the complete redaction-safe assertion
@@ -217,7 +288,28 @@ func PlatformCapabilityDigest(capability PlatformCapabilityState) (string, error
 }
 
 func evaluatePlatformState(policy Policy, profile PlatformProfile, snapshot PlatformSnapshot) (string, string, string) {
-	if snapshot.TargetClusterUID != policy.TargetClusterUID {
+	status, reason, observedRevision := evaluatePlatformApplications(policy, profile, snapshot.TargetClusterUID, snapshot.Applications)
+	if status != "True" {
+		return status, reason, observedRevision
+	}
+	capability := snapshot.Capability
+	if capability.TargetClusterUID != policy.TargetClusterUID || capability.IntentRevision != policy.IntentRevision || capability.PlatformRevision != policy.PlatformRevision || capability.ExecutionFixture != profile.ExecutionFixture || capability.ContractDigest != profile.CapabilityContractDigest || capability.ExecutableDigest != profile.CapabilityExecutableDigest {
+		return "Unknown", "RevisionCorrelationUnproven", ""
+	}
+	observedAt, _ := time.Parse(time.RFC3339Nano, snapshot.ObservedAt)
+	capabilityAt, _ := time.Parse(time.RFC3339Nano, capability.ObservedAt)
+	age := observedAt.Sub(capabilityAt)
+	if age < 0 || age > time.Duration(profile.MaximumCapabilityAgeSeconds)*time.Second {
+		return "Unknown", "PlatformCapabilityStale", policy.PlatformRevision
+	}
+	if !capability.Passed {
+		return "False", "PlatformCapabilityFailed", policy.PlatformRevision
+	}
+	return "True", "PlatformReady", policy.PlatformRevision
+}
+
+func evaluatePlatformApplications(policy Policy, profile PlatformProfile, targetClusterUID string, applications []PlatformApplicationState) (string, string, string) {
+	if targetClusterUID != policy.TargetClusterUID {
 		return "Unknown", "RevisionCorrelationUnproven", ""
 	}
 	expected := make(map[string]string, len(profile.RequiredApplications))
@@ -225,7 +317,7 @@ func evaluatePlatformState(policy Policy, profile PlatformProfile, snapshot Plat
 		expected[application.Name] = application.SpecDigest
 	}
 	seen := map[string]struct{}{}
-	for _, application := range snapshot.Applications {
+	for _, application := range applications {
 		specDigest, exists := expected[application.Name]
 		if !exists || application.SpecDigest != specDigest {
 			return "False", "PlatformApplicationIdentityMismatch", ""
@@ -250,20 +342,7 @@ func evaluatePlatformState(policy Policy, profile PlatformProfile, snapshot Plat
 	if len(seen) != len(expected) {
 		return "Unknown", "PlatformApplicationMissing", ""
 	}
-	capability := snapshot.Capability
-	if capability.TargetClusterUID != policy.TargetClusterUID || capability.IntentRevision != policy.IntentRevision || capability.PlatformRevision != policy.PlatformRevision || capability.ExecutionFixture != profile.ExecutionFixture || capability.ContractDigest != profile.CapabilityContractDigest || capability.ExecutableDigest != profile.CapabilityExecutableDigest {
-		return "Unknown", "RevisionCorrelationUnproven", ""
-	}
-	observedAt, _ := time.Parse(time.RFC3339Nano, snapshot.ObservedAt)
-	capabilityAt, _ := time.Parse(time.RFC3339Nano, capability.ObservedAt)
-	age := observedAt.Sub(capabilityAt)
-	if age < 0 || age > time.Duration(profile.MaximumCapabilityAgeSeconds)*time.Second {
-		return "Unknown", "PlatformCapabilityStale", policy.PlatformRevision
-	}
-	if !capability.Passed {
-		return "False", "PlatformCapabilityFailed", policy.PlatformRevision
-	}
-	return "True", "PlatformReady", policy.PlatformRevision
+	return "True", "PlatformApplicationsReady", policy.PlatformRevision
 }
 
 func sortPlatformApplications(applications []PlatformApplicationState) {

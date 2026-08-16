@@ -46,7 +46,18 @@ func NewPlatformSourceCollector(argo PlatformRawGetter, capability PlatformCapab
 }
 
 func (collector *PlatformSourceCollector) Observe(ctx context.Context, policy Policy) (Evidence, error) {
-	snapshot, err := collector.Collect(ctx, policy)
+	applicationSnapshot, err := collector.collectApplications(ctx, policy)
+	if err != nil {
+		return Evidence{}, err
+	}
+	gate, err := EvaluatePlatformApplications(policy, collector.config.Profile, applicationSnapshot)
+	if err != nil {
+		return Evidence{}, err
+	}
+	if gate.Status != "True" {
+		return gate, nil
+	}
+	snapshot, err := collector.collectCapability(ctx, applicationSnapshot)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -57,37 +68,59 @@ func (collector *PlatformSourceCollector) Observe(ctx context.Context, policy Po
 // capability-source read. It has no list, discovery, watch, mutation, sync,
 // retry, repair, target-cluster access or arbitrary-command path.
 func (collector *PlatformSourceCollector) Collect(ctx context.Context, policy Policy) (PlatformSnapshot, error) {
-	if err := validatePolicy(policy, true); err != nil {
+	applicationSnapshot, err := collector.collectApplications(ctx, policy)
+	if err != nil {
 		return PlatformSnapshot{}, err
+	}
+	gate, err := EvaluatePlatformApplications(policy, collector.config.Profile, applicationSnapshot)
+	if err != nil {
+		return PlatformSnapshot{}, err
+	}
+	if gate.Status != "True" {
+		return PlatformSnapshot{}, errors.New("platform Applications are not current; capability execution is closed")
+	}
+	return collector.collectCapability(ctx, applicationSnapshot)
+}
+
+func (collector *PlatformSourceCollector) collectApplications(ctx context.Context, policy Policy) (PlatformApplicationSnapshot, error) {
+	if err := validatePolicy(policy, true); err != nil {
+		return PlatformApplicationSnapshot{}, err
 	}
 	if err := validatePlatformProfile(policy, collector.config.Profile); err != nil {
-		return PlatformSnapshot{}, err
+		return PlatformApplicationSnapshot{}, err
 	}
 	if collector.config.TargetClusterUID != policy.TargetClusterUID {
-		return PlatformSnapshot{}, errors.New("platform collector target differs from the runtime-bound Cluster")
+		return PlatformApplicationSnapshot{}, errors.New("platform collector target differs from the runtime-bound Cluster")
 	}
 	applications := make([]PlatformApplicationState, 0, len(collector.config.Profile.RequiredApplications))
 	for _, expected := range collector.config.Profile.RequiredApplications {
 		path := platformApplicationPath(collector.config.Profile.ArgoNamespace, expected.Name)
 		object, err := getPlatformObject(ctx, collector.argo, path)
 		if err != nil {
-			return PlatformSnapshot{}, fmt.Errorf("collect exact Argo Application: %w", err)
+			return PlatformApplicationSnapshot{}, fmt.Errorf("collect exact Argo Application: %w", err)
 		}
 		application, err := normalizePlatformApplication(object, collector.config.Profile, expected)
 		if err != nil {
-			return PlatformSnapshot{}, err
+			return PlatformApplicationSnapshot{}, err
 		}
 		applications = append(applications, application)
 	}
 	sortPlatformApplications(applications)
+	return PlatformApplicationSnapshot{
+		Format: PlatformApplicationSnapshotFormat, ObservedAt: collector.config.Clock().UTC().Format(time.RFC3339Nano),
+		TargetClusterUID: collector.config.TargetClusterUID, Applications: applications,
+	}, nil
+}
+
+func (collector *PlatformSourceCollector) collectCapability(ctx context.Context, applicationSnapshot PlatformApplicationSnapshot) (PlatformSnapshot, error) {
 	capability, err := collector.capability.Capability(ctx)
 	if err != nil {
 		return PlatformSnapshot{}, errors.New("collect bounded platform capability evidence")
 	}
 	return PlatformSnapshot{
 		Format: PlatformSnapshotFormat, ObservedAt: collector.config.Clock().UTC().Format(time.RFC3339Nano),
-		TargetClusterUID: collector.config.TargetClusterUID,
-		Applications:     applications, Capability: capability,
+		TargetClusterUID: applicationSnapshot.TargetClusterUID,
+		Applications:     applicationSnapshot.Applications, Capability: capability,
 	}, nil
 }
 

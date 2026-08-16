@@ -80,6 +80,51 @@ func TestPlatformCollectorRedactsSourceErrorsAndDoesNotRunCapabilityEarly(t *tes
 	}
 }
 
+func TestPlatformCollectorDoesNotRunCapabilityUntilApplicationsAreCurrent(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]any){
+		"wrong revision": func(object map[string]any) {
+			object["status"].(map[string]any)["sync"].(map[string]any)["revision"] = strings.Repeat("7", 40)
+		},
+		"out of sync": func(object map[string]any) {
+			object["status"].(map[string]any)["sync"].(map[string]any)["status"] = "OutOfSync"
+		},
+		"unhealthy": func(object map[string]any) {
+			object["status"].(map[string]any)["health"].(map[string]any)["status"] = "Degraded"
+		},
+		"wrong correlation": func(object map[string]any) {
+			object["metadata"].(map[string]any)["annotations"].(map[string]any)["openkubes.io/platform-revision"] = "sha256:" + strings.Repeat("9", 64)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			policy, profile, capability, getter := platformCollectorFixture(t)
+			path := platformApplicationPath(profile.ArgoNamespace, profile.RequiredApplications[0].Name)
+			var object map[string]any
+			if err := json.Unmarshal(getter.responses[path], &object); err != nil {
+				t.Fatal(err)
+			}
+			mutate(object)
+			getter.responses[path], _ = json.Marshal(object)
+			source := &fakePlatformCapabilitySource{capability: capability}
+			collector, err := NewPlatformSourceCollector(getter, source, PlatformCollectorConfig{
+				Profile: profile, TargetClusterUID: policy.TargetClusterUID, Clock: func() time.Time { return time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC) },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence, err := collector.Observe(context.Background(), policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if evidence.Status == "True" || source.calls != 0 {
+				t.Fatalf("capability gate opened before Applications were current: evidence=%#v calls=%d", evidence, source.calls)
+			}
+			if _, err := collector.Collect(context.Background(), policy); err == nil || source.calls != 0 {
+				t.Fatalf("full collection bypassed capability gate: err=%v calls=%d", err, source.calls)
+			}
+		})
+	}
+}
+
 func TestPlatformCollectorBindsRuntimeTargetAfterSubmission(t *testing.T) {
 	policy, profile, capability, getter := platformCollectorFixture(t)
 	if _, err := NewPlatformSourceCollector(getter, &fakePlatformCapabilitySource{capability: capability}, PlatformCollectorConfig{Profile: profile, Clock: time.Now}); err == nil {
