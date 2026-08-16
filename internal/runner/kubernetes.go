@@ -151,19 +151,31 @@ func openKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submissi
 // observer for one exact CAPI Cluster. The independently supplied expected
 // authority must match the credential identity bound by the projection plan.
 func OpenKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*observation.CAPILifecycleObserver, error) {
+	observer, _, err := openKubernetesCAPILifecycleObserver(config, expectedAuthority, namespace, name)
+	return observer, err
+}
+
+// openKubernetesCAPILifecycleObserver also returns the bounded token so a
+// stage-level composition can prove that observation and ledger writes use
+// distinct credentials. The token never leaves this package.
+func openKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*observation.CAPILifecycleObserver, string, error) {
 	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.TokenFile == "" || config.CAFile == "" {
-		return nil, errors.New("Kubernetes CAPI observer endpoint, identity, token file, and CA file are required")
+		return nil, "", errors.New("Kubernetes CAPI observer endpoint, identity, token file, and CA file are required")
 	}
 	if expectedAuthority == "" || config.AuthorityIdentity != expectedAuthority {
-		return nil, errors.New("Kubernetes CAPI observer authority differs from the verified management plane")
+		return nil, "", errors.New("Kubernetes CAPI observer authority differs from the verified management plane")
 	}
 	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return observation.NewCAPILifecycleObserver(observation.CAPILifecycleObserverConfig{
+	observer, err := observation.NewCAPILifecycleObserver(observation.CAPILifecycleObserverConfig{
 		Endpoint: config.Endpoint, BearerToken: token, Namespace: namespace, Name: name, Client: client,
 	})
+	if err != nil {
+		return nil, "", err
+	}
+	return observer, token, nil
 }
 
 // OpenKubernetesNetworkSourceCollector materializes two isolated TLS clients:

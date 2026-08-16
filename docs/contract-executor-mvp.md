@@ -984,6 +984,21 @@ read-only stage into a controller loop.
 This remains library-only composition. No CLI or Job activates the observer,
 and this checkpoint performs no Kubernetes request or infrastructure change.
 
+The next composition boundary retains the reverified plan and cursor in a
+private lifecycle-observation bundle. It rejects any prefix that selects a
+different stage or whose lifecycle predecessor lacks the durable target UID
+digest. Opening the bundle reads the ledger and management-observer credential
+files exactly once, requires distinct token values and binds the observer's
+namespace, name and authority to the plan rather than caller input. Opening
+constructs TLS clients but performs no Kubernetes request.
+
+The resulting value exposes only one bounded `Run` method. Callers cannot
+replace its plan, cursor, predecessor, source implementation or credential
+after verification. An unverified zero value cannot expose a decision, open
+credentials or run. This provides the environment-neutral boundary needed by
+a later local CLI or short-lived Job without activating either one in this
+checkpoint.
+
 ## Cursor-to-grant binding
 
 Selecting a next stage is not claim authority. Before a later runner may claim

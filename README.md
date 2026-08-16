@@ -65,7 +65,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   `lifecycle-observation` operation derives its target only from that receipt,
   performs bounded read-only CAPI polling and persists one immutable stage
   receipt. A restarted process reuses the persisted receipt without observing
-  again; a same-name replacement Cluster fails the UID-digest boundary.
+  again; a same-name replacement Cluster fails the UID-digest boundary. A
+  verified lifecycle-observation bundle now retains the plan and receipt
+  cursor privately, opens distinct ledger and management-observer credentials
+  exactly once and exposes only the bounded stage `Run` method. This bundle is
+  not yet activated by a CLI command or Job.
 
 ---
 

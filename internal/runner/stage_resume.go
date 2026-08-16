@@ -21,26 +21,34 @@ type StageResumeConfig struct {
 // safe cursor decision. It performs no credential read, ledger access,
 // Kubernetes request, mutation or stage execution.
 func InspectStageResume(config StageResumeConfig) (stagecursor.Decision, error) {
+	_, cursor, err := loadStageResume(config)
+	if err != nil {
+		return stagecursor.Decision{}, err
+	}
+	return cursor.Decision()
+}
+
+func loadStageResume(config StageResumeConfig) (stageplan.Binding, stagecursor.Cursor, error) {
 	if config.Receipts == nil {
-		return stagecursor.Decision{}, errors.New("stage receipt prefix must be explicit")
+		return stageplan.Binding{}, stagecursor.Cursor{}, errors.New("stage receipt prefix must be explicit")
 	}
 	plan, err := stageplan.Load(config.PlanPath, config.PlanExpected)
 	if err != nil {
-		return stagecursor.Decision{}, err
+		return stageplan.Binding{}, stagecursor.Cursor{}, err
 	}
 	prefix := make([]stagereceipt.Verified, 0, len(config.Receipts))
 	predecessors := []stagereceipt.Verified{}
 	for _, source := range config.Receipts {
 		verified, err := stagereceipt.Load(source.Path, source.Digest, plan, predecessors)
 		if err != nil {
-			return stagecursor.Decision{}, err
+			return stageplan.Binding{}, stagecursor.Cursor{}, err
 		}
 		prefix = append(prefix, verified)
 		predecessors = []stagereceipt.Verified{verified}
 	}
 	cursor, err := stagecursor.Evaluate(plan, prefix)
 	if err != nil {
-		return stagecursor.Decision{}, err
+		return stageplan.Binding{}, stagecursor.Cursor{}, err
 	}
-	return cursor.Decision()
+	return plan, cursor, nil
 }
