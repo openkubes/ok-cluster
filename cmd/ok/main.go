@@ -52,6 +52,19 @@ var materializeSubmissionStagePackage = func(config runner.SubmissionStagePackag
 	return raw, receipt, err
 }
 
+var materializeLifecycleObservationStagePackage = func(config runner.LifecycleObservationStagePackageConfig) ([]byte, runner.LifecycleObservationStagePackageReceipt, error) {
+	packaged, err := runner.BuildLifecycleObservationStagePackage(config)
+	if err != nil {
+		return nil, runner.LifecycleObservationStagePackageReceipt{}, err
+	}
+	raw, err := packaged.Bytes()
+	if err != nil {
+		return nil, runner.LifecycleObservationStagePackageReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	return raw, receipt, err
+}
+
 var prepareSubmissionStageLaunch = func(config runner.SubmissionStageLaunchMaterialConfig) (stageLaunchPreparation, error) {
 	material, err := runner.BuildSubmissionStageLaunchMaterial(config)
 	if err != nil {
@@ -392,6 +405,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "resume" {
 		return runClusterStageResume(arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "lifecycle" && arguments[4] == "package" {
+		return runClusterStageObserveLifecyclePackage(arguments[5:], stdout, stderr)
+	}
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "lifecycle" {
 		return runClusterStageObserveLifecycle(ctx, arguments[4:], stdout, stderr)
 	}
@@ -407,7 +423,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe lifecycle package ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -647,6 +663,70 @@ func runClusterStageObserveLifecycle(ctx context.Context, arguments []string, st
 		}
 	}
 	return runErr
+}
+
+func runClusterStageObserveLifecyclePackage(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage observe lifecycle package", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	jobTemplate := flags.String("job-template", "", "path to the bounded lifecycle-observation Job template")
+	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	output := flags.String("output", "", "new local file for the verified ConfigMap/Job/NetworkPolicy package")
+	runID := flags.String("run-id", "", "bounded OK-147 observation Job identity")
+	imageDigest := flags.String("image", "", "digest-pinned ok image")
+	inputConfigMap := flags.String("input-configmap", "", "immutable observation input ConfigMap name")
+	ledgerAPIURL := flags.String("ledger-api-url", "", "exact management-ledger HTTPS IP endpoint")
+	ledgerAPICIDR := flags.String("ledger-api-cidr", "", "single-address management-ledger CIDR")
+	ledgerCredentialSecret := flags.String("ledger-credential-secret", "", "externally materialized ledger credential Secret name")
+	managementAPIURL := flags.String("management-api-url", "", "exact management-observer HTTPS IP endpoint")
+	managementAPICIDR := flags.String("management-api-cidr", "", "single-address management-observer CIDR")
+	managementCredentialSecret := flags.String("management-credential-secret", "", "externally materialized read-only management credential Secret name")
+	pollInterval := flags.Duration("poll-interval", 0, "bounded interval between verified Unknown observations")
+	pollTimeout := flags.Duration("poll-timeout", 0, "maximum bounded lifecycle observation duration")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	bundleConfig, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--job-template", *jobTemplate}, {"--job-template-digest", *jobTemplateDigest}, {"--output", *output},
+		{"--run-id", *runID}, {"--image", *imageDigest}, {"--input-configmap", *inputConfigMap},
+		{"--ledger-api-url", *ledgerAPIURL}, {"--ledger-api-cidr", *ledgerAPICIDR}, {"--ledger-credential-secret", *ledgerCredentialSecret},
+		{"--management-api-url", *managementAPIURL}, {"--management-api-cidr", *managementAPICIDR}, {"--management-credential-secret", *managementCredentialSecret},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if *pollInterval < time.Second || *pollInterval > 5*time.Minute || *pollTimeout < *pollInterval || *pollTimeout > 6*time.Hour {
+		return errors.New("--poll-interval and --poll-timeout must define a valid bounded observation of at most 6h")
+	}
+	template, err := readBoundedLocalFile(*jobTemplate, 1024*1024)
+	if err != nil {
+		return fmt.Errorf("read lifecycle observation Job template: %w", err)
+	}
+	raw, receipt, err := materializeLifecycleObservationStagePackage(runner.LifecycleObservationStagePackageConfig{
+		Bundle: bundleConfig, JobTemplate: template, JobTemplateDigest: *jobTemplateDigest,
+		RunID: *runID, ImageDigest: *imageDigest, InputConfigMap: *inputConfigMap,
+		LedgerAPIURL: *ledgerAPIURL, LedgerAPICIDR: *ledgerAPICIDR, LedgerCredentialSecret: *ledgerCredentialSecret,
+		ManagementAPIURL: *managementAPIURL, ManagementAPICIDR: *managementAPICIDR, ManagementCredentialSecret: *managementCredentialSecret,
+		PollInterval: *pollInterval, PollTimeout: *pollTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeNewLocalFile(*output, raw); err != nil {
+		return fmt.Errorf("write lifecycle observation stage package: %w", err)
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(receipt)
 }
 
 func runClusterStageRun(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {

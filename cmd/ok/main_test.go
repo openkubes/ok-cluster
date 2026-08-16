@@ -348,6 +348,81 @@ func TestStageObserveLifecycleEmitsPersistedTerminalReceipt(t *testing.T) {
 	}
 }
 
+func TestStageObserveLifecyclePackageWritesVerifiedOfflineArtifact(t *testing.T) {
+	previous := materializeLifecycleObservationStagePackage
+	defer func() { materializeLifecycleObservationStagePackage = previous }()
+	var captured runner.LifecycleObservationStagePackageConfig
+	materializeLifecycleObservationStagePackage = func(config runner.LifecycleObservationStagePackageConfig) ([]byte, runner.LifecycleObservationStagePackageReceipt, error) {
+		captured = config
+		return []byte("verified-observation-package\n"), runner.LifecycleObservationStagePackageReceipt{
+			Format: runner.LifecycleObservationStagePackageFormat, State: "VERIFIED", StageID: "lifecycle-observation",
+			PackageDigest: testSHA("1"), InputConfigMapDigest: testSHA("2"), ReceiptPrefixDigest: testSHA("3"),
+			JobTemplateDigest: testSHA("4"), JobEnvelopeDigest: testSHA("5"), ObjectKinds: []string{"ConfigMap", "NetworkPolicy", "Job"},
+			AuthorizationState: "NOT_REQUIRED", MutationAllowed: false,
+		}, nil
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "observation-job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-observation-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "observation-package.yaml")
+	arguments := stageObserveLifecyclePackageArguments(template, output)
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Bundle.PlanPath != "/tmp/plan.json" || len(captured.Bundle.Receipts) != 2 || captured.RunID != "ok147-lifecycle-observation-01" || captured.PollTimeout != 5*time.Minute {
+		t.Fatalf("unexpected observation package config: %#v", captured)
+	}
+	if string(captured.JobTemplate) != "bounded-observation-template" || captured.JobTemplateDigest != digest.SHA256([]byte("bounded-observation-template")) || captured.LedgerCredentialSecret == captured.ManagementCredentialSecret {
+		t.Fatalf("template or credentials were not bound: %#v", captured)
+	}
+	written, err := os.ReadFile(output)
+	if err != nil || string(written) != "verified-observation-package\n" {
+		t.Fatalf("unexpected observation package: %q %v", written, err)
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("observation package mode is not 0600: %v %v", info, err)
+	}
+	var receipt runner.LifecycleObservationStagePackageReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.AuthorizationState != "NOT_REQUIRED" || receipt.MutationAllowed {
+		t.Fatalf("unsafe observation package receipt: %#v", receipt)
+	}
+	stdout.Reset()
+	if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+		t.Fatal("existing observation package was overwritten")
+	}
+}
+
+func TestStageObserveLifecyclePackageRejectsIncompleteInputs(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "observation-job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-observation-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "observation-package.yaml")
+	valid := stageObserveLifecyclePackageArguments(template, output)
+	for name, arguments := range map[string][]string{
+		"execute":                   append(append([]string{}, valid...), "--execute"),
+		"missing template digest":   removeArgumentWithValue(valid, "--job-template-digest"),
+		"missing management secret": removeArgumentWithValue(valid, "--management-credential-secret"),
+		"missing poll timeout":      removeArgumentWithValue(valid, "--poll-timeout"),
+		"positional":                append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe observation package input was accepted: %v %s", err, stdout.String())
+			}
+		})
+	}
+}
+
 func TestStageRunRequiresExplicitExecutionAndBindsOneRuntime(t *testing.T) {
 	previous := executeSubmissionStage
 	defer func() { executeSubmissionStage = previous }()
@@ -734,6 +809,23 @@ func stageObserveLifecycleArguments() []string {
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
 		"--management-api-endpoint", "https://192.0.2.12:6443", "--management-token-file", "/tmp/management-observer-token", "--management-ca-file", "/tmp/management-ca",
+		"--poll-interval", "15s", "--poll-timeout", "5m",
+	)
+}
+
+func stageObserveLifecyclePackageArguments(template, output string) []string {
+	arguments := stageObserveLifecycleArguments()
+	arguments = removeArgument(arguments, "--execute")
+	for _, name := range []string{"--ledger-api-endpoint", "--ledger-token-file", "--ledger-ca-file", "--management-api-endpoint", "--management-token-file", "--management-ca-file", "--poll-interval", "--poll-timeout"} {
+		arguments = removeArgumentWithValue(arguments, name)
+	}
+	arguments = append(arguments[:4], append([]string{"package"}, arguments[4:]...)...)
+	return append(arguments,
+		"--job-template", template, "--job-template-digest", digest.SHA256([]byte("bounded-observation-template")),
+		"--output", output, "--run-id", "ok147-lifecycle-observation-01",
+		"--image", "ghcr.io/openkubes/ok-cluster@"+testSHA("a"), "--input-configmap", "ok147-lifecycle-observation-input",
+		"--ledger-api-url", "https://192.0.2.12:6443", "--ledger-api-cidr", "192.0.2.12/32", "--ledger-credential-secret", "ok147-ledger-observation",
+		"--management-api-url", "https://192.0.2.12:6443", "--management-api-cidr", "192.0.2.12/32", "--management-credential-secret", "ok147-management-observer",
 		"--poll-interval", "15s", "--poll-timeout", "5m",
 	)
 }
