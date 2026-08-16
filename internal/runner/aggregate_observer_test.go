@@ -67,9 +67,74 @@ func TestKubernetesAggregateObserverBindsRuntimeTargetBeforeOpeningSources(t *te
 	if err != nil || receipt.Ready != "True" {
 		t.Fatalf("unexpected aggregate result: receipt=%#v err=%v", receipt, err)
 	}
-	expected := []string{"open-capi", "resolve-workload", "open-network", "resolve-capability", "open-platform", "collect-capi", "observe-network", "observe-platform"}
+	expected := []string{"open-capi", "collect-capi", "resolve-workload", "open-network", "observe-network", "resolve-capability", "open-platform", "observe-platform"}
 	if strings.Join(order, ",") != strings.Join(expected, ",") {
 		t.Fatalf("unexpected lazy source order: %v", order)
+	}
+}
+
+func TestKubernetesAggregateObserverDefersRuntimeResolversUntilTheirStage(t *testing.T) {
+	policy, config := aggregateRunnerFixture()
+	workloadCalls, capabilityCalls := 0, 0
+	config.WorkloadAuthority = WorkloadAuthorityResolverFunc(func(context.Context, observation.Policy) (KubernetesAuthorityConfig, error) {
+		workloadCalls++
+		return KubernetesAuthorityConfig{}, errors.New("must remain closed")
+	})
+	config.PlatformCapability = PlatformCapabilityResolverFunc(func(context.Context, observation.Policy, observation.PlatformProfile) (observation.PlatformCapabilitySource, error) {
+		capabilityCalls++
+		return nil, errors.New("must remain closed")
+	})
+	observer, err := OpenKubernetesAggregateObserver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := aggregateRunnerEvidence(policy, "InfrastructureReady")
+	pending.Status = "Unknown"
+	pending.Reason = "Provisioning"
+	observer.openers.capi = func(KubernetesAuthorityConfig, string, string, string) (observation.CAPIEvidenceSource, error) {
+		return &aggregateRunnerCAPISource{policy: policy, evidence: []observation.Evidence{pending, aggregateRunnerEvidence(policy, "ControlPlaneAvailable")}}, nil
+	}
+	result, err := observer.Observe(context.Background(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := result.Receipt()
+	if receipt.Ready != "Unknown" || workloadCalls != 0 || capabilityCalls != 0 {
+		t.Fatalf("runtime authority opened before CAPI convergence: receipt=%#v calls=%d/%d", receipt, workloadCalls, capabilityCalls)
+	}
+}
+
+func TestKubernetesAggregateObserverDefersPlatformResolverUntilNetworkReady(t *testing.T) {
+	policy, config := aggregateRunnerFixture()
+	workloadCalls, capabilityCalls := 0, 0
+	config.WorkloadAuthority = WorkloadAuthorityResolverFunc(func(_ context.Context, received observation.Policy) (KubernetesAuthorityConfig, error) {
+		workloadCalls++
+		return KubernetesAuthorityConfig{AuthorityIdentity: received.TargetClusterUID}, nil
+	})
+	config.PlatformCapability = PlatformCapabilityResolverFunc(func(context.Context, observation.Policy, observation.PlatformProfile) (observation.PlatformCapabilitySource, error) {
+		capabilityCalls++
+		return nil, errors.New("must remain closed")
+	})
+	observer, err := OpenKubernetesAggregateObserver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.openers.capi = func(KubernetesAuthorityConfig, string, string, string) (observation.CAPIEvidenceSource, error) {
+		return &aggregateRunnerCAPISource{policy: policy}, nil
+	}
+	observer.openers.network = func(KubernetesNetworkObserverConfig) (observation.NetworkEvidenceSource, error) {
+		pending := aggregateRunnerEvidence(policy, "NetworkReady")
+		pending.Status = "Unknown"
+		pending.Reason = "ProbePending"
+		return &aggregateRunnerNetworkSource{policy: policy, evidence: &pending}, nil
+	}
+	result, err := observer.Observe(context.Background(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := result.Receipt()
+	if receipt.Ready != "Unknown" || workloadCalls != 1 || capabilityCalls != 0 {
+		t.Fatalf("Platform authority opened before NetworkReady: receipt=%#v calls=%d/%d", receipt, workloadCalls, capabilityCalls)
 	}
 }
 
@@ -220,25 +285,33 @@ func aggregateRunnerFixture() (observation.Policy, KubernetesAggregateObserverCo
 }
 
 type aggregateRunnerCAPISource struct {
-	policy observation.Policy
-	order  *[]string
+	policy   observation.Policy
+	order    *[]string
+	evidence []observation.Evidence
 }
 
 func (source *aggregateRunnerCAPISource) Collect(context.Context, observation.Policy) ([]observation.Evidence, error) {
 	if source.order != nil {
 		*source.order = append(*source.order, "collect-capi")
 	}
+	if source.evidence != nil {
+		return source.evidence, nil
+	}
 	return []observation.Evidence{aggregateRunnerEvidence(source.policy, "InfrastructureReady"), aggregateRunnerEvidence(source.policy, "ControlPlaneAvailable")}, nil
 }
 
 type aggregateRunnerNetworkSource struct {
-	policy observation.Policy
-	order  *[]string
+	policy   observation.Policy
+	order    *[]string
+	evidence *observation.Evidence
 }
 
 func (source *aggregateRunnerNetworkSource) Observe(context.Context, observation.Policy, observation.NetworkProfile) (observation.Evidence, error) {
 	if source.order != nil {
 		*source.order = append(*source.order, "observe-network")
+	}
+	if source.evidence != nil {
+		return *source.evidence, nil
 	}
 	return aggregateRunnerEvidence(source.policy, "NetworkReady"), nil
 }
