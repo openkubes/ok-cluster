@@ -1301,6 +1301,27 @@ authorize a launch. The global barrier and fixed order are executable contract
 evidence for the next composition boundary; tests still use only in-memory
 objects and transports.
 
+`KubernetesSubmissionStageLauncher` implements that next composition boundary
+as one single-use operation. It opens one separately supplied short-lived
+management installer credential, rechecks that this credential is distinct
+from both Job credentials, and rejects launch when either Job credential has
+less than 15 minutes remaining. All six exact GETs then run before the first
+POST. Secret GETs request only `PartialObjectMetadata`; the other objects never
+fall back to list, watch or discovery.
+
+Only an exactly matching existing tokenless ServiceAccount may be reused. The
+other five objects must all be absent. After the barrier, the launcher creates
+the absent ServiceAccount, both immutable Secrets and the ConfigMap,
+NetworkPolicy and Job in fixed order. Every create response must contain the
+exact desired fields and bounded runtime identity. Failure stops without
+retry, rollback or cleanup and retains only a redaction-safe verified prefix;
+transport-ambiguous results remain explicitly unknown.
+
+The launcher has no update, patch, apply, delete, list, watch, discovery,
+adoption or retry API. This checkpoint exercises it only with an in-memory
+Kubernetes transport. Opening live credentials or invoking it against a
+cluster remains a separate, critical execution decision.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
