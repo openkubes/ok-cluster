@@ -102,17 +102,33 @@ func TestStageCompletionIsBoundImmutableAndIdempotent(t *testing.T) {
 func verifiedStageGrant(t *testing.T, at time.Time) authorization.VerifiedStageGrant {
 	t.Helper()
 	plan := verifiedStagePlan(t)
-	identity := plan.ContractIdentity
-	stage, stageDigest, err := plan.Stage("provider-prerequisites")
+	return verifiedStageGrantFor(t, plan, "provider-prerequisites", []stagereceipt.Verified{}, at)
+}
+
+func verifiedStageGrantFor(t *testing.T, plan stageplan.Binding, stageID string, predecessors []stagereceipt.Verified, at time.Time) authorization.VerifiedStageGrant {
+	t.Helper()
+	stage, stageDigest, err := plan.Stage(stageID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	signedPredecessors := make([]authorization.StagePredecessor, len(predecessors))
+	for index, predecessor := range predecessors {
+		receipt, err := predecessor.Receipt()
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiptDigest, err := predecessor.Digest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		signedPredecessors[index] = authorization.StagePredecessor{StageID: receipt.StageID, OutcomeDigest: receiptDigest}
+	}
 	payload := authorization.StagePayload{
 		Audience: authorization.StageAudience, GrantID: "ok147-stage-ledger-20260816-01", Decision: "ALLOW",
-		PlanDigest: plan.PlanDigest, ContractIdentity: identity, ContractRevision: plan.IntentRevision,
+		PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity, ContractRevision: plan.IntentRevision,
 		EnablementRevision: plan.EnablementRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
 		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Operation: stage.GrantOperation, Authority: stage.Authority,
-		Predecessors: []authorization.StagePredecessor{},
+		Predecessors: signedPredecessors,
 		NotBefore:    at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
 	}
 	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
@@ -121,7 +137,7 @@ func verifiedStageGrant(t *testing.T, at time.Time) authorization.VerifiedStageG
 		"format": authorization.StageFormat, "payload": payload,
 		"signature": map[string]any{"algorithm": "Ed25519", "keyId": digest.SHA256(publicKey), "value": base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, signed))},
 	})
-	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, []stagereceipt.Verified{}, at)
+	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, predecessors, at)
 	if err != nil {
 		t.Fatal(err)
 	}
