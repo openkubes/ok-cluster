@@ -771,6 +771,28 @@ transport, fixed synthetic objects, bounded service access and credential
 materialization remain separate follow-ups. In particular, the existing Bash
 contract test is not embedded or executed by the runner.
 
+## Deterministic observability synthetic fixture
+
+The first concrete Kubernetes-facing input is now generated internally from
+the bound capability run. It contains exactly four namespaced objects in fixed
+order: a Pushgateway Deployment, its Service, a ServiceMonitor and a one-shot
+log-emitter Pod. Callers cannot supply raw manifests, API versions, kinds,
+names, labels, commands or REST paths. The only external content inputs are the
+two container images, and both must be complete OCI references pinned by a
+SHA-256 digest.
+
+Every object carries R, P, execution-fixture, capability-contract and
+capability-executable annotations plus the deterministic run label. Object
+JSON, object digests, exact collection/object paths and membership are folded
+into a separate synthetic-fixture digest. The Pod executes only
+`/bin/echo <derived-marker>`; neither fixture contains a shell or service
+account token. Pod/container security contexts, resource bounds and the
+Prometheus release selector are fixed by the implementation.
+
+This checkpoint still performs no Kubernetes request. Exact absence/create,
+UID/resourceVersion observation, service-proxy checks and guarded cleanup will
+consume this generated fixture in later transport checkpoints.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
