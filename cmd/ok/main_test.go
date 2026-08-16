@@ -7,6 +7,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/openkubes/ok-cluster/internal/runner"
+	"github.com/openkubes/ok-cluster/internal/stagecursor"
 )
 
 func fixturePath(t *testing.T, name string) string {
@@ -101,3 +105,83 @@ func TestArbitraryCommandsAreAbsent(t *testing.T) {
 		}
 	}
 }
+
+func TestStageInspectBindsInputsAndEmitsNonMutatingDecision(t *testing.T) {
+	previous := inspectSubmissionStage
+	defer func() { inspectSubmissionStage = previous }()
+	var captured runner.SubmissionStageBundleConfig
+	inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (stageInspection, error) {
+		captured = config
+		return stageInspection{
+			Format: "ok147-stage-inspection/v1",
+			Decision: stagecursor.Decision{
+				Format: stagecursor.DecisionFormat, State: "NEXT", PlanDigest: testSHA("9"), StageID: "cluster-lifecycle",
+				StageOrder: 2, StageDigest: testSHA("8"), Kind: "Submission", Authority: "management",
+				Operation: "CreateCluster", RequiresAuthorization: true, Predecessors: []stagecursor.Predecessor{},
+			},
+			AuthorizationState: "VERIFIED", MutationAllowed: false,
+		}, nil
+	}
+	arguments := stageInspectArguments()
+	arguments = append(arguments, "--receipt", "/tmp/provider.json@"+testSHA("7"))
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.PlanPath != "/tmp/plan.json" || captured.PlanExpected.ContractIdentity.Name != "disposable-ok147" || len(captured.Receipts) != 1 {
+		t.Fatalf("unexpected bundle config: %#v", captured)
+	}
+	if captured.Receipts[0].Path != "/tmp/provider.json" || captured.Receipts[0].Digest != testSHA("7") || !captured.EvaluationTime.Equal(time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)) {
+		t.Fatalf("unexpected receipt/time binding: %#v %s", captured.Receipts, captured.EvaluationTime)
+	}
+	var result stageInspection
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != "ok147-stage-inspection/v1" || result.Decision.StageID != "cluster-lifecycle" || result.AuthorizationState != "VERIFIED" || result.MutationAllowed {
+		t.Fatalf("unsafe inspection output: %#v", result)
+	}
+}
+
+func TestStageInspectRequiresCompleteInputsAndStrictReceipts(t *testing.T) {
+	for name, arguments := range map[string][]string{
+		"missing bindings": {"cluster", "stage", "inspect", "--plan", "/tmp/plan.json"},
+		"positional":       append(stageInspectArguments(), "unexpected"),
+		"bad receipt":      append(stageInspectArguments(), "--receipt", "/tmp/provider.json"),
+		"bad time":         replaceArgument(stageInspectArguments(), "--evaluation-time", "now"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil {
+				t.Fatal("incomplete or ambiguous stage inspection was accepted")
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("unexpected stdout: %s", stdout.String())
+			}
+		})
+	}
+}
+
+func stageInspectArguments() []string {
+	return []string{
+		"cluster", "stage", "inspect",
+		"--plan", "/tmp/plan.json", "--contract-namespace", "disposable-ok147", "--contract-name", "disposable-ok147",
+		"--intent-revision", testSHA("a"), "--enablement-revision", testSHA("b"), "--platform-revision", testSHA("c"),
+		"--execution-fixture", testSHA("d"), "--infrastructure-authority", "ok-infra", "--management-authority", "ok-mgmt", "--gitops-authority", "ok-shared",
+		"--grant", "/tmp/grant.json", "--grant-key", "/tmp/grant.pub", "--projection-manifest", "/tmp/projection.json",
+		"--evaluation-time", "2026-08-16T14:00:00Z",
+	}
+}
+
+func replaceArgument(arguments []string, name, value string) []string {
+	result := append([]string(nil), arguments...)
+	for index := range result {
+		if result[index] == name && index+1 < len(result) {
+			result[index+1] = value
+			return result
+		}
+	}
+	return result
+}
+
+func testSHA(value string) string { return "sha256:" + strings.Repeat(value, 64) }
