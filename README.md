@@ -100,7 +100,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   expiry-bound candidate then binds that plan to one exact management API,
   CA, installer-token identity and independent credential evidence. These
   public and private inputs can now be sealed as one verified launch material;
-  it deliberately has no open or execute method yet.
+  it deliberately has no open or execute method yet. A single-use Enablement
+  launcher now proves the six-GET global barrier and fixed six-POST create-only
+  sequence against a fake API; it is not yet reachable from the CLI or sealed
+  launch material.
 
 ---
 
