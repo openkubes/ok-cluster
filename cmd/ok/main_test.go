@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/runner"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
@@ -162,6 +164,36 @@ func TestStageInspectRequiresCompleteInputsAndStrictReceipts(t *testing.T) {
 				t.Fatalf("unexpected stdout: %s", stdout.String())
 			}
 		})
+	}
+}
+
+func TestStageInspectLoadsDigestBoundReceiptPrefix(t *testing.T) {
+	previous := inspectSubmissionStage
+	defer func() { inspectSubmissionStage = previous }()
+	var captured runner.SubmissionStageBundleConfig
+	inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (stageInspection, error) {
+		captured = config
+		return stageInspection{Format: "ok147-stage-inspection/v1", Decision: stagecursor.Decision{Format: stagecursor.DecisionFormat, State: "NEXT"}, AuthorizationState: "VERIFIED"}, nil
+	}
+	root := t.TempDir()
+	raw := []byte(`{"format":"` + runner.StageReceiptPrefixFormat + `","receipts":[{"file":"provider.json","digest":"` + testSHA("7") + `"}]}`)
+	prefixPath := filepath.Join(root, "prefix.json")
+	if err := os.WriteFile(prefixPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	arguments := append(stageInspectArguments(), "--receipt-prefix", prefixPath, "--receipt-prefix-digest", digest.SHA256(raw))
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if len(captured.Receipts) != 1 || captured.Receipts[0].Path != filepath.Join(root, "provider.json") || captured.Receipts[0].Digest != testSHA("7") {
+		t.Fatalf("receipt-prefix manifest was not bound: %#v", captured.Receipts)
+	}
+
+	arguments = append(arguments, "--receipt", "/tmp/other.json@"+testSHA("8"))
+	stdout.Reset()
+	if err := run(arguments, &stdout, &stderr); err == nil {
+		t.Fatal("receipt-prefix manifest and direct receipt were combined")
 	}
 }
 

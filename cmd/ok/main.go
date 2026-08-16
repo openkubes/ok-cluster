@@ -76,6 +76,7 @@ type stageBundleFlags struct {
 	grantPath, grantKeyPath, projectionManifest, projectionRoot   *string
 	evaluationTime                                                *string
 	receipts                                                      receiptFlags
+	receiptPrefix, receiptPrefixDigest                            *string
 }
 
 func addStageBundleFlags(flags *flag.FlagSet) *stageBundleFlags {
@@ -91,6 +92,8 @@ func addStageBundleFlags(flags *flag.FlagSet) *stageBundleFlags {
 	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
 	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
 	flags.Var(&values.receipts, "receipt", "ordered canonical predecessor receipt as PATH@sha256:<digest>; repeat for each receipt")
+	values.receiptPrefix = flags.String("receipt-prefix", "", "path to a digest-bound ordered receipt-prefix manifest")
+	values.receiptPrefixDigest = flags.String("receipt-prefix-digest", "", "expected SHA-256 digest of the receipt-prefix manifest")
 	values.grantPath = flags.String("grant", "", "path to the signed single-stage grant")
 	values.grantKeyPath = flags.String("grant-key", "", "path to the trusted stage-authority public key")
 	values.projectionManifest = flags.String("projection-manifest", "", "path to the immutable projection manifest")
@@ -119,13 +122,25 @@ func (values *stageBundleFlags) config() (runner.SubmissionStageBundleConfig, er
 	if err != nil {
 		return runner.SubmissionStageBundleConfig{}, fmt.Errorf("parse evaluation time: %w", err)
 	}
-	receipts := make([]runner.StageReceiptSource, 0, len(values.receipts))
-	for _, value := range values.receipts {
-		if !stageReceiptFlagPattern.MatchString(value) {
-			return runner.SubmissionStageBundleConfig{}, errors.New("receipt must use PATH@sha256:<64 lowercase hex> format")
+	providedPrefix := countNonEmpty(*values.receiptPrefix, *values.receiptPrefixDigest)
+	if providedPrefix != 0 && (providedPrefix != 2 || len(values.receipts) != 0) {
+		return runner.SubmissionStageBundleConfig{}, errors.New("--receipt-prefix and --receipt-prefix-digest must be provided together and cannot be combined with --receipt")
+	}
+	var receipts []runner.StageReceiptSource
+	if providedPrefix == 2 {
+		receipts, err = runner.LoadStageReceiptPrefix(*values.receiptPrefix, *values.receiptPrefixDigest)
+		if err != nil {
+			return runner.SubmissionStageBundleConfig{}, err
 		}
-		separator := strings.LastIndex(value, "@sha256:")
-		receipts = append(receipts, runner.StageReceiptSource{Path: value[:separator], Digest: value[separator+1:]})
+	} else {
+		receipts = make([]runner.StageReceiptSource, 0, len(values.receipts))
+		for _, value := range values.receipts {
+			if !stageReceiptFlagPattern.MatchString(value) {
+				return runner.SubmissionStageBundleConfig{}, errors.New("receipt must use PATH@sha256:<64 lowercase hex> format")
+			}
+			separator := strings.LastIndex(value, "@sha256:")
+			receipts = append(receipts, runner.StageReceiptSource{Path: value[:separator], Digest: value[separator+1:]})
+		}
 	}
 	return runner.SubmissionStageBundleConfig{
 		PlanPath: *values.planPath,

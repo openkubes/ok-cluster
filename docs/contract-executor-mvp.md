@@ -1040,6 +1040,17 @@ introducing submission, claim, mutation, retry, discovery or cluster contact.
 The future Job can use the same bundle loader rather than a second artifact
 interpretation path.
 
+The receipt prefix can additionally be supplied as one independently
+digest-bound `ok147-stage-receipt-prefix/v1` document. It contains an explicit
+ordered array, including an explicit empty array for the first stage, and only
+plain sibling file names plus canonical receipt digests. The loader rejects
+symlinked, oversized, traversing, duplicate, unknown-field or implicitly empty
+prefix documents. Every referenced receipt is still reloaded and verified by
+the normal stage-receipt chain; the manifest cannot turn a file name into
+evidence. Direct repeated `--receipt` flags and a prefix document are mutually
+exclusive. This fixed single-file argument is the input shape required by a
+later non-shell Job template.
+
 ## Explicit local staged execution
 
 `ok cluster stage run` composes the same verified bundle with exactly one
