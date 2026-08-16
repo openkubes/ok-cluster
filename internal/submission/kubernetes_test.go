@@ -21,11 +21,11 @@ func TestKubernetesSubmitIsExactCreateOnlyAndIdempotent(t *testing.T) {
 	client := newSubmissionClient(t, "ok-infra", api.client())
 
 	first, err := client.Submit(context.Background(), plan.Infrastructure)
-	if err != nil || first.State != "SUBMITTED" || len(first.Results) != 1 || first.Results[0].State != "CREATED" {
+	if err != nil || first.State != "SUBMITTED" || first.MutationState != "ATTEMPTED" || len(first.Results) != 1 || first.Results[0].State != "CREATED" {
 		t.Fatalf("first submission: %#v %v", first, err)
 	}
 	second, err := client.Submit(context.Background(), plan.Infrastructure)
-	if err != nil || second.Results[0].State != "UNCHANGED" {
+	if err != nil || second.MutationState != "NOT_ATTEMPTED" || second.Results[0].State != "UNCHANGED" {
 		t.Fatalf("second submission: %#v %v", second, err)
 	}
 	if api.posts != 1 {
@@ -75,7 +75,7 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		api.conflict = true
 		client := newSubmissionClient(t, "ok-infra", api.client())
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
-		if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || !strings.Contains(err.Error(), "conflicted") {
+		if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || receipt.MutationState != "ATTEMPTED" || !strings.Contains(err.Error(), "conflicted") {
 			t.Fatalf("conflict accepted: %#v %v", receipt, err)
 		}
 	})
@@ -109,7 +109,7 @@ func TestExecutorPreservesAuthorityOrderAndPartialReceipt(t *testing.T) {
 	if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || receipt.Infrastructure == nil || receipt.Management == nil {
 		t.Fatalf("partial execution receipt: %#v %v", receipt, err)
 	}
-	if receipt.Infrastructure.State != "SUBMITTED" || receipt.Management.State != "STOPPED_PARTIAL_OR_UNKNOWN" || infraAPI.posts != 1 || mgmtAPI.posts != 0 {
+	if receipt.MutationState != "ATTEMPTED" || receipt.Infrastructure.State != "SUBMITTED" || receipt.Management.State != "STOPPED_PARTIAL_OR_UNKNOWN" || infraAPI.posts != 1 || mgmtAPI.posts != 0 {
 		t.Fatalf("authority order/stop differs: %#v infraPosts=%d mgmtPosts=%d", receipt, infraAPI.posts, mgmtAPI.posts)
 	}
 }

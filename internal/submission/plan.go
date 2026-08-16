@@ -67,6 +67,10 @@ func Load(root string, binding projection.Binding) (Plan, error) {
 	if binding.InfrastructurePlane.Identity == binding.ManagementPlane.Identity {
 		return Plan{}, errors.New("submission authority identities must differ")
 	}
+	binding, err = projection.ReverifyAtUse(abs, binding)
+	if err != nil {
+		return Plan{}, fmt.Errorf("reverify projection at use: %w", err)
+	}
 	infrastructure, err := loadPlane(abs, "ok-infra-prerequisites.yaml", binding.InfrastructurePlane, binding, binding.IntentRevision)
 	if err != nil {
 		return Plan{}, fmt.Errorf("infrastructure submission plane: %w", err)

@@ -120,12 +120,16 @@ func (ledger *Ledger) Claim(ctx context.Context, grant authorization.VerifiedGra
 	if err != nil {
 		return ClaimReceipt{}, err
 	}
+	starts, err := time.Parse(time.RFC3339, binding.NotBefore)
+	if err != nil {
+		return ClaimReceipt{}, fmt.Errorf("grant start: %w", err)
+	}
 	expires, err := time.Parse(time.RFC3339, binding.NotAfter)
 	if err != nil {
 		return ClaimReceipt{}, fmt.Errorf("grant expiration: %w", err)
 	}
-	if !at.Before(expires) {
-		return ClaimReceipt{}, errors.New("grant expired before consumption")
+	if at.Before(starts) || !at.Before(expires) {
+		return ClaimReceipt{}, errors.New("grant is not active at consumption time")
 	}
 	receipt := ClaimReceipt{
 		Format:                   ClaimFormat,

@@ -14,7 +14,10 @@ import (
 	"time"
 )
 
-const maximumAPIResponseBytes = 4 * 1024 * 1024
+const (
+	maximumAPIResponseBytes = 4 * 1024 * 1024
+	PlaneReceiptFormat      = "ok147-bounded-submission-receipt/v2"
+)
 
 // KubernetesClientConfig binds one client to one authority plane. Credentials
 // are supplied by an execution-environment adapter and are never retained in a
@@ -36,24 +39,26 @@ type KubernetesClient struct {
 
 // ObjectResult records only redacted, immutable submission identity.
 type ObjectResult struct {
-	Identity projectionIdentity `json:"identity"`
-	Digest   string             `json:"digest"`
-	State    string             `json:"state"`
+	Identity ObjectIdentity `json:"identity"`
+	Digest   string         `json:"digest"`
+	UID      string         `json:"uid"`
+	State    string         `json:"state"`
 }
 
 // PlaneReceipt is useful even on failure: Results contains the exact prefix
 // completed before STOP-PRESERVE-NO-RETRY.
 type PlaneReceipt struct {
-	Format    string         `json:"format"`
-	Authority string         `json:"authority"`
-	Role      string         `json:"role"`
-	State     string         `json:"state"`
-	Results   []ObjectResult `json:"results"`
+	Format        string         `json:"format"`
+	Authority     string         `json:"authority"`
+	Role          string         `json:"role"`
+	State         string         `json:"state"`
+	MutationState string         `json:"mutationState"`
+	Results       []ObjectResult `json:"results"`
 }
 
-// projectionIdentity mirrors only the public, non-secret resource identity in
-// receipts while avoiding an import cycle through JSON helpers.
-type projectionIdentity struct {
+// ObjectIdentity is the public, non-secret runtime identity used to correlate
+// later observation with the exact submission response.
+type ObjectIdentity struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
@@ -106,11 +111,12 @@ func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, erro
 // retries. A conflict after an absence observation is indeterminate and stops.
 func (client *KubernetesClient) Submit(ctx context.Context, plane Plane) (PlaneReceipt, error) {
 	receipt := PlaneReceipt{
-		Format:    "ok147-bounded-submission-receipt/v1",
-		Authority: plane.Identity,
-		Role:      plane.Role,
-		State:     "IN_PROGRESS",
-		Results:   make([]ObjectResult, 0, len(plane.Objects)),
+		Format:        PlaneReceiptFormat,
+		Authority:     plane.Identity,
+		Role:          plane.Role,
+		State:         "IN_PROGRESS",
+		MutationState: "NOT_ATTEMPTED",
+		Results:       make([]ObjectResult, 0, len(plane.Objects)),
 	}
 	if plane.Identity != client.authority {
 		return stopped(receipt, errors.New("submission client authority differs from projection plane"))
@@ -119,13 +125,17 @@ func (client *KubernetesClient) Submit(ctx context.Context, plane Plane) (PlaneR
 		return stopped(receipt, errors.New("submission plane has no objects"))
 	}
 	for _, object := range plane.Objects {
-		state, err := client.submitObject(ctx, object)
+		state, uid, mutationAttempted, err := client.submitObject(ctx, object)
+		if mutationAttempted {
+			receipt.MutationState = "ATTEMPTED"
+		}
 		if err != nil {
 			return stopped(receipt, err)
 		}
 		receipt.Results = append(receipt.Results, ObjectResult{
-			Identity: projectionIdentity{APIVersion: object.Identity.APIVersion, Kind: object.Identity.Kind, Name: object.Identity.Name, Namespace: object.Identity.Namespace},
+			Identity: ObjectIdentity{APIVersion: object.Identity.APIVersion, Kind: object.Identity.Kind, Name: object.Identity.Name, Namespace: object.Identity.Namespace},
 			Digest:   object.Digest,
+			UID:      uid,
 			State:    state,
 		})
 	}
@@ -138,37 +148,39 @@ func stopped(receipt PlaneReceipt, cause error) (PlaneReceipt, error) {
 	return receipt, &SubmissionError{Receipt: receipt, Cause: cause}
 }
 
-func (client *KubernetesClient) submitObject(ctx context.Context, object Object) (string, error) {
+func (client *KubernetesClient) submitObject(ctx context.Context, object Object) (string, string, bool, error) {
 	response, status, err := client.request(ctx, http.MethodGet, object.ObjectPath, nil)
 	if err != nil {
-		return "", err
+		return "", "", false, err
 	}
 	switch status {
 	case http.StatusOK:
-		if err := verifyObservedObject(response, object); err != nil {
-			return "", fmt.Errorf("existing %s/%s differs from projection: %w", object.Identity.Kind, object.Identity.Name, err)
+		uid, err := verifyObservedObject(response, object)
+		if err != nil {
+			return "", "", false, fmt.Errorf("existing %s/%s differs from projection: %w", object.Identity.Kind, object.Identity.Name, err)
 		}
-		return "UNCHANGED", nil
+		return "UNCHANGED", uid, false, nil
 	case http.StatusNotFound:
 		// Continue to the one authorized create attempt.
 	default:
-		return "", apiStatusError(http.MethodGet, status, response)
+		return "", "", false, apiStatusError(http.MethodGet, status, response)
 	}
 
 	response, status, err = client.request(ctx, http.MethodPost, object.CollectionPath, object.Raw)
 	if err != nil {
-		return "", err
+		return "", "", true, err
 	}
 	if status == http.StatusConflict {
-		return "", errors.New("Kubernetes create conflicted after exact absence observation")
+		return "", "", true, errors.New("Kubernetes create conflicted after exact absence observation")
 	}
 	if status != http.StatusCreated {
-		return "", apiStatusError(http.MethodPost, status, response)
+		return "", "", true, apiStatusError(http.MethodPost, status, response)
 	}
-	if err := verifyObservedObject(response, object); err != nil {
-		return "", fmt.Errorf("created %s/%s response differs from projection: %w", object.Identity.Kind, object.Identity.Name, err)
+	uid, err := verifyObservedObject(response, object)
+	if err != nil {
+		return "", "", true, fmt.Errorf("created %s/%s response differs from projection: %w", object.Identity.Kind, object.Identity.Name, err)
 	}
-	return "CREATED", nil
+	return "CREATED", uid, true, nil
 }
 
 func (client *KubernetesClient) request(ctx context.Context, method, path string, body []byte) ([]byte, int, error) {
@@ -195,23 +207,24 @@ func (client *KubernetesClient) request(ctx context.Context, method, path string
 	return raw, response.StatusCode, nil
 }
 
-func verifyObservedObject(raw []byte, desired Object) error {
+func verifyObservedObject(raw []byte, desired Object) (string, error) {
 	observed, err := decodeJSONObject(raw)
 	if err != nil {
-		return errors.New("Kubernetes API returned invalid object JSON")
+		return "", errors.New("Kubernetes API returned invalid object JSON")
 	}
 	expected, err := decodeJSONObject(desired.Raw)
 	if err != nil {
-		return errors.New("verified projection object is invalid JSON")
+		return "", errors.New("verified projection object is invalid JSON")
 	}
 	if !isSubset(expected, observed) {
-		return errors.New("observed object does not contain the exact projected fields")
+		return "", errors.New("observed object does not contain the exact projected fields")
 	}
 	metadata, _ := observed["metadata"].(map[string]any)
-	if text(metadata["uid"]) == "" || text(metadata["resourceVersion"]) == "" {
-		return errors.New("Kubernetes API response lacks UID or resourceVersion")
+	uid := text(metadata["uid"])
+	if uid == "" || text(metadata["resourceVersion"]) == "" {
+		return "", errors.New("Kubernetes API response lacks UID or resourceVersion")
 	}
-	return nil
+	return uid, nil
 }
 
 func decodeJSONObject(raw []byte) (map[string]any, error) {
