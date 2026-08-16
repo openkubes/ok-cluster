@@ -1353,6 +1353,30 @@ composition still performs no Kubernetes request. The installer credential is
 opened only by `Open`, and mutation remains possible only after a separate call
 to the single-use launch operation.
 
+The local CLI exposes only this preparation boundary:
+
+```text
+ok cluster stage launch prepare
+  + verified stage-bundle flags
+  + package/template identities
+  + two bounded Job credential-source identities
+  + tokenless runtime manifest identity
+  + installer endpoint, CA, token and TokenRequest-evidence digests
+  + exact materialization/preparation times
+```
+
+It emits `ok147-submission-stage-launch-preparation/v1`, containing the
+redaction-safe material and candidate receipts. Credential files, endpoint,
+token digest, manifest bodies and local source paths are not emitted. Every
+input is explicit; audiences use an exact comma-separated set and bounded
+template/runtime files must be regular non-symlink files.
+
+There is deliberately no execute flag on this command. `--execute` is rejected
+as an unknown option, no installer token file is opened, and no Kubernetes
+client is constructed. A future execution command must rebuild the same
+material, require the exact emitted candidate digest and retain a separate
+critical live-authorization boundary.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
