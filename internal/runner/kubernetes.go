@@ -73,6 +73,13 @@ type KubernetesPlatformObserverConfig struct {
 	Clock                 func() time.Time
 }
 
+type KubernetesObservabilityTransportConfig struct {
+	Workload KubernetesAuthorityConfig
+	Run      ObservabilityCapabilityRun
+	Fixture  ObservabilitySyntheticFixtureConfig
+	Checks   ObservabilityCapabilityChecks
+}
+
 // InspectKubernetesLedger performs a read-only restart decision. It does not
 // claim the grant and therefore cannot authorize a later mutation by itself.
 func InspectKubernetesLedger(ctx context.Context, grant authorization.VerifiedGrant, config KubernetesLedgerConfig) (ledger.Inspection, error) {
@@ -211,6 +218,29 @@ func OpenKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConf
 	return observation.NewPlatformSourceCollector(reader, config.Capability, observation.PlatformCollectorConfig{
 		Profile: config.Profile, TargetClusterUID: config.TargetClusterUID, Clock: config.Clock,
 	})
+}
+
+// OpenKubernetesObservabilityTransport binds the fixed capability lifecycle to
+// one runtime workload authority. It reads credential files but performs no
+// Kubernetes request until the capability probe opens its execution gate.
+func OpenKubernetesObservabilityTransport(config KubernetesObservabilityTransportConfig) (*KubernetesObservabilityTransport, error) {
+	if config.Workload.AuthorityIdentity != config.Run.TargetClusterUID || !platformInputDigestPattern.MatchString(config.Workload.CABundleDigest) {
+		return nil, errors.New("observability transport workload authority differs from runtime target")
+	}
+	token, ca, client, err := openBoundedKubernetesMaterial(config.Workload.TokenFile, config.Workload.CAFile)
+	if err != nil {
+		return nil, errors.New("open bounded observability transport credential")
+	}
+	if digest.SHA256(ca) != config.Workload.CABundleDigest {
+		return nil, errors.New("observability transport CA differs from runtime-bound authority")
+	}
+	fixtureClient, err := NewKubernetesCapabilityFixtureClient(KubernetesCapabilityFixtureClientConfig{
+		Endpoint: config.Workload.Endpoint, BearerToken: token, AuthorityIdentity: config.Workload.AuthorityIdentity, Client: client,
+	}, config.Run, config.Fixture)
+	if err != nil {
+		return nil, errors.New("open bounded observability fixture client")
+	}
+	return newKubernetesObservabilityTransport(fixtureClient, config.Run, config.Checks)
 }
 
 func openBoundedKubernetesHTTP(tokenFile, caFile string) (string, *http.Client, error) {

@@ -107,18 +107,20 @@ func (client *KubernetesCapabilityFixtureClient) Create(ctx context.Context) (Ca
 	}
 	receipt.State = "CREATING"
 	for _, object := range client.fixture.Objects {
-		receipt.MutationState = "ATTEMPTED"
+		receipt.MutationState = "ATTEMPTED_UNKNOWN"
 		raw, status, err := client.request(ctx, http.MethodPost, object.CollectionPath, object.Raw)
 		if err != nil {
 			return stoppedCapabilityFixture(receipt, err)
 		}
 		if status != http.StatusCreated {
+			receipt.MutationState = "ATTEMPTED"
 			return stoppedCapabilityFixture(receipt, capabilityStatusError(http.MethodPost, status))
 		}
 		uid, _, err := verifyCapabilityObject(raw, object)
 		if err != nil {
 			return stoppedCapabilityFixture(receipt, errors.New("created synthetic capability object differs from fixture"))
 		}
+		receipt.MutationState = "ATTEMPTED"
 		receipt.Results = append(receipt.Results, CapabilityFixtureObjectResult{Identity: object.Identity, Digest: object.Digest, UID: uid, State: "CREATED"})
 	}
 	receipt.State = "CREATED"
