@@ -1280,6 +1280,14 @@ materialization or after that boundary fails closed. The public receipt exposes
 only digests and times, not the endpoint or installer token, and remains
 non-mutating.
 
+`ok147-enablement-stage-launch-material/v1` rebuilds and seals the package,
+private credentials, tokenless runtime and expiry-bound candidate as one
+coherent private value. Its public receipt contains only the correlated
+package, credential, runtime, launch-plan and candidate digests plus validity.
+Post-verification changes to any retained component fail closed. At this
+checkpoint the material deliberately exposes neither private bytes nor an
+`Open`/execute method, so it cannot launch Kubernetes objects.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter

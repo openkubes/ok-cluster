@@ -98,7 +98,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   private launch planner correlates runtime, prerequisites, both Secrets and
   the final Job behind one global six-object preflight barrier. A prepared,
   expiry-bound candidate then binds that plan to one exact management API,
-  CA, installer-token identity and independent credential evidence.
+  CA, installer-token identity and independent credential evidence. These
+  public and private inputs can now be sealed as one verified launch material;
+  it deliberately has no open or execute method yet.
 
 ---
 
