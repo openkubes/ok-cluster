@@ -605,18 +605,45 @@ ordering does not create a different profile identity.
 
 Argo `Synced` and `Healthy` is intentionally not sufficient for
 `PlatformReady=True`. A separately verified, redaction-safe capability
-assertion must bind the same target UID, R, P, capability contract and
-executable identities; its self-independent evidence digest and bounded age
-are checked by the evaluator. The Argo adapter cannot manufacture that
-assertion or run its executable. Missing, stale or revision-mismatched proof
-therefore remains `Unknown`, while current health, identity or capability
-failures remain `False`.
+assertion must bind the same target UID, R, P, execution fixture, capability
+contract and executable identities; its self-independent evidence digest and
+bounded age are checked by the evaluator. The Argo adapter cannot manufacture
+that assertion or run its executable. Missing, stale or revision-mismatched
+proof therefore remains `Unknown`, while current health, identity or
+capability failures remain `False`.
 
 The runner-side opener binds the reader to one explicitly named GitOps
 authority (for the OK-141 topology, `ok-shared`) and a short-lived projected
 credential. The adapter is still not wired to the CLI or Job, no built-in
 OK-141 profile is selected, and this offline checkpoint made no cluster
 contact or infrastructure mutation.
+
+## Digest-bound Platform input loading
+
+The Platform adapter no longer depends on freely constructed profile and
+capability values at its runner boundary. Two separate maximum-64-KiB,
+strict-JSON loaders now materialize:
+
+```text
+Platform profile
+  ↔ expected canonical profile digest + R + P + FixtureDigest + target UID
+
+Capability assertion
+  ↔ expected evidence digest + R + P + FixtureDigest + target UID
+     + capability contract digest + executable digest
+```
+
+Both inputs must be bounded regular files and reject duplicate keys, unknown
+fields, trailing values, malformed identities and semantic changes. Required
+Application membership is canonicalized as a set, so ordering alone does not
+change the profile digest. Capability content is verified against its
+self-independent digest before becoming an immutable in-memory
+`PlatformCapabilitySource`; subsequent changes to or removal of the source file
+cannot alter the loaded assertion.
+
+These loaders execute no capability code and contact no Kubernetes API. The
+independent expected values still have to come from verified execution inputs;
+successful file parsing is neither provenance authority nor a GO decision.
 
 ## OK-141 compatibility evidence
 

@@ -121,6 +121,13 @@ func TestEvaluatePlatformSnapshotFailsClosed(t *testing.T) {
 			},
 			status: "Unknown", reason: "PlatformCapabilityStale",
 		},
+		"capability from other fixture": {
+			mutate: func(_ *PlatformProfile, snapshot *PlatformSnapshot) {
+				snapshot.Capability.ExecutionFixture = "sha256:" + strings.Repeat("f", 64)
+				rebindPlatformCapability(t, snapshot)
+			},
+			status: "Unknown", reason: "RevisionCorrelationUnproven",
+		},
 		"capability failed": {
 			mutate: func(_ *PlatformProfile, snapshot *PlatformSnapshot) {
 				snapshot.Capability.Passed = false
@@ -198,7 +205,7 @@ func validPlatformFixture(t *testing.T) (Policy, PlatformProfile, PlatformSnapsh
 		Applications: applications,
 		Capability: PlatformCapabilityState{
 			Format: PlatformCapabilityFormat, ObservedAt: "2026-08-16T09:55:00Z", TargetClusterUID: policy.TargetClusterUID,
-			IntentRevision: policy.IntentRevision, PlatformRevision: policy.PlatformRevision,
+			IntentRevision: policy.IntentRevision, PlatformRevision: policy.PlatformRevision, ExecutionFixture: fixture,
 			ContractDigest: profile.CapabilityContractDigest, ExecutableDigest: profile.CapabilityExecutableDigest, Passed: true,
 		},
 	}
