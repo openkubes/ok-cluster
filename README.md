@@ -32,9 +32,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   the first two Contract-to-CAPI submission stages with a durable ledger,
   exact split authorities and no retry. `cluster stage package` produces the
   digest-bound immutable ConfigMap/Job/NetworkPolicy envelope offline; the
-  tokenless runtime identity and credential Secrets remain separately managed
-  prerequisites. The runner image is digest-pinned, multi-architecture,
-  non-root, SBOM- and provenance-producing behind a protected publisher.
+  single-use Create-only installer can submit only that verified envelope
+  after a complete zero-write preflight. Its tokenless runtime identity and
+  credential Secrets remain separately managed prerequisites. The runner
+  image is digest-pinned, multi-architecture, non-root, SBOM- and
+  provenance-producing behind a protected publisher.
 
 ---
 

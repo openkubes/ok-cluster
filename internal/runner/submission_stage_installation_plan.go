@@ -44,6 +44,9 @@ func PlanSubmissionStageInstallation(packaged VerifiedSubmissionStagePackage) (S
 	if !packaged.verified || len(packaged.raw) == 0 || packaged.receipt.State != "VERIFIED" {
 		return SubmissionStageInstallationPlan{}, errors.New("submission stage package was not produced by verification")
 	}
+	if packaged.installationAuthority == "" {
+		return SubmissionStageInstallationPlan{}, errors.New("submission stage package installation authority is missing")
+	}
 	if digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest {
 		return SubmissionStageInstallationPlan{}, errors.New("submission stage package changed after verification")
 	}
@@ -133,12 +136,36 @@ func PlanSubmissionStageInstallation(packaged VerifiedSubmissionStagePackage) (S
 			if !jobMountsInputConfigMap(podSpec, configMapName) {
 				return SubmissionStageInstallationPlan{}, errors.New("submission stage Job input ConfigMap differs")
 			}
+			if !jobUsesManagementAuthority(podSpec, packaged.installationAuthority) {
+				return SubmissionStageInstallationPlan{}, errors.New("submission stage Job management authority differs from installation authority")
+			}
 		}
 	}
 	return SubmissionStageInstallationPlan{
 		Format: SubmissionStageInstallationPlanFormat, State: "VERIFIED", StageID: packaged.receipt.StageID,
 		PackageDigest: packaged.receipt.PackageDigest, Creates: creates, MutationAllowed: false,
 	}, nil
+}
+
+func jobUsesManagementAuthority(podSpec map[string]any, authority string) bool {
+	containers, ok := podSpec["containers"].([]any)
+	if !ok || len(containers) != 1 {
+		return false
+	}
+	container, _ := containers[0].(map[string]any)
+	if container["name"] != "executor" {
+		return false
+	}
+	arguments, ok := container["args"].([]any)
+	if !ok {
+		return false
+	}
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == "--management-authority" && arguments[index+1] == authority {
+			return true
+		}
+	}
+	return false
 }
 
 func submissionStageCreatePaths(apiVersion, kind, namespace, name string) (string, string, error) {

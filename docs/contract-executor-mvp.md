@@ -1177,8 +1177,24 @@ ConfigMap volume binding. The output fixes this sequence:
 Every entry records the exact object and collection paths plus a canonical
 object digest. The plan has `mutationAllowed: false`; it contains no Secret,
 credential, generic path, update, patch, apply, delete, retry or API client.
-The future installer must remain a separately reviewed mutation boundary and
-must preserve the fail-closed order and absence preconditions.
+The bounded installer consumes only that in-memory verified package. It first
+performs all three exact object GETs; any existing object or unexpected API
+result stops before the first write. Only after the complete absence preflight
+does it POST ConfigMap, NetworkPolicy and Job in that order. Created responses
+must contain every exact desired field plus a UID and resourceVersion. Its
+redaction-safe receipt retains digests of those runtime identities and the
+verified created prefix, never their raw values.
+
+The installer is single-use and exposes no caller-selected manifest, object
+name or API path. It has no update, patch, apply, delete, list, watch,
+discovery, adoption, retry or rollback operation. A failure after a POST stops
+with `STOPPED_PARTIAL_OR_UNKNOWN`; cleanup is deliberately outside this
+boundary. The separately opened installer credential must identify the
+package's verified management authority, use an exact IP-literal HTTPS
+endpoint and carry a CA bundle matching its bound digest. It is distinct from
+the ledger and selected-authority credential Secrets mounted by the future
+Job. This checkpoint verifies the mutation behavior against an in-memory API
+transport only; it does not authorize or perform a live installation.
 
 ## Tokenless submission runtime identity
 
