@@ -425,9 +425,9 @@ projection plan. Network and Platform evidence remain separate bounded source
 domains; this CAPI adapter does not infer either one.
 
 This checkpoint still does not wire the observer into the CLI or Job and does
-not contact a cluster. A later composition adapter must combine this exact CAPI
-evidence with separately verified Network and Platform evidence before the
-aggregate evaluator can produce lifecycle success.
+not contact a cluster. The later single-pass composition described below
+combines this exact CAPI evidence with separately verified Network and Platform
+evidence before the aggregate evaluator can produce lifecycle success.
 
 ## Deterministic NetworkReady source evaluation
 
@@ -522,8 +522,42 @@ races and bounded output failures.
 This checkpoint still introduces no shell, `kubectl`, arbitrary command
 arguments, mutation, polling, retry, CLI/Job wiring, status publication, or live
 cluster contact. The executor is constructed as part of the bounded Kubernetes
-Network source collector but remains unused until a later composition path
-explicitly invokes that collector.
+Network source collector and can be invoked only through the single-pass
+composition described next; no production command activates that path yet.
+
+## Single-pass aggregate source composition
+
+The next offline checkpoint implements the exact `Observer` shape required by
+the crash-safe execution operation. It composes three ownership domains without
+introducing a controller or persistent status surface:
+
+```text
+CAPI Cluster source                → InfrastructureReady + ControlPlaneAvailable
+bounded Network source + profile   → NetworkReady
+bounded Platform source            → PlatformReady
+                                      |
+                                      v
+                       deterministic aggregate evaluator
+                                      |
+                                      v
+                         one verified observation result
+```
+
+Only domains named by the Contract-derived required-condition policy are
+called. CAPI may emit only its two lifecycle statements, while the Network and
+Platform sources may each emit only their own statement. Cross-domain evidence
+is rejected before evaluation; duplicate CAPI authority is retained and becomes
+`Unknown/ConflictingAuthority` rather than being silently selected. Source
+failures are redacted and stop the already claimed execution path
+indeterminately, while valid `False` or `Unknown` evidence remains an explicit
+deterministic outcome.
+
+The composer performs exactly one pass in CAPI, Network, Platform order and
+then evaluates one ordered bundle at the injected clock time. It has no polling,
+retry, watch, mutation, repair, durable status publication or default source.
+The concrete GitOps/Platform source and the immutable Network-profile loader
+remain separate checkpoints. Consequently this composition is not yet wired to
+the CLI or Job and made no cluster contact.
 
 ## OK-141 compatibility evidence
 
