@@ -54,6 +54,9 @@ func TestBuildSubmissionStagePackageBindsInputAndJobEnvelope(t *testing.T) {
 			if len(parts) != 2 || receipt.InputConfigMapDigest != digest.SHA256(parts[0]) || receipt.JobEnvelopeDigest != digest.SHA256(parts[1]) {
 				t.Fatal("package component digests do not match exact emitted bytes")
 			}
+			if receipt.JobTemplateDigest != digest.SHA256(config.JobTemplate) {
+				t.Fatal("package does not bind the exact Job template identity")
+			}
 			if !reflect.DeepEqual(receipt.ObjectKinds, []string{"ConfigMap", "Job", "NetworkPolicy"}) || receipt.AuthorizationState != "VERIFIED" {
 				t.Fatalf("unexpected package object/authorization state: %#v", receipt)
 			}
@@ -102,6 +105,9 @@ func TestBuildSubmissionStagePackageFailsClosed(t *testing.T) {
 		"changed template": func(config *SubmissionStagePackageConfig) {
 			config.JobTemplate = append(config.JobTemplate, []byte("\n${UNKNOWN}")...)
 		},
+		"wrong template digest": func(config *SubmissionStagePackageConfig) {
+			config.JobTemplateDigest = prefixSHA("f")
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := valid
@@ -127,12 +133,14 @@ func submissionStagePackageConfig(t *testing.T, fixture submissionBundleTestFixt
 	if stageID == "cluster-lifecycle" {
 		values.AuthorityAPIURL, values.AuthorityAPICIDR = values.LedgerAPIURL, values.LedgerAPICIDR
 	}
-	return SubmissionStagePackageConfig{
+	config := SubmissionStagePackageConfig{
 		Bundle: fixture.config, JobTemplate: submissionStageJobTemplate(t),
 		RunID: values.RunID, ImageDigest: values.ImageDigest, InputConfigMap: values.InputConfigMap,
 		LedgerAPIURL: values.LedgerAPIURL, LedgerAPICIDR: values.LedgerAPICIDR, LedgerCredentialSecret: values.LedgerCredentialSecret,
 		AuthorityAPIURL: values.AuthorityAPIURL, AuthorityAPICIDR: values.AuthorityAPICIDR, AuthorityCredentialSecret: values.AuthorityCredentialSecret,
 	}
+	config.JobTemplateDigest = digest.SHA256(config.JobTemplate)
+	return config
 }
 
 func argumentValue(arguments []string, name string) string {
