@@ -136,10 +136,11 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("parse evaluation time: %w", err)
 		}
-		receipt, err := authorization.Verify(authorizationRaw, keyRaw, *plan.Request, at)
+		grant, err := authorization.Verify(authorizationRaw, keyRaw, *plan.Request, at)
 		if err != nil {
 			return err
 		}
+		receipt := grant.Receipt()
 		plan.AuthorizationState = "VERIFIED"
 		plan.Authorization = &receipt
 	}

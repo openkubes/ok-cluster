@@ -63,41 +63,73 @@ type Receipt struct {
 	MaxUses             int    `json:"maxUses"`
 }
 
+// ConsumptionBinding is the minimum verified identity required by the local
+// single-use ledger. It contains no signature, key material, or source path.
+type ConsumptionBinding struct {
+	AuthorizationDigest      string
+	GrantID                  string
+	KeyID                    string
+	Operation                string
+	RequestDigest            string
+	ContractRevision         string
+	ProjectionManifestDigest string
+	NotAfter                 string
+}
+
+// VerifiedGrant can only be produced by Verify. The unexported marker prevents
+// callers from manufacturing a grant by constructing a Receipt value.
+type VerifiedGrant struct {
+	receipt  Receipt
+	binding  ConsumptionBinding
+	verified bool
+}
+
+// Receipt returns the redacted verification result for plan output.
+func (grant VerifiedGrant) Receipt() Receipt { return grant.receipt }
+
+// ConsumptionBinding returns verified fields for a single-use claim.
+func (grant VerifiedGrant) ConsumptionBinding() (ConsumptionBinding, error) {
+	if !grant.verified {
+		return ConsumptionBinding{}, errors.New("authorization grant was not produced by verification")
+	}
+	return grant.binding, nil
+}
+
 // Verify checks the signature, trust key identity, time window, single-use
 // declaration, and every request binding.
-func Verify(raw, publicKeyPEM []byte, request executor.CreateRequest, at time.Time) (Receipt, error) {
+func Verify(raw, publicKeyRaw []byte, request executor.CreateRequest, at time.Time) (VerifiedGrant, error) {
 	var document envelope
 	if err := jsonstrict.Decode(raw, &document); err != nil {
-		return Receipt{}, fmt.Errorf("decode authorization: %w", err)
+		return VerifiedGrant{}, fmt.Errorf("decode authorization: %w", err)
 	}
 	if document.Format != Format {
-		return Receipt{}, fmt.Errorf("authorization format %q is not supported", document.Format)
+		return VerifiedGrant{}, fmt.Errorf("authorization format %q is not supported", document.Format)
 	}
-	publicKey, keyID, err := parsePublicKey(publicKeyPEM)
+	publicKey, keyID, err := parsePublicKey(publicKeyRaw)
 	if err != nil {
-		return Receipt{}, err
+		return VerifiedGrant{}, err
 	}
 	if document.Signature.Algorithm != "Ed25519" {
-		return Receipt{}, fmt.Errorf("signature algorithm %q is not supported", document.Signature.Algorithm)
+		return VerifiedGrant{}, fmt.Errorf("signature algorithm %q is not supported", document.Signature.Algorithm)
 	}
 	if document.Signature.KeyID != keyID {
-		return Receipt{}, fmt.Errorf("authorization keyId %s does not match trusted key %s", document.Signature.KeyID, keyID)
+		return VerifiedGrant{}, fmt.Errorf("authorization keyId %s does not match trusted key %s", document.Signature.KeyID, keyID)
 	}
 	signatureBytes, err := base64.StdEncoding.Strict().DecodeString(document.Signature.Value)
 	if err != nil {
-		return Receipt{}, fmt.Errorf("decode authorization signature: %w", err)
+		return VerifiedGrant{}, fmt.Errorf("decode authorization signature: %w", err)
 	}
 	signed, err := SigningBytes(document.Payload)
 	if err != nil {
-		return Receipt{}, err
+		return VerifiedGrant{}, err
 	}
 	if !ed25519.Verify(publicKey, signed, signatureBytes) {
-		return Receipt{}, errors.New("authorization signature verification failed")
+		return VerifiedGrant{}, errors.New("authorization signature verification failed")
 	}
 	if err := verifyPayload(document.Payload, request, at); err != nil {
-		return Receipt{}, err
+		return VerifiedGrant{}, err
 	}
-	return Receipt{
+	receipt := Receipt{
 		Format:              "ok147-authorization-receipt/v1",
 		State:               "VERIFIED",
 		AuthorizationDigest: digest.SHA256(raw),
@@ -105,6 +137,20 @@ func Verify(raw, publicKeyPEM []byte, request executor.CreateRequest, at time.Ti
 		KeyID:               keyID,
 		NotAfter:            document.Payload.NotAfter,
 		MaxUses:             document.Payload.MaxUses,
+	}
+	return VerifiedGrant{
+		receipt: receipt,
+		binding: ConsumptionBinding{
+			AuthorizationDigest:      receipt.AuthorizationDigest,
+			GrantID:                  document.Payload.GrantID,
+			KeyID:                    keyID,
+			Operation:                document.Payload.Operation,
+			RequestDigest:            document.Payload.RequestDigest,
+			ContractRevision:         document.Payload.ContractRevision,
+			ProjectionManifestDigest: document.Payload.ProjectionManifestDigest,
+			NotAfter:                 document.Payload.NotAfter,
+		},
+		verified: true,
 	}, nil
 }
 

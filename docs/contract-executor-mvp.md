@@ -101,9 +101,47 @@ and the one-use declaration. The output receipt intentionally excludes the
 signature and all source paths.
 
 Even a verified decision still produces `mutationAllowed: false`. This
-checkpoint proves content binding and trust verification only. It does not yet
-provide grant consumption, idempotency, credentials, Kubernetes submission,
-retry, rollback, or evidence publication.
+boundary proves content binding and trust verification only. It does not by
+itself consume the grant or authorize Kubernetes submission.
+
+## Single-use and crash boundary
+
+The third checkpoint adds a filesystem-backed ledger for a future short-lived
+executor. It is not wired to the dry-run CLI and still has no Kubernetes client.
+
+Before any future external write, the executor must atomically create an
+immutable `ok147-grant-claim/v1` using `O_CREATE|O_EXCL`:
+
+```text
+verified signed grant
+        |
+        v
+atomic immutable claim
+        |
+        +-- process stops before outcome --> CLAIMED_INDETERMINATE_STOP
+        |                                    no automatic retry
+        v
+future bounded operation
+        |
+        v
+separate immutable ok147-operation-receipt/v1
+```
+
+The claim binds the authorization, key, operation, request, `R`, and projection
+digests. A concurrent or later attempt using the same grant is rejected. A
+completion receipt additionally binds the claim and evidence digest. Repeating
+the exact completion write is idempotent; a conflicting completion fails
+closed. A successful `CreateCluster` receipt cannot claim that no mutation was
+attempted.
+
+Ledger directories must be real private directories and records must remain
+regular `0600` files. Non-canonical or modified records are rejected. Tests
+prove that 24 concurrent claim attempts produce exactly one winner.
+
+This local ledger proves the consumption and restart algorithm only. A real
+Job must use a durable, authority-controlled backing store that survives Job and
+node loss; an `emptyDir` alone cannot enforce single use across Job recreation.
+Selecting and integrating that backing store remains a later checkpoint.
 
 ## OK-141 compatibility evidence
 
