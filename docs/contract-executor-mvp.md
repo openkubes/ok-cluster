@@ -856,6 +856,31 @@ Platform collector's separately hashed Application gate invokes capability
 code only after Argo is current, ordinary pre-convergence polling also does not
 consume the single-use first-run capability source.
 
+## Staged authority observation gates
+
+Each polling pass now opens source authorities in dependency order rather than
+materializing every runtime credential up front:
+
+```text
+CAPI lifecycle current
+        ↓
+resolve workload authority and evaluate NetworkReady
+        ↓
+resolve GitOps capability and evaluate PlatformReady
+```
+
+If a required CAPI condition is `False`, `Unknown`, missing, stale, foreign or
+conflicting, the workload resolver and Platform source remain unopened. If
+NetworkReady is not `True`, the Platform resolver remains unopened. The partial
+authoritative bundle is still evaluated normally, so `False` remains terminal
+and unresolved downstream conditions remain `Unknown`; no success is inferred.
+Malformed source evidence remains an operational error.
+
+This staging is required for a real first create: the workload authority cannot
+exist before CAPI has produced the target, and capability execution must not
+start before NetworkReady. The gate adds no retry, credential creation,
+mutation, repair or persistent state.
+
 ## Bounded Kubernetes execution composition
 
 The runtime package now composes the durable ledger, the two exact-create

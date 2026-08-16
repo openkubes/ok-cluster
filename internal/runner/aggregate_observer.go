@@ -56,8 +56,9 @@ type KubernetesAggregateObserverConfig struct {
 }
 
 // KubernetesAggregateObserver lazily materializes only the source domains
-// required by the runtime-bound observation policy. It has no polling, retry,
-// mutation, status publication, or persistent controller loop.
+// required by the runtime-bound observation policy and only after the prior
+// authority stage is current. It has no polling, retry, mutation, status
+// publication, or persistent controller loop.
 type KubernetesAggregateObserver struct {
 	config  KubernetesAggregateObserverConfig
 	openers kubernetesAggregateSourceOpeners
@@ -131,36 +132,42 @@ func (observer *KubernetesAggregateObserver) Observe(ctx context.Context, policy
 		}
 	}
 	if required.network {
-		workload, err := observer.config.WorkloadAuthority.ResolveWorkloadAuthority(ctx, policy)
-		if err != nil {
-			return observation.VerifiedResult{}, errors.New("resolve bounded workload observation authority")
-		}
-		if workload.AuthorityIdentity != policy.TargetClusterUID {
-			return observation.VerifiedResult{}, errors.New("workload observation authority differs from runtime-bound target Cluster")
-		}
-		networkSource, err = observer.openers.network(KubernetesNetworkObserverConfig{
-			Management: observer.config.Management, Workload: workload,
-			ExpectedManagementAuthority: observer.config.ExpectedManagementAuthority,
-			TargetClusterUID:            policy.TargetClusterUID, Namespace: observer.config.Namespace,
-			Name: observer.config.Name, HCPName: observer.config.HCPName, Clock: observer.config.Clock,
-		})
-		if err != nil {
-			return observation.VerifiedResult{}, errors.New("open bounded NetworkReady observation source")
-		}
+		networkSource = lazyNetworkEvidenceSource{open: func(stageCtx context.Context) (observation.NetworkEvidenceSource, error) {
+			workload, err := observer.config.WorkloadAuthority.ResolveWorkloadAuthority(stageCtx, policy)
+			if err != nil {
+				return nil, errors.New("resolve bounded workload observation authority")
+			}
+			if workload.AuthorityIdentity != policy.TargetClusterUID {
+				return nil, errors.New("workload observation authority differs from runtime-bound target Cluster")
+			}
+			source, err := observer.openers.network(KubernetesNetworkObserverConfig{
+				Management: observer.config.Management, Workload: workload,
+				ExpectedManagementAuthority: observer.config.ExpectedManagementAuthority,
+				TargetClusterUID:            policy.TargetClusterUID, Namespace: observer.config.Namespace,
+				Name: observer.config.Name, HCPName: observer.config.HCPName, Clock: observer.config.Clock,
+			})
+			if err != nil || source == nil {
+				return nil, errors.New("open bounded NetworkReady observation source")
+			}
+			return source, nil
+		}}
 	}
 	if required.platform {
-		capability, err := observer.config.PlatformCapability.ResolvePlatformCapability(ctx, policy, clonePlatformProfile(observer.config.PlatformProfile))
-		if err != nil || capability == nil {
-			return observation.VerifiedResult{}, errors.New("resolve bounded Platform capability evidence")
-		}
-		platformSource, err = observer.openers.platform(KubernetesPlatformObserverConfig{
-			Argo: observer.config.Argo, ExpectedArgoAuthority: observer.config.ExpectedArgoAuthority,
-			Profile: clonePlatformProfile(observer.config.PlatformProfile), Capability: capability,
-			TargetClusterUID: policy.TargetClusterUID, Clock: observer.config.Clock,
-		})
-		if err != nil {
-			return observation.VerifiedResult{}, errors.New("open bounded PlatformReady observation source")
-		}
+		platformSource = lazyPlatformEvidenceSource{open: func(stageCtx context.Context) (observation.PlatformEvidenceSource, error) {
+			capability, err := observer.config.PlatformCapability.ResolvePlatformCapability(stageCtx, policy, clonePlatformProfile(observer.config.PlatformProfile))
+			if err != nil || capability == nil {
+				return nil, errors.New("resolve bounded Platform capability evidence")
+			}
+			source, err := observer.openers.platform(KubernetesPlatformObserverConfig{
+				Argo: observer.config.Argo, ExpectedArgoAuthority: observer.config.ExpectedArgoAuthority,
+				Profile: clonePlatformProfile(observer.config.PlatformProfile), Capability: capability,
+				TargetClusterUID: policy.TargetClusterUID, Clock: observer.config.Clock,
+			})
+			if err != nil || source == nil {
+				return nil, errors.New("open bounded PlatformReady observation source")
+			}
+			return source, nil
+		}}
 	}
 
 	aggregate, err := observation.NewAggregateObserver(observation.AggregateObserverConfig{
@@ -211,4 +218,28 @@ type unusedPlatformSource struct{}
 
 func (unusedPlatformSource) Observe(context.Context, observation.Policy) (observation.Evidence, error) {
 	return observation.Evidence{}, errors.New("unused Platform source was called")
+}
+
+type lazyNetworkEvidenceSource struct {
+	open func(context.Context) (observation.NetworkEvidenceSource, error)
+}
+
+func (source lazyNetworkEvidenceSource) Observe(ctx context.Context, policy observation.Policy, profile observation.NetworkProfile) (observation.Evidence, error) {
+	opened, err := source.open(ctx)
+	if err != nil {
+		return observation.Evidence{}, errors.New("materialize bounded NetworkReady source")
+	}
+	return opened.Observe(ctx, policy, profile)
+}
+
+type lazyPlatformEvidenceSource struct {
+	open func(context.Context) (observation.PlatformEvidenceSource, error)
+}
+
+func (source lazyPlatformEvidenceSource) Observe(ctx context.Context, policy observation.Policy) (observation.Evidence, error) {
+	opened, err := source.open(ctx)
+	if err != nil {
+		return observation.Evidence{}, errors.New("materialize bounded PlatformReady source")
+	}
+	return opened.Observe(ctx, policy)
 }

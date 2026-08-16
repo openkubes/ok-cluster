@@ -67,6 +67,58 @@ func TestAggregateObserverCallsOnlyRequiredDomains(t *testing.T) {
 	}
 }
 
+func TestAggregateObserverKeepsDownstreamAuthoritiesClosedUntilPriorStageReady(t *testing.T) {
+	policy, profile := aggregateFixture()
+
+	t.Run("CAPI pending keeps Network and Platform closed", func(t *testing.T) {
+		infrastructure := aggregateEvidence(policy, "InfrastructureReady")
+		infrastructure.Status = "Unknown"
+		infrastructure.Reason = "Provisioning"
+		capi := &fakeCAPIEvidenceSource{evidence: []Evidence{infrastructure, aggregateEvidence(policy, "ControlPlaneAvailable")}}
+		network := &fakeNetworkEvidenceSource{err: errors.New("must not be called")}
+		platform := &fakePlatformEvidenceSource{err: errors.New("must not be called")}
+		observer, err := NewAggregateObserver(AggregateObserverConfig{
+			CAPI: capi, Network: network, Platform: platform, NetworkProfile: profile,
+			Clock: func() time.Time { return time.Date(2026, 8, 16, 12, 30, 0, 0, time.UTC) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := observer.Observe(context.Background(), policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, _ := result.Receipt()
+		if receipt.Ready != "Unknown" || network.calls != 0 || platform.calls != 0 {
+			t.Fatalf("downstream source opened before CAPI convergence: receipt=%#v calls=%d/%d", receipt, network.calls, platform.calls)
+		}
+	})
+
+	t.Run("Network pending keeps Platform closed", func(t *testing.T) {
+		networkEvidence := aggregateEvidence(policy, "NetworkReady")
+		networkEvidence.Status = "Unknown"
+		networkEvidence.Reason = "ProbePending"
+		capi := &fakeCAPIEvidenceSource{evidence: []Evidence{aggregateEvidence(policy, "InfrastructureReady"), aggregateEvidence(policy, "ControlPlaneAvailable")}}
+		network := &fakeNetworkEvidenceSource{evidence: networkEvidence}
+		platform := &fakePlatformEvidenceSource{err: errors.New("must not be called")}
+		observer, err := NewAggregateObserver(AggregateObserverConfig{
+			CAPI: capi, Network: network, Platform: platform, NetworkProfile: profile,
+			Clock: func() time.Time { return time.Date(2026, 8, 16, 12, 30, 0, 0, time.UTC) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := observer.Observe(context.Background(), policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, _ := result.Receipt()
+		if receipt.Ready != "Unknown" || network.calls != 1 || platform.calls != 0 {
+			t.Fatalf("Platform source opened before Network convergence: receipt=%#v calls=%d/%d", receipt, network.calls, platform.calls)
+		}
+	})
+}
+
 func TestAggregateObserverPreservesConflictingAuthority(t *testing.T) {
 	policy, profile := aggregateFixture()
 	policy.Required = []string{"InfrastructureReady"}

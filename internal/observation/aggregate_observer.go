@@ -72,6 +72,13 @@ func (observer *AggregateObserver) Observe(ctx context.Context, policy Policy) (
 				evidenceByType[item.Type] = append(evidenceByType[item.Type], item)
 			}
 		}
+		ready, err := stageConditionsTrue(policy, required, evidenceByType, "InfrastructureReady", "ControlPlaneAvailable")
+		if err != nil {
+			return VerifiedResult{}, errors.New("validate bounded CAPI evidence")
+		}
+		if !ready {
+			return observer.evaluate(policy, evidenceByType)
+		}
 	}
 	if _, wanted := required["NetworkReady"]; wanted {
 		item, err := observer.config.Network.Observe(ctx, policy, observer.config.NetworkProfile)
@@ -82,6 +89,13 @@ func (observer *AggregateObserver) Observe(ctx context.Context, policy Policy) (
 			return VerifiedResult{}, errors.New("Network source returned evidence outside its ownership domain")
 		}
 		evidenceByType[item.Type] = append(evidenceByType[item.Type], item)
+		ready, err := stageConditionsTrue(policy, required, evidenceByType, "NetworkReady")
+		if err != nil {
+			return VerifiedResult{}, errors.New("validate bounded NetworkReady evidence")
+		}
+		if !ready {
+			return observer.evaluate(policy, evidenceByType)
+		}
 	}
 	if _, wanted := required["PlatformReady"]; wanted {
 		item, err := observer.config.Platform.Observe(ctx, policy)
@@ -94,6 +108,10 @@ func (observer *AggregateObserver) Observe(ctx context.Context, policy Policy) (
 		evidenceByType[item.Type] = append(evidenceByType[item.Type], item)
 	}
 
+	return observer.evaluate(policy, evidenceByType)
+}
+
+func (observer *AggregateObserver) evaluate(policy Policy, evidenceByType map[string][]Evidence) (VerifiedResult, error) {
 	evidence := make([]Evidence, 0, len(policy.Required))
 	for _, condition := range policy.Required {
 		evidence = append(evidence, evidenceByType[condition]...)
@@ -103,6 +121,28 @@ func (observer *AggregateObserver) Observe(ctx context.Context, policy Policy) (
 		EvaluatedAt: observer.config.Clock().UTC().Format(time.RFC3339Nano), Evidence: evidence,
 	}
 	return Evaluate(policy, bundle)
+}
+
+// stageConditionsTrue decides only whether a downstream authority may be
+// opened. False, Unknown, missing, conflicting, stale or foreign evidence all
+// keep the next stage closed; malformed evidence remains an operational error.
+func stageConditionsTrue(policy Policy, required map[string]struct{}, evidenceByType map[string][]Evidence, conditions ...string) (bool, error) {
+	for _, condition := range conditions {
+		if _, wanted := required[condition]; !wanted {
+			continue
+		}
+		items := evidenceByType[condition]
+		if len(items) != 1 {
+			return false, nil
+		}
+		if err := validateEvidenceShape(items[0]); err != nil {
+			return false, err
+		}
+		if evaluateEvidence(policy, items[0]).Status != "True" {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func requiresAny(required map[string]struct{}, conditions ...string) bool {
