@@ -142,7 +142,8 @@ func verifiedStageGrant(t *testing.T, at time.Time) authorization.VerifiedStageG
 		PlanDigest: plan.PlanDigest, ContractIdentity: identity, ContractRevision: plan.IntentRevision,
 		EnablementRevision: plan.EnablementRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
 		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Operation: stage.GrantOperation, Authority: stage.Authority,
-		NotBefore: at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
+		Predecessors: []authorization.StagePredecessor{},
+		NotBefore:    at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
 	}
 	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	signed, _ := authorization.StageSigningBytes(payload)
@@ -150,7 +151,7 @@ func verifiedStageGrant(t *testing.T, at time.Time) authorization.VerifiedStageG
 		"format": authorization.StageFormat, "payload": payload,
 		"signature": map[string]any{"algorithm": "Ed25519", "keyId": digest.SHA256(publicKey), "value": base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, signed))},
 	})
-	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, at)
+	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, payload.Predecessors, at)
 	if err != nil {
 		t.Fatal(err)
 	}

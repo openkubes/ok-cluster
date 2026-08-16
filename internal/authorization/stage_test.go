@@ -23,7 +23,7 @@ func TestVerifyStageAcceptsExactMutatingStage(t *testing.T) {
 	}
 	payload := stagePayloadFixture(t, plan, "enablement", at)
 	raw := signStage(t, payload, publicKey, privateKey)
-	grant, err := VerifyStage(raw, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, "enablement", at)
+	grant, err := VerifyStage(raw, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, "enablement", payload.Predecessors, at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,12 +44,25 @@ func TestVerifyStageRejectsReadOnlyStageAndCrossStageReuse(t *testing.T) {
 	payload := stagePayloadFixture(t, plan, "enablement", at)
 	raw := signStage(t, payload, publicKey, privateKey)
 	key := []byte(base64.StdEncoding.EncodeToString(publicKey))
-	if _, err := VerifyStage(raw, key, plan, "platform-applications", at); err == nil {
+	platformPredecessors := stagePayloadFixture(t, plan, "platform-applications", at).Predecessors
+	if _, err := VerifyStage(raw, key, plan, "platform-applications", platformPredecessors, at); err == nil {
 		t.Fatal("enablement grant was reused for Platform submission")
 	}
 	readPayload := stagePayloadFixture(t, plan, "lifecycle-observation", at)
-	if _, err := VerifyStage(signStage(t, readPayload, publicKey, privateKey), key, plan, "lifecycle-observation", at); err == nil {
+	if _, err := VerifyStage(signStage(t, readPayload, publicKey, privateKey), key, plan, "lifecycle-observation", readPayload.Predecessors, at); err == nil {
 		t.Fatal("mutation grant was accepted for a read-only stage")
+	}
+}
+
+func TestVerifyStageRequiresExplicitPredecessorReceipts(t *testing.T) {
+	plan := stagePlanFixture(t)
+	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	key := []byte(base64.StdEncoding.EncodeToString(publicKey))
+	payload := stagePayloadFixture(t, plan, "provider-prerequisites", at)
+	payload.Predecessors = nil
+	if _, err := VerifyStage(signStage(t, payload, publicKey, privateKey), key, plan, "provider-prerequisites", []StagePredecessor{}, at); err == nil {
+		t.Fatal("omitted empty predecessor set was accepted for the first stage")
 	}
 }
 
@@ -59,27 +72,30 @@ func TestVerifyStageRejectsEveryChangedBinding(t *testing.T) {
 	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	key := []byte(base64.StdEncoding.EncodeToString(publicKey))
 	tests := map[string]func(*StagePayload){
-		"decision":       func(payload *StagePayload) { payload.Decision = "DENY" },
-		"plan":           func(payload *StagePayload) { payload.PlanDigest = authSHA("0") },
-		"identity":       func(payload *StagePayload) { payload.ContractIdentity.Name = "another" },
-		"R":              func(payload *StagePayload) { payload.ContractRevision = authSHA("1") },
-		"E":              func(payload *StagePayload) { payload.EnablementRevision = authSHA("2") },
-		"P":              func(payload *StagePayload) { payload.PlatformRevision = authSHA("3") },
-		"fixture":        func(payload *StagePayload) { payload.ExecutionFixture = authSHA("4") },
-		"stage":          func(payload *StagePayload) { payload.StageID = "cluster-lifecycle" },
-		"order":          func(payload *StagePayload) { payload.StageOrder++ },
-		"stage digest":   func(payload *StagePayload) { payload.StageDigest = authSHA("5") },
-		"operation":      func(payload *StagePayload) { payload.Operation = "CreateCluster" },
-		"authority":      func(payload *StagePayload) { payload.Authority = "gitops" },
-		"uses":           func(payload *StagePayload) { payload.MaxUses = 2 },
-		"expired":        func(payload *StagePayload) { payload.NotAfter = at.Format(time.RFC3339) },
-		"oversized time": func(payload *StagePayload) { payload.NotAfter = at.Add(31 * time.Minute).Format(time.RFC3339) },
+		"decision":            func(payload *StagePayload) { payload.Decision = "DENY" },
+		"plan":                func(payload *StagePayload) { payload.PlanDigest = authSHA("0") },
+		"identity":            func(payload *StagePayload) { payload.ContractIdentity.Name = "another" },
+		"R":                   func(payload *StagePayload) { payload.ContractRevision = authSHA("1") },
+		"E":                   func(payload *StagePayload) { payload.EnablementRevision = authSHA("2") },
+		"P":                   func(payload *StagePayload) { payload.PlatformRevision = authSHA("3") },
+		"fixture":             func(payload *StagePayload) { payload.ExecutionFixture = authSHA("4") },
+		"stage":               func(payload *StagePayload) { payload.StageID = "cluster-lifecycle" },
+		"order":               func(payload *StagePayload) { payload.StageOrder++ },
+		"stage digest":        func(payload *StagePayload) { payload.StageDigest = authSHA("5") },
+		"operation":           func(payload *StagePayload) { payload.Operation = "CreateCluster" },
+		"authority":           func(payload *StagePayload) { payload.Authority = "gitops" },
+		"predecessor":         func(payload *StagePayload) { payload.Predecessors[0].OutcomeDigest = authSHA("0") },
+		"missing predecessor": func(payload *StagePayload) { payload.Predecessors = nil },
+		"uses":                func(payload *StagePayload) { payload.MaxUses = 2 },
+		"expired":             func(payload *StagePayload) { payload.NotAfter = at.Format(time.RFC3339) },
+		"oversized time":      func(payload *StagePayload) { payload.NotAfter = at.Add(31 * time.Minute).Format(time.RFC3339) },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			payload := stagePayloadFixture(t, plan, "enablement", at)
 			mutate(&payload)
-			if _, err := VerifyStage(signStage(t, payload, publicKey, privateKey), key, plan, "enablement", at); err == nil {
+			expectedPredecessors := stagePayloadFixture(t, plan, "enablement", at).Predecessors
+			if _, err := VerifyStage(signStage(t, payload, publicKey, privateKey), key, plan, "enablement", expectedPredecessors, at); err == nil {
 				t.Fatal("changed stage authorization was accepted")
 			}
 		})
@@ -93,11 +109,12 @@ func TestVerifyStageRejectsTamperingAndNonStrictEnvelope(t *testing.T) {
 	raw := signStage(t, stagePayloadFixture(t, plan, "enablement", at), publicKey, privateKey)
 	key := []byte(base64.StdEncoding.EncodeToString(publicKey))
 	tampered := strings.Replace(string(raw), `"operation":"CreateEnablement"`, `"operation":"CreateCluster"`, 1)
-	if _, err := VerifyStage([]byte(tampered), key, plan, "enablement", at); err == nil {
+	predecessors := stagePayloadFixture(t, plan, "enablement", at).Predecessors
+	if _, err := VerifyStage([]byte(tampered), key, plan, "enablement", predecessors, at); err == nil {
 		t.Fatal("tampered stage authorization was accepted")
 	}
 	unknown := strings.Replace(string(raw), `"format":"`+StageFormat+`"`, `"format":"`+StageFormat+`","unknown":true`, 1)
-	if _, err := VerifyStage([]byte(unknown), key, plan, "enablement", at); err == nil {
+	if _, err := VerifyStage([]byte(unknown), key, plan, "enablement", predecessors, at); err == nil {
 		t.Fatal("unknown stage authorization field was accepted")
 	}
 }
@@ -108,13 +125,18 @@ func stagePayloadFixture(t *testing.T, plan stageplan.Binding, stageID string, a
 	if err != nil {
 		t.Fatal(err)
 	}
+	predecessors := make([]StagePredecessor, len(stage.Requires))
+	for index, predecessor := range stage.Requires {
+		predecessors[index] = StagePredecessor{StageID: predecessor, OutcomeDigest: authSHA("e")}
+	}
 	return StagePayload{
 		Audience: StageAudience, GrantID: "ok147-stage-20260816-01", Decision: "ALLOW",
 		PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity, ContractRevision: plan.IntentRevision,
 		EnablementRevision: plan.EnablementRevision, PlatformRevision: plan.PlatformRevision,
 		ExecutionFixture: plan.ExecutionFixture, StageID: stage.ID, StageOrder: stage.Order,
 		StageDigest: stageDigest, Operation: stage.GrantOperation, Authority: stage.Authority,
-		NotBefore: at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
+		Predecessors: predecessors,
+		NotBefore:    at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
 	}
 }
 
