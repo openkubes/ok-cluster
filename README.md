@@ -90,7 +90,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   package is emitted locally with `ok cluster stage run enablement package`.
   A private offline credential packager separately verifies two distinct,
   short-lived management TokenRequest results for ledger and HCP writer roles;
-  its public receipt exposes neither tokens, CA data, subjects nor paths.
+  its public receipt exposes neither tokens, CA data, subjects nor paths. The
+  shared tokenless runtime ServiceAccount is also bound offline to the exact
+  Enablement package and contains no RBAC or implicit Pod credential.
 
 ---
 

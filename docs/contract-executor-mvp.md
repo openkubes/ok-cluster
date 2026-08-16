@@ -1248,6 +1248,13 @@ receipt contains only authority, expiry, CA/evidence/object digests and object
 names. Changing the previously verified Enablement package identity fails
 closed. No credential or Job is installed by this checkpoint.
 
+`ok147-enablement-stage-runtime-prerequisite/v1` independently binds the exact
+shared `ok147-contract-executor-runtime` ServiceAccount manifest to the same
+Enablement package. The accepted manifest contains one tokenless ServiceAccount
+only: no Role, binding, Secret or implicit Pod credential. Its canonical object
+digest, source-manifest digest, `ok-mgmt` authority and package digest are
+retained in a redaction-safe receipt. This step is also entirely offline.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
