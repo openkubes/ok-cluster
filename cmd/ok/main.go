@@ -26,13 +26,15 @@ import (
 )
 
 const (
-	ledgerNamespace = "openkubes-execution-system"
-	stageRunTimeout = 10 * time.Minute
+	ledgerNamespace    = "openkubes-execution-system"
+	stageRunTimeout    = 10 * time.Minute
+	stageLaunchTimeout = 5 * time.Minute
 )
 
 var (
 	version                 = "0.0.0-dev"
 	revision                = "unknown"
+	sha256DigestPattern     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	stageReceiptFlagPattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
 )
 
@@ -66,6 +68,25 @@ var prepareSubmissionStageLaunch = func(config runner.SubmissionStageLaunchMater
 		Format: "ok147-submission-stage-launch-preparation/v1", State: "PREPARED",
 		Material: materialReceipt, Candidate: candidateReceipt, MutationAllowed: false,
 	}, nil
+}
+
+var executeSubmissionStageLaunch = func(ctx context.Context, config runner.SubmissionStageLaunchMaterialConfig, authority runner.KubernetesAuthorityConfig, expectedCandidateDigest string) (runner.SubmissionStageLaunchReceipt, error) {
+	material, err := runner.BuildSubmissionStageLaunchMaterial(config)
+	if err != nil {
+		return runner.SubmissionStageLaunchReceipt{}, err
+	}
+	candidate, err := material.CandidateReceipt()
+	if err != nil {
+		return runner.SubmissionStageLaunchReceipt{}, err
+	}
+	authority.AuthorityIdentity = candidate.Authority
+	launcher, err := material.Open(runner.SubmissionStageLaunchOpenConfig{
+		Authority: authority, Clock: func() time.Time { return time.Now().UTC() }, ExpectedCandidateDigest: expectedCandidateDigest,
+	})
+	if err != nil {
+		return runner.SubmissionStageLaunchReceipt{}, err
+	}
+	return launcher.Launch(ctx)
 }
 
 type createPlan struct {
@@ -278,7 +299,10 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "prepare" {
 		return runClusterStageLaunchPrepare(arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ...")
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
+		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
+	}
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -606,94 +630,117 @@ func (values *stageLaunchCredentialFlags) source(prefix string) (runner.Submissi
 	}, nil
 }
 
+type stageLaunchMaterialFlags struct {
+	bundle                                                                                       *stageBundleFlags
+	jobTemplate, jobTemplateDigest, runID, imageDigest, inputConfigMap                           *string
+	ledgerAPIURL, ledgerAPICIDR, ledgerCredentialSecret                                          *string
+	authorityAPIURL, authorityAPICIDR, authorityCredentialSecret                                 *string
+	materializedAt, runtimeManifest, runtimeManifestDigest                                       *string
+	installerAPIEndpoint, installerCADigest, installerTokenDigest, installerEvidence, preparedAt *string
+	ledgerCredential, authorityCredential                                                        *stageLaunchCredentialFlags
+}
+
+func addStageLaunchMaterialFlags(flags *flag.FlagSet) *stageLaunchMaterialFlags {
+	values := &stageLaunchMaterialFlags{bundle: addStageBundleFlags(flags)}
+	values.jobTemplate = flags.String("job-template", "", "path to the bounded submission-stage Job template")
+	values.jobTemplateDigest = flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	values.runID = flags.String("run-id", "", "bounded OK-147 Job identity")
+	values.imageDigest = flags.String("image", "", "digest-pinned ok image")
+	values.inputConfigMap = flags.String("input-configmap", "", "immutable input ConfigMap name")
+	values.ledgerAPIURL = flags.String("ledger-api-url", "", "exact management-ledger HTTPS IP endpoint")
+	values.ledgerAPICIDR = flags.String("ledger-api-cidr", "", "single-address management-ledger CIDR")
+	values.ledgerCredentialSecret = flags.String("ledger-credential-secret", "", "ledger credential Secret name")
+	values.authorityAPIURL = flags.String("authority-api-url", "", "exact selected-authority HTTPS IP endpoint")
+	values.authorityAPICIDR = flags.String("authority-api-cidr", "", "single-address selected-authority CIDR")
+	values.authorityCredentialSecret = flags.String("authority-credential-secret", "", "authority credential Secret name")
+	values.materializedAt = flags.String("credential-materialized-at", "", "exact credential materialization time")
+	values.ledgerCredential = addStageLaunchCredentialFlags(flags, "ledger-job", "ledger Job credential")
+	values.authorityCredential = addStageLaunchCredentialFlags(flags, "authority-job", "selected-authority Job credential")
+	values.runtimeManifest = flags.String("runtime-manifest", "", "path to the tokenless runtime ServiceAccount manifest")
+	values.runtimeManifestDigest = flags.String("runtime-manifest-digest", "", "expected runtime manifest digest")
+	values.installerAPIEndpoint = flags.String("installer-api-endpoint", "", "exact management installer HTTPS IP endpoint")
+	values.installerCADigest = flags.String("installer-ca-digest", "", "expected management installer CA digest")
+	values.installerTokenDigest = flags.String("installer-token-digest", "", "private expected management installer token digest")
+	values.installerEvidence = flags.String("installer-tokenrequest-evidence-digest", "", "management installer TokenRequest evidence digest")
+	values.preparedAt = flags.String("prepared-at", "", "exact launch candidate preparation time")
+	return values
+}
+
+func (values *stageLaunchMaterialFlags) config() (runner.SubmissionStageLaunchMaterialConfig, error) {
+	bundleConfig, err := values.bundle.config()
+	if err != nil {
+		return runner.SubmissionStageLaunchMaterialConfig{}, err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--job-template", *values.jobTemplate}, {"--job-template-digest", *values.jobTemplateDigest}, {"--run-id", *values.runID}, {"--image", *values.imageDigest},
+		{"--input-configmap", *values.inputConfigMap}, {"--ledger-api-url", *values.ledgerAPIURL}, {"--ledger-api-cidr", *values.ledgerAPICIDR},
+		{"--ledger-credential-secret", *values.ledgerCredentialSecret}, {"--authority-api-url", *values.authorityAPIURL},
+		{"--authority-api-cidr", *values.authorityAPICIDR}, {"--authority-credential-secret", *values.authorityCredentialSecret},
+		{"--credential-materialized-at", *values.materializedAt}, {"--runtime-manifest", *values.runtimeManifest},
+		{"--runtime-manifest-digest", *values.runtimeManifestDigest}, {"--installer-api-endpoint", *values.installerAPIEndpoint},
+		{"--installer-ca-digest", *values.installerCADigest}, {"--installer-token-digest", *values.installerTokenDigest},
+		{"--installer-tokenrequest-evidence-digest", *values.installerEvidence}, {"--prepared-at", *values.preparedAt},
+	} {
+		if input.value == "" {
+			return runner.SubmissionStageLaunchMaterialConfig{}, fmt.Errorf("%s is required", input.name)
+		}
+	}
+	materializationTime, err := time.Parse(time.RFC3339, *values.materializedAt)
+	if err != nil {
+		return runner.SubmissionStageLaunchMaterialConfig{}, fmt.Errorf("parse credential materialization time: %w", err)
+	}
+	candidateTime, err := time.Parse(time.RFC3339, *values.preparedAt)
+	if err != nil {
+		return runner.SubmissionStageLaunchMaterialConfig{}, fmt.Errorf("parse candidate preparation time: %w", err)
+	}
+	ledgerSource, err := values.ledgerCredential.source("ledger-job")
+	if err != nil {
+		return runner.SubmissionStageLaunchMaterialConfig{}, err
+	}
+	authoritySource, err := values.authorityCredential.source("authority-job")
+	if err != nil {
+		return runner.SubmissionStageLaunchMaterialConfig{}, err
+	}
+	template, err := readBoundedLocalFile(*values.jobTemplate, 1024*1024)
+	if err != nil {
+		return runner.SubmissionStageLaunchMaterialConfig{}, fmt.Errorf("read Job template: %w", err)
+	}
+	runtimeRaw, err := readBoundedLocalFile(*values.runtimeManifest, 128*1024)
+	if err != nil {
+		return runner.SubmissionStageLaunchMaterialConfig{}, fmt.Errorf("read runtime manifest: %w", err)
+	}
+	return runner.SubmissionStageLaunchMaterialConfig{
+		Package: runner.SubmissionStagePackageConfig{
+			Bundle: bundleConfig, JobTemplate: template, JobTemplateDigest: *values.jobTemplateDigest,
+			RunID: *values.runID, ImageDigest: *values.imageDigest, InputConfigMap: *values.inputConfigMap,
+			LedgerAPIURL: *values.ledgerAPIURL, LedgerAPICIDR: *values.ledgerAPICIDR, LedgerCredentialSecret: *values.ledgerCredentialSecret,
+			AuthorityAPIURL: *values.authorityAPIURL, AuthorityAPICIDR: *values.authorityAPICIDR, AuthorityCredentialSecret: *values.authorityCredentialSecret,
+		},
+		MaterializationTime: materializationTime, Ledger: ledgerSource, SelectedAuthority: authoritySource,
+		RuntimeManifest: runtimeRaw, RuntimeManifestDigest: *values.runtimeManifestDigest,
+		Candidate: runner.SubmissionStageLaunchCandidateConfig{
+			AuthorityEndpoint: *values.installerAPIEndpoint, CABundleDigest: *values.installerCADigest,
+			InstallerTokenDigest: *values.installerTokenDigest, InstallerCredentialEvidenceDigest: *values.installerEvidence,
+			PreparedAt: candidateTime,
+		},
+	}, nil
+}
+
 func runClusterStageLaunchPrepare(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster stage launch prepare", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	bundleFlags := addStageBundleFlags(flags)
-	jobTemplate := flags.String("job-template", "", "path to the bounded submission-stage Job template")
-	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
-	runID := flags.String("run-id", "", "bounded OK-147 Job identity")
-	imageDigest := flags.String("image", "", "digest-pinned ok image")
-	inputConfigMap := flags.String("input-configmap", "", "immutable input ConfigMap name")
-	ledgerAPIURL := flags.String("ledger-api-url", "", "exact management-ledger HTTPS IP endpoint")
-	ledgerAPICIDR := flags.String("ledger-api-cidr", "", "single-address management-ledger CIDR")
-	ledgerCredentialSecret := flags.String("ledger-credential-secret", "", "ledger credential Secret name")
-	authorityAPIURL := flags.String("authority-api-url", "", "exact selected-authority HTTPS IP endpoint")
-	authorityAPICIDR := flags.String("authority-api-cidr", "", "single-address selected-authority CIDR")
-	authorityCredentialSecret := flags.String("authority-credential-secret", "", "authority credential Secret name")
-	materializedAt := flags.String("credential-materialized-at", "", "exact credential materialization time")
-	ledgerCredential := addStageLaunchCredentialFlags(flags, "ledger-job", "ledger Job credential")
-	authorityCredential := addStageLaunchCredentialFlags(flags, "authority-job", "selected-authority Job credential")
-	runtimeManifest := flags.String("runtime-manifest", "", "path to the tokenless runtime ServiceAccount manifest")
-	runtimeManifestDigest := flags.String("runtime-manifest-digest", "", "expected runtime manifest digest")
-	installerAPIEndpoint := flags.String("installer-api-endpoint", "", "exact management installer HTTPS IP endpoint")
-	installerCADigest := flags.String("installer-ca-digest", "", "expected management installer CA digest")
-	installerTokenDigest := flags.String("installer-token-digest", "", "private expected management installer token digest")
-	installerEvidenceDigest := flags.String("installer-tokenrequest-evidence-digest", "", "management installer TokenRequest evidence digest")
-	preparedAt := flags.String("prepared-at", "", "exact launch candidate preparation time")
+	materialFlags := addStageLaunchMaterialFlags(flags)
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("positional arguments are not accepted")
 	}
-	bundleConfig, err := bundleFlags.config()
+	config, err := materialFlags.config()
 	if err != nil {
 		return err
 	}
-	for _, input := range []struct{ name, value string }{
-		{"--job-template", *jobTemplate}, {"--job-template-digest", *jobTemplateDigest}, {"--run-id", *runID}, {"--image", *imageDigest},
-		{"--input-configmap", *inputConfigMap}, {"--ledger-api-url", *ledgerAPIURL}, {"--ledger-api-cidr", *ledgerAPICIDR},
-		{"--ledger-credential-secret", *ledgerCredentialSecret}, {"--authority-api-url", *authorityAPIURL},
-		{"--authority-api-cidr", *authorityAPICIDR}, {"--authority-credential-secret", *authorityCredentialSecret},
-		{"--credential-materialized-at", *materializedAt}, {"--runtime-manifest", *runtimeManifest},
-		{"--runtime-manifest-digest", *runtimeManifestDigest}, {"--installer-api-endpoint", *installerAPIEndpoint},
-		{"--installer-ca-digest", *installerCADigest}, {"--installer-token-digest", *installerTokenDigest},
-		{"--installer-tokenrequest-evidence-digest", *installerEvidenceDigest}, {"--prepared-at", *preparedAt},
-	} {
-		if input.value == "" {
-			return fmt.Errorf("%s is required", input.name)
-		}
-	}
-	materializationTime, err := time.Parse(time.RFC3339, *materializedAt)
-	if err != nil {
-		return fmt.Errorf("parse credential materialization time: %w", err)
-	}
-	candidateTime, err := time.Parse(time.RFC3339, *preparedAt)
-	if err != nil {
-		return fmt.Errorf("parse candidate preparation time: %w", err)
-	}
-	ledgerSource, err := ledgerCredential.source("ledger-job")
-	if err != nil {
-		return err
-	}
-	authoritySource, err := authorityCredential.source("authority-job")
-	if err != nil {
-		return err
-	}
-	template, err := readBoundedLocalFile(*jobTemplate, 1024*1024)
-	if err != nil {
-		return fmt.Errorf("read Job template: %w", err)
-	}
-	runtimeRaw, err := readBoundedLocalFile(*runtimeManifest, 128*1024)
-	if err != nil {
-		return fmt.Errorf("read runtime manifest: %w", err)
-	}
-	preparation, err := prepareSubmissionStageLaunch(runner.SubmissionStageLaunchMaterialConfig{
-		Package: runner.SubmissionStagePackageConfig{
-			Bundle: bundleConfig, JobTemplate: template, JobTemplateDigest: *jobTemplateDigest,
-			RunID: *runID, ImageDigest: *imageDigest, InputConfigMap: *inputConfigMap,
-			LedgerAPIURL: *ledgerAPIURL, LedgerAPICIDR: *ledgerAPICIDR, LedgerCredentialSecret: *ledgerCredentialSecret,
-			AuthorityAPIURL: *authorityAPIURL, AuthorityAPICIDR: *authorityAPICIDR, AuthorityCredentialSecret: *authorityCredentialSecret,
-		},
-		MaterializationTime: materializationTime, Ledger: ledgerSource, SelectedAuthority: authoritySource,
-		RuntimeManifest: runtimeRaw, RuntimeManifestDigest: *runtimeManifestDigest,
-		Candidate: runner.SubmissionStageLaunchCandidateConfig{
-			AuthorityEndpoint: *installerAPIEndpoint, CABundleDigest: *installerCADigest,
-			InstallerTokenDigest: *installerTokenDigest, InstallerCredentialEvidenceDigest: *installerEvidenceDigest,
-			PreparedAt: candidateTime,
-		},
-	})
+	preparation, err := prepareSubmissionStageLaunch(config)
 	if err != nil {
 		return err
 	}
@@ -701,6 +748,54 @@ func runClusterStageLaunchPrepare(arguments []string, stdout, stderr io.Writer) 
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(preparation)
+}
+
+func runClusterStageLaunchExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage launch execute", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	materialFlags := addStageLaunchMaterialFlags(flags)
+	execute := flags.Bool("execute", false, "perform the exact single-use six-object launch")
+	expectedCandidateDigest := flags.String("expected-candidate-digest", "", "exact digest emitted by launch prepare")
+	installerTokenFile := flags.String("installer-token-file", "", "bounded short-lived management installer token file")
+	installerCAFile := flags.String("installer-ca-file", "", "bounded management installer CA file")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("stage launch mutation requires explicit --execute")
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--expected-candidate-digest", *expectedCandidateDigest}, {"--installer-token-file", *installerTokenFile}, {"--installer-ca-file", *installerCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*expectedCandidateDigest) {
+		return errors.New("--expected-candidate-digest must be sha256:<64 lowercase hex>")
+	}
+	config, err := materialFlags.config()
+	if err != nil {
+		return err
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, stageLaunchTimeout)
+	defer cancel()
+	receipt, launchErr := executeSubmissionStageLaunch(boundedContext, config, runner.KubernetesAuthorityConfig{
+		Endpoint: config.Candidate.AuthorityEndpoint, TokenFile: *installerTokenFile,
+		CAFile: *installerCAFile, CABundleDigest: config.Candidate.CABundleDigest,
+	}, *expectedCandidateDigest)
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return launchErr
 }
 
 func readBoundedLocalFile(path string, maximum int64) ([]byte, error) {

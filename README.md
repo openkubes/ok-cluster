@@ -50,8 +50,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   correlates all package, credential, runtime and candidate inputs without
   exposing their bytes or contacting Kubernetes. `ok cluster stage launch
   prepare` exposes only the redacted material/candidate receipts and rejects
-  execution. The runner image is digest-pinned, multi-architecture, non-root,
-  SBOM- and provenance-producing behind a protected publisher.
+  execution. A separate `ok cluster stage launch execute` boundary requires the
+  exact prepared candidate, explicit `--execute`, bounded installer credentials
+  and a single-use global-preflight launcher. The runner image is digest-pinned,
+  multi-architecture, non-root, SBOM- and provenance-producing behind a
+  protected publisher.
 
 ---
 

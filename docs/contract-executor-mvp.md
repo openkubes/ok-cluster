@@ -1377,6 +1377,31 @@ client is constructed. A future execution command must rebuild the same
 material, require the exact emitted candidate digest and retain a separate
 critical live-authorization boundary.
 
+That separate boundary is exposed as:
+
+```text
+ok cluster stage launch execute
+  + every exact preparation input
+  + --execute
+  + --expected-candidate-digest sha256:...
+  + --installer-token-file PATH
+  + --installer-ca-file PATH
+```
+
+The command rejects missing or malformed candidate identity before rebuilding
+the launch material. It then rebuilds the complete private material, requires
+the recomputed candidate to equal the separately supplied digest, and only
+after that opens the bounded installer credential. Execution has a five-minute
+outer deadline and delegates to the single-use launcher: all six exact GET
+preflights complete before the first create, followed by at most six fixed-order
+create requests. There is no update, patch, apply, delete, list, watch, retry or
+rollback path.
+
+The command emits the redaction-safe launch receipt whenever the launcher
+returns one, including `STOPPED_ZERO_WRITE` or
+`STOPPED_PARTIAL_OR_UNKNOWN`. A stopped receipt is evidence of the observed
+boundary, never permission for an automatic retry.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

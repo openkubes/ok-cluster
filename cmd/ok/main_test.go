@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -426,6 +427,124 @@ func TestStageLaunchPrepareRejectsExecuteIncompleteAndSymlinkInputs(t *testing.T
 	}
 }
 
+func TestStageLaunchExecuteUsesExactSingleUseBoundary(t *testing.T) {
+	previous := executeSubmissionStageLaunch
+	defer func() { executeSubmissionStageLaunch = previous }()
+	var calls int
+	var capturedAuthority runner.KubernetesAuthorityConfig
+	var capturedCandidate string
+	executeSubmissionStageLaunch = func(ctx context.Context, config runner.SubmissionStageLaunchMaterialConfig, authority runner.KubernetesAuthorityConfig, expectedCandidateDigest string) (runner.SubmissionStageLaunchReceipt, error) {
+		calls++
+		capturedAuthority, capturedCandidate = authority, expectedCandidateDigest
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > stageLaunchTimeout {
+			t.Fatal("stage launch context is not bounded")
+		}
+		if config.Package.RunID != "ok147-provider-20260816-01" || config.Candidate.AuthorityEndpoint != "https://192.0.2.12:6443" {
+			t.Fatalf("stage launch material differs: %#v", config)
+		}
+		return runner.SubmissionStageLaunchReceipt{
+			Format: runner.SubmissionStageLaunchReceiptFormat, StageID: "provider-prerequisites", Authority: "ok-mgmt",
+			State: "LAUNCHED", MutationState: "ATTEMPTED", Results: []runner.SubmissionStageLaunchResult{},
+		}, nil
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "job.yaml.tpl")
+	runtimeManifest := filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	arguments := stageLaunchExecuteArguments(template, runtimeManifest)
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 1 || capturedCandidate != testSHA("9") {
+		t.Fatalf("exact launch candidate was not used: calls=%d digest=%q", calls, capturedCandidate)
+	}
+	if capturedAuthority.Endpoint != "https://192.0.2.12:6443" || capturedAuthority.TokenFile != "/private/tmp/installer-token" || capturedAuthority.CAFile != "/private/tmp/installer-ca" || capturedAuthority.CABundleDigest != testSHA("2") {
+		t.Fatalf("installer authority differs: %#v", capturedAuthority)
+	}
+	var receipt runner.SubmissionStageLaunchReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Format != runner.SubmissionStageLaunchReceiptFormat || receipt.State != "LAUNCHED" || receipt.MutationState != "ATTEMPTED" {
+		t.Fatalf("launch receipt differs: %#v", receipt)
+	}
+}
+
+func TestStageLaunchExecuteFailsClosedBeforeLauncher(t *testing.T) {
+	previous := executeSubmissionStageLaunch
+	defer func() { executeSubmissionStageLaunch = previous }()
+	var calls int
+	executeSubmissionStageLaunch = func(context.Context, runner.SubmissionStageLaunchMaterialConfig, runner.KubernetesAuthorityConfig, string) (runner.SubmissionStageLaunchReceipt, error) {
+		calls++
+		return runner.SubmissionStageLaunchReceipt{}, nil
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "job.yaml.tpl")
+	runtimeManifest := filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	valid := stageLaunchExecuteArguments(template, runtimeManifest)
+	for name, arguments := range map[string][]string{
+		"missing execute":           removeArgument(valid, "--execute"),
+		"missing candidate":         removeArgumentWithValue(valid, "--expected-candidate-digest"),
+		"malformed candidate":       replaceArgument(valid, "--expected-candidate-digest", "sha256:ABC"),
+		"missing installer token":   removeArgumentWithValue(valid, "--installer-token-file"),
+		"missing installer CA file": removeArgumentWithValue(valid, "--installer-ca-file"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatal("unsafe stage launch input was accepted")
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("launcher was reached %d times for invalid input", calls)
+	}
+}
+
+func TestStageLaunchExecuteEmitsStoppedReceipt(t *testing.T) {
+	previous := executeSubmissionStageLaunch
+	defer func() { executeSubmissionStageLaunch = previous }()
+	executeSubmissionStageLaunch = func(context.Context, runner.SubmissionStageLaunchMaterialConfig, runner.KubernetesAuthorityConfig, string) (runner.SubmissionStageLaunchReceipt, error) {
+		return runner.SubmissionStageLaunchReceipt{
+			Format: runner.SubmissionStageLaunchReceiptFormat, StageID: "provider-prerequisites", Authority: "ok-mgmt",
+			State: "STOPPED_ZERO_WRITE", MutationState: "NOT_ATTEMPTED", Results: []runner.SubmissionStageLaunchResult{},
+		}, errors.New("bounded launch stopped")
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "job.yaml.tpl")
+	runtimeManifest := filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageLaunchExecuteArguments(template, runtimeManifest), &stdout, &stderr); err == nil {
+		t.Fatal("stopped launch returned success")
+	}
+	var receipt runner.SubmissionStageLaunchReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" {
+		t.Fatalf("stopped launch receipt was lost: %#v", receipt)
+	}
+}
+
 func stageInspectArguments() []string {
 	return []string{
 		"cluster", "stage", "inspect",
@@ -491,6 +610,15 @@ func stageLaunchPrepareArguments(template, runtimeManifest string) []string {
 		"--installer-api-endpoint", "https://192.0.2.12:6443", "--installer-ca-digest", testSHA("2"),
 		"--installer-token-digest", testSHA("7"), "--installer-tokenrequest-evidence-digest", testSHA("8"),
 		"--prepared-at", "2026-08-16T12:01:00Z",
+	)
+}
+
+func stageLaunchExecuteArguments(template, runtimeManifest string) []string {
+	arguments := stageLaunchPrepareArguments(template, runtimeManifest)
+	arguments[3] = "execute"
+	return append(arguments,
+		"--execute", "--expected-candidate-digest", testSHA("9"),
+		"--installer-token-file", "/private/tmp/installer-token", "--installer-ca-file", "/private/tmp/installer-ca",
 	)
 }
 
