@@ -12,6 +12,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
+	"github.com/openkubes/ok-cluster/internal/stagereceipt"
 )
 
 func TestVerifyStageAcceptsExactMutatingStage(t *testing.T) {
@@ -23,7 +24,7 @@ func TestVerifyStageAcceptsExactMutatingStage(t *testing.T) {
 	}
 	payload := stagePayloadFixture(t, plan, "enablement", at)
 	raw := signStage(t, payload, publicKey, privateKey)
-	grant, err := VerifyStage(raw, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, "enablement", payload.Predecessors, at)
+	grant, err := VerifyStage(raw, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, "enablement", stagePredecessorReceipts(t, plan, "enablement", at), at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,12 +45,12 @@ func TestVerifyStageRejectsReadOnlyStageAndCrossStageReuse(t *testing.T) {
 	payload := stagePayloadFixture(t, plan, "enablement", at)
 	raw := signStage(t, payload, publicKey, privateKey)
 	key := []byte(base64.StdEncoding.EncodeToString(publicKey))
-	platformPredecessors := stagePayloadFixture(t, plan, "platform-applications", at).Predecessors
+	platformPredecessors := stagePredecessorReceipts(t, plan, "platform-applications", at)
 	if _, err := VerifyStage(raw, key, plan, "platform-applications", platformPredecessors, at); err == nil {
 		t.Fatal("enablement grant was reused for Platform submission")
 	}
 	readPayload := stagePayloadFixture(t, plan, "lifecycle-observation", at)
-	if _, err := VerifyStage(signStage(t, readPayload, publicKey, privateKey), key, plan, "lifecycle-observation", readPayload.Predecessors, at); err == nil {
+	if _, err := VerifyStage(signStage(t, readPayload, publicKey, privateKey), key, plan, "lifecycle-observation", stagePredecessorReceipts(t, plan, "lifecycle-observation", at), at); err == nil {
 		t.Fatal("mutation grant was accepted for a read-only stage")
 	}
 }
@@ -61,7 +62,7 @@ func TestVerifyStageRequiresExplicitPredecessorReceipts(t *testing.T) {
 	key := []byte(base64.StdEncoding.EncodeToString(publicKey))
 	payload := stagePayloadFixture(t, plan, "provider-prerequisites", at)
 	payload.Predecessors = nil
-	if _, err := VerifyStage(signStage(t, payload, publicKey, privateKey), key, plan, "provider-prerequisites", []StagePredecessor{}, at); err == nil {
+	if _, err := VerifyStage(signStage(t, payload, publicKey, privateKey), key, plan, "provider-prerequisites", []stagereceipt.Verified{}, at); err == nil {
 		t.Fatal("omitted empty predecessor set was accepted for the first stage")
 	}
 }
@@ -94,7 +95,7 @@ func TestVerifyStageRejectsEveryChangedBinding(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			payload := stagePayloadFixture(t, plan, "enablement", at)
 			mutate(&payload)
-			expectedPredecessors := stagePayloadFixture(t, plan, "enablement", at).Predecessors
+			expectedPredecessors := stagePredecessorReceipts(t, plan, "enablement", at)
 			if _, err := VerifyStage(signStage(t, payload, publicKey, privateKey), key, plan, "enablement", expectedPredecessors, at); err == nil {
 				t.Fatal("changed stage authorization was accepted")
 			}
@@ -109,7 +110,7 @@ func TestVerifyStageRejectsTamperingAndNonStrictEnvelope(t *testing.T) {
 	raw := signStage(t, stagePayloadFixture(t, plan, "enablement", at), publicKey, privateKey)
 	key := []byte(base64.StdEncoding.EncodeToString(publicKey))
 	tampered := strings.Replace(string(raw), `"operation":"CreateEnablement"`, `"operation":"CreateCluster"`, 1)
-	predecessors := stagePayloadFixture(t, plan, "enablement", at).Predecessors
+	predecessors := stagePredecessorReceipts(t, plan, "enablement", at)
 	if _, err := VerifyStage([]byte(tampered), key, plan, "enablement", predecessors, at); err == nil {
 		t.Fatal("tampered stage authorization was accepted")
 	}
@@ -125,9 +126,18 @@ func stagePayloadFixture(t *testing.T, plan stageplan.Binding, stageID string, a
 	if err != nil {
 		t.Fatal(err)
 	}
-	predecessors := make([]StagePredecessor, len(stage.Requires))
-	for index, predecessor := range stage.Requires {
-		predecessors[index] = StagePredecessor{StageID: predecessor, OutcomeDigest: authSHA("e")}
+	predecessorReceipts := stagePredecessorReceipts(t, plan, stageID, at)
+	predecessors := make([]StagePredecessor, len(predecessorReceipts))
+	for index, predecessor := range predecessorReceipts {
+		receipt, err := predecessor.Receipt()
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiptDigest, err := predecessor.Digest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		predecessors[index] = StagePredecessor{StageID: receipt.StageID, OutcomeDigest: receiptDigest}
 	}
 	return StagePayload{
 		Audience: StageAudience, GrantID: "ok147-stage-20260816-01", Decision: "ALLOW",
@@ -138,6 +148,29 @@ func stagePayloadFixture(t *testing.T, plan stageplan.Binding, stageID string, a
 		Predecessors: predecessors,
 		NotBefore:    at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
 	}
+}
+
+func stagePredecessorReceipts(t *testing.T, plan stageplan.Binding, stageID string, at time.Time) []stagereceipt.Verified {
+	t.Helper()
+	predecessors := []stagereceipt.Verified{}
+	for _, stage := range plan.Stages {
+		if stage.ID == stageID {
+			return predecessors
+		}
+		mutationState := "NOT_APPLICABLE"
+		operationOutcome := ""
+		if stageplan.IsMutating(stage) {
+			mutationState = "ATTEMPTED"
+			operationOutcome = authSHA("f")
+		}
+		receipt, err := stagereceipt.New(plan, stage.ID, predecessors, "SUCCEEDED", mutationState, operationOutcome, authSHA("e"), at.Add(time.Duration(stage.Order)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		predecessors = []stagereceipt.Verified{receipt}
+	}
+	t.Fatalf("stage %s is not in plan", stageID)
+	return nil
 }
 
 func signStage(t *testing.T, payload StagePayload, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey) []byte {
