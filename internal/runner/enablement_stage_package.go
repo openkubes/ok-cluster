@@ -44,9 +44,12 @@ type EnablementStagePackageReceipt struct {
 }
 
 type VerifiedEnablementStagePackage struct {
-	raw      []byte
-	receipt  EnablementStagePackageReceipt
-	verified bool
+	raw                  []byte
+	receipt              EnablementStagePackageReceipt
+	managementAuthority  string
+	ledgerCredential     string
+	managementCredential string
+	verified             bool
 }
 
 // BuildEnablementStagePackage composes an immutable input ConfigMap with one
@@ -92,21 +95,39 @@ func BuildEnablementStagePackage(config EnablementStagePackageConfig) (VerifiedE
 		JobTemplateDigest: config.JobTemplateDigest, JobEnvelopeDigest: digest.SHA256(jobRaw),
 		ObjectKinds: []string{"ConfigMap", "NetworkPolicy", "Job"}, AuthorizationState: "VERIFIED", MutationAllowed: false,
 	}
-	return VerifiedEnablementStagePackage{raw: packageRaw, receipt: receipt, verified: true}, nil
+	return VerifiedEnablementStagePackage{
+		raw: packageRaw, receipt: receipt,
+		managementAuthority: config.Bundle.PlanExpected.ManagementAuthority,
+		ledgerCredential:    config.LedgerCredentialSecret, managementCredential: config.ManagementCredentialSecret,
+		verified: true,
+	}, nil
 }
 
 func (packaged VerifiedEnablementStagePackage) Bytes() ([]byte, error) {
-	if !packaged.verified || len(packaged.raw) == 0 {
+	if err := verifyEnablementStagePackage(packaged); err != nil {
 		return nil, errors.New("enablement stage package was not produced by verification")
 	}
 	return append([]byte(nil), packaged.raw...), nil
 }
 
 func (packaged VerifiedEnablementStagePackage) Receipt() (EnablementStagePackageReceipt, error) {
-	if !packaged.verified || packaged.receipt.State != "VERIFIED" {
+	if err := verifyEnablementStagePackage(packaged); err != nil {
 		return EnablementStagePackageReceipt{}, errors.New("enablement stage package was not produced by verification")
 	}
 	receipt := packaged.receipt
 	receipt.ObjectKinds = append([]string(nil), packaged.receipt.ObjectKinds...)
 	return receipt, nil
+}
+
+func verifyEnablementStagePackage(packaged VerifiedEnablementStagePackage) error {
+	if !packaged.verified || packaged.receipt.Format != EnablementStagePackageFormat || packaged.receipt.State != "VERIFIED" || packaged.receipt.StageID != "enablement" || packaged.receipt.MutationAllowed || len(packaged.raw) == 0 || packaged.managementAuthority == "" || packaged.ledgerCredential == "" || packaged.managementCredential == "" || packaged.ledgerCredential == packaged.managementCredential {
+		return errors.New("enablement stage package identity is incomplete")
+	}
+	if digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.InputConfigMapDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.ReceiptPrefixDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.EnablementDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.JobTemplateDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.JobEnvelopeDigest) {
+		return errors.New("enablement stage package digest identity changed after verification")
+	}
+	if len(packaged.receipt.ObjectKinds) != 3 || packaged.receipt.ObjectKinds[0] != "ConfigMap" || packaged.receipt.ObjectKinds[1] != "NetworkPolicy" || packaged.receipt.ObjectKinds[2] != "Job" || packaged.receipt.AuthorizationState != "VERIFIED" {
+		return errors.New("enablement stage package object inventory changed after verification")
+	}
+	return nil
 }
