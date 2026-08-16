@@ -23,6 +23,8 @@ import (
 	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
+var _ Observer = (*observation.AggregateObserver)(nil)
+
 func TestRunCompletesOnlyAfterCurrentReadyObservation(t *testing.T) {
 	fixture := executionFixture(t)
 	store, err := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
