@@ -1288,6 +1288,15 @@ Post-verification changes to any retained component fail closed. At this
 checkpoint the material deliberately exposes neither private bytes nor an
 `Open`/execute method, so it cannot launch Kubernetes objects.
 
+`ok147-enablement-stage-launch-receipt/v1` is produced by a single-use bounded
+launcher that completes all six exact-name GETs before its first POST. It
+accepts only global absence, the already verified runtime alone, or all six
+objects matching exactly; every other partial state stops with zero writes.
+Creation is fixed to runtime, ConfigMap, NetworkPolicy, ledger Secret, writer
+Secret and Job. A failed create preserves the verified prefix and stops without
+retry. The launcher is currently exercised only through a fake Kubernetes API
+and is not exposed by the CLI or sealed launch material.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
