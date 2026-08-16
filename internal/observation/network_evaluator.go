@@ -13,9 +13,9 @@ const (
 	NetworkSnapshotFormat = "ok147-network-snapshot/v1"
 )
 
-// NetworkProfile contains the reviewed, immutable semantics behind E. A later
-// Kubernetes adapter must derive it from a digest-bound profile; this evaluator
-// deliberately has no API client or command-execution path.
+// NetworkProfile contains the reviewed, immutable semantics behind E. The
+// runner adapter loads it from a separately digest-bound strict-JSON document;
+// this evaluator deliberately has no API client or command-execution path.
 type NetworkProfile struct {
 	Format                       string        `json:"format"`
 	IntentRevision               string        `json:"intentRevision"`
@@ -133,6 +133,18 @@ func EvaluateNetworkSnapshot(policy Policy, profile NetworkProfile, snapshot Net
 	if err != nil {
 		return Evidence{}, err
 	}
+	profileDigest, err := NetworkProfileDigest(profile)
+	if err != nil {
+		return Evidence{}, err
+	}
+	evidenceDigest, err := canonicalDigest(struct {
+		Format         string `json:"format"`
+		ProfileDigest  string `json:"profileDigest"`
+		SnapshotDigest string `json:"snapshotDigest"`
+	}{Format: "ok147-network-evidence-binding/v1", ProfileDigest: profileDigest, SnapshotDigest: snapshotDigest})
+	if err != nil {
+		return Evidence{}, err
+	}
 	observedRevision := snapshot.EnablementRevision
 	if !validDigest(observedRevision) {
 		observedRevision = ""
@@ -140,10 +152,10 @@ func EvaluateNetworkSnapshot(policy Policy, profile NetworkProfile, snapshot Net
 	status, reason := evaluateNetworkState(policy, profile, snapshot)
 	evidence := Evidence{
 		Type: "NetworkReady", Source: "BoundedNetworkEvaluator",
-		SourceUID:        "network-evidence-" + snapshotDigest[len("sha256:"):len("sha256:")+32],
+		SourceUID:        "network-evidence-" + evidenceDigest[len("sha256:"):len("sha256:")+32],
 		TargetClusterUID: policy.TargetClusterUID, Status: status, Reason: reason,
 		DesiredRevision: policy.EnablementRevision, ObservedRevision: observedRevision,
-		EvidenceDigest: snapshotDigest,
+		EvidenceDigest: evidenceDigest,
 	}
 	if err := validateEvidenceShape(evidence); err != nil {
 		return Evidence{}, fmt.Errorf("normalize NetworkReady evidence: %w", err)
@@ -154,6 +166,15 @@ func EvaluateNetworkSnapshot(policy Policy, profile NetworkProfile, snapshot Net
 func validateNetworkProfile(policy Policy, profile NetworkProfile) error {
 	if profile.Format != NetworkProfileFormat || profile.IntentRevision != policy.IntentRevision || profile.EnablementRevision != policy.EnablementRevision {
 		return errors.New("network profile identity differs from observation policy")
+	}
+	return ValidateNetworkProfile(profile)
+}
+
+// ValidateNetworkProfile checks the complete intrinsic profile shape without
+// inferring its R or E identity from a runtime source.
+func ValidateNetworkProfile(profile NetworkProfile) error {
+	if profile.Format != NetworkProfileFormat || !validDigest(profile.IntentRevision) || !validDigest(profile.EnablementRevision) {
+		return errors.New("network profile format or revision identity is invalid")
 	}
 	if profile.ExpectedNodeCount < 1 || profile.ExpectedNodeCount > 100 || !validDigest(profile.ExpectedHCPSpecDigest) || !validDigest(profile.ExpectedHRPSpecDigest) {
 		return errors.New("network profile object expectations are invalid")
@@ -167,6 +188,15 @@ func validateNetworkProfile(policy Policy, profile NetworkProfile) error {
 		return errors.New("network profile probe freshness boundary is invalid")
 	}
 	return nil
+}
+
+// NetworkProfileDigest identifies the canonical semantic profile consumed by
+// NetworkReady evaluation. Whitespace and JSON object ordering are irrelevant.
+func NetworkProfileDigest(profile NetworkProfile) (string, error) {
+	if err := ValidateNetworkProfile(profile); err != nil {
+		return "", err
+	}
+	return canonicalDigest(profile)
 }
 
 func validateNetworkSnapshotShape(snapshot NetworkSnapshot) error {

@@ -555,9 +555,38 @@ deterministic outcome.
 The composer performs exactly one pass in CAPI, Network, Platform order and
 then evaluates one ordered bundle at the injected clock time. It has no polling,
 retry, watch, mutation, repair, durable status publication or default source.
-The concrete GitOps/Platform source and the immutable Network-profile loader
-remain separate checkpoints. Consequently this composition is not yet wired to
-the CLI or Job and made no cluster contact.
+The concrete GitOps/Platform source remains a separate checkpoint. The
+immutable Network-profile loader is described next. Consequently this
+composition is not yet wired to the CLI or Job and made no cluster contact.
+
+## Digest-bound Network profile loading
+
+NetworkReady expectations are no longer available only as freely constructed
+Go values. The runner can load exactly one maximum-64-KiB strict-JSON
+`ok147-network-profile/v1` document and requires three independent bindings:
+
+```text
+expected canonical profile digest
+expected Contract revision R
+expected Enablement revision E
+```
+
+The expected values must come from already verified execution inputs. Unknown
+fields, duplicate JSON keys, trailing values, malformed or mutable image
+identities, invalid HCP/HRP spec digests, unsafe node counts, and unbounded
+probe timing fail closed. The loader retains neither the source path nor raw
+document. Canonical JSON gives semantically equivalent key ordering and
+whitespace the same profile digest, while any semantic field change requires a
+new binding.
+
+NetworkReady evidence now hashes a versioned pair of the canonical profile
+digest and normalized runtime-snapshot digest. Therefore an unchanged runtime
+snapshot evaluated under different profile semantics cannot produce the same
+source identity or evidence digest. This closes the evaluator-provenance gap
+without making the profile a Kubernetes resource or introducing a reconciler.
+
+The loader is not yet wired to the CLI or Job, contains no built-in OK-141
+profile default, and performs no Kubernetes access or mutation.
 
 ## OK-141 compatibility evidence
 
