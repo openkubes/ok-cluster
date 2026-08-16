@@ -626,7 +626,8 @@ strict-JSON loaders now materialize:
 
 ```text
 Platform profile
-  ↔ expected canonical profile digest + R + P + FixtureDigest + target UID
+  ↔ expected canonical profile digest + R + P + FixtureDigest
+     + target identity scheme capi-cluster-uid/v1
 
 Capability assertion
   ↔ expected evidence digest + R + P + FixtureDigest + target UID
@@ -644,6 +645,15 @@ cannot alter the loaded assertion.
 These loaders execute no capability code and contact no Kubernetes API. The
 independent expected values still have to come from verified execution inputs;
 successful file parsing is neither provenance authority nor a GO decision.
+
+The concrete target Cluster UID is deliberately absent from the Platform
+profile and therefore from P: it does not exist until the exact CAPI Cluster
+submission response is available. The profile binds the
+`capi-cluster-uid/v1` resolution scheme and the Argo registration name. At
+observation time, the Platform collector receives the post-submission UID from
+the execution policy, rejects any different configured target before an Argo
+request, and requires the capability assertion to carry that same UID. This
+keeps pre-runtime Platform semantics separate from runtime correlation.
 
 ## OK-141 compatibility evidence
 

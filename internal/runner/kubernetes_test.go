@@ -191,7 +191,7 @@ func TestOpenKubernetesPlatformSourceCollectorBindsGitOpsAuthority(t *testing.T)
 	digest := func(character string) string { return "sha256:" + strings.Repeat(character, 64) }
 	profile := observation.PlatformProfile{
 		Format: observation.PlatformProfileFormat, IntentRevision: digest("a"), PlatformRevision: digest("b"), ExecutionFixture: digest("c"),
-		TargetClusterUID: "cluster-uid-disposable-ok141", ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
+		TargetIdentityScheme: "capi-cluster-uid/v1", ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
 		RequiredApplications:     []observation.PlatformApplicationExpectation{{Name: "disposable-ok141-observability-core", SpecDigest: digest("d")}},
 		CapabilityContractDigest: digest("e"), CapabilityExecutableDigest: digest("f"), MaximumCapabilityAgeSeconds: 3600,
 	}
@@ -199,7 +199,7 @@ func TestOpenKubernetesPlatformSourceCollectorBindsGitOpsAuthority(t *testing.T)
 		Argo: KubernetesAuthorityConfig{
 			Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok-shared", TokenFile: tokenPath, CAFile: caPath,
 		},
-		ExpectedArgoAuthority: "ok-shared", Profile: profile, Capability: inertPlatformCapabilitySource{}, Clock: time.Now,
+		ExpectedArgoAuthority: "ok-shared", Profile: profile, Capability: inertPlatformCapabilitySource{}, TargetClusterUID: "cluster-uid-disposable-ok141", Clock: time.Now,
 	}
 	if _, err := OpenKubernetesPlatformSourceCollector(config); err != nil {
 		t.Fatal(err)
