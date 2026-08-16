@@ -1915,6 +1915,22 @@ This checkpoint is the stage observer only. It adds no Kubernetes bundle, CLI,
 Job, credential opening, cluster request or infrastructure mutation. Those
 activation boundaries remain separate reviewable steps.
 
+The subsequent private bundle now supplies that environment-neutral
+composition boundary. It retains the complete reverified prefix, loads the
+strict workload-authority binding and immutable Network profile, and proves
+that the binding's raw Cluster UID hashes to the historical lifecycle digest.
+It then opens three distinct bounded capabilities: ledger writer, management
+network reader and workload network reader/probe. Management and workload
+endpoints must differ, all three bearer-token values must remain separate, and
+the HCP identity is derived from the Contract identity rather than caller
+input. Opening reads bounded local files and constructs TLS clients but makes
+no API request; only the resulting private `Run` method can invoke the existing
+crash-safe observation-stage operation.
+
+This bundle remains library-only. No CLI, Job, credential issuance, cluster
+request, persistence call or infrastructure mutation was activated by its
+construction or tests.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
