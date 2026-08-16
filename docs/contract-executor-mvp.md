@@ -1040,6 +1040,27 @@ introducing submission, claim, mutation, retry, discovery or cluster contact.
 The future Job can use the same bundle loader rather than a second artifact
 interpretation path.
 
+## Explicit local staged execution
+
+`ok cluster stage run` composes the same verified bundle with exactly one
+ledger credential and one selected write-authority credential. The command
+requires the additional literal `--execute` gate; merely supplying credentials
+or a valid grant cannot activate it. The selected cursor stage derives either
+the independently expected infrastructure or management identity, and the
+runtime still rejects equal ledger and writer token contents.
+
+Execution uses the real claim-time clock and one fixed ten-minute cancellable
+context. SIGINT and SIGTERM cancel that context. The command emits the
+redaction-safe staged-operation receipt even for a durable non-success result,
+but never retries, chooses a different stage, or exposes a generic Kubernetes
+operation. Only `provider-prerequisites` and `cluster-lifecycle` are supported;
+all later stages remain unavailable through this path.
+
+This checkpoint tests CLI composition with an injected operation and the
+concrete artifact/runtime path with local TLS material only. It does not run
+the command against a cluster, create credentials, install the CLI, activate a
+Job, or change live infrastructure.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

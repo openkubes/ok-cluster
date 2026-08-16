@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"runtime"
@@ -9,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/runner"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 func fixturePath(t *testing.T, name string) string {
@@ -162,6 +165,78 @@ func TestStageInspectRequiresCompleteInputsAndStrictReceipts(t *testing.T) {
 	}
 }
 
+func TestStageRunRequiresExplicitExecutionAndBindsOneRuntime(t *testing.T) {
+	previous := executeSubmissionStage
+	defer func() { executeSubmissionStage = previous }()
+	var capturedBundle runner.SubmissionStageBundleConfig
+	var capturedRuntime runner.SubmissionStageRuntimeConfig
+	var capturedContext context.Context
+	executeSubmissionStage = func(ctx context.Context, bundle runner.SubmissionStageBundleConfig, runtime runner.SubmissionStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+		capturedContext = ctx
+		capturedBundle, capturedRuntime = bundle, runtime
+		return execution.StagedOperationReceipt{
+			Format: execution.StagedReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: testSHA("9"),
+			StageID: "provider-prerequisites", StageReceiptDigest: testSHA("8"),
+		}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageRunArguments(), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if capturedBundle.PlanPath != "/tmp/plan.json" || capturedRuntime.Ledger.Namespace != ledgerNamespace || capturedRuntime.Ledger.TokenFile != "/tmp/ledger-token" || capturedRuntime.Authority.TokenFile != "/tmp/authority-token" {
+		t.Fatalf("unexpected bound runtime: %#v %#v", capturedBundle, capturedRuntime)
+	}
+	if capturedRuntime.Clock == nil || capturedRuntime.Clock().IsZero() {
+		t.Fatal("claim-time clock was not bound")
+	}
+	deadline, bounded := capturedContext.Deadline()
+	if !bounded || time.Until(deadline) > stageRunTimeout || time.Until(deadline) < stageRunTimeout-time.Minute {
+		t.Fatalf("stage run context is not bounded to the fixed timeout: %s %t", deadline, bounded)
+	}
+	var receipt execution.StagedOperationReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "COMPLETED_SUCCEEDED" || receipt.StageID != "provider-prerequisites" {
+		t.Fatalf("unexpected run receipt: %#v", receipt)
+	}
+}
+
+func TestStageRunFailsClosedBeforeExecution(t *testing.T) {
+	withoutExecute := stageRunArguments()
+	withoutExecute = removeArgument(withoutExecute, "--execute")
+	withoutAuthorityToken := stageRunArguments()
+	withoutAuthorityToken = removeArgumentWithValue(withoutAuthorityToken, "--authority-token-file")
+	for name, arguments := range map[string][]string{
+		"missing execute":         withoutExecute,
+		"missing runtime binding": withoutAuthorityToken,
+		"positional":              append(stageRunArguments(), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil {
+				t.Fatal("unsafe stage run was accepted")
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("unexpected stdout: %s", stdout.String())
+			}
+		})
+	}
+}
+
+func TestSubmissionStageAuthorityIsDerivedFromVerifiedTopology(t *testing.T) {
+	expected := stageplan.Expected{InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt"}
+	for symbolic, want := range map[string]string{"infrastructure": "ok-infra", "management": "ok-mgmt"} {
+		got, err := submissionStageAuthority(stagecursor.Decision{Authority: symbolic}, expected)
+		if err != nil || got != want {
+			t.Fatalf("authority %s resolved to %q: %v", symbolic, got, err)
+		}
+	}
+	if _, err := submissionStageAuthority(stagecursor.Decision{Authority: "gitops"}, expected); err == nil {
+		t.Fatal("unsupported authority was accepted")
+	}
+}
+
 func stageInspectArguments() []string {
 	return []string{
 		"cluster", "stage", "inspect",
@@ -173,12 +248,42 @@ func stageInspectArguments() []string {
 	}
 }
 
+func stageRunArguments() []string {
+	arguments := stageInspectArguments()
+	arguments[2] = "run"
+	return append(arguments,
+		"--execute",
+		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
+		"--authority-api-endpoint", "https://192.0.2.11:6443", "--authority-token-file", "/tmp/authority-token", "--authority-ca-file", "/tmp/authority-ca",
+	)
+}
+
 func replaceArgument(arguments []string, name, value string) []string {
 	result := append([]string(nil), arguments...)
 	for index := range result {
 		if result[index] == name && index+1 < len(result) {
 			result[index+1] = value
 			return result
+		}
+	}
+	return result
+}
+
+func removeArgument(arguments []string, name string) []string {
+	result := append([]string(nil), arguments...)
+	for index := range result {
+		if result[index] == name {
+			return append(result[:index], result[index+1:]...)
+		}
+	}
+	return result
+}
+
+func removeArgumentWithValue(arguments []string, name string) []string {
+	result := append([]string(nil), arguments...)
+	for index := range result {
+		if result[index] == name && index+1 < len(result) {
+			return append(result[:index], result[index+2:]...)
 		}
 	}
 	return result

@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/contract"
+	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/executor"
 	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/projection"
@@ -24,6 +27,7 @@ import (
 
 const (
 	ledgerNamespace = "openkubes-execution-system"
+	stageRunTimeout = 10 * time.Minute
 )
 
 var (
@@ -64,6 +68,78 @@ func (values *receiptFlags) Set(value string) error {
 	return nil
 }
 
+type stageBundleFlags struct {
+	planPath, contractNamespace, contractName                     *string
+	intentRevision, enablementRevision, platformRevision          *string
+	executionFixture                                              *string
+	infrastructureAuthority, managementAuthority, gitOpsAuthority *string
+	grantPath, grantKeyPath, projectionManifest, projectionRoot   *string
+	evaluationTime                                                *string
+	receipts                                                      receiptFlags
+}
+
+func addStageBundleFlags(flags *flag.FlagSet) *stageBundleFlags {
+	values := &stageBundleFlags{}
+	values.planPath = flags.String("plan", "", "path to the bounded staged execution plan")
+	values.contractNamespace = flags.String("contract-namespace", "", "expected Contract namespace")
+	values.contractName = flags.String("contract-name", "", "expected Contract name")
+	values.intentRevision = flags.String("intent-revision", "", "expected normalized Contract revision R")
+	values.enablementRevision = flags.String("enablement-revision", "", "expected Enablement revision E")
+	values.platformRevision = flags.String("platform-revision", "", "expected Platform revision P")
+	values.executionFixture = flags.String("execution-fixture", "", "expected execution FixtureDigest")
+	values.infrastructureAuthority = flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
+	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
+	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
+	flags.Var(&values.receipts, "receipt", "ordered canonical predecessor receipt as PATH@sha256:<digest>; repeat for each receipt")
+	values.grantPath = flags.String("grant", "", "path to the signed single-stage grant")
+	values.grantKeyPath = flags.String("grant-key", "", "path to the trusted stage-authority public key")
+	values.projectionManifest = flags.String("projection-manifest", "", "path to the immutable projection manifest")
+	values.projectionRoot = flags.String("projection-root", "", "directory containing projection artifacts (defaults to manifest directory)")
+	values.evaluationTime = flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
+	return values
+}
+
+func (values *stageBundleFlags) config() (runner.SubmissionStageBundleConfig, error) {
+	required := []struct {
+		name  string
+		value string
+	}{
+		{"--plan", *values.planPath}, {"--contract-namespace", *values.contractNamespace}, {"--contract-name", *values.contractName},
+		{"--intent-revision", *values.intentRevision}, {"--enablement-revision", *values.enablementRevision}, {"--platform-revision", *values.platformRevision},
+		{"--execution-fixture", *values.executionFixture}, {"--infrastructure-authority", *values.infrastructureAuthority},
+		{"--management-authority", *values.managementAuthority}, {"--gitops-authority", *values.gitOpsAuthority},
+		{"--grant", *values.grantPath}, {"--grant-key", *values.grantKeyPath}, {"--projection-manifest", *values.projectionManifest}, {"--evaluation-time", *values.evaluationTime},
+	}
+	for _, input := range required {
+		if input.value == "" {
+			return runner.SubmissionStageBundleConfig{}, fmt.Errorf("%s is required", input.name)
+		}
+	}
+	at, err := time.Parse(time.RFC3339, *values.evaluationTime)
+	if err != nil {
+		return runner.SubmissionStageBundleConfig{}, fmt.Errorf("parse evaluation time: %w", err)
+	}
+	receipts := make([]runner.StageReceiptSource, 0, len(values.receipts))
+	for _, value := range values.receipts {
+		if !stageReceiptFlagPattern.MatchString(value) {
+			return runner.SubmissionStageBundleConfig{}, errors.New("receipt must use PATH@sha256:<64 lowercase hex> format")
+		}
+		separator := strings.LastIndex(value, "@sha256:")
+		receipts = append(receipts, runner.StageReceiptSource{Path: value[:separator], Digest: value[separator+1:]})
+	}
+	return runner.SubmissionStageBundleConfig{
+		PlanPath: *values.planPath,
+		PlanExpected: stageplan.Expected{
+			ContractIdentity: contract.Identity{Namespace: *values.contractNamespace, Name: *values.contractName},
+			IntentRevision:   *values.intentRevision, EnablementRevision: *values.enablementRevision,
+			PlatformRevision: *values.platformRevision, ExecutionFixture: *values.executionFixture,
+			InfrastructureAuthority: *values.infrastructureAuthority, ManagementAuthority: *values.managementAuthority, GitOpsAuthority: *values.gitOpsAuthority,
+		},
+		Receipts: receipts, GrantPath: *values.grantPath, GrantPublicKeyPath: *values.grantKeyPath,
+		ProjectionManifestPath: *values.projectionManifest, ProjectionRoot: *values.projectionRoot, EvaluationTime: at,
+	}, nil
+}
+
 var inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (stageInspection, error) {
 	bundle, err := runner.LoadSubmissionStageBundle(config)
 	if err != nil {
@@ -79,14 +155,52 @@ var inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (st
 	}, nil
 }
 
+var executeSubmissionStage = func(ctx context.Context, bundleConfig runner.SubmissionStageBundleConfig, runtimeConfig runner.SubmissionStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+	bundle, err := runner.LoadSubmissionStageBundle(bundleConfig)
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	decision, err := bundle.Decision()
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	authorityIdentity, err := submissionStageAuthority(decision, bundleConfig.PlanExpected)
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	runtimeConfig.Authority.AuthorityIdentity = authorityIdentity
+	bound, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	return bound.Run(ctx)
+}
+
+func submissionStageAuthority(decision stagecursor.Decision, expected stageplan.Expected) (string, error) {
+	switch decision.Authority {
+	case "infrastructure":
+		return expected.InfrastructureAuthority, nil
+	case "management":
+		return expected.ManagementAuthority, nil
+	default:
+		return "", errors.New("selected stage has no supported Kubernetes submission authority")
+	}
+}
+
 func main() {
-	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runContext(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		os.Exit(2)
 	}
 }
 
 func run(arguments []string, stdout, stderr io.Writer) error {
+	return runContext(context.Background(), arguments, stdout, stderr)
+}
+
+func runContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 1 && arguments[0] == "version" {
 		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil
@@ -97,7 +211,10 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "inspect" {
 		return runClusterStageInspect(arguments[3:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ...")
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" {
+		return runClusterStageRun(ctx, arguments[3:], stdout, stderr)
+	}
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -233,67 +350,18 @@ func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
 func runClusterStageInspect(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster stage inspect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	planPath := flags.String("plan", "", "path to the bounded staged execution plan")
-	contractNamespace := flags.String("contract-namespace", "", "expected Contract namespace")
-	contractName := flags.String("contract-name", "", "expected Contract name")
-	intentRevision := flags.String("intent-revision", "", "expected normalized Contract revision R")
-	enablementRevision := flags.String("enablement-revision", "", "expected Enablement revision E")
-	platformRevision := flags.String("platform-revision", "", "expected Platform revision P")
-	executionFixture := flags.String("execution-fixture", "", "expected execution FixtureDigest")
-	infrastructureAuthority := flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
-	managementAuthority := flags.String("management-authority", "", "expected management authority identity")
-	gitOpsAuthority := flags.String("gitops-authority", "", "expected GitOps authority identity")
-	var receiptValues receiptFlags
-	flags.Var(&receiptValues, "receipt", "ordered canonical predecessor receipt as PATH@sha256:<digest>; repeat for each receipt")
-	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
-	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
-	projectionManifest := flags.String("projection-manifest", "", "path to the immutable projection manifest")
-	projectionRoot := flags.String("projection-root", "", "directory containing projection artifacts (defaults to manifest directory)")
-	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
+	bundleFlags := addStageBundleFlags(flags)
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("positional arguments are not accepted")
 	}
-	required := []struct {
-		name  string
-		value string
-	}{
-		{"--plan", *planPath}, {"--contract-namespace", *contractNamespace}, {"--contract-name", *contractName},
-		{"--intent-revision", *intentRevision}, {"--enablement-revision", *enablementRevision}, {"--platform-revision", *platformRevision},
-		{"--execution-fixture", *executionFixture}, {"--infrastructure-authority", *infrastructureAuthority},
-		{"--management-authority", *managementAuthority}, {"--gitops-authority", *gitOpsAuthority},
-		{"--grant", *grantPath}, {"--grant-key", *grantKeyPath}, {"--projection-manifest", *projectionManifest}, {"--evaluation-time", *evaluationTime},
-	}
-	for _, input := range required {
-		if input.value == "" {
-			return fmt.Errorf("%s is required", input.name)
-		}
-	}
-	at, err := time.Parse(time.RFC3339, *evaluationTime)
+	bundleConfig, err := bundleFlags.config()
 	if err != nil {
-		return fmt.Errorf("parse evaluation time: %w", err)
+		return err
 	}
-	receipts := make([]runner.StageReceiptSource, 0, len(receiptValues))
-	for _, value := range receiptValues {
-		if !stageReceiptFlagPattern.MatchString(value) {
-			return errors.New("receipt must use PATH@sha256:<64 lowercase hex> format")
-		}
-		separator := strings.LastIndex(value, "@sha256:")
-		receipts = append(receipts, runner.StageReceiptSource{Path: value[:separator], Digest: value[separator+1:]})
-	}
-	inspection, err := inspectSubmissionStage(runner.SubmissionStageBundleConfig{
-		PlanPath: *planPath,
-		PlanExpected: stageplan.Expected{
-			ContractIdentity: contract.Identity{Namespace: *contractNamespace, Name: *contractName},
-			IntentRevision:   *intentRevision, EnablementRevision: *enablementRevision,
-			PlatformRevision: *platformRevision, ExecutionFixture: *executionFixture,
-			InfrastructureAuthority: *infrastructureAuthority, ManagementAuthority: *managementAuthority, GitOpsAuthority: *gitOpsAuthority,
-		},
-		Receipts: receipts, GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath,
-		ProjectionManifestPath: *projectionManifest, ProjectionRoot: *projectionRoot, EvaluationTime: at,
-	})
+	inspection, err := inspectSubmissionStage(bundleConfig)
 	if err != nil {
 		return err
 	}
@@ -301,6 +369,62 @@ func runClusterStageInspect(arguments []string, stdout, stderr io.Writer) error 
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(inspection)
+}
+
+func runClusterStageRun(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	bundleFlags := addStageBundleFlags(flags)
+	execute := flags.Bool("execute", false, "claim and execute exactly the selected authorized stage")
+	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
+	ledgerTokenFile := flags.String("ledger-token-file", "", "path to the short-lived ledger token")
+	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the ledger Kubernetes API CA bundle")
+	authorityAPIEndpoint := flags.String("authority-api-endpoint", "", "TLS Kubernetes API endpoint for the selected write authority")
+	authorityTokenFile := flags.String("authority-token-file", "", "path to the selected short-lived write-authority token")
+	authorityCAFile := flags.String("authority-ca-file", "", "path to the selected authority Kubernetes API CA bundle")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("stage mutation requires explicit --execute")
+	}
+	bundleConfig, err := bundleFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct {
+		name, value string
+	}{
+		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
+		{"--authority-api-endpoint", *authorityAPIEndpoint}, {"--authority-token-file", *authorityTokenFile}, {"--authority-ca-file", *authorityCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, stageRunTimeout)
+	defer cancel()
+	receipt, runErr := executeSubmissionStage(boundedContext, bundleConfig, runner.SubmissionStageRuntimeConfig{
+		Ledger: runner.KubernetesLedgerConfig{
+			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
+		},
+		Authority: runner.KubernetesAuthorityConfig{
+			Endpoint: *authorityAPIEndpoint, TokenFile: *authorityTokenFile, CAFile: *authorityCAFile,
+		},
+		Clock: func() time.Time { return time.Now().UTC() },
+	})
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return runErr
 }
 
 func countNonEmpty(values ...string) int {
