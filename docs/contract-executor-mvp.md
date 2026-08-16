@@ -1104,6 +1104,31 @@ This is an offline rendering checkpoint. It creates neither the immutable
 input ConfigMap nor credential Secrets, ServiceAccount/RBAC, Job or
 NetworkPolicy, and it made no Kubernetes request.
 
+## Immutable submission-stage inputs
+
+`BuildSubmissionStageInput` now materializes the Job's immutable input
+ConfigMap from exactly one fully verified submission-stage bundle. The
+materializer first verifies the staged plan, explicit receipt prefix, cursor,
+projection, stage grant and public signing key. It then copies only the fixed
+public input set expected by the Job and repeats full bundle verification after
+capturing the source files. A provider stage contains an explicit empty receipt
+prefix; a cluster-lifecycle stage contains exactly the verified provider
+receipt under the code-owned `provider-receipt.json` identity.
+
+The resulting ConfigMap is fixed to `openkubes-execution-system`, must use an
+`ok147-` DNS-label name and has `immutable: true`. Every source must be a
+bounded regular non-symlink UTF-8 file without NUL bytes, and the complete JSON
+object must remain below the fail-closed 900 KiB limit. The materialization
+receipt binds the ConfigMap digest, receipt-prefix digest, selected stage and
+sorted data-key inventory without exposing source paths or content.
+
+Tokens, CA files, kubeconfigs, private signing keys and Secret material have no
+input slot and cannot be packaged by this API. Credential Secrets,
+ServiceAccount/RBAC, ConfigMap creation, Job creation and any Kubernetes
+request remain external prerequisites. The Job independently reverifies all
+mounted artifacts before it opens credentials, so source races or changed
+inputs stop execution rather than authorizing them.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
