@@ -199,6 +199,62 @@ func TestStageInspectLoadsDigestBoundReceiptPrefix(t *testing.T) {
 	}
 }
 
+func TestStageResumeSelectsReadOnlyStageWithoutGrantOrCredentials(t *testing.T) {
+	previous := inspectStageResume
+	defer func() { inspectStageResume = previous }()
+	var captured runner.StageResumeConfig
+	inspectStageResume = func(config runner.StageResumeConfig) (stageResumeInspection, error) {
+		captured = config
+		return stageResumeInspection{
+			Format: "ok147-stage-resume-inspection/v1",
+			Decision: stagecursor.Decision{
+				Format: stagecursor.DecisionFormat, State: "NEXT", PlanDigest: testSHA("9"), CompletedStages: 2,
+				StageID: "lifecycle-observation", StageOrder: 3, StageDigest: testSHA("8"), Kind: "Observation",
+				Authority: "management", RequiresAuthorization: false, Predecessors: []stagecursor.Predecessor{},
+			},
+			MutationAllowed: false,
+		}, nil
+	}
+	arguments := stageResumeArguments()
+	arguments = append(arguments,
+		"--receipt", "/tmp/provider.json@"+testSHA("6"),
+		"--receipt", "/tmp/lifecycle.json@"+testSHA("7"),
+	)
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.PlanPath != "/tmp/plan.json" || captured.PlanExpected.ContractIdentity.Name != "disposable-ok147" || len(captured.Receipts) != 2 {
+		t.Fatalf("resume config differs: %#v", captured)
+	}
+	var result stageResumeInspection
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != "ok147-stage-resume-inspection/v1" || result.Decision.StageID != "lifecycle-observation" || result.Decision.RequiresAuthorization || result.MutationAllowed {
+		t.Fatalf("unsafe resume inspection: %#v", result)
+	}
+}
+
+func TestStageResumeRequiresCompleteUnambiguousInputs(t *testing.T) {
+	for name, arguments := range map[string][]string{
+		"missing bindings": {"cluster", "stage", "resume", "--plan", "/tmp/plan.json"},
+		"positional":       append(stageResumeArguments(), "unexpected"),
+		"bad receipt":      append(stageResumeArguments(), "--receipt", "/tmp/provider.json"),
+		"half prefix":      append(stageResumeArguments(), "--receipt-prefix", "/tmp/prefix.json"),
+		"mixed prefix": append(append(stageResumeArguments(),
+			"--receipt-prefix", "/tmp/prefix.json", "--receipt-prefix-digest", testSHA("1")),
+			"--receipt", "/tmp/provider.json@"+testSHA("2")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("ambiguous resume input was accepted: err=%v stdout=%s", err, stdout.String())
+			}
+		})
+	}
+}
+
 func TestStageRunRequiresExplicitExecutionAndBindsOneRuntime(t *testing.T) {
 	previous := executeSubmissionStage
 	defer func() { executeSubmissionStage = previous }()
@@ -554,6 +610,15 @@ func stageInspectArguments() []string {
 		"--execution-fixture", testSHA("d"), "--infrastructure-authority", "ok-infra", "--management-authority", "ok-mgmt", "--gitops-authority", "ok-shared",
 		"--grant", "/tmp/grant.json", "--grant-key", "/tmp/grant.pub", "--projection-manifest", "/tmp/projection.json",
 		"--evaluation-time", "2026-08-16T14:00:00Z",
+	}
+}
+
+func stageResumeArguments() []string {
+	return []string{
+		"cluster", "stage", "resume",
+		"--plan", "/tmp/plan.json", "--contract-namespace", "disposable-ok147", "--contract-name", "disposable-ok147",
+		"--intent-revision", testSHA("a"), "--enablement-revision", testSHA("b"), "--platform-revision", testSHA("c"),
+		"--execution-fixture", testSHA("d"), "--infrastructure-authority", "ok-infra", "--management-authority", "ok-mgmt", "--gitops-authority", "ok-shared",
 	}
 }
 
