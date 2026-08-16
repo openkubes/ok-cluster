@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,8 +22,10 @@ import (
 const SubmissionStageLaunchReceiptFormat = "ok147-submission-stage-launch-receipt/v1"
 
 type SubmissionStageLauncherConfig struct {
-	Authority KubernetesAuthorityConfig
-	Clock     func() time.Time
+	Authority               KubernetesAuthorityConfig
+	Clock                   func() time.Time
+	Candidate               VerifiedSubmissionStageLaunchCandidate
+	ExpectedCandidateDigest string
 }
 
 type SubmissionStageLaunchResult struct {
@@ -61,6 +64,7 @@ type KubernetesSubmissionStageLauncher struct {
 	token       string
 	client      *http.Client
 	clock       func() time.Time
+	validUntil  time.Time
 	plan        SubmissionStageLaunchPlan
 	runtime     VerifiedSubmissionStageRuntimePrerequisite
 	credentials SubmissionStageCredentialPackageReceipt
@@ -74,16 +78,33 @@ type submissionStageLauncherClientConfig struct {
 	AuthorityIdentity string
 	Client            *http.Client
 	Clock             func() time.Time
+	ValidUntil        time.Time
 }
 
 // OpenKubernetesSubmissionStageLauncher opens one exact management-plane
 // client for one coherent launch. It performs no API request.
 func OpenKubernetesSubmissionStageLauncher(config SubmissionStageLauncherConfig, packaged VerifiedSubmissionStagePackage, credentials VerifiedSubmissionStageCredentialPackage, runtime VerifiedSubmissionStageRuntimePrerequisite) (*KubernetesSubmissionStageLauncher, error) {
-	if _, err := PlanSubmissionStageLaunch(packaged, credentials, runtime); err != nil {
+	plan, err := PlanSubmissionStageLaunch(packaged, credentials, runtime)
+	if err != nil {
 		return nil, err
+	}
+	if err := verifySubmissionStageLaunchCandidate(config.Candidate); err != nil {
+		return nil, err
+	}
+	candidate := config.Candidate.receipt
+	planRaw, err := json.Marshal(plan)
+	if err != nil {
+		return nil, errors.New("encode stage launcher plan identity")
+	}
+	if config.ExpectedCandidateDigest != candidate.CandidateDigest || digest.SHA256(planRaw) != candidate.LaunchPlanDigest || plan.StageID != candidate.StageID || plan.Authority != candidate.Authority || plan.StagePackageDigest != candidate.StagePackageDigest || plan.CredentialPackageDigest != candidate.CredentialPackageDigest || plan.RuntimeManifestDigest != candidate.RuntimeManifestDigest {
+		return nil, errors.New("stage launcher components differ from exact launch candidate")
 	}
 	if config.Authority.AuthorityIdentity == "" || config.Authority.AuthorityIdentity != packaged.installationAuthority {
 		return nil, errors.New("stage launcher authority differs from verified management authority")
+	}
+	endpoint, err := normalizeSubmissionStageLaunchEndpoint(config.Authority.Endpoint)
+	if err != nil || endpoint != config.Candidate.authorityEndpoint || config.Authority.CABundleDigest != candidate.CABundleDigest {
+		return nil, errors.New("stage launcher destination differs from exact launch candidate")
 	}
 	if !stageReceiptPrefixDigestPattern.MatchString(config.Authority.CABundleDigest) {
 		return nil, errors.New("stage launcher CA identity is required")
@@ -92,12 +113,16 @@ func OpenKubernetesSubmissionStageLauncher(config SubmissionStageLauncherConfig,
 	if err != nil {
 		return nil, errors.New("open bounded stage launcher credential")
 	}
-	if digest.SHA256(ca) != config.Authority.CABundleDigest {
-		return nil, errors.New("stage launcher CA differs from bound identity")
+	if digest.SHA256(ca) != config.Authority.CABundleDigest || digest.SHA256([]byte(token)) != config.Candidate.installerTokenDigest {
+		return nil, errors.New("stage launcher credential differs from bound identity")
+	}
+	validUntil, err := time.Parse(time.RFC3339, candidate.ValidUntil)
+	if err != nil {
+		return nil, errors.New("stage launcher candidate validity is invalid")
 	}
 	return newKubernetesSubmissionStageLauncher(submissionStageLauncherClientConfig{
 		Endpoint: config.Authority.Endpoint, BearerToken: token, AuthorityIdentity: config.Authority.AuthorityIdentity,
-		Client: client, Clock: config.Clock,
+		Client: client, Clock: config.Clock, ValidUntil: validUntil,
 	}, packaged, credentials, runtime)
 }
 
@@ -140,7 +165,7 @@ func newKubernetesSubmissionStageLauncher(config submissionStageLauncherClientCo
 	endpoint.Path, endpoint.RawPath = "", ""
 	runtime.raw = append([]byte(nil), runtime.raw...)
 	return &KubernetesSubmissionStageLauncher{
-		endpoint: endpoint, token: config.BearerToken, client: &client, clock: config.Clock,
+		endpoint: endpoint, token: config.BearerToken, client: &client, clock: config.Clock, validUntil: config.ValidUntil,
 		plan: plan, runtime: runtime, credentials: credentialReceipt, secrets: secrets, objects: objects,
 	}, nil
 }
@@ -162,6 +187,9 @@ func (launcher *KubernetesSubmissionStageLauncher) Launch(ctx context.Context) (
 	launcher.mu.Unlock()
 
 	now := launcher.clock().UTC()
+	if !launcher.validUntil.IsZero() && now.After(launcher.validUntil) {
+		return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", errors.New("stage launch candidate validity has expired"))
+	}
 	materializedAt, err := time.Parse(time.RFC3339, launcher.credentials.MaterializedAt)
 	if err != nil || now.Before(materializedAt) {
 		return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", errors.New("stage launch time precedes credential materialization"))

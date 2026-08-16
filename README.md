@@ -43,9 +43,12 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   barrier and fixes their eventual create order without exposing object bodies
   or credentials. A single-use composite launcher implements the same order,
   preserves a redaction-safe partial receipt and has no update, delete, retry
-  or rollback path; live invocation remains a separate critical boundary. The
-  runner image is digest-pinned, multi-architecture, non-root, SBOM- and
-  provenance-producing behind a protected publisher.
+  or rollback path. Its public opener additionally requires an exact,
+  expiry-bound launch-candidate digest that binds destination, CA and installer
+  credential evidence; preparing it remains non-mutating. Live invocation is
+  still a separate critical boundary. The runner image is digest-pinned,
+  multi-architecture, non-root, SBOM- and provenance-producing behind a
+  protected publisher.
 
 ---
 
