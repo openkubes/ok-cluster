@@ -1269,6 +1269,38 @@ This prerequisite installer is tested only against an in-memory API transport
 in this checkpoint. Creating the ServiceAccount, credential Secrets or stage
 package remains a separately authorized live operation.
 
+## Coherent six-object launch plan
+
+`PlanSubmissionStageLaunch` correlates the verified runtime prerequisite,
+private credential package and three-object stage package before any of their
+installers can be composed into a live launch. It requires one exact stage ID,
+stage-package digest and management installation authority across all three
+inputs. The returned plan is redaction-safe and contains no object bodies,
+token, CA or Secret content.
+
+The plan places all six object checks behind one global barrier:
+
+```text
+GET ServiceAccount (verify exact or absent)
+GET ledger Secret (PartialObjectMetadata, must be absent)
+GET authority Secret (PartialObjectMetadata, must be absent)
+GET ConfigMap (must be absent)
+GET NetworkPolicy (must be absent)
+GET Job (must be absent)
+        |
+        +-- any failure or conflicting state --> STOP, zero writes
+        v
+fixed create sequence:
+ServiceAccount -> ledger Secret -> authority Secret
+               -> ConfigMap -> NetworkPolicy -> Job
+```
+
+This is a non-mutating plan (`mutationAllowed: false`), not an executor. It
+does not contact Kubernetes, open a credential, invoke a child installer or
+authorize a launch. The global barrier and fixed order are executable contract
+evidence for the next composition boundary; tests still use only in-memory
+objects and transports.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

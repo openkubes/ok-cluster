@@ -38,9 +38,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   private, digest-bound package and have their own single-use exact-create
   installer. TokenRequest issuance and live installation remain separately
   managed prerequisites. The shared runtime ServiceAccount also has a bounded
-  exact-create-or-verify path and remains tokenless and RBAC-free. The runner
-  image is digest-pinned, multi-architecture, non-root, SBOM- and
-  provenance-producing behind a protected publisher.
+  exact-create-or-verify path and remains tokenless and RBAC-free. A unified
+  non-mutating launch plan binds all six objects behind one complete preflight
+  barrier and fixes their eventual create order without exposing object bodies
+  or credentials. The runner image is digest-pinned, multi-architecture,
+  non-root, SBOM- and provenance-producing behind a protected publisher.
 
 ---
 
