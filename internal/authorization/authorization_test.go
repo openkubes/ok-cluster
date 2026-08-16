@@ -19,15 +19,26 @@ func TestVerifyAcceptsExactSignedRequest(t *testing.T) {
 	request := testRequest()
 	at := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 	raw, publicPEM := signAuthorization(t, request, at)
-	receipt, err := Verify(raw, publicPEM, request, at)
+	grant, err := Verify(raw, publicPEM, request, at)
 	if err != nil {
 		t.Fatal(err)
 	}
+	receipt := grant.Receipt()
 	if receipt.State != "VERIFIED" || receipt.GrantID != "ok147-create-20260816-01" || receipt.MaxUses != 1 {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
 	if receipt.AuthorizationDigest != digest.SHA256(raw) {
 		t.Fatal("authorization digest differs from raw document")
+	}
+	binding, err := grant.ConsumptionBinding()
+	if err != nil || binding.RequestDigest == "" || binding.Operation != "CreateCluster" {
+		t.Fatalf("invalid consumption binding: %#v %v", binding, err)
+	}
+}
+
+func TestZeroGrantCannotProduceConsumptionBinding(t *testing.T) {
+	if _, err := (VerifiedGrant{}).ConsumptionBinding(); err == nil {
+		t.Fatal("zero grant was accepted")
 	}
 }
 
