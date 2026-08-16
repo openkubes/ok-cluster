@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
 )
@@ -54,6 +55,33 @@ func (ledger *Ledger) StoreStageReceipt(ctx context.Context, plan stageplan.Bind
 		return "", fmt.Errorf("verify existing stage receipt: %w", err)
 	}
 	return receiptDigest, nil
+}
+
+// InspectStageReceipt reads the deterministic immutable slot and fully
+// verifies any existing receipt against the supplied plan and predecessor
+// chain. It is intended for crash-safe read-only stage replay, where the
+// process may have terminated after persistence but before returning a digest.
+func (ledger *Ledger) InspectStageReceipt(ctx context.Context, plan stageplan.Binding, stageID string, predecessors []stagereceipt.Verified) (stagereceipt.Verified, bool, error) {
+	key, err := stageReceiptKey(plan, stageID)
+	if err != nil {
+		return stagereceipt.Verified{}, false, err
+	}
+	raw, err := ledger.store.Get(ctx, "stage-receipts", key)
+	if errors.Is(err, ErrRecordNotFound) {
+		return stagereceipt.Verified{}, false, nil
+	}
+	if err != nil {
+		return stagereceipt.Verified{}, false, fmt.Errorf("read immutable stage receipt: %w", err)
+	}
+	verified, err := stagereceipt.Verify(raw, digest.SHA256(raw), plan, predecessors)
+	if err != nil {
+		return stagereceipt.Verified{}, false, fmt.Errorf("verify immutable stage receipt: %w", err)
+	}
+	receipt, err := verified.Receipt()
+	if err != nil || receipt.StageID != stageID {
+		return stagereceipt.Verified{}, false, errors.New("immutable stage receipt occupies a different stage")
+	}
+	return verified, true, nil
 }
 
 // LoadStageReceipt reads one deterministic slot and requires the receipt

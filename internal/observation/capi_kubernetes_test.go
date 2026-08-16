@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"github.com/openkubes/ok-cluster/internal/digest"
 )
 
 func TestCAPILifecycleObserverCollectsCurrentExactEvidence(t *testing.T) {
@@ -43,6 +45,37 @@ func TestCAPILifecycleObserverCollectsCurrentExactEvidence(t *testing.T) {
 	receipt, _ := result.Receipt()
 	if receipt.Ready != "True" {
 		t.Fatalf("current authoritative evidence did not converge: %#v", receipt)
+	}
+}
+
+func TestCAPILifecycleObserverBindsExactRuntimeIdentityAfterRestart(t *testing.T) {
+	policy := testPolicy(t)
+	policy.TargetClusterUID = ""
+	const runtimeUID = "cluster-runtime-uid-147"
+	client := &http.Client{Transport: capiRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return capiJSONResponse(t, http.StatusOK, capiFixture(policy, runtimeUID, policy.IntentRevision, 7, 7)), nil
+	})}
+	bound, evidence, err := newTestCAPIObserver(t, client).CollectBound(context.Background(), policy, digest.SHA256([]byte(runtimeUID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.TargetClusterUID != runtimeUID || len(evidence) != 2 || evidence[0].SourceUID != runtimeUID || evidence[0].TargetClusterUID != runtimeUID {
+		t.Fatalf("runtime correlation differs: %#v %#v", bound, evidence)
+	}
+}
+
+func TestCAPILifecycleObserverRejectsChangedRuntimeIdentityAfterRestart(t *testing.T) {
+	policy := testPolicy(t)
+	policy.TargetClusterUID = ""
+	client := &http.Client{Transport: capiRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return capiJSONResponse(t, http.StatusOK, capiFixture(policy, "replacement-cluster-uid", policy.IntentRevision, 7, 7)), nil
+	})}
+	if _, _, err := newTestCAPIObserver(t, client).CollectBound(context.Background(), policy, digest.SHA256([]byte("original-cluster-uid"))); err == nil {
+		t.Fatal("replacement Cluster with the same name and revision was accepted")
+	}
+	policy.TargetClusterUID = "caller-selected-uid"
+	if _, _, err := newTestCAPIObserver(t, client).CollectBound(context.Background(), policy, digest.SHA256([]byte("caller-selected-uid"))); err == nil {
+		t.Fatal("caller-selected target UID was accepted at resume boundary")
 	}
 }
 
