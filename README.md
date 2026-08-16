@@ -68,8 +68,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   again; a same-name replacement Cluster fails the UID-digest boundary. A
   verified lifecycle-observation bundle now retains the plan and receipt
   cursor privately, opens distinct ledger and management-observer credentials
-  exactly once and exposes only the bounded stage `Run` method. This bundle is
-  not yet activated by a CLI command or Job.
+  exactly once and exposes only the bounded stage `Run` method. `ok cluster
+  stage observe lifecycle --execute` is the first activation path: it accepts
+  no grant or projection, requires an explicit receipt prefix and bounded
+  polling window, reads only the exact CAPI Cluster and persists only its
+  immutable stage receipt. It is not yet packaged or launched as a Job.
 
 ---
 

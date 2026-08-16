@@ -26,9 +26,10 @@ import (
 )
 
 const (
-	ledgerNamespace    = "openkubes-execution-system"
-	stageRunTimeout    = 10 * time.Minute
-	stageLaunchTimeout = 5 * time.Minute
+	ledgerNamespace                 = "openkubes-execution-system"
+	stageRunTimeout                 = 10 * time.Minute
+	stageLaunchTimeout              = 5 * time.Minute
+	lifecycleObservationRunOverhead = time.Minute
 )
 
 var (
@@ -340,6 +341,19 @@ var executeSubmissionStage = func(ctx context.Context, bundleConfig runner.Submi
 	return bound.Run(ctx)
 }
 
+var executeLifecycleObservationStage = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.LifecycleObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+	bundle, err := runner.LoadLifecycleObservationStageBundle(bundleConfig)
+	if err != nil {
+		return execution.ObservationStageRunReceipt{}, err
+	}
+	runtimeConfig.Management.AuthorityIdentity = bundleConfig.PlanExpected.ManagementAuthority
+	opened, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.ObservationStageRunReceipt{}, err
+	}
+	return opened.Run(ctx)
+}
+
 func submissionStageAuthority(decision stagecursor.Decision, expected stageplan.Expected) (string, error) {
 	switch decision.Authority {
 	case "infrastructure":
@@ -378,6 +392,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "resume" {
 		return runClusterStageResume(arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "lifecycle" {
+		return runClusterStageObserveLifecycle(ctx, arguments[4:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" {
 		return runClusterStageRun(ctx, arguments[3:], stdout, stderr)
 	}
@@ -390,7 +407,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -569,6 +586,67 @@ func runClusterStageResume(arguments []string, stdout, stderr io.Writer) error {
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(inspection)
+}
+
+func runClusterStageObserveLifecycle(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage observe lifecycle", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	execute := flags.Bool("execute", false, "perform exactly the selected read-only observation and persist its receipt")
+	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
+	ledgerTokenFile := flags.String("ledger-token-file", "", "path to the short-lived ledger token")
+	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the ledger Kubernetes API CA bundle")
+	managementAPIEndpoint := flags.String("management-api-endpoint", "", "TLS Kubernetes API endpoint for exact CAPI observation")
+	managementTokenFile := flags.String("management-token-file", "", "path to the short-lived read-only management token")
+	managementCAFile := flags.String("management-ca-file", "", "path to the management Kubernetes API CA bundle")
+	pollInterval := flags.Duration("poll-interval", 0, "bounded interval between verified Unknown observations")
+	pollTimeout := flags.Duration("poll-timeout", 0, "maximum bounded lifecycle observation duration")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("lifecycle observation requires explicit --execute")
+	}
+	bundleConfig, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
+		{"--management-api-endpoint", *managementAPIEndpoint}, {"--management-token-file", *managementTokenFile}, {"--management-ca-file", *managementCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if *pollInterval < time.Second || *pollInterval > 5*time.Minute || *pollTimeout < *pollInterval || *pollTimeout > 6*time.Hour {
+		return errors.New("--poll-interval and --poll-timeout must define a valid bounded observation of at most 6h")
+	}
+	runTimeout := *pollTimeout + lifecycleObservationRunOverhead
+	boundedContext, cancel := context.WithTimeout(ctx, runTimeout)
+	defer cancel()
+	receipt, runErr := executeLifecycleObservationStage(boundedContext, bundleConfig, runner.LifecycleObservationStageRuntimeConfig{
+		Ledger: runner.KubernetesLedgerConfig{
+			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
+		},
+		Management: runner.KubernetesAuthorityConfig{
+			Endpoint: *managementAPIEndpoint, TokenFile: *managementTokenFile, CAFile: *managementCAFile,
+		},
+		PollInterval: *pollInterval, PollTimeout: *pollTimeout,
+		Clock: func() time.Time { return time.Now().UTC() }, Wait: runner.WaitWithTimer,
+	})
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return runErr
 }
 
 func runClusterStageRun(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
