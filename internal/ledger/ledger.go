@@ -5,6 +5,7 @@ package ledger
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,11 +28,21 @@ const (
 
 var ErrGrantConsumed = errors.New("authorization grant is already consumed")
 
+var (
+	ErrRecordExists   = errors.New("ledger record already exists")
+	ErrRecordNotFound = errors.New("ledger record not found")
+)
+
+// RecordStore is the only persistence capability required by the ledger.
+// Implementations must provide atomic create-if-absent and exact-name reads.
+type RecordStore interface {
+	Create(context.Context, string, string, []byte) error
+	Get(context.Context, string, string) ([]byte, error)
+}
+
 // Ledger stores immutable claim and outcome files below a private directory.
 type Ledger struct {
-	root     string
-	claims   string
-	outcomes string
+	store RecordStore
 }
 
 // ClaimReceipt is written atomically before a future operation begins.
@@ -84,19 +95,27 @@ func Open(root string) (*Ledger, error) {
 	if err := secureDirectory(abs); err != nil {
 		return nil, err
 	}
-	result := &Ledger{root: abs, claims: filepath.Join(abs, "claims"), outcomes: filepath.Join(abs, "outcomes")}
-	if err := secureDirectory(result.claims); err != nil {
+	store := &fileStore{claims: filepath.Join(abs, "claims"), outcomes: filepath.Join(abs, "outcomes")}
+	if err := secureDirectory(store.claims); err != nil {
 		return nil, err
 	}
-	if err := secureDirectory(result.outcomes); err != nil {
+	if err := secureDirectory(store.outcomes); err != nil {
 		return nil, err
 	}
-	return result, nil
+	return New(store)
+}
+
+// New constructs a ledger around a durable RecordStore.
+func New(store RecordStore) (*Ledger, error) {
+	if store == nil {
+		return nil, errors.New("ledger record store is required")
+	}
+	return &Ledger{store: store}, nil
 }
 
 // Claim atomically consumes a verified grant. A second call always returns
 // ErrGrantConsumed, including after a process crash.
-func (ledger *Ledger) Claim(grant authorization.VerifiedGrant, at time.Time) (ClaimReceipt, error) {
+func (ledger *Ledger) Claim(ctx context.Context, grant authorization.VerifiedGrant, at time.Time) (ClaimReceipt, error) {
 	binding, err := grant.ConsumptionBinding()
 	if err != nil {
 		return ClaimReceipt{}, err
@@ -124,9 +143,9 @@ func (ledger *Ledger) Claim(grant authorization.VerifiedGrant, at time.Time) (Cl
 	if err != nil {
 		return ClaimReceipt{}, err
 	}
-	path := ledger.claimPath(binding.GrantID)
-	if err := writeExclusive(path, raw, ledger.claims); err != nil {
-		if errors.Is(err, os.ErrExist) {
+	key := recordKey(binding.GrantID)
+	if err := ledger.store.Create(ctx, "claims", key, raw); err != nil {
+		if errors.Is(err, ErrRecordExists) {
 			return ClaimReceipt{}, ErrGrantConsumed
 		}
 		return ClaimReceipt{}, fmt.Errorf("write grant claim: %w", err)
@@ -136,7 +155,7 @@ func (ledger *Ledger) Claim(grant authorization.VerifiedGrant, at time.Time) (Cl
 
 // Complete writes one outcome. Repeating the exact completion is idempotent;
 // a conflicting completion fails closed.
-func (ledger *Ledger) Complete(claim ClaimReceipt, outcome, mutationState, evidenceDigest string, at time.Time) (OutcomeReceipt, error) {
+func (ledger *Ledger) Complete(ctx context.Context, claim ClaimReceipt, outcome, mutationState, evidenceDigest string, at time.Time) (OutcomeReceipt, error) {
 	if !allowed(outcome, "SUCCEEDED", "FAILED", "STOPPED") {
 		return OutcomeReceipt{}, fmt.Errorf("unsupported outcome %q", outcome)
 	}
@@ -149,7 +168,7 @@ func (ledger *Ledger) Complete(claim ClaimReceipt, outcome, mutationState, evide
 	if !validDigest(evidenceDigest) {
 		return OutcomeReceipt{}, errors.New("evidence digest is invalid")
 	}
-	stored, claimDigest, err := ledger.readClaim(claim.GrantID)
+	stored, claimDigest, err := ledger.readClaim(ctx, claim.GrantID)
 	if err != nil {
 		return OutcomeReceipt{}, err
 	}
@@ -180,12 +199,12 @@ func (ledger *Ledger) Complete(claim ClaimReceipt, outcome, mutationState, evide
 	if err != nil {
 		return OutcomeReceipt{}, err
 	}
-	path := ledger.outcomePath(claim.GrantID)
-	if err := writeExclusive(path, raw, ledger.outcomes); err != nil {
-		if !errors.Is(err, os.ErrExist) {
+	key := recordKey(claim.GrantID)
+	if err := ledger.store.Create(ctx, "outcomes", key, raw); err != nil {
+		if !errors.Is(err, ErrRecordExists) {
 			return OutcomeReceipt{}, fmt.Errorf("write operation outcome: %w", err)
 		}
-		existing, existingDigest, readErr := ledger.readOutcome(claim.GrantID)
+		existing, existingDigest, readErr := ledger.readOutcome(ctx, claim.GrantID)
 		if readErr != nil {
 			return OutcomeReceipt{}, readErr
 		}
@@ -199,13 +218,13 @@ func (ledger *Ledger) Complete(claim ClaimReceipt, outcome, mutationState, evide
 
 // Inspect returns AVAILABLE, CLAIMED_INDETERMINATE_STOP, or COMPLETED. It never
 // recommends retrying an already claimed grant.
-func (ledger *Ledger) Inspect(grant authorization.VerifiedGrant) (Inspection, error) {
+func (ledger *Ledger) Inspect(ctx context.Context, grant authorization.VerifiedGrant) (Inspection, error) {
 	binding, err := grant.ConsumptionBinding()
 	if err != nil {
 		return Inspection{}, err
 	}
-	claim, claimDigest, err := ledger.readClaim(binding.GrantID)
-	if errors.Is(err, os.ErrNotExist) {
+	claim, claimDigest, err := ledger.readClaim(ctx, binding.GrantID)
+	if errors.Is(err, ErrRecordNotFound) {
 		return Inspection{State: "AVAILABLE", ClaimAllowed: true}, nil
 	}
 	if err != nil {
@@ -214,8 +233,8 @@ func (ledger *Ledger) Inspect(grant authorization.VerifiedGrant) (Inspection, er
 	if err := matchBinding(claim, binding); err != nil {
 		return Inspection{}, err
 	}
-	outcome, outcomeDigest, err := ledger.readOutcome(binding.GrantID)
-	if errors.Is(err, os.ErrNotExist) {
+	outcome, outcomeDigest, err := ledger.readOutcome(ctx, binding.GrantID)
+	if errors.Is(err, ErrRecordNotFound) {
 		return Inspection{State: "CLAIMED_INDETERMINATE_STOP", ClaimAllowed: false, ClaimDigest: claimDigest}, nil
 	}
 	if err != nil {
@@ -227,9 +246,9 @@ func (ledger *Ledger) Inspect(grant authorization.VerifiedGrant) (Inspection, er
 	return Inspection{State: "COMPLETED", ClaimAllowed: false, ClaimDigest: claimDigest, OutcomeDigest: outcomeDigest, Outcome: &outcome}, nil
 }
 
-func (ledger *Ledger) readClaim(grantID string) (ClaimReceipt, string, error) {
+func (ledger *Ledger) readClaim(ctx context.Context, grantID string) (ClaimReceipt, string, error) {
 	var value ClaimReceipt
-	raw, err := readRegular(ledger.claimPath(grantID))
+	raw, err := ledger.store.Get(ctx, "claims", recordKey(grantID))
 	if err != nil {
 		return value, "", err
 	}
@@ -246,9 +265,9 @@ func (ledger *Ledger) readClaim(grantID string) (ClaimReceipt, string, error) {
 	return value, identity, validateClaim(value)
 }
 
-func (ledger *Ledger) readOutcome(grantID string) (OutcomeReceipt, string, error) {
+func (ledger *Ledger) readOutcome(ctx context.Context, grantID string) (OutcomeReceipt, string, error) {
 	var value OutcomeReceipt
-	raw, err := readRegular(ledger.outcomePath(grantID))
+	raw, err := ledger.store.Get(ctx, "outcomes", recordKey(grantID))
 	if err != nil {
 		return value, "", err
 	}
@@ -265,12 +284,8 @@ func (ledger *Ledger) readOutcome(grantID string) (OutcomeReceipt, string, error
 	return value, identity, validateOutcome(value)
 }
 
-func (ledger *Ledger) claimPath(grantID string) string {
-	return filepath.Join(ledger.claims, digest.SHA256([]byte(grantID))[7:]+".json")
-}
-
-func (ledger *Ledger) outcomePath(grantID string) string {
-	return filepath.Join(ledger.outcomes, digest.SHA256([]byte(grantID))[7:]+".json")
+func recordKey(grantID string) string {
+	return digest.SHA256([]byte(grantID))[7:]
 }
 
 func canonicalRecord(value any) ([]byte, string, error) {
@@ -306,6 +321,59 @@ func secureDirectory(path string) error {
 		return fmt.Errorf("ledger directory %s permissions are broader than 0700", path)
 	}
 	return nil
+}
+
+type fileStore struct {
+	claims   string
+	outcomes string
+}
+
+func (store *fileStore) Create(ctx context.Context, category, key string, raw []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, directory, err := store.path(category, key)
+	if err != nil {
+		return err
+	}
+	if err := writeExclusive(path, raw, directory); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return ErrRecordExists
+		}
+		return err
+	}
+	return nil
+}
+
+func (store *fileStore) Get(ctx context.Context, category, key string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, _, err := store.path(category, key)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := readRegular(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrRecordNotFound
+	}
+	return raw, err
+}
+
+func (store *fileStore) path(category, key string) (string, string, error) {
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(key) {
+		return "", "", errors.New("ledger record key is invalid")
+	}
+	var directory string
+	switch category {
+	case "claims":
+		directory = store.claims
+	case "outcomes":
+		directory = store.outcomes
+	default:
+		return "", "", fmt.Errorf("ledger record category %q is invalid", category)
+	}
+	return filepath.Join(directory, key+".json"), directory, nil
 }
 
 func writeExclusive(path string, raw []byte, directory string) (returnErr error) {

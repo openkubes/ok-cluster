@@ -29,7 +29,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Bounded Contract Executor MVP** — a shared Go core for local CLI and future
   short-lived `ok-mgmt` Jobs; it remains dry-run-only while verifying the
   OK-141 revision, existing projection, authority split, signed grant binding,
-  and fail-closed single-use receipt semantics
+  fail-closed single-use receipt semantics, and an offline-tested durable
+  Kubernetes ledger boundary
 
 ---
 
