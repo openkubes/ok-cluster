@@ -69,6 +69,7 @@ func (values *receiptFlags) Set(value string) error {
 }
 
 type stageBundleFlags struct {
+	expectedStage                                                 *string
 	planPath, contractNamespace, contractName                     *string
 	intentRevision, enablementRevision, platformRevision          *string
 	executionFixture                                              *string
@@ -81,6 +82,7 @@ type stageBundleFlags struct {
 
 func addStageBundleFlags(flags *flag.FlagSet) *stageBundleFlags {
 	values := &stageBundleFlags{}
+	values.expectedStage = flags.String("expected-stage", "", "independently expected Contract-to-CAPI stage")
 	values.planPath = flags.String("plan", "", "path to the bounded staged execution plan")
 	values.contractNamespace = flags.String("contract-namespace", "", "expected Contract namespace")
 	values.contractName = flags.String("contract-name", "", "expected Contract name")
@@ -107,6 +109,7 @@ func (values *stageBundleFlags) config() (runner.SubmissionStageBundleConfig, er
 		name  string
 		value string
 	}{
+		{"--expected-stage", *values.expectedStage},
 		{"--plan", *values.planPath}, {"--contract-namespace", *values.contractNamespace}, {"--contract-name", *values.contractName},
 		{"--intent-revision", *values.intentRevision}, {"--enablement-revision", *values.enablementRevision}, {"--platform-revision", *values.platformRevision},
 		{"--execution-fixture", *values.executionFixture}, {"--infrastructure-authority", *values.infrastructureAuthority},
@@ -143,7 +146,7 @@ func (values *stageBundleFlags) config() (runner.SubmissionStageBundleConfig, er
 		}
 	}
 	return runner.SubmissionStageBundleConfig{
-		PlanPath: *values.planPath,
+		ExpectedStageID: *values.expectedStage, PlanPath: *values.planPath,
 		PlanExpected: stageplan.Expected{
 			ContractIdentity: contract.Identity{Namespace: *values.contractNamespace, Name: *values.contractName},
 			IntentRevision:   *values.intentRevision, EnablementRevision: *values.enablementRevision,

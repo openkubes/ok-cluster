@@ -49,6 +49,12 @@ func TestLoadSubmissionStageBundleRejectsImplicitPrefixAndProjectionMismatch(t *
 	if _, err := LoadSubmissionStageBundle(fixture.config); err == nil || !strings.Contains(err.Error(), "differs from verified artifact") {
 		t.Fatalf("projection digest mismatch was accepted: %v", err)
 	}
+
+	fixture = submissionBundleFixture(t, false, "")
+	fixture.config.ExpectedStageID = "cluster-lifecycle"
+	if _, err := LoadSubmissionStageBundle(fixture.config); err == nil || !strings.Contains(err.Error(), "differs from the independently expected stage") {
+		t.Fatalf("foreign cursor stage was accepted: %v", err)
+	}
 }
 
 func TestSubmissionStageBundleOpenIsOfflineAndRequiresDistinctCredentials(t *testing.T) {
@@ -159,7 +165,7 @@ func submissionBundleFixture(t *testing.T, completedProvider bool, overrideProvi
 	grantPath, keyPath := writeSubmissionStageGrant(t, root, plan, stageID, predecessors, at)
 	return submissionBundleTestFixture{
 		config: SubmissionStageBundleConfig{
-			PlanPath: planPath, PlanExpected: expected, Receipts: receipts, GrantPath: grantPath, GrantPublicKeyPath: keyPath,
+			ExpectedStageID: stageID, PlanPath: planPath, PlanExpected: expected, Receipts: receipts, GrantPath: grantPath, GrantPublicKeyPath: keyPath,
 			ProjectionManifestPath: manifestPath, ProjectionRoot: root, EvaluationTime: at,
 		},
 		plan: plan,
