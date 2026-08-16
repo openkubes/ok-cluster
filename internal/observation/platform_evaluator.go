@@ -68,6 +68,7 @@ type PlatformCapabilityState struct {
 	TargetClusterUID string `json:"targetClusterUid"`
 	IntentRevision   string `json:"intentRevision"`
 	PlatformRevision string `json:"platformRevision"`
+	ExecutionFixture string `json:"executionFixture"`
 	ContractDigest   string `json:"contractDigest"`
 	ExecutableDigest string `json:"executableDigest"`
 	Passed           bool   `json:"passed"`
@@ -181,14 +182,21 @@ func validatePlatformSnapshotShape(snapshot PlatformSnapshot) error {
 			return errors.New("platform snapshot Application state is oversized")
 		}
 	}
-	capability := snapshot.Capability
+	return ValidatePlatformCapabilityState(snapshot.Capability)
+}
+
+// ValidatePlatformCapabilityState checks the complete redaction-safe assertion
+// including its self-independent semantic digest. It does not establish who
+// produced the assertion; expected identities are supplied to the runner input
+// loader from an independently verified execution boundary.
+func ValidatePlatformCapabilityState(capability PlatformCapabilityState) error {
 	if capability.Format != PlatformCapabilityFormat || capability.ObservedAt == "" || !validUID(capability.TargetClusterUID) {
 		return errors.New("platform capability identity is invalid")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, capability.ObservedAt); err != nil {
 		return errors.New("platform capability observation time is invalid")
 	}
-	for _, revision := range []string{capability.IntentRevision, capability.PlatformRevision, capability.ContractDigest, capability.ExecutableDigest, capability.EvidenceDigest} {
+	for _, revision := range []string{capability.IntentRevision, capability.PlatformRevision, capability.ExecutionFixture, capability.ContractDigest, capability.ExecutableDigest, capability.EvidenceDigest} {
 		if !validDigest(revision) {
 			return errors.New("platform capability revision or evidence identity is invalid")
 		}
@@ -243,7 +251,7 @@ func evaluatePlatformState(policy Policy, profile PlatformProfile, snapshot Plat
 		return "Unknown", "PlatformApplicationMissing", ""
 	}
 	capability := snapshot.Capability
-	if capability.TargetClusterUID != policy.TargetClusterUID || capability.IntentRevision != policy.IntentRevision || capability.PlatformRevision != policy.PlatformRevision || capability.ContractDigest != profile.CapabilityContractDigest || capability.ExecutableDigest != profile.CapabilityExecutableDigest {
+	if capability.TargetClusterUID != policy.TargetClusterUID || capability.IntentRevision != policy.IntentRevision || capability.PlatformRevision != policy.PlatformRevision || capability.ExecutionFixture != profile.ExecutionFixture || capability.ContractDigest != profile.CapabilityContractDigest || capability.ExecutableDigest != profile.CapabilityExecutableDigest {
 		return "Unknown", "RevisionCorrelationUnproven", ""
 	}
 	observedAt, _ := time.Parse(time.RFC3339Nano, snapshot.ObservedAt)
