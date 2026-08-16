@@ -1285,8 +1285,9 @@ private credentials, tokenless runtime and expiry-bound candidate as one
 coherent private value. Its public receipt contains only the correlated
 package, credential, runtime, launch-plan and candidate digests plus validity.
 Post-verification changes to any retained component fail closed. At this
-checkpoint the material deliberately exposes neither private bytes nor an
-`Open`/execute method, so it cannot launch Kubernetes objects.
+checkpoint the material exposes no private bytes. Its `Open` boundary requires
+the exact candidate digest and reuses only retained verified components;
+opening validates the bounded local installer credential without API contact.
 
 `ok147-enablement-stage-launch-receipt/v1` is produced by a single-use bounded
 launcher that completes all six exact-name GETs before its first POST. It
@@ -1295,7 +1296,7 @@ objects matching exactly; every other partial state stops with zero writes.
 Creation is fixed to runtime, ConfigMap, NetworkPolicy, ledger Secret, writer
 Secret and Job. A failed create preserves the verified prefix and stops without
 retry. The launcher is currently exercised only through a fake Kubernetes API
-and is not exposed by the CLI or sealed launch material.
+and is not exposed by the CLI.
 
 ## Typed Contract-to-CAPI submission stages
 

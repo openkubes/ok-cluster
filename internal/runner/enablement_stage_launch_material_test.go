@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -47,6 +48,44 @@ func TestBuildEnablementStageLaunchMaterialSealsPrivateComponents(t *testing.T) 
 	tampered.receipt.CandidateDigest = digest.SHA256([]byte("foreign"))
 	if _, err := tampered.Receipt(); err == nil {
 		t.Fatal("changed enablement launch material identity accepted")
+	}
+}
+
+func TestEnablementStageLaunchMaterialOpenRetainsExactComponents(t *testing.T) {
+	config, _, _, _ := enablementStageLaunchMaterialConfig(t)
+	material, err := BuildEnablementStageLaunchMaterial(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := material.Receipt()
+	launcher, err := material.Open(EnablementStageLaunchOpenConfig{
+		Authority: KubernetesAuthorityConfig{
+			Endpoint: "http://127.0.0.1:12345", AuthorityIdentity: "ok-mgmt",
+		},
+		Clock:                   func() time.Time { return time.Date(2026, 8, 16, 12, 16, 0, 0, time.UTC) },
+		ExpectedCandidateDigest: receipt.CandidateDigest,
+	})
+	if err == nil || launcher != nil {
+		// Public Open requires the bound endpoint and credential files; the
+		// in-memory client path is intentionally unavailable here.
+		t.Fatalf("unbound public launcher was opened: %v", err)
+	}
+	if _, err := material.Open(EnablementStageLaunchOpenConfig{ExpectedCandidateDigest: digest.SHA256([]byte("foreign"))}); err == nil {
+		t.Fatal("wrong exact candidate digest accepted")
+	}
+
+	api := newSubmissionStageLauncherAPI(t)
+	internal, err := newKubernetesEnablementStageLauncher(submissionStageLauncherClientConfig{
+		Endpoint: "http://127.0.0.1:12345", BearerToken: "short-lived-installer-token", AuthorityIdentity: "ok-mgmt",
+		Client: api.client(), Clock: func() time.Time { return time.Date(2026, 8, 16, 12, 16, 0, 0, time.UTC) },
+		ValidUntil: time.Date(2026, 8, 16, 12, 15, 0, 0, time.UTC),
+	}, material.packaged, material.credentials, material.runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launchReceipt, err := internal.Launch(context.Background())
+	if err == nil || launchReceipt.State != "STOPPED_ZERO_WRITE" || launchReceipt.MutationState != "NOT_ATTEMPTED" || len(api.requests) != 0 {
+		t.Fatalf("expired sealed material reached API: %#v %v", launchReceipt, err)
 	}
 }
 

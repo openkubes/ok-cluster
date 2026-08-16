@@ -31,8 +31,8 @@ type EnablementStageLaunchMaterialReceipt struct {
 	MutationAllowed         bool   `json:"mutationAllowed"`
 }
 
-// VerifiedEnablementStageLaunchMaterial retains every private component but
-// deliberately provides no Open or execution method at this checkpoint.
+// VerifiedEnablementStageLaunchMaterial retains every private component and
+// permits only the exact retained candidate to open a bounded launcher.
 type VerifiedEnablementStageLaunchMaterial struct {
 	packaged    VerifiedEnablementStagePackage
 	credentials VerifiedEnablementStageCredentialPackage
@@ -40,6 +40,12 @@ type VerifiedEnablementStageLaunchMaterial struct {
 	candidate   VerifiedEnablementStageLaunchCandidate
 	receipt     EnablementStageLaunchMaterialReceipt
 	verified    bool
+}
+
+type EnablementStageLaunchOpenConfig struct {
+	Authority               KubernetesAuthorityConfig
+	Clock                   func() time.Time
+	ExpectedCandidateDigest string
 }
 
 // BuildEnablementStageLaunchMaterial constructs the complete private launch
@@ -94,6 +100,22 @@ func (material VerifiedEnablementStageLaunchMaterial) CandidateReceipt() (Enable
 		return EnablementStageLaunchCandidateReceipt{}, err
 	}
 	return material.candidate.Receipt()
+}
+
+// Open requires the exact prepared candidate digest and never permits callers
+// to replace any private verified component retained by the material. Opening
+// validates local credentials but performs no Kubernetes request.
+func (material VerifiedEnablementStageLaunchMaterial) Open(config EnablementStageLaunchOpenConfig) (*KubernetesEnablementStageLauncher, error) {
+	if err := verifyEnablementStageLaunchMaterial(material); err != nil {
+		return nil, err
+	}
+	if config.ExpectedCandidateDigest == "" || config.ExpectedCandidateDigest != material.receipt.CandidateDigest {
+		return nil, errors.New("enablement launch open requires the exact candidate digest")
+	}
+	return OpenKubernetesEnablementStageLauncher(EnablementStageLauncherConfig{
+		Authority: config.Authority, Clock: config.Clock, Candidate: material.candidate,
+		ExpectedCandidateDigest: config.ExpectedCandidateDigest,
+	}, material.packaged, material.credentials, material.runtime)
 }
 
 func verifyEnablementStageLaunchMaterial(material VerifiedEnablementStageLaunchMaterial) error {
