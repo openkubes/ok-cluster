@@ -1992,6 +1992,17 @@ existing output path and validates all semantic digests and polling bounds
 before invoking the packager. Its tests inject package construction, so no
 private runtime file or Kubernetes API is read.
 
+The next offline boundary materializes three pairwise-distinct, immutable
+credential Secrets from independently bound short-lived TokenRequest results:
+one ledger writer and one management reader from the management authority,
+plus one workload reader from the digest-bound workload authority. Only the
+workload Secret contains the canonical private workload binding alongside its
+token and CA. Its CA, R, endpoint and target-UID digest must still equal the
+verified observation package. The public receipt exposes only expiry,
+audiences, authority/digest identities and exact Secret-object digests; it
+contains no token, CA, endpoint, raw target UID, subject or source path. This
+primitive performs no TokenRequest, Secret installation or Kubernetes call.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
