@@ -230,6 +230,42 @@ resources, observe cluster convergence, or publish an outcome. The template is
 not applied and no image is built or published. It proves only that local mode
 and the future Job can use the same binary and read-only ledger boundary.
 
+## Reproducible container boundary
+
+The sixth checkpoint defines the container supply-chain boundary for the same
+`ok` binary. [`Containerfile.ok147`](../Containerfile.ok147) pins the Dockerfile
+frontend, Go builder and distroless runtime by SHA-256 digest. The build context
+is deny-by-default and admits only the Go module plus `cmd/ok` and `internal`;
+kubeconfigs, credentials, evidence and unrelated worktree files cannot enter the
+image context.
+
+The binary is cross-compiled with `CGO_ENABLED=0`, `-trimpath`, an empty build
+ID, and explicit version and full Git revision. The runtime contains no shell,
+runs as UID/GID `65532`, and exposes only `/ok` as its entrypoint. The pinned
+supply-chain identities and exact `linux/amd64` plus `linux/arm64` platform set
+are recorded in
+[`build/ok147-runner-image.json`](../build/ok147-runner-image.json).
+
+Planning is non-executing and non-publishing:
+
+```bash
+make ok147-runner-image-plan \
+  OK147_IMAGE_VERSION=0.1.0-dev \
+  OK147_IMAGE_OUTPUT=/private/tmp/ok147-runner.oci.tar
+```
+
+An actual local build additionally requires a clean worktree, the exact checked
+out 40-character revision, and `OK147_IMAGE_BUILD=yes`. It produces only a local
+multi-platform OCI archive, BuildKit `mode=max` provenance attestations, a Syft
+SPDX JSON SBOM and an exclusive `0600` build record. The verifier rejects a
+missing or extra platform, absent per-platform provenance, a changed pinned base
+image, or a revision mismatch.
+
+This checkpoint deliberately has no registry destination and never uses
+`--push`. It does not publish an image, deploy a Job, contact Kubernetes, consume
+an authorization, or permit lifecycle mutation. A later checkpoint must bind a
+verified registry digest before any in-cluster execution can be proposed.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It

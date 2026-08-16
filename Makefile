@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test contract-executor-test contract-executor-dry-run
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test contract-executor-test contract-executor-dry-run ok147-runner-image-plan ok147-runner-image-build
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -201,6 +201,27 @@ contract-executor-dry-run: ## Reproduce the OK-141 R and emit a non-mutating pla
 		--contract internal/contract/testdata/ok141-contract-v5.yaml \
 		--schema internal/contract/testdata/ok141-contract-v3.schema.json \
 		--dry-run
+
+OK147_IMAGE_VERSION ?= 0.1.0-dev
+OK147_IMAGE_REVISION ?= $(shell git rev-parse HEAD)
+OK147_IMAGE_CREATED ?= $(shell git show -s --format=%cI HEAD)
+OK147_IMAGE_OUTPUT ?= /private/tmp/ok147-runner.oci.tar
+
+ok147-runner-image-plan: ## Emit the non-publishing reproducible image build plan
+	@python3 scripts/build_ok147_runner.py \
+		--version "$(OK147_IMAGE_VERSION)" \
+		--revision "$(OK147_IMAGE_REVISION)" \
+		--created "$(OK147_IMAGE_CREATED)" \
+		--output "$(OK147_IMAGE_OUTPUT)"
+
+ok147-runner-image-build: ## Build OCI+SBOM locally (requires OK147_IMAGE_BUILD=yes)
+	@OK147_IMAGE_BUILD="$(OK147_IMAGE_BUILD)" \
+		python3 scripts/build_ok147_runner.py \
+		--version "$(OK147_IMAGE_VERSION)" \
+		--revision "$(OK147_IMAGE_REVISION)" \
+		--created "$(OK147_IMAGE_CREATED)" \
+		--output "$(OK147_IMAGE_OUTPUT)" \
+		--execute
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
