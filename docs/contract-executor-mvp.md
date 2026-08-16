@@ -274,6 +274,35 @@ This checkpoint deliberately has no registry destination and never uses
 an authorization, or permit lifecycle mutation. A later checkpoint must bind a
 verified registry digest before any in-cluster execution can be proposed.
 
+## Bounded registry-publication candidate
+
+The next checkpoint defines that publication boundary without executing it.
+[`build/ok147-runner-publication.json`](../build/ok147-runner-publication.json)
+binds the sole image name, exact platform set, protected GitHub Environment,
+provenance mode, digest-pinned BuildKit SBOM generator, digest-only pullback and
+90-day receipt retention. Its tag includes both the source-SHA prefix and the
+unique workflow-run ID, so a second authorized publication cannot overwrite a
+previous run tag.
+
+The publisher is manual `workflow_dispatch` only, runs exclusively from an
+exact reviewed `main` commit, and accepts the publication-contract digest as an
+explicit input. Every referenced action is pinned by full commit SHA. It creates
+only a non-authoritative `sha-<commit>-run-<run-id>` tag—never `latest` or a
+release tag—and publishes with BuildKit SLSA provenance plus SPDX SBOM
+attestations for both platforms. A separate GitHub artifact attestation binds
+the resulting OCI index digest.
+
+Pullback occurs only as `image@sha256:...`. The verifier hashes the returned OCI
+index, enforces exactly `linux/amd64` and `linux/arm64`, resolves one attestation
+manifest per platform, and requires each to contain exactly the SPDX Document
+and SLSA Provenance v1 predicate classes. `gh attestation verify` must also
+succeed before an exclusive redacted receipt is retained.
+
+The workflow still cannot deploy a Job or contact a Kubernetes cluster. Merely
+merging it does not publish anything: the protected
+`ok-147-runner-publish` Environment and a separately reviewed dispatch binding
+the exact merged SHA and publication-contract digest are required first.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It

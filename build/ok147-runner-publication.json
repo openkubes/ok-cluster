@@ -1,0 +1,17 @@
+{
+  "format": "ok147-runner-publication/v1",
+  "image": "ghcr.io/openkubes/ok-cluster-runner",
+  "sourceRef": "refs/heads/main",
+  "environment": "ok-147-runner-publish",
+  "tagTemplate": "sha-<12>-run-<run-id>",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "provenance": "mode=max",
+  "sbomGeneratorImage": "docker.io/docker/buildkit-syft-scanner:stable-1@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68",
+  "githubAttestation": true,
+  "pullbackByDigest": true,
+  "networkPublication": "workflow-dispatch-only",
+  "receiptRetentionDays": 90
+}
