@@ -97,13 +97,16 @@ func networkObservationBundleConfig(t *testing.T, withTargetDigest bool) StageRe
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	for name, receipt := range map[string]stagereceipt.Verified{
-		"lifecycle-observation.json": lifecycleObservation,
-		"enablement.json":            enablement,
+	for _, item := range []struct {
+		name    string
+		receipt stagereceipt.Verified
+	}{
+		{name: "lifecycle-observation.json", receipt: lifecycleObservation},
+		{name: "enablement.json", receipt: enablement},
 	} {
-		raw, _ := receipt.Bytes()
-		receiptDigest, _ := receipt.Digest()
-		base.Receipts = append(base.Receipts, StageReceiptSource{Path: writeBundleFile(t, root, name, raw), Digest: receiptDigest})
+		raw, _ := item.receipt.Bytes()
+		receiptDigest, _ := item.receipt.Digest()
+		base.Receipts = append(base.Receipts, StageReceiptSource{Path: writeBundleFile(t, root, item.name, raw), Digest: receiptDigest})
 	}
 	return base
 }
