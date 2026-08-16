@@ -303,6 +303,53 @@ merging it does not publish anything: the protected
 `ok-147-runner-publish` Environment and a separately reviewed dispatch binding
 the exact merged SHA and publication-contract digest are required first.
 
+## Bounded submission primitive
+
+The next offline checkpoint implements, but does not activate, the exact-create
+submission primitive needed by a future executor. It consumes only a projection
+that already passed the authoritative renderer verifier. Immediately before
+use it re-reads and digest-verifies both projection YAML artifacts and checks
+every object, in order, against the authority map.
+
+```text
+verified projection
+        |
+        v
+re-verify exact artifact bytes
+        |
+        v
+hard-coded resource allow-list + exact REST paths
+        |
+        +-- ok-infra: exact GET, then at most one collection POST
+        |
+        `-- ok-mgmt:  exact GET, then at most one collection POST
+                              |
+                              v
+                  SUBMITTED_OBSERVATION_PENDING
+```
+
+Only the eleven resources bound by the OK-141 projection are accepted:
+Namespace, Role, RoleBinding, Cluster, KubevirtCluster,
+KubevirtMachineTemplate, TalosControlPlane, TalosConfigTemplate and
+MachineDeployment objects in their exact API versions. The implementation has
+no list, watch, discovery, update, patch, apply, delete, retry, rollback or
+arbitrary-resource path. Separate TLS clients and authority identities are
+required for `ok-infra` and `ok-mgmt`, and infrastructure submission must
+complete before management lifecycle submission starts.
+
+An existing object is accepted only when it contains every exact projected
+field; Kubernetes-added metadata and defaulted fields may be additional. A
+missing object receives one create attempt. Conflict after an observed absence,
+drift, redirect, malformed API response, partial submission or an authority
+mismatch stops fail-closed and preserves the exact completed receipt prefix.
+
+Successful submission is deliberately classified as
+`SUBMITTED_OBSERVATION_PENDING`, never as lifecycle success. The primitive is
+not wired to the CLI or Job because claim consumption and generation-correct
+observation still need to be composed into one crash-safe execution path.
+Therefore this checkpoint does not contact Kubernetes, consume a grant, deploy
+the published image or authorize any mutation.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It

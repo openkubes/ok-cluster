@@ -59,6 +59,44 @@ func TestOpenKubernetesLedgerValidatesProjectedInputs(t *testing.T) {
 	})
 }
 
+func TestOpenKubernetesSubmissionClientBindsOneAuthority(t *testing.T) {
+	root := t.TempDir()
+	tokenPath := filepath.Join(root, "token")
+	caPath := filepath.Join(root, "ca.crt")
+	if err := os.WriteFile(tokenPath, []byte("short-lived-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caPath, testCA(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenKubernetesSubmissionClient(KubernetesAuthorityConfig{
+		Endpoint:          "https://10.43.0.1:443",
+		AuthorityIdentity: "ok-mgmt",
+		TokenFile:         tokenPath,
+		CAFile:            caPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, config := range map[string]KubernetesAuthorityConfig{
+		"missing identity": {
+			Endpoint: "https://10.43.0.1:443", TokenFile: tokenPath, CAFile: caPath,
+		},
+		"invalid identity": {
+			Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok.mgmt", TokenFile: tokenPath, CAFile: caPath,
+		},
+		"endpoint path": {
+			Endpoint: "https://10.43.0.1:443/api", AuthorityIdentity: "ok-mgmt", TokenFile: tokenPath, CAFile: caPath,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := OpenKubernetesSubmissionClient(config); err == nil || strings.Contains(err.Error(), root) {
+				t.Fatalf("unsafe authority config accepted or disclosed a path: %v", err)
+			}
+		})
+	}
+}
+
 func testCA(t *testing.T) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/ledger"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 const (
@@ -30,6 +31,16 @@ type KubernetesLedgerConfig struct {
 	Namespace string
 	TokenFile string
 	CAFile    string
+}
+
+// KubernetesAuthorityConfig binds one short-lived credential to exactly one
+// authority plane. A caller must use separate instances for ok-infra and
+// ok-mgmt; no reusable multi-cluster administrator client is constructed.
+type KubernetesAuthorityConfig struct {
+	Endpoint          string
+	AuthorityIdentity string
+	TokenFile         string
+	CAFile            string
 }
 
 // InspectKubernetesLedger performs a read-only restart decision. It does not
@@ -49,21 +60,51 @@ func OpenKubernetesLedger(config KubernetesLedgerConfig) (*ledger.Ledger, error)
 	if config.Endpoint == "" || config.Namespace == "" || config.TokenFile == "" || config.CAFile == "" {
 		return nil, errors.New("Kubernetes ledger endpoint, namespace, token file, and CA file are required")
 	}
-	tokenRaw, err := readBoundedRegular(config.TokenFile, maximumTokenBytes)
+	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
 	if err != nil {
-		return nil, errors.New("read projected Kubernetes ledger token")
+		return nil, err
+	}
+	backend, err := ledger.NewKubernetesStore(ledger.KubernetesStoreConfig{
+		Endpoint: config.Endpoint, Namespace: config.Namespace, BearerToken: token, Client: client,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ledger.New(backend)
+}
+
+// OpenKubernetesSubmissionClient materializes a redirect-denying TLS client
+// for one exact authority plane. Paths and credential contents are never
+// returned in errors or receipts.
+func OpenKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submission.KubernetesClient, error) {
+	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.TokenFile == "" || config.CAFile == "" {
+		return nil, errors.New("Kubernetes authority endpoint, identity, token file, and CA file are required")
+	}
+	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
+	if err != nil {
+		return nil, err
+	}
+	return submission.NewKubernetesClient(submission.KubernetesClientConfig{
+		Endpoint: config.Endpoint, AuthorityIdentity: config.AuthorityIdentity, BearerToken: token, Client: client,
+	})
+}
+
+func openBoundedKubernetesHTTP(tokenFile, caFile string) (string, *http.Client, error) {
+	tokenRaw, err := readBoundedRegular(tokenFile, maximumTokenBytes)
+	if err != nil {
+		return "", nil, errors.New("read projected Kubernetes token")
 	}
 	token := string(tokenRaw)
 	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") {
-		return nil, errors.New("projected Kubernetes ledger token is invalid")
+		return "", nil, errors.New("projected Kubernetes token is invalid")
 	}
-	caRaw, err := readBoundedRegular(config.CAFile, maximumCABytes)
+	caRaw, err := readBoundedRegular(caFile, maximumCABytes)
 	if err != nil {
-		return nil, errors.New("read projected Kubernetes API CA")
+		return "", nil, errors.New("read projected Kubernetes API CA")
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(caRaw) {
-		return nil, errors.New("projected Kubernetes API CA contains no certificate")
+		return "", nil, errors.New("projected Kubernetes API CA contains no certificate")
 	}
 	client := &http.Client{
 		Timeout: 15 * time.Second,
@@ -77,13 +118,7 @@ func OpenKubernetesLedger(config KubernetesLedgerConfig) (*ledger.Ledger, error)
 			},
 		},
 	}
-	backend, err := ledger.NewKubernetesStore(ledger.KubernetesStoreConfig{
-		Endpoint: config.Endpoint, Namespace: config.Namespace, BearerToken: token, Client: client,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return ledger.New(backend)
+	return token, client, nil
 }
 
 func readBoundedRegular(path string, maximum int64) ([]byte, error) {
