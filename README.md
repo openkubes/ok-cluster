@@ -84,7 +84,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
   `HelmChartProxy`; it neither renders Helm nor writes the controller-owned
-  `HelmReleaseProxy`.
+  `HelmReleaseProxy`. A distinct offline package now composes the immutable
+  eight-key input ConfigMap with a tokenless, non-retrying Job and a deny-all
+  NetworkPolicy that permits only the exact management API endpoint.
 
 ---
 

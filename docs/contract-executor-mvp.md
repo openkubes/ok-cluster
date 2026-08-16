@@ -1215,6 +1215,23 @@ inputs, a malformed evaluation time or positional input fail before bundle
 execution. This CLI does not package or launch a Job and adds no retry,
 rollback or cleanup.
 
+The separate `ok147-enablement-stage-package/v1` composer can materialize the
+same boundary as a deterministic three-object stream:
+
+```text
+immutable eight-key ConfigMap
+        -> single-endpoint deny-all NetworkPolicy
+        -> backoffLimit: 0 Enablement Job
+```
+
+The Job is tokenless and non-root, mounts the public input and the ledger and
+management-writer credentials from three distinct objects, and has a fixed
+660-second deadline around the command's ten-minute context. Both credentials
+must address the same exact management API IP and port; the NetworkPolicy has
+only that one egress rule. The Job submits the bound `HelmChartProxy` and never
+renders Helm or writes a `HelmReleaseProxy`. Package construction remains
+offline: no Secret, ServiceAccount, ConfigMap, NetworkPolicy or Job is created.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
