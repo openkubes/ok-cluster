@@ -2020,6 +2020,14 @@ exact before a later launcher may create anything. The Job is always last.
 The launch plan carries only package, credential and runtime digests plus exact
 GET/POST metadata and remains `MutationAllowed=false`.
 
+A time-bounded launch candidate now seals that plan to one IP-literal HTTPS
+management endpoint, one CA digest and one independently evidenced installer
+credential identity. Its validity ends fifteen minutes before the earliest of
+the three stage credentials expires. Endpoint and installer-token values stay
+private; the public candidate exposes only their digests and remains
+`MutationAllowed=false`. Candidate preparation reads no credential and makes
+no API request.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
