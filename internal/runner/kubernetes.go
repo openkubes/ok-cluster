@@ -16,6 +16,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/ledger"
+	"github.com/openkubes/ok-cluster/internal/observation"
 	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
@@ -86,6 +87,25 @@ func OpenKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submissi
 	}
 	return submission.NewKubernetesClient(submission.KubernetesClientConfig{
 		Endpoint: config.Endpoint, AuthorityIdentity: config.AuthorityIdentity, BearerToken: token, Client: client,
+	})
+}
+
+// OpenKubernetesCAPILifecycleObserver materializes a bounded management-plane
+// observer for one exact CAPI Cluster. The independently supplied expected
+// authority must match the credential identity bound by the projection plan.
+func OpenKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*observation.CAPILifecycleObserver, error) {
+	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.TokenFile == "" || config.CAFile == "" {
+		return nil, errors.New("Kubernetes CAPI observer endpoint, identity, token file, and CA file are required")
+	}
+	if expectedAuthority == "" || config.AuthorityIdentity != expectedAuthority {
+		return nil, errors.New("Kubernetes CAPI observer authority differs from the verified management plane")
+	}
+	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
+	if err != nil {
+		return nil, err
+	}
+	return observation.NewCAPILifecycleObserver(observation.CAPILifecycleObserverConfig{
+		Endpoint: config.Endpoint, BearerToken: token, Namespace: namespace, Name: name, Client: client,
 	})
 }
 

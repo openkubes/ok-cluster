@@ -273,7 +273,7 @@ func validatePolicy(policy Policy, requireTarget bool) error {
 }
 
 func validateEvidenceShape(value Evidence) error {
-	if !validUID(value.SourceUID) || !validUID(value.TargetClusterUID) || !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,127}$`).MatchString(value.Reason) || !validDigest(value.DesiredRevision) || !validDigest(value.ObservedRevision) || !validDigest(value.EvidenceDigest) {
+	if !validUID(value.SourceUID) || !validUID(value.TargetClusterUID) || !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,127}$`).MatchString(value.Reason) || !validDigest(value.DesiredRevision) || (value.ObservedRevision != "" && !validDigest(value.ObservedRevision)) || !validDigest(value.EvidenceDigest) {
 		return errors.New("identity, revision, reason, or evidence digest is invalid")
 	}
 	if value.Status != "True" && value.Status != "False" && value.Status != "Unknown" {
