@@ -1255,6 +1255,14 @@ only: no Role, binding, Secret or implicit Pod credential. Its canonical object
 digest, source-manifest digest, `ok-mgmt` authority and package digest are
 retained in a redaction-safe receipt. This step is also entirely offline.
 
+`ok147-enablement-stage-installation-plan/v1` parses the sealed three-object
+package again and derives the exact create order `ConfigMap -> NetworkPolicy ->
+Job`. Every item carries an exact-name GET preflight path, collection-only POST
+path and canonical object digest. The planner verifies immutable input,
+NetworkPolicy/Job run identity, tokenless ServiceAccount, `ok-mgmt` authority
+and the two exact credential Secret names. It deliberately excludes the Secret
+objects themselves and grants no mutation authority.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
