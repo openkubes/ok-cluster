@@ -194,7 +194,7 @@ cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 
 # ── bounded Contract Executor MVP (OK-147) ──────────────────────────────────
 contract-executor-test: ## Test the side-effect-free Go Contract Executor core
-	@go test ./cmd/ok ./internal/contract
+	@go test ./...
 
 contract-executor-dry-run: ## Reproduce the OK-141 R and emit a non-mutating plan
 	@go run ./cmd/ok cluster create \
