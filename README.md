@@ -34,9 +34,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   digest-bound immutable ConfigMap/Job/NetworkPolicy envelope offline; the
   single-use Create-only installer can submit only that verified envelope
   after a complete zero-write preflight. Its tokenless runtime identity and
-  credential Secrets remain separately managed prerequisites. The runner
-  image is digest-pinned, multi-architecture, non-root, SBOM- and
-  provenance-producing behind a protected publisher.
+  two short-lived immutable credential Secrets are built as a separate
+  private, digest-bound package; TokenRequest issuance and Secret installation
+  remain separately managed prerequisites. The runner image is digest-pinned,
+  multi-architecture, non-root, SBOM- and provenance-producing behind a
+  protected publisher.
 
 ---
 

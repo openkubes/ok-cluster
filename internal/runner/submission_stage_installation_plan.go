@@ -47,6 +47,9 @@ func PlanSubmissionStageInstallation(packaged VerifiedSubmissionStagePackage) (S
 	if packaged.installationAuthority == "" {
 		return SubmissionStageInstallationPlan{}, errors.New("submission stage package installation authority is missing")
 	}
+	if packaged.ledgerAuthority != packaged.installationAuthority || packaged.selectedAuthority == "" || packaged.ledgerCredential == "" || packaged.selectedCredential == "" || packaged.ledgerCredential == packaged.selectedCredential {
+		return SubmissionStageInstallationPlan{}, errors.New("submission stage package credential binding is invalid")
+	}
 	if digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest {
 		return SubmissionStageInstallationPlan{}, errors.New("submission stage package changed after verification")
 	}
@@ -139,12 +142,52 @@ func PlanSubmissionStageInstallation(packaged VerifiedSubmissionStagePackage) (S
 			if !jobUsesManagementAuthority(podSpec, packaged.installationAuthority) {
 				return SubmissionStageInstallationPlan{}, errors.New("submission stage Job management authority differs from installation authority")
 			}
+			if !jobUsesCredentialSecrets(podSpec, packaged.ledgerCredential, packaged.selectedCredential) {
+				return SubmissionStageInstallationPlan{}, errors.New("submission stage Job credential Secrets differ from package binding")
+			}
 		}
 	}
 	return SubmissionStageInstallationPlan{
 		Format: SubmissionStageInstallationPlanFormat, State: "VERIFIED", StageID: packaged.receipt.StageID,
 		PackageDigest: packaged.receipt.PackageDigest, Creates: creates, MutationAllowed: false,
 	}, nil
+}
+
+func jobUsesCredentialSecrets(podSpec map[string]any, ledger, selected string) bool {
+	volumes, ok := podSpec["volumes"].([]any)
+	if !ok {
+		return false
+	}
+	found := map[string]string{}
+	for _, item := range volumes {
+		volume, _ := item.(map[string]any)
+		name, _ := volume["name"].(string)
+		if name != "ledger-credential" && name != "authority-credential" {
+			continue
+		}
+		secret, _ := volume["secret"].(map[string]any)
+		secretName, _ := secret["secretName"].(string)
+		items, _ := secret["items"].([]any)
+		if len(items) != 2 || !credentialSecretItems(items) {
+			return false
+		}
+		found[name] = secretName
+	}
+	return len(found) == 2 && found["ledger-credential"] == ledger && found["authority-credential"] == selected
+}
+
+func credentialSecretItems(items []any) bool {
+	expected := map[string]string{"token": "token", "ca.crt": "ca.crt"}
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		key, _ := entry["key"].(string)
+		path, _ := entry["path"].(string)
+		if expected[key] != path {
+			return false
+		}
+		delete(expected, key)
+	}
+	return len(expected) == 0
 }
 
 func jobUsesManagementAuthority(podSpec map[string]any, authority string) bool {
