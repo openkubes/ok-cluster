@@ -19,8 +19,12 @@ import (
 )
 
 const (
-	version         = "0.0.0-dev"
 	ledgerNamespace = "openkubes-execution-system"
+)
+
+var (
+	version  = "0.0.0-dev"
+	revision = "unknown"
 )
 
 type createPlan struct {
@@ -48,7 +52,7 @@ func main() {
 
 func run(arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 1 && arguments[0] == "version" {
-		fmt.Fprintln(stdout, version)
+		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil
 	}
 	if len(arguments) < 2 || arguments[0] != "cluster" || arguments[1] != "create" {

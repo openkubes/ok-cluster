@@ -30,7 +30,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   short-lived `ok-mgmt` Jobs; it remains dry-run-only while verifying the
   OK-141 revision, existing projection, authority split, signed grant binding,
   fail-closed single-use receipt semantics, and an offline-tested durable
-  Kubernetes ledger plus short-lived read-only Job preflight boundary
+  Kubernetes ledger plus short-lived read-only Job preflight boundary; its
+  container build is digest-pinned, multi-architecture, non-root, SBOM- and
+  provenance-producing, and remains local/non-publishing
 
 ---
 

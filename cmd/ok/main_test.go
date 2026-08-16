@@ -18,6 +18,16 @@ func fixturePath(t *testing.T, name string) string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "internal", "contract", "testdata", name)
 }
 
+func TestVersionIncludesExecutableRevision(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"version"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "0.0.0-dev unknown\n" {
+		t.Fatalf("version output = %q", stdout.String())
+	}
+}
+
 func TestCreateDryRunProducesNonMutatingPlan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
