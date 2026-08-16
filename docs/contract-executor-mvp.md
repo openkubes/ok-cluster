@@ -612,6 +612,15 @@ that assertion or run its executable. Missing, stale or revision-mismatched
 proof therefore remains `Unknown`, while current health, identity or
 capability failures remain `False`.
 
+Capability execution is additionally fail-closed behind a separately hashed
+Application gate. The collector first reads and normalizes every exact
+Application. It does not invoke the capability source unless all required
+Applications have the expected spec identity, current R/P/fixture correlation,
+the exact applied source revision, `Synced`, and `Healthy`. Pending, unhealthy,
+foreign, missing, or stale Application state therefore produces bounded
+`PlatformReady` evidence without starting capability code. The same gate also
+protects direct full-snapshot collection, so callers cannot bypass it.
+
 The runner-side opener binds the reader to one explicitly named GitOps
 authority (for the OK-141 topology, `ok-shared`) and a short-lived projected
 credential. The adapter is still not wired to the CLI or Job, no built-in

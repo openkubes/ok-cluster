@@ -26,6 +26,29 @@ func TestEvaluatePlatformSnapshotProducesCurrentEvidence(t *testing.T) {
 	}
 }
 
+func TestEvaluatePlatformApplicationsProducesTamperEvidentCapabilityGate(t *testing.T) {
+	policy, profile, snapshot := validPlatformFixture(t)
+	applicationSnapshot := PlatformApplicationSnapshot{
+		Format: PlatformApplicationSnapshotFormat, ObservedAt: snapshot.ObservedAt,
+		TargetClusterUID: snapshot.TargetClusterUID, Applications: snapshot.Applications,
+	}
+	first, err := EvaluatePlatformApplications(policy, profile, applicationSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != "True" || first.Reason != "PlatformApplicationsReady" || first.ObservedRevision != policy.PlatformRevision {
+		t.Fatalf("unexpected capability gate: %#v", first)
+	}
+	applicationSnapshot.Applications[0].SyncStatus = "OutOfSync"
+	second, err := EvaluatePlatformApplications(policy, profile, applicationSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Status != "Unknown" || second.Reason != "PlatformConvergencePending" || second.EvidenceDigest == first.EvidenceDigest || second.SourceUID == first.SourceUID {
+		t.Fatalf("Application drift was not fail-closed and digest-bound: first=%#v second=%#v", first, second)
+	}
+}
+
 func TestEvaluatePlatformSnapshotBindsProfileAndCapabilityIdentity(t *testing.T) {
 	policy, profile, snapshot := validPlatformFixture(t)
 	first, err := EvaluatePlatformSnapshot(policy, profile, snapshot)
