@@ -74,7 +74,13 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   polling window, reads only the exact CAPI Cluster and persists only its
   immutable stage receipt. `ok cluster stage observe lifecycle package`
   additionally creates a digest-bound immutable ConfigMap, NetworkPolicy and
-  non-retrying Job envelope offline; it does not install or launch them.
+  non-retrying Job envelope offline; it does not install or launch them. The
+  matching `observe lifecycle launch prepare` command seals that package with
+  two distinct short-lived Job credentials, the tokenless runtime identity and
+  an expiry-bound installer candidate. Only `observe lifecycle launch execute`
+  can open the installer credential and run the single-use six-object
+  exact-create launcher; it requires the separately copied candidate digest
+  and explicit `--execute`.
 
 ---
 
