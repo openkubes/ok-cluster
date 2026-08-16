@@ -37,9 +37,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   two short-lived immutable credential Secrets are built as a separate
   private, digest-bound package and have their own single-use exact-create
   installer. TokenRequest issuance and live installation remain separately
-  managed prerequisites. The runner image is digest-pinned,
-  multi-architecture, non-root, SBOM- and provenance-producing behind a
-  protected publisher.
+  managed prerequisites. The shared runtime ServiceAccount also has a bounded
+  exact-create-or-verify path and remains tokenless and RBAC-free. The runner
+  image is digest-pinned, multi-architecture, non-root, SBOM- and
+  provenance-producing behind a protected publisher.
 
 ---
 

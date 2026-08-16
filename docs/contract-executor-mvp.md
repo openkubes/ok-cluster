@@ -1253,9 +1253,21 @@ Role, RoleBinding, ClusterRole or ClusterRoleBinding.
 The Job therefore receives no implicit local API credential or Kubernetes
 permission from its Pod identity. Its ledger and selected-authority access can
 only come from the two separately named, externally materialized short-lived
-Secret mounts already bound by the Job envelope. Creating the ServiceAccount,
-credential Secrets or package objects remains an external authorized
-operation; this checkpoint only defines and tests the prerequisite manifest.
+Secret mounts already bound by the Job envelope.
+
+`BuildSubmissionStageRuntimePrerequisite` binds this exact one-object manifest
+and its canonical ServiceAccount representation to a verified stage package.
+The matching single-use installer performs one exact GET and creates the
+ServiceAccount only when absent. Existing state is accepted only when its
+token setting, exact two labels and absence of annotations, image-pull Secrets
+or other runtime semantics match the prerequisite. Server-generated identity
+and managed-fields metadata are allowed and retained only as digests in the
+receipt. There is no update, patch, apply, delete, list, watch, discovery or
+retry operation.
+
+This prerequisite installer is tested only against an in-memory API transport
+in this checkpoint. Creating the ServiceAccount, credential Secrets or stage
+package remains a separately authorized live operation.
 
 ## Typed first-run Platform capability boundary
 
