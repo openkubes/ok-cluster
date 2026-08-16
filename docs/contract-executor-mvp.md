@@ -350,6 +350,54 @@ observation still need to be composed into one crash-safe execution path.
 Therefore this checkpoint does not contact Kubernetes, consume a grant, deploy
 the published image or authorize any mutation.
 
+## Crash-safe execution composition
+
+The following offline checkpoint composes the previously separate mechanisms
+without activating them in the CLI or Job:
+
+```text
+reverify Contract, request, grant, projection and condition policy
+        |
+        v
+atomically claim the one-use grant
+        |
+        v
+exact-create submission v2
+        |
+        v
+bind the CAPI Cluster UID from the API response
+        |
+        v
+bounded aggregate observation for current R, E and P
+        |
+        v
+immutable ledger outcome
+```
+
+Every check that can be completed without external writes occurs before the
+claim. After the claim, an observer or persistence failure leaves
+`CLAIMED_INDETERMINATE_STOP`; a replacement must not retry the operation.
+Known submission failure is retained as `STOPPED`. Current authoritative
+failure is retained as `FAILED`. `SUCCEEDED` is possible only when at least one
+write was attempted and all required Conditions evaluate `True` for the exact
+runtime policy after the claim.
+
+The aggregate evaluator derives its required membership and `R`/`E`/`P`
+identities from the normalized Contract. CAPI evidence must carry the exact
+submitted Cluster UID and current `observedGeneration == generation`.
+Network and Platform evidence must carry the same target UID and exact `E` or
+`P`; they must not invent Kubernetes generation fields for sources that do not
+expose them. Missing, stale, foreign, conflicting or revision-mismatched
+evidence cannot produce `Ready=True`. `False` takes precedence over `Unknown`,
+matching the OK-141 aggregate evaluation model.
+
+The submission receipt is versioned as v2 because it now records per-object
+UIDs plus whether a write was attempted. This runtime identity is required to
+reject a same-name foreign Cluster during observation. The composition remains
+an internal offline primitive: there is still no mutating CLI flag, observer
+HTTP adapter, Job wiring, deployment or infrastructure contact in this
+checkpoint.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It

@@ -73,6 +73,7 @@ type ConsumptionBinding struct {
 	RequestDigest            string
 	ContractRevision         string
 	ProjectionManifestDigest string
+	NotBefore                string
 	NotAfter                 string
 }
 
@@ -148,6 +149,7 @@ func Verify(raw, publicKeyRaw []byte, request executor.CreateRequest, at time.Ti
 			RequestDigest:            document.Payload.RequestDigest,
 			ContractRevision:         document.Payload.ContractRevision,
 			ProjectionManifestDigest: document.Payload.ProjectionManifestDigest,
+			NotBefore:                document.Payload.NotBefore,
 			NotAfter:                 document.Payload.NotAfter,
 		},
 		verified: true,

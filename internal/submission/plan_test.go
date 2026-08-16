@@ -1,6 +1,7 @@
 package submission
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,14 +43,19 @@ func TestLoadReverifiesArtifactAtUseTime(t *testing.T) {
 func TestLoadFailsClosedForIdentityAndYAMLGaps(t *testing.T) {
 	for name, mutate := range map[string]func(string, *projection.Binding){
 		"authority identity mismatch": func(_ string, binding *projection.Binding) {
-			binding.ManagementPlane.Resources[0].Name = "different"
+			binding.ManagementPlane.Identity = "different"
 		},
-		"unsupported kind": func(_ string, binding *projection.Binding) {
-			binding.ManagementPlane.Resources[0].APIVersion = "apps/v1"
-			binding.ManagementPlane.Resources[0].Kind = "Deployment"
+		"projection object differs from authority map": func(root string, binding *projection.Binding) {
+			path := filepath.Join(root, "ok-mgmt-lifecycle.yaml")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = []byte(strings.Replace(string(raw), "apiVersion: cluster.x-k8s.io/v1beta2\nkind: Cluster", "apiVersion: apps/v1\nkind: Deployment", 1))
+			writeBoundArtifact(t, root, "ok-mgmt-lifecycle.yaml", raw, binding)
 		},
 		"incomplete resource inventory": func(_ string, binding *projection.Binding) {
-			binding.ManagementPlane.Resources = nil
+			binding.ManagementPlane.ResourceCount = 0
 		},
 		"alias in YAML": func(root string, binding *projection.Binding) {
 			raw := []byte("apiVersion: v1\nkind: Namespace\nmetadata: &meta\n  name: disposable-ok141\n  annotations:\n    openkubes.io/contract-name: disposable-ok141\n    openkubes.io/contract-namespace: disposable-ok141\n    openkubes.io/intent-revision: " + binding.IntentRevision + "\n")
@@ -63,6 +69,18 @@ func TestLoadFailsClosedForIdentityAndYAMLGaps(t *testing.T) {
 				t.Fatal("unsafe projection accepted")
 			}
 		})
+	}
+}
+
+func TestLoadReconstructsUnsignedInMemoryResourceInventory(t *testing.T) {
+	root, binding := validProjection(t)
+	binding.ManagementPlane.Resources[0].Name = "tampered-in-memory"
+	plan, err := Load(root, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Management.Objects[0].Identity.Name != "disposable-ok141" {
+		t.Fatalf("unsigned in-memory identity became authoritative: %#v", plan.Management.Objects[0].Identity)
 	}
 }
 
@@ -101,9 +119,28 @@ func validProjection(t *testing.T) (string, projection.Binding) {
 	if err := os.WriteFile(filepath.Join(root, "ok-mgmt-lifecycle.yaml"), mgmt, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	authority, err := json.Marshal(map[string]any{
+		"format":           "ok141-contract-to-capi-projection/v2",
+		"contractIdentity": identity,
+		"intentRevision":   revision,
+		"infrastructurePlane": map[string]any{
+			"identity": "ok-infra", "role": "provider-runtime-and-golden-image-prerequisites",
+			"resources": []map[string]any{{"apiVersion": "v1", "kind": "Namespace", "name": "disposable-ok141"}},
+		},
+		"managementPlane": map[string]any{
+			"identity": "ok-mgmt", "role": "single-lifecycle-writer",
+			"resources": []map[string]any{{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "name": "disposable-ok141", "namespace": "disposable-ok141"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "authority-map.json"), authority, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	binding := projection.Binding{
-		Format: projection.BindingFormat, IntentRevision: revision, ContractIdentity: identity,
-		AuthorityMapDigest: "sha256:" + strings.Repeat("2", 64),
+		Format: projection.BindingFormat, SourceFormat: "ok141-contract-to-capi-projection/v2", IntentRevision: revision, ContractIdentity: identity,
+		AuthorityMapDigest: digest.SHA256(authority),
 		InfrastructurePlane: projection.Plane{Identity: "ok-infra", Role: "provider-runtime-and-golden-image-prerequisites", ResourceCount: 1, Resources: []projection.ResourceIdentity{
 			{APIVersion: "v1", Kind: "Namespace", Name: "disposable-ok141"},
 		}},
@@ -111,6 +148,7 @@ func validProjection(t *testing.T) (string, projection.Binding) {
 			{APIVersion: "cluster.x-k8s.io/v1beta2", Kind: "Cluster", Name: "disposable-ok141", Namespace: "disposable-ok141"},
 		}},
 		Artifacts: []projection.Artifact{
+			{Name: "authority-map.json", Digest: digest.SHA256(authority)},
 			{Name: "ok-infra-prerequisites.yaml", Digest: digest.SHA256(infra)},
 			{Name: "ok-mgmt-lifecycle.yaml", Digest: digest.SHA256(mgmt)},
 		},

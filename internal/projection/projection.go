@@ -198,6 +198,75 @@ func Verify(manifestPath, root, expectedRevision string, expectedIdentity contra
 	}, nil
 }
 
+// ReverifyAtUse reconstructs the non-serialized resource inventories from the
+// digest-bound authority map immediately before submission. This prevents an
+// in-memory Resource list change from becoming a second, unsigned authority.
+func ReverifyAtUse(root string, binding Binding) (Binding, error) {
+	if binding.Format != BindingFormat || root == "" {
+		return Binding{}, errors.New("verified projection binding and root are required")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return Binding{}, fmt.Errorf("resolve projection root: %w", err)
+	}
+	artifactDigests := make(map[string]string, len(binding.Artifacts))
+	for _, artifact := range binding.Artifacts {
+		if err := validateArtifactName(artifact.Name); err != nil {
+			return Binding{}, err
+		}
+		if _, duplicate := artifactDigests[artifact.Name]; duplicate {
+			return Binding{}, fmt.Errorf("verified projection repeats artifact %s", artifact.Name)
+		}
+		artifactDigests[artifact.Name] = artifact.Digest
+	}
+	for _, required := range []string{"authority-map.json", "ok-infra-prerequisites.yaml", "ok-mgmt-lifecycle.yaml"} {
+		if _, ok := artifactDigests[required]; !ok {
+			return Binding{}, fmt.Errorf("verified projection does not bind %s", required)
+		}
+	}
+	var authorityRaw []byte
+	for name, expected := range artifactDigests {
+		raw, err := os.ReadFile(filepath.Join(abs, name))
+		if err != nil {
+			return Binding{}, fmt.Errorf("read projection artifact %s: %w", name, err)
+		}
+		if actual := digest.SHA256(raw); actual != expected {
+			return Binding{}, fmt.Errorf("projection artifact %s changed after verification", name)
+		}
+		if name == "authority-map.json" {
+			authorityRaw = raw
+		}
+	}
+	if digest.SHA256(authorityRaw) != binding.AuthorityMapDigest {
+		return Binding{}, errors.New("authority map digest differs from verified binding")
+	}
+	var authority authorityMap
+	if err := jsonstrict.Decode(authorityRaw, &authority); err != nil {
+		return Binding{}, fmt.Errorf("decode authority map: %w", err)
+	}
+	if authority.IntentRevision != binding.IntentRevision || authority.ContractIdentity != binding.ContractIdentity {
+		return Binding{}, errors.New("authority map intent or Contract identity differs from verified binding")
+	}
+	if authority.Format != binding.SourceFormat {
+		return Binding{}, errors.New("authority map format differs from verified binding")
+	}
+	if err := validatePlane(authority.InfrastructurePlane, "provider-runtime-and-golden-image-prerequisites"); err != nil {
+		return Binding{}, fmt.Errorf("infrastructure plane: %w", err)
+	}
+	if err := validatePlane(authority.ManagementPlane, "single-lifecycle-writer"); err != nil {
+		return Binding{}, fmt.Errorf("management plane: %w", err)
+	}
+	if authority.InfrastructurePlane.Identity != binding.InfrastructurePlane.Identity || authority.InfrastructurePlane.Role != binding.InfrastructurePlane.Role || len(authority.InfrastructurePlane.Resources) != binding.InfrastructurePlane.ResourceCount {
+		return Binding{}, errors.New("infrastructure authority differs from verified binding")
+	}
+	if authority.ManagementPlane.Identity != binding.ManagementPlane.Identity || authority.ManagementPlane.Role != binding.ManagementPlane.Role || len(authority.ManagementPlane.Resources) != binding.ManagementPlane.ResourceCount {
+		return Binding{}, errors.New("management authority differs from verified binding")
+	}
+	binding.InfrastructurePlane.Resources = exportResources(authority.InfrastructurePlane.Resources)
+	binding.ManagementPlane.Resources = exportResources(authority.ManagementPlane.Resources)
+	return binding, nil
+}
+
 func exportResources(resources []resource) []ResourceIdentity {
 	result := make([]ResourceIdentity, 0, len(resources))
 	for _, object := range resources {

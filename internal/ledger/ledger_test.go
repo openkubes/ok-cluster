@@ -64,6 +64,21 @@ func TestClaimIsAtomicAndSingleUse(t *testing.T) {
 	}
 }
 
+func TestClaimRechecksGrantWindowAtConsumption(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	grant := verifiedGrant(t, at)
+	if _, err := store.Claim(context.Background(), grant, at.Add(-2*time.Minute)); err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("inactive grant was consumed: %v", err)
+	}
+	if _, err := store.Claim(context.Background(), grant, at); err != nil {
+		t.Fatalf("active grant was consumed by the rejected attempt: %v", err)
+	}
+}
+
 func TestCompleteIsImmutableAndIdempotent(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "ledger"))
 	if err != nil {
