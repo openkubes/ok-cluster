@@ -1023,6 +1023,23 @@ only an explicit later `Run` can inspect or claim the ledger and invoke the
 single bound mutator. No CLI command, Job entry point, retry or live cluster
 access is introduced by this checkpoint.
 
+## Inspect-only staged CLI
+
+`ok cluster stage inspect` is the first production entry point for the shared
+bundle loader. Callers must provide every expected R/E/P/fixture and authority
+identity, the bounded plan, an explicitly ordered zero-or-more receipt prefix,
+the projection manifest, the signed stage grant and one explicit RFC3339
+evaluation time. Receipt arguments bind a source file to an independently
+supplied canonical digest; malformed or positional input fails before loading.
+
+The command emits only the redaction-safe verified cursor decision plus
+`AuthorizationState=VERIFIED` and `MutationAllowed=false`. It does not accept
+ledger or Kubernetes credentials and cannot open or run the bound operation.
+Consequently it provides an executable local preclaim inspection path without
+introducing submission, claim, mutation, retry, discovery or cluster contact.
+The future Job can use the same bundle loader rather than a second artifact
+interpretation path.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

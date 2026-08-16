@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
@@ -16,6 +18,8 @@ import (
 	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/runner"
+	"github.com/openkubes/ok-cluster/internal/stagecursor"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 const (
@@ -23,8 +27,9 @@ const (
 )
 
 var (
-	version  = "0.0.0-dev"
-	revision = "unknown"
+	version                 = "0.0.0-dev"
+	revision                = "unknown"
+	stageReceiptFlagPattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
 )
 
 type createPlan struct {
@@ -43,6 +48,37 @@ type createPlan struct {
 	Ledger                  *ledger.Inspection      `json:"ledger,omitempty"`
 }
 
+type stageInspection struct {
+	Format             string               `json:"format"`
+	Decision           stagecursor.Decision `json:"decision"`
+	AuthorizationState string               `json:"authorizationState"`
+	MutationAllowed    bool                 `json:"mutationAllowed"`
+}
+
+type receiptFlags []string
+
+func (values *receiptFlags) String() string { return strings.Join(*values, ",") }
+
+func (values *receiptFlags) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+var inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (stageInspection, error) {
+	bundle, err := runner.LoadSubmissionStageBundle(config)
+	if err != nil {
+		return stageInspection{}, err
+	}
+	decision, err := bundle.Decision()
+	if err != nil {
+		return stageInspection{}, err
+	}
+	return stageInspection{
+		Format: "ok147-stage-inspection/v1", Decision: decision,
+		AuthorizationState: "VERIFIED", MutationAllowed: false,
+	}, nil
+}
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
@@ -55,9 +91,16 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil
 	}
-	if len(arguments) < 2 || arguments[0] != "cluster" || arguments[1] != "create" {
-		return errors.New("usage: ok cluster create --contract PATH --schema PATH --dry-run [--projection-manifest PATH] [--authorization PATH --authorization-key PATH --evaluation-time RFC3339] [--ledger-inspect --ledger-api-endpoint URL --ledger-token-file PATH --ledger-ca-file PATH]")
+	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
+		return runClusterCreate(arguments[2:], stdout, stderr)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "inspect" {
+		return runClusterStageInspect(arguments[3:], stdout, stderr)
+	}
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ...")
+}
+
+func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster create", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	contractPath := flags.String("contract", "", "path to the versioned cluster contract")
@@ -72,7 +115,7 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
 	ledgerTokenFile := flags.String("ledger-token-file", "", "path to a projected short-lived ledger ServiceAccount token")
 	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the projected Kubernetes API CA bundle")
-	if err := flags.Parse(arguments[2:]); err != nil {
+	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -185,6 +228,79 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(plan)
+}
+
+func runClusterStageInspect(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage inspect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	planPath := flags.String("plan", "", "path to the bounded staged execution plan")
+	contractNamespace := flags.String("contract-namespace", "", "expected Contract namespace")
+	contractName := flags.String("contract-name", "", "expected Contract name")
+	intentRevision := flags.String("intent-revision", "", "expected normalized Contract revision R")
+	enablementRevision := flags.String("enablement-revision", "", "expected Enablement revision E")
+	platformRevision := flags.String("platform-revision", "", "expected Platform revision P")
+	executionFixture := flags.String("execution-fixture", "", "expected execution FixtureDigest")
+	infrastructureAuthority := flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
+	managementAuthority := flags.String("management-authority", "", "expected management authority identity")
+	gitOpsAuthority := flags.String("gitops-authority", "", "expected GitOps authority identity")
+	var receiptValues receiptFlags
+	flags.Var(&receiptValues, "receipt", "ordered canonical predecessor receipt as PATH@sha256:<digest>; repeat for each receipt")
+	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
+	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
+	projectionManifest := flags.String("projection-manifest", "", "path to the immutable projection manifest")
+	projectionRoot := flags.String("projection-root", "", "directory containing projection artifacts (defaults to manifest directory)")
+	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	required := []struct {
+		name  string
+		value string
+	}{
+		{"--plan", *planPath}, {"--contract-namespace", *contractNamespace}, {"--contract-name", *contractName},
+		{"--intent-revision", *intentRevision}, {"--enablement-revision", *enablementRevision}, {"--platform-revision", *platformRevision},
+		{"--execution-fixture", *executionFixture}, {"--infrastructure-authority", *infrastructureAuthority},
+		{"--management-authority", *managementAuthority}, {"--gitops-authority", *gitOpsAuthority},
+		{"--grant", *grantPath}, {"--grant-key", *grantKeyPath}, {"--projection-manifest", *projectionManifest}, {"--evaluation-time", *evaluationTime},
+	}
+	for _, input := range required {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	at, err := time.Parse(time.RFC3339, *evaluationTime)
+	if err != nil {
+		return fmt.Errorf("parse evaluation time: %w", err)
+	}
+	receipts := make([]runner.StageReceiptSource, 0, len(receiptValues))
+	for _, value := range receiptValues {
+		if !stageReceiptFlagPattern.MatchString(value) {
+			return errors.New("receipt must use PATH@sha256:<64 lowercase hex> format")
+		}
+		separator := strings.LastIndex(value, "@sha256:")
+		receipts = append(receipts, runner.StageReceiptSource{Path: value[:separator], Digest: value[separator+1:]})
+	}
+	inspection, err := inspectSubmissionStage(runner.SubmissionStageBundleConfig{
+		PlanPath: *planPath,
+		PlanExpected: stageplan.Expected{
+			ContractIdentity: contract.Identity{Namespace: *contractNamespace, Name: *contractName},
+			IntentRevision:   *intentRevision, EnablementRevision: *enablementRevision,
+			PlatformRevision: *platformRevision, ExecutionFixture: *executionFixture,
+			InfrastructureAuthority: *infrastructureAuthority, ManagementAuthority: *managementAuthority, GitOpsAuthority: *gitOpsAuthority,
+		},
+		Receipts: receipts, GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath,
+		ProjectionManifestPath: *projectionManifest, ProjectionRoot: *projectionRoot, EvaluationTime: at,
+	})
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(inspection)
 }
 
 func countNonEmpty(values ...string) int {
