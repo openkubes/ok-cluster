@@ -57,7 +57,6 @@ type KubernetesNetworkObserverConfig struct {
 	Name                        string
 	HCPName                     string
 	Clock                       func() time.Time
-	PodExecutor                 observation.CiliumProbePodExecutor
 }
 
 // InspectKubernetesLedger performs a read-only restart decision. It does not
@@ -138,11 +137,11 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 	if config.Management.Endpoint == config.Workload.Endpoint {
 		return nil, errors.New("network observer management and workload endpoints must be distinct")
 	}
-	managementToken, managementClient, err := openBoundedKubernetesHTTP(config.Management.TokenFile, config.Management.CAFile)
+	managementToken, _, managementClient, err := openBoundedKubernetesMaterial(config.Management.TokenFile, config.Management.CAFile)
 	if err != nil {
 		return nil, errors.New("open bounded management network credential")
 	}
-	workloadToken, workloadClient, err := openBoundedKubernetesHTTP(config.Workload.TokenFile, config.Workload.CAFile)
+	workloadToken, workloadCA, workloadClient, err := openBoundedKubernetesMaterial(config.Workload.TokenFile, config.Workload.CAFile)
 	if err != nil {
 		return nil, errors.New("open bounded workload network credential")
 	}
@@ -161,7 +160,11 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 	if err != nil {
 		return nil, err
 	}
-	probe, err := observation.NewKubernetesFixedCiliumProbe(config.PodExecutor)
+	podExecutor, err := newKubernetesCiliumWebSocketExecutor(config.Workload.Endpoint, workloadToken, workloadCA, workloadClient)
+	if err != nil {
+		return nil, err
+	}
+	probe, err := observation.NewKubernetesFixedCiliumProbe(podExecutor)
 	if err != nil {
 		return nil, err
 	}
@@ -172,21 +175,26 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 }
 
 func openBoundedKubernetesHTTP(tokenFile, caFile string) (string, *http.Client, error) {
+	token, _, client, err := openBoundedKubernetesMaterial(tokenFile, caFile)
+	return token, client, err
+}
+
+func openBoundedKubernetesMaterial(tokenFile, caFile string) (string, []byte, *http.Client, error) {
 	tokenRaw, err := readBoundedRegular(tokenFile, maximumTokenBytes)
 	if err != nil {
-		return "", nil, errors.New("read projected Kubernetes token")
+		return "", nil, nil, errors.New("read projected Kubernetes token")
 	}
 	token := string(tokenRaw)
 	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") {
-		return "", nil, errors.New("projected Kubernetes token is invalid")
+		return "", nil, nil, errors.New("projected Kubernetes token is invalid")
 	}
 	caRaw, err := readBoundedRegular(caFile, maximumCABytes)
 	if err != nil {
-		return "", nil, errors.New("read projected Kubernetes API CA")
+		return "", nil, nil, errors.New("read projected Kubernetes API CA")
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(caRaw) {
-		return "", nil, errors.New("projected Kubernetes API CA contains no certificate")
+		return "", nil, nil, errors.New("projected Kubernetes API CA contains no certificate")
 	}
 	client := &http.Client{
 		Timeout: 15 * time.Second,
@@ -200,7 +208,7 @@ func openBoundedKubernetesHTTP(tokenFile, caFile string) (string, *http.Client, 
 			},
 		},
 	}
-	return token, client, nil
+	return token, append([]byte(nil), caRaw...), client, nil
 }
 
 func readBoundedRegular(path string, maximum int64) ([]byte, error) {

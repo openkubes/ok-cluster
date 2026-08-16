@@ -503,10 +503,27 @@ cilium-health status --probe --output json
 
 It carries the selected Pod name and UID plus the fixed `kube-system` namespace
 and `cilium-agent` container to a narrow Pod-exec transport. The concrete
-WebSocket/SPDY transport must still verify the Pod UID immediately before exec;
-that transport and any live cluster contact remain a later checkpoint. No
-shell, `kubectl`, arbitrary command arguments, mutation, polling, CLI/Job
-wiring, or status publication is introduced here.
+transport now uses the official `client-go` v0.29.15 RemoteCommand WebSocket
+executor and requests only protocol `v5.channel.k8s.io`; it has no SPDY
+fallback. One exact Pod GET verifies the selected UID immediately before exec,
+and a second exact GET verifies it again afterwards so a same-name replacement
+cannot be accepted as evidence. Namespace, container and the five command
+arguments come from one authoritative constructor and are validated again at
+the transport boundary.
+
+The operation is bounded to 30 seconds, 4 MiB of stdout and 64 KiB of stderr.
+Any stderr, empty or oversized stdout, Pod-identity change, transport failure,
+or protocol construction failure stops fail-closed without returning raw
+remote details. A local TLS/WebSocket integration test proves the v5 handshake,
+channel-1 stdout decoding, exact query shape, bearer-token use and the two UID
+checks. Unit tests cover altered commands, an initial foreign UID, replacement
+races and bounded output failures.
+
+This checkpoint still introduces no shell, `kubectl`, arbitrary command
+arguments, mutation, polling, retry, CLI/Job wiring, status publication, or live
+cluster contact. The executor is constructed as part of the bounded Kubernetes
+Network source collector but remains unused until a later composition path
+explicitly invokes that collector.
 
 ## OK-141 compatibility evidence
 
