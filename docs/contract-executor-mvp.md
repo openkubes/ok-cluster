@@ -1967,6 +1967,14 @@ security context and digest-pinned image prevent an implicit retry or broad
 ambient authority. Rendering is strict literal substitution and performs no
 cluster request or object creation.
 
+The complete offline package now combines that envelope with the immutable
+public ConfigMap. Before rendering, it reads the private workload binding only
+long enough to prove its digest, R, target-UID correlation and exact workload
+API endpoint. Binding bytes are not copied into the package or receipt. The
+redaction-safe package receipt retains only the binding digest plus the public
+input, prefix, profile, template, envelope and complete package digests. This
+is package coherence, not credential materialization or launch authority.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
