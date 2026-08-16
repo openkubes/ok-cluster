@@ -555,9 +555,9 @@ deterministic outcome.
 The composer performs exactly one pass in CAPI, Network, Platform order and
 then evaluates one ordered bundle at the injected clock time. It has no polling,
 retry, watch, mutation, repair, durable status publication or default source.
-The concrete GitOps/Platform source remains a separate checkpoint. The
-immutable Network-profile loader is described next. Consequently this
-composition is not yet wired to the CLI or Job and made no cluster contact.
+The concrete Kubernetes adapters and immutable profile loaders are described
+next. This composition is not yet wired to the CLI or Job and made no cluster
+contact.
 
 ## Digest-bound Network profile loading
 
@@ -654,6 +654,43 @@ observation time, the Platform collector receives the post-submission UID from
 the execution policy, rejects any different configured target before an Argo
 request, and requires the capability assertion to carry that same UID. This
 keeps pre-runtime Platform semantics separate from runtime correlation.
+
+## Post-submission aggregate observer wiring
+
+The runner now exposes one concrete `execution.Observer` boundary that lazily
+composes the CAPI, Network and Platform adapters. Construction validates and
+freezes the immutable Network and Platform profiles but reads no credential
+file and contacts no API. `Observe` first requires the policy to carry the
+concrete CAPI Cluster UID returned by the exact-create submission receipt and
+to match R, E and P from both profiles.
+
+Only then can two explicit runtime resolvers run:
+
+```text
+submitted CAPI Cluster UID
+        |
+        +--> workload-authority resolver --> Network source
+        |
+        +--> capability-evidence resolver -> Platform source
+```
+
+The workload resolver must return an authority identity exactly equal to the
+runtime Cluster UID. The capability resolver receives the same bound policy
+and an isolated copy of the immutable Platform profile. Resolver failures are
+redacted, and a foreign workload identity, missing capability source or
+profile/revision mismatch fails before the affected source is opened.
+
+Domains absent from the Contract-derived required-condition policy are not
+opened and their runtime resolvers are not invoked. Required domains still run
+in the fixed CAPI, Network, Platform observation order and are immediately
+evaluated by the bounded aggregate evaluator. The wiring adds no resolver
+implementation that could silently reuse historical capability evidence: the
+single-run workload binding and capability execution remain explicit later
+runner boundaries.
+
+This checkpoint is library wiring only. It remains disconnected from the CLI
+and Job, performs no polling, retry, mutation or status publication, and made
+no live cluster contact.
 
 ## OK-141 compatibility evidence
 
