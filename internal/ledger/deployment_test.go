@@ -24,7 +24,7 @@ func TestKubernetesLedgerDeploymentBoundary(t *testing.T) {
 	}
 
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
-	objects := map[string]map[string]any{}
+	objects := map[string][]map[string]any{}
 	for {
 		var object map[string]any
 		if err := decoder.Decode(&object); err != nil {
@@ -34,15 +34,16 @@ func TestKubernetesLedgerDeploymentBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		kind, _ := object["kind"].(string)
-		objects[kind] = object
+		objects[kind] = append(objects[kind], object)
 	}
 
 	for _, kind := range []string{"Namespace", "ServiceAccount", "Role", "RoleBinding", "ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"} {
-		if objects[kind] == nil {
+		if len(objects[kind]) == 0 {
 			t.Fatalf("deployment lacks %s", kind)
 		}
 	}
-	roleRules := nestedSlice(t, objects["Role"], "rules")
+	writerRole := namedObject(t, objects["Role"], "ok147-ledger-writer")
+	roleRules := nestedSlice(t, writerRole, "rules")
 	if len(roleRules) != 1 {
 		t.Fatalf("ledger Role has %d rules, want 1", len(roleRules))
 	}
@@ -56,8 +57,17 @@ func TestKubernetesLedgerDeploymentBoundary(t *testing.T) {
 	if len(resources) != 1 || resources[0] != "configmaps" {
 		t.Fatalf("ledger Role resources = %v, want only configmaps", resources)
 	}
+	readerRole := namedObject(t, objects["Role"], "ok147-ledger-reader")
+	readerRules := nestedSlice(t, readerRole, "rules")
+	if len(readerRules) != 1 {
+		t.Fatalf("ledger reader Role has %d rules, want 1", len(readerRules))
+	}
+	readerVerbs := stringsFrom(t, readerRules[0].(map[string]any)["verbs"])
+	if len(readerVerbs) != 1 || readerVerbs[0] != "get" {
+		t.Fatalf("ledger reader verbs = %v, want only get", readerVerbs)
+	}
 
-	policy := objects["ValidatingAdmissionPolicy"]
+	policy := objects["ValidatingAdmissionPolicy"][0]
 	spec := nestedMap(t, policy, "spec")
 	if spec["failurePolicy"] != "Fail" {
 		t.Fatalf("admission failurePolicy = %v, want Fail", spec["failurePolicy"])
@@ -84,6 +94,18 @@ func TestKubernetesLedgerDeploymentBoundary(t *testing.T) {
 	if !serviceAccountBound {
 		t.Fatal("admission validations do not bind the exact ServiceAccount")
 	}
+}
+
+func namedObject(t *testing.T, objects []map[string]any, name string) map[string]any {
+	t.Helper()
+	for _, object := range objects {
+		metadata, ok := object["metadata"].(map[string]any)
+		if ok && metadata["name"] == name {
+			return object
+		}
+	}
+	t.Fatalf("object %q not found", name)
+	return nil
 }
 
 func nestedMap(t *testing.T, object map[string]any, key string) map[string]any {
