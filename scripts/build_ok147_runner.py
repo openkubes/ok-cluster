@@ -98,43 +98,85 @@ def sha256(path: Path) -> str:
 
 
 def inspect_oci_archive(path: Path) -> dict[str, object]:
-    with tarfile.open(path, "r") as archive:
+    def read_member(archive: tarfile.TarFile, name: str) -> bytes:
         try:
-            member = archive.getmember("index.json")
+            member = archive.getmember(name)
         except KeyError as error:
-            raise ValueError("OCI archive has no index.json") from error
+            raise ValueError(f"OCI archive has no {name}") from error
         source = archive.extractfile(member)
         if source is None:
-            raise ValueError("OCI archive has no readable index.json")
-        raw = source.read()
-    index = json.loads(raw)
-    if index.get("schemaVersion") != 2 or not isinstance(index.get("manifests"), list):
-        raise ValueError("OCI archive index is invalid")
-    platforms: dict[str, str] = {}
-    attestations: list[str] = []
-    for descriptor in index["manifests"]:
-        digest = descriptor.get("digest", "")
+            raise ValueError(f"OCI archive has no readable {name}")
+        return source.read()
+
+    def read_blob(archive: tarfile.TarFile, digest: str) -> dict[str, object]:
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-            raise ValueError("OCI index contains an invalid manifest digest")
-        annotations = descriptor.get("annotations") or {}
-        if annotations.get("vnd.docker.reference.type") == "attestation-manifest":
-            attestations.append(digest)
-            continue
-        platform = descriptor.get("platform") or {}
-        identity = f"{platform.get('os')}/{platform.get('architecture')}"
-        if identity not in PLATFORMS.split(","):
-            raise ValueError(f"OCI archive contains unexpected platform {identity}")
-        if identity in platforms:
-            raise ValueError(f"OCI archive contains duplicate platform {identity}")
-        platforms[identity] = digest
-    if sorted(platforms) != sorted(PLATFORMS.split(",")):
-        raise ValueError("OCI archive lacks an exact platform manifest set")
-    if len(attestations) < 2:
-        raise ValueError("OCI archive lacks per-platform provenance attestations")
+            raise ValueError("OCI descriptor has an invalid digest")
+        raw = read_member(archive, "blobs/sha256/" + digest.removeprefix("sha256:"))
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError("OCI blob content differs from its descriptor digest")
+        document = json.loads(raw)
+        if not isinstance(document, dict):
+            raise ValueError("OCI blob is not a JSON object")
+        return document
+
+    with tarfile.open(path, "r") as archive:
+        raw = read_member(archive, "index.json")
+        layout_index = json.loads(raw)
+        if layout_index.get("schemaVersion") != 2 or not isinstance(layout_index.get("manifests"), list):
+            raise ValueError("OCI archive index is invalid")
+
+        index = layout_index
+        index_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        if len(layout_index["manifests"]) == 1:
+            root_descriptor = layout_index["manifests"][0]
+            if root_descriptor.get("mediaType") == "application/vnd.oci.image.index.v1+json":
+                index_digest = root_descriptor.get("digest", "")
+                index = read_blob(archive, index_digest)
+        if index.get("schemaVersion") != 2 or not isinstance(index.get("manifests"), list):
+            raise ValueError("OCI image index is invalid")
+
+        platforms: dict[str, str] = {}
+        attestations: dict[str, str] = {}
+        for descriptor in index["manifests"]:
+            digest = descriptor.get("digest", "")
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise ValueError("OCI index contains an invalid manifest digest")
+            annotations = descriptor.get("annotations") or {}
+            if annotations.get("vnd.docker.reference.type") == "attestation-manifest":
+                subject = annotations.get("vnd.docker.reference.digest", "")
+                if subject in attestations:
+                    raise ValueError("OCI archive contains duplicate provenance for one subject")
+                provenance = read_blob(archive, digest)
+                layers = provenance.get("layers")
+                if not isinstance(layers, list) or len(layers) != 1:
+                    raise ValueError("provenance manifest must contain exactly one layer")
+                layer = layers[0]
+                if layer.get("mediaType") != "application/vnd.in-toto+json":
+                    raise ValueError("provenance layer is not an in-toto statement")
+                predicate = (layer.get("annotations") or {}).get("in-toto.io/predicate-type")
+                if predicate != "https://slsa.dev/provenance/v1":
+                    raise ValueError("provenance layer is not SLSA provenance v1")
+                attestations[subject] = digest
+                continue
+            platform = descriptor.get("platform") or {}
+            identity = f"{platform.get('os')}/{platform.get('architecture')}"
+            if identity not in PLATFORMS.split(","):
+                raise ValueError(f"OCI archive contains unexpected platform {identity}")
+            if identity in platforms:
+                raise ValueError(f"OCI archive contains duplicate platform {identity}")
+            image_manifest = read_blob(archive, digest)
+            if image_manifest.get("mediaType") != "application/vnd.oci.image.manifest.v1+json":
+                raise ValueError("platform descriptor does not reference an OCI image manifest")
+            platforms[identity] = digest
+        if sorted(platforms) != sorted(PLATFORMS.split(",")):
+            raise ValueError("OCI archive lacks an exact platform manifest set")
+        if sorted(attestations) != sorted(platforms.values()):
+            raise ValueError("OCI archive lacks exact per-platform provenance attestations")
     return {
-        "ociIndexDigest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "ociLayoutIndexDigest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "ociIndexDigest": index_digest,
         "platformManifestDigests": dict(sorted(platforms.items())),
-        "provenanceManifestDigests": sorted(attestations),
+        "provenanceManifestDigests": sorted(attestations.values()),
     }
 
 
@@ -193,7 +235,7 @@ def main() -> int:
         write_exclusive(output.with_suffix(".build-record.json"), record)
         print(json.dumps(record, sort_keys=True, indent=2))
         return 0
-    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+    except (OSError, subprocess.CalledProcessError, tarfile.TarError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
