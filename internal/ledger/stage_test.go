@@ -101,6 +101,35 @@ func TestStageCompletionIsBoundImmutableAndIdempotent(t *testing.T) {
 
 func verifiedStageGrant(t *testing.T, at time.Time) authorization.VerifiedStageGrant {
 	t.Helper()
+	plan := verifiedStagePlan(t)
+	identity := plan.ContractIdentity
+	stage, stageDigest, err := plan.Stage("provider-prerequisites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := authorization.StagePayload{
+		Audience: authorization.StageAudience, GrantID: "ok147-stage-ledger-20260816-01", Decision: "ALLOW",
+		PlanDigest: plan.PlanDigest, ContractIdentity: identity, ContractRevision: plan.IntentRevision,
+		EnablementRevision: plan.EnablementRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
+		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Operation: stage.GrantOperation, Authority: stage.Authority,
+		Predecessors: []authorization.StagePredecessor{},
+		NotBefore:    at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
+	}
+	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	signed, _ := authorization.StageSigningBytes(payload)
+	document, _ := json.Marshal(map[string]any{
+		"format": authorization.StageFormat, "payload": payload,
+		"signature": map[string]any{"algorithm": "Ed25519", "keyId": digest.SHA256(publicKey), "value": base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, signed))},
+	})
+	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, []stagereceipt.Verified{}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return grant
+}
+
+func verifiedStagePlan(t *testing.T) stageplan.Binding {
+	t.Helper()
 	identity := contract.Identity{Namespace: "disposable-ok147", Name: "disposable-ok147"}
 	ids := []string{"provider-prerequisites", "cluster-lifecycle", "lifecycle-observation", "enablement", "network-observation", "runtime-binding", "target-access", "target-credential", "target-registration", "platform-applications", "platform-observation", "aggregate-evidence"}
 	kinds := []string{"Submission", "Submission", "Observation", "Submission", "Observation", "Binding", "Submission", "Credential", "Submission", "Submission", "Observation", "Evaluation"}
@@ -134,29 +163,7 @@ func verifiedStageGrant(t *testing.T, at time.Time) authorization.VerifiedStageG
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage, stageDigest, err := plan.Stage("provider-prerequisites")
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := authorization.StagePayload{
-		Audience: authorization.StageAudience, GrantID: "ok147-stage-ledger-20260816-01", Decision: "ALLOW",
-		PlanDigest: plan.PlanDigest, ContractIdentity: identity, ContractRevision: plan.IntentRevision,
-		EnablementRevision: plan.EnablementRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
-		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Operation: stage.GrantOperation, Authority: stage.Authority,
-		Predecessors: []authorization.StagePredecessor{},
-		NotBefore:    at.Add(-time.Minute).Format(time.RFC3339), NotAfter: at.Add(20 * time.Minute).Format(time.RFC3339), MaxUses: 1,
-	}
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-	signed, _ := authorization.StageSigningBytes(payload)
-	document, _ := json.Marshal(map[string]any{
-		"format": authorization.StageFormat, "payload": payload,
-		"signature": map[string]any{"algorithm": "Ed25519", "keyId": digest.SHA256(publicKey), "value": base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, signed))},
-	})
-	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, []stagereceipt.Verified{}, at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return grant
+	return plan
 }
 
 func stageSHA(value string) string { return "sha256:" + strings.Repeat(value, 64) }

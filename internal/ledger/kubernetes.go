@@ -217,10 +217,16 @@ func kubernetesRecordIdentity(category, key string) (string, string, error) {
 		recordType = "claim"
 	case "outcomes":
 		recordType = "outcome"
+	case "stage-receipts":
+		recordType = "stage-receipt"
 	default:
 		return "", "", fmt.Errorf("Kubernetes ledger record category %q is invalid", category)
 	}
-	return "ok147-" + recordType + "-" + key[:48], recordType, nil
+	prefix := recordType
+	if recordType == "stage-receipt" {
+		prefix = "receipt"
+	}
+	return "ok147-" + prefix + "-" + key[:48], recordType, nil
 }
 
 func validateCanonicalReceipt(raw []byte) error {
