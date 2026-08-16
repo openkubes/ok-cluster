@@ -1049,6 +1049,62 @@ a new `0600` local file and reports `authorizationState: NOT_REQUIRED` with
 ConfigMap, NetworkPolicy or credential Secret is created by this checkpoint,
 and all tests remain offline.
 
+## Lifecycle-observation launch boundary
+
+The lifecycle-observation package has a separate sealed launch path. Its
+preparation command rebuilds and correlates the verified package with exactly
+two distinct immutable credential Secrets, the shared tokenless runtime
+ServiceAccount and one expiry-bound management installer candidate:
+
+```text
+ok cluster stage observe lifecycle launch prepare
+      -> redacted package/material receipt
+      -> redacted candidate receipt
+      -> mutationAllowed: false
+```
+
+Both Job credentials must be short-lived TokenRequest-derived JWTs for the
+management authority, but they remain separate capabilities: one writes the
+durable ledger and the other performs only the bounded CAPI observation. Their
+token values and object names must differ. Candidate validity ends 15 minutes
+before either Job credential expires. Preparation reads bounded local sources
+and performs no Kubernetes request.
+
+Live installation is exposed only through the matching execute command:
+
+```text
+ok cluster stage observe lifecycle launch execute
+  + every exact preparation input
+  + --execute
+  + --expected-candidate-digest sha256:...
+  + --installer-token-file PATH
+  + --installer-ca-file PATH
+```
+
+The command rebuilds the same private material, requires the recomputed
+candidate to equal the separately supplied digest and only then opens the
+installer credential. A five-minute outer deadline bounds the complete
+operation. Before the first write, the launcher performs an exact global
+preflight for the ServiceAccount, both Secrets, ConfigMap, NetworkPolicy and
+Job. It accepts only all absent, the exact runtime ServiceAccount alone, or all
+six objects already present and exact. Mixed or uncertain state stops
+zero-write.
+
+For an absent set, creation order is fixed:
+
+```text
+ServiceAccount -> ledger Secret -> observer Secret
+               -> ConfigMap -> NetworkPolicy -> Job
+```
+
+A complete exact duplicate returns `ALREADY_LAUNCHED` without mutation. A
+failed or ambiguous create stops with a redaction-safe
+`STOPPED_PARTIAL_OR_UNKNOWN` receipt and never retries or cleans up. The
+launcher exposes no update, patch, apply, delete, list, watch, discovery,
+adoption, retry or rollback path. This makes live invocation a narrow critical
+boundary while keeping package construction and candidate preparation
+non-authorizing.
+
 ## Cursor-to-grant binding
 
 Selecting a next stage is not claim authority. Before a later runner may claim
