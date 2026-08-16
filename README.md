@@ -27,8 +27,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **GitOps-ready** — all cluster state is declarative YAML, rendered from templates
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
 - **Bounded Contract Executor MVP** — a shared Go core for local CLI and future
-  short-lived `ok-mgmt` Jobs; the first checkpoint is deliberately dry-run-only
-  and reproduces the OK-141 semantic contract revision
+  short-lived `ok-mgmt` Jobs; it remains dry-run-only while verifying the
+  OK-141 revision, existing projection, authority split, and signed grant binding
 
 ---
 

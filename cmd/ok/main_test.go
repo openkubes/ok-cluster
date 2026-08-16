@@ -56,6 +56,27 @@ func TestCreateWithoutDryRunFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsIncompleteProjectionAndAuthorizationInputs(t *testing.T) {
+	base := []string{
+		"cluster", "create",
+		"--contract", fixturePath(t, "ok141-contract-v5.yaml"),
+		"--schema", fixturePath(t, "ok141-contract-v3.schema.json"),
+		"--dry-run",
+	}
+	for name, extra := range map[string][]string{
+		"projection root without manifest": {"--projection-root", "/tmp/projection"},
+		"authorization without projection": {"--authorization", "/tmp/grant.json", "--authorization-key", "/tmp/key", "--evaluation-time", "2026-08-16T10:00:00Z"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			arguments := append(append([]string{}, base...), extra...)
+			if err := run(arguments, &stdout, &stderr); err == nil {
+				t.Fatal("unsafe incomplete input was accepted")
+			}
+		})
+	}
+}
+
 func TestArbitraryCommandsAreAbsent(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	for _, arguments := range [][]string{
