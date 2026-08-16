@@ -866,6 +866,32 @@ not sufficient. This checkpoint only persists evidence: it does not execute a
 stage, consume a grant, select a retry, contact a cluster during construction,
 or activate the CLI/Job path.
 
+## Durable mutating-stage outcome finalization
+
+A completed mutating-stage ledger outcome can now be transformed into the
+common stage receipt without re-running the operation. Finalization rechecks
+the verified grant against the same staged plan, requires the ledger claim and
+outcome to be complete, and requires the supplied predecessor-receipt set to
+have the exact digest signed into that grant. It then binds the immutable
+ledger outcome digest as `operationOutcomeDigest` and persists the resulting
+stage receipt in its deterministic slot.
+
+This split is intentionally crash-safe:
+
+```text
+claim -> one bounded mutation -> durable outcome
+                                  |
+                    process may disappear here
+                                  |
+                                  v
+                   idempotent receipt finalization
+```
+
+An outcome cannot be finalized against a different predecessor chain, and a
+claimed stage without a durable outcome remains indeterminate. Finalization is
+evidence bookkeeping only; it cannot invoke a stage implementation, create an
+authorization, retry a mutation or turn a failed/stopped receipt into success.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
