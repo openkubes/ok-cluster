@@ -4,6 +4,7 @@ package runner
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -42,6 +43,21 @@ type KubernetesAuthorityConfig struct {
 	AuthorityIdentity string
 	TokenFile         string
 	CAFile            string
+}
+
+// KubernetesNetworkObserverConfig binds distinct management and workload
+// credentials to one runtime Cluster UID. Pod exec remains a separately
+// supplied, fixed-command transport rather than an arbitrary shell surface.
+type KubernetesNetworkObserverConfig struct {
+	Management                  KubernetesAuthorityConfig
+	Workload                    KubernetesAuthorityConfig
+	ExpectedManagementAuthority string
+	TargetClusterUID            string
+	Namespace                   string
+	Name                        string
+	HCPName                     string
+	Clock                       func() time.Time
+	PodExecutor                 observation.CiliumProbePodExecutor
 }
 
 // InspectKubernetesLedger performs a read-only restart decision. It does not
@@ -106,6 +122,52 @@ func OpenKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expec
 	}
 	return observation.NewCAPILifecycleObserver(observation.CAPILifecycleObserverConfig{
 		Endpoint: config.Endpoint, BearerToken: token, Namespace: namespace, Name: name, Client: client,
+	})
+}
+
+// OpenKubernetesNetworkSourceCollector materializes two isolated TLS clients:
+// one for HCP/HRP reads on the management authority and one for runtime reads
+// on the immutable workload Cluster UID. It performs no API request itself.
+func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig) (*observation.NetworkSourceCollector, error) {
+	if config.ExpectedManagementAuthority == "" || config.Management.AuthorityIdentity != config.ExpectedManagementAuthority {
+		return nil, errors.New("network observer management authority differs from the verified management plane")
+	}
+	if config.TargetClusterUID == "" || config.Workload.AuthorityIdentity != config.TargetClusterUID {
+		return nil, errors.New("network observer workload authority differs from the runtime-bound target Cluster")
+	}
+	if config.Management.Endpoint == config.Workload.Endpoint {
+		return nil, errors.New("network observer management and workload endpoints must be distinct")
+	}
+	managementToken, managementClient, err := openBoundedKubernetesHTTP(config.Management.TokenFile, config.Management.CAFile)
+	if err != nil {
+		return nil, errors.New("open bounded management network credential")
+	}
+	workloadToken, workloadClient, err := openBoundedKubernetesHTTP(config.Workload.TokenFile, config.Workload.CAFile)
+	if err != nil {
+		return nil, errors.New("open bounded workload network credential")
+	}
+	if len(managementToken) == len(workloadToken) && subtle.ConstantTimeCompare([]byte(managementToken), []byte(workloadToken)) == 1 {
+		return nil, errors.New("network observer management and workload credentials must be distinct")
+	}
+	management, err := observation.NewKubernetesManagementNetworkReader(observation.KubernetesNetworkReaderConfig{
+		Endpoint: config.Management.Endpoint, BearerToken: managementToken, Client: managementClient,
+	}, config.Namespace, config.Name, config.HCPName)
+	if err != nil {
+		return nil, err
+	}
+	workload, err := observation.NewKubernetesWorkloadNetworkReader(observation.KubernetesNetworkReaderConfig{
+		Endpoint: config.Workload.Endpoint, BearerToken: workloadToken, Client: workloadClient,
+	})
+	if err != nil {
+		return nil, err
+	}
+	probe, err := observation.NewKubernetesFixedCiliumProbe(config.PodExecutor)
+	if err != nil {
+		return nil, err
+	}
+	return observation.NewNetworkSourceCollector(management, workload, probe, observation.NetworkCollectorConfig{
+		Namespace: config.Namespace, Name: config.Name, HCPName: config.HCPName,
+		TargetClusterUID: config.TargetClusterUID, Clock: config.Clock,
 	})
 }
 

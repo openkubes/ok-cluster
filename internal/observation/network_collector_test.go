@@ -13,7 +13,7 @@ import (
 func TestNetworkSourceCollectorUsesOnlyBoundedSources(t *testing.T) {
 	policy, profile, management, workload, probe := collectorFixture(t)
 	collector, err := NewNetworkSourceCollector(management, workload, probe, NetworkCollectorConfig{
-		Namespace: "disposable-ok141", Name: "disposable-ok141", HCPName: "disposable-ok141-cilium",
+		Namespace: "disposable-ok141", Name: "disposable-ok141", HCPName: "disposable-ok141-cilium", TargetClusterUID: policy.TargetClusterUID,
 		Clock: func() time.Time { return time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
@@ -44,7 +44,7 @@ func TestNetworkSourceCollectorUsesOnlyBoundedSources(t *testing.T) {
 
 func TestNetworkSourceCollectorNormalizesOrderDeterministically(t *testing.T) {
 	policy, profile, management, workload, probe := collectorFixture(t)
-	collector := mustNetworkCollector(t, management, workload, probe)
+	collector := mustNetworkCollector(t, policy, management, workload, probe)
 	first, err := collector.Observe(context.Background(), policy, profile)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +58,18 @@ func TestNetworkSourceCollectorNormalizesOrderDeterministically(t *testing.T) {
 	}
 	if first.EvidenceDigest != second.EvidenceDigest || first.SourceUID != second.SourceUID {
 		t.Fatalf("source ordering changed evidence identity: %#v %#v", first, second)
+	}
+}
+
+func TestNetworkSourceCollectorRejectsDifferentRuntimeAuthorityBeforeReads(t *testing.T) {
+	policy, _, management, workload, probe := collectorFixture(t)
+	collector := mustNetworkCollector(t, policy, management, workload, probe)
+	policy.TargetClusterUID = "different-runtime-cluster-uid"
+	if _, err := collector.Collect(context.Background(), policy); err == nil {
+		t.Fatal("collector accepted a policy for a different runtime authority")
+	}
+	if len(management.requests) != 0 || len(workload.requests) != 0 || probe.calls != 0 {
+		t.Fatal("authority mismatch reached a network source")
 	}
 }
 
@@ -106,7 +118,7 @@ func TestNetworkSourceCollectorFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			policy, profile, management, workload, probe := collectorFixture(t)
 			mutate(management, workload, probe)
-			collector := mustNetworkCollector(t, management, workload, probe)
+			collector := mustNetworkCollector(t, policy, management, workload, probe)
 			if _, err := collector.Observe(context.Background(), policy, profile); err == nil {
 				t.Fatal("malformed or foreign network source accepted")
 			} else if (name == "probe execution error" || name == "source transport error") && strings.Contains(err.Error(), "sensitive") {
@@ -226,10 +238,10 @@ func collectorFixture(t *testing.T) (Policy, NetworkProfile, *fakeNetworkGetter,
 	return policy, profile, management, workload, probe
 }
 
-func mustNetworkCollector(t *testing.T, management, workload NetworkRawGetter, probe FixedCiliumProbe) *NetworkSourceCollector {
+func mustNetworkCollector(t *testing.T, policy Policy, management, workload NetworkRawGetter, probe FixedCiliumProbe) *NetworkSourceCollector {
 	t.Helper()
 	collector, err := NewNetworkSourceCollector(management, workload, probe, NetworkCollectorConfig{
-		Namespace: "disposable-ok141", Name: "disposable-ok141", HCPName: "disposable-ok141-cilium",
+		Namespace: "disposable-ok141", Name: "disposable-ok141", HCPName: "disposable-ok141-cilium", TargetClusterUID: policy.TargetClusterUID,
 		Clock: func() time.Time { return time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
