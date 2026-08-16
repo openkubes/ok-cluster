@@ -170,9 +170,10 @@ func newKubernetesSubmissionStageLauncher(config submissionStageLauncherClientCo
 	}, nil
 }
 
-// Launch performs the complete six-object preflight and only then creates the
-// absent runtime, both Secrets and the three stage objects in fixed order. It
-// has no update, patch, apply, delete, list, watch, retry or rollback path.
+// Launch performs the complete six-object preflight and only then either
+// reports one exact existing set or creates the globally absent objects in
+// fixed order. Mixed state stops zero-write. It has no update, patch, apply,
+// delete, list, watch, retry or rollback path.
 func (launcher *KubernetesSubmissionStageLauncher) Launch(ctx context.Context) (SubmissionStageLaunchReceipt, error) {
 	receipt := launcher.newReceipt()
 	if launcher == nil || launcher.client == nil || launcher.clock == nil {
@@ -200,38 +201,40 @@ func (launcher *KubernetesSubmissionStageLauncher) Launch(ctx context.Context) (
 		}
 	}
 
-	runtimeExists := false
-	runtimeUID, runtimeResourceVersion := "", ""
+	existing := make(map[int]SubmissionStageLaunchResult, len(launcher.plan.Preflights))
 	for _, preflight := range launcher.plan.Preflights {
 		raw, status, err := launcher.request(ctx, http.MethodGet, preflight.ObjectPath, nil, preflight.ResponseMode)
 		if err != nil {
 			return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", err)
 		}
-		if preflight.Order == 1 {
-			switch status {
-			case http.StatusNotFound:
-			case http.StatusOK:
-				runtimeUID, runtimeResourceVersion, err = verifySubmissionStageRuntimeObject(raw, launcher.runtime.raw)
-				if err != nil {
-					return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", errors.New("existing stage runtime differs from verified prerequisite"))
-				}
-				runtimeExists = true
-			default:
-				return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", submissionStageLaunchStatusError(http.MethodGet, status))
-			}
+		switch status {
+		case http.StatusNotFound:
 			continue
-		}
-		if status == http.StatusOK {
-			return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", errors.New("stage launch object already exists; global preflight stopped"))
-		}
-		if status != http.StatusNotFound {
+		case http.StatusOK:
+			result, err := launcher.verifyExisting(preflight, raw)
+			if err != nil {
+				return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", err)
+			}
+			existing[preflight.Order] = result
+		default:
 			return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", submissionStageLaunchStatusError(http.MethodGet, status))
 		}
+	}
+	if len(existing) == len(launcher.plan.Preflights) {
+		receipt.State = "ALREADY_LAUNCHED"
+		for order := 1; order <= len(launcher.plan.Preflights); order++ {
+			receipt.Results = append(receipt.Results, existing[order])
+		}
+		return receipt, nil
+	}
+	runtime, runtimeExists := existing[1]
+	if len(existing) != 0 && !(len(existing) == 1 && runtimeExists) {
+		return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", errors.New("stage launch found an exact partial state; global preflight stopped"))
 	}
 
 	receipt.State = "LAUNCHING"
 	if runtimeExists {
-		receipt.Results = append(receipt.Results, launcher.result(1, "runtime", "v1", "ServiceAccount", launcher.runtime.receipt.Namespace, launcher.runtime.receipt.Name, launcher.runtime.receipt.ObjectDigest, "EXISTING_VERIFIED", runtimeUID, runtimeResourceVersion))
+		receipt.Results = append(receipt.Results, runtime)
 	} else {
 		receipt.MutationState = "ATTEMPTED_UNKNOWN"
 		result, err := launcher.createRuntime(ctx)
@@ -261,6 +264,33 @@ func (launcher *KubernetesSubmissionStageLauncher) Launch(ctx context.Context) (
 	}
 	receipt.State, receipt.MutationState = "LAUNCHED", "ATTEMPTED"
 	return receipt, nil
+}
+
+func (launcher *KubernetesSubmissionStageLauncher) verifyExisting(preflight SubmissionStageLaunchPreflight, raw []byte) (SubmissionStageLaunchResult, error) {
+	var uid, resourceVersion string
+	var err error
+	switch preflight.Phase {
+	case "runtime":
+		uid, resourceVersion, err = verifySubmissionStageRuntimeObject(raw, launcher.runtime.raw)
+	case "credentials":
+		index := preflight.Order - 2
+		if index < 0 || index >= len(launcher.secrets) {
+			return SubmissionStageLaunchResult{}, errors.New("stage launch credential preflight order is invalid")
+		}
+		uid, resourceVersion, err = verifySubmissionStageCredentialCreatedObject(raw, launcher.secrets[index])
+	case "stage-package":
+		index := preflight.Order - 4
+		if index < 0 || index >= len(launcher.objects) {
+			return SubmissionStageLaunchResult{}, errors.New("stage launch package preflight order is invalid")
+		}
+		uid, resourceVersion, err = verifySubmissionStageCreatedObject(raw, launcher.objects[index])
+	default:
+		return SubmissionStageLaunchResult{}, errors.New("stage launch preflight phase is invalid")
+	}
+	if err != nil {
+		return SubmissionStageLaunchResult{}, errors.New("existing stage launch object differs from verified plan")
+	}
+	return launcher.result(preflight.Order, preflight.Phase, preflight.APIVersion, preflight.Kind, preflight.Namespace, preflight.Name, preflight.ObjectDigest, "EXISTING_VERIFIED", uid, resourceVersion), nil
 }
 
 func (launcher *KubernetesSubmissionStageLauncher) createRuntime(ctx context.Context) (SubmissionStageLaunchResult, error) {

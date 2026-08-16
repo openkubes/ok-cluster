@@ -29,11 +29,7 @@ func TestSubmissionStageLauncherPreflightsSixThenCreatesInFixedOrder(t *testing.
 		if preflight.method != http.MethodGet || preflight.path != launcher.plan.Preflights[index].ObjectPath || create.method != http.MethodPost || create.path != launcher.plan.Creates[index].CollectionPath || digest.SHA256(create.body) != launcher.plan.Creates[index].ObjectDigest {
 			t.Fatalf("request order %d differs: preflight=%#v create=%#v", index+1, preflight, create)
 		}
-		if index == 1 || index == 2 {
-			if preflight.accept != partialObjectMetadataAccept {
-				t.Fatalf("Secret preflight %d did not request metadata only", index+1)
-			}
-		} else if preflight.accept != "application/json" {
+		if preflight.accept != "application/json" {
 			t.Fatalf("object preflight %d media type differs: %q", index+1, preflight.accept)
 		}
 		result := receipt.Results[index]
@@ -54,6 +50,56 @@ func TestSubmissionStageLauncherPreflightsSixThenCreatesInFixedOrder(t *testing.
 	retry, retryErr := launcher.Launch(context.Background())
 	if retryErr == nil || retry.State != "STOPPED_ZERO_WRITE" || len(api.requests) != requests {
 		t.Fatalf("launcher retried: receipt=%#v err=%v", retry, retryErr)
+	}
+}
+
+func TestSubmissionStageLauncherTreatsExactDuplicateAsAlreadyLaunched(t *testing.T) {
+	stage, credentials, runtime, ledgerToken, authorityToken := submissionStageLaunchFixture(t)
+	api := newSubmissionStageLauncherAPI(t)
+	now := time.Date(2026, 8, 16, 12, 1, 0, 0, time.UTC)
+	first := newSubmissionStageLauncher(t, stage, credentials, runtime, api, now)
+	firstReceipt, err := first.Launch(context.Background())
+	if err != nil || firstReceipt.State != "LAUNCHED" || api.posts != 6 {
+		t.Fatalf("first launch failed: %#v posts=%d err=%v", firstReceipt, api.posts, err)
+	}
+	requests := len(api.requests)
+	duplicate := newSubmissionStageLauncher(t, stage, credentials, runtime, api, now)
+	receipt, err := duplicate.Launch(context.Background())
+	if err != nil || receipt.State != "ALREADY_LAUNCHED" || receipt.MutationState != "NOT_ATTEMPTED" || len(receipt.Results) != 6 || api.posts != 6 || len(api.requests) != requests+6 {
+		t.Fatalf("exact duplicate was not idempotent: %#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
+	}
+	for index, result := range receipt.Results {
+		if result.Order != index+1 || result.ObjectState != "EXISTING_VERIFIED" {
+			t.Fatalf("duplicate result %d differs: %#v", index+1, result)
+		}
+	}
+	public, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range [][]byte{ledgerToken, authorityToken, credentials.objects[0].raw, credentials.objects[1].raw, []byte("short-lived-installer-token"), []byte("created-uid")} {
+		if bytes.Contains(public, forbidden) {
+			t.Fatal("duplicate launch receipt exposed private content")
+		}
+	}
+}
+
+func TestSubmissionStageLauncherRejectsChangedDuplicateSecret(t *testing.T) {
+	stage, credentials, runtime, _, _ := submissionStageLaunchFixture(t)
+	api := newSubmissionStageLauncherAPI(t)
+	now := time.Date(2026, 8, 16, 12, 1, 0, 0, time.UTC)
+	first := newSubmissionStageLauncher(t, stage, credentials, runtime, api, now)
+	if receipt, err := first.Launch(context.Background()); err != nil || receipt.State != "LAUNCHED" {
+		t.Fatalf("first launch failed: %#v %v", receipt, err)
+	}
+	secret := api.objects[first.plan.Preflights[1].ObjectPath]
+	data := secret["data"].(map[string]any)
+	data["token"] = "dGFtcGVyZWQ="
+	requests, posts := len(api.requests), api.posts
+	duplicate := newSubmissionStageLauncher(t, stage, credentials, runtime, api, now)
+	receipt, err := duplicate.Launch(context.Background())
+	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || len(api.requests) != requests+2 || api.posts != posts || len(receipt.Results) != 0 {
+		t.Fatalf("changed duplicate Secret was accepted: %#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
 	}
 }
 
@@ -92,6 +138,20 @@ func TestSubmissionStageLauncherStopsGloballyBeforeWrite(t *testing.T) {
 	receipt, err := launcher.Launch(context.Background())
 	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 5 || len(receipt.Results) != 0 {
 		t.Fatalf("global preflight did not stop zero-write: receipt=%#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
+	}
+}
+
+func TestSubmissionStageLauncherRejectsExactPartialState(t *testing.T) {
+	stage, credentials, runtime, _, _ := submissionStageLaunchFixture(t)
+	api := newSubmissionStageLauncherAPI(t)
+	launcher := newSubmissionStageLauncher(t, stage, credentials, runtime, api, time.Date(2026, 8, 16, 12, 1, 0, 0, time.UTC))
+	existing := decodeCapabilityJSONForTest(t, launcher.objects[1].raw)
+	metadata := existing["metadata"].(map[string]any)
+	metadata["uid"], metadata["resourceVersion"] = "existing-network-policy-uid", "9"
+	api.objects[launcher.plan.Preflights[4].ObjectPath] = existing
+	receipt, err := launcher.Launch(context.Background())
+	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 6 || len(receipt.Results) != 0 {
+		t.Fatalf("exact partial state reached mutation: receipt=%#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
 	}
 }
 
@@ -182,6 +242,8 @@ func (api *submissionStageLauncherAPI) roundTrip(request *http.Request) (*http.R
 		metadata := object["metadata"].(map[string]any)
 		metadata["uid"] = "created-uid-" + string(rune('a'+api.posts-1))
 		metadata["resourceVersion"] = string(rune('1' + api.posts - 1))
+		name, _ := metadata["name"].(string)
+		api.objects[request.URL.Path+"/"+name] = object
 		return submissionStageLauncherJSONResponse(http.StatusCreated, object), nil
 	default:
 		return submissionStageLauncherJSONResponse(http.StatusMethodNotAllowed, map[string]any{"reason": "MethodNotAllowed"}), nil
