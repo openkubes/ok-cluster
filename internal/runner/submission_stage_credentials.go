@@ -62,14 +62,15 @@ type SubmissionStageCredentialObjectReceipt struct {
 // SubmissionStageCredentialPackageReceipt contains no token, CA, subject or
 // source path. ObjectDigest binds the private exact Secret object.
 type SubmissionStageCredentialPackageReceipt struct {
-	Format             string                                   `json:"format"`
-	State              string                                   `json:"state"`
-	StageID            string                                   `json:"stageId"`
-	StagePackageDigest string                                   `json:"stagePackageDigest"`
-	MaterializedAt     string                                   `json:"materializedAt"`
-	PackageDigest      string                                   `json:"packageDigest"`
-	Credentials        []SubmissionStageCredentialObjectReceipt `json:"credentials"`
-	MutationAllowed    bool                                     `json:"mutationAllowed"`
+	Format                string                                   `json:"format"`
+	State                 string                                   `json:"state"`
+	StageID               string                                   `json:"stageId"`
+	StagePackageDigest    string                                   `json:"stagePackageDigest"`
+	InstallationAuthority string                                   `json:"installationAuthority"`
+	MaterializedAt        string                                   `json:"materializedAt"`
+	PackageDigest         string                                   `json:"packageDigest"`
+	Credentials           []SubmissionStageCredentialObjectReceipt `json:"credentials"`
+	MutationAllowed       bool                                     `json:"mutationAllowed"`
 }
 
 type submissionStageCredentialObject struct {
@@ -79,13 +80,21 @@ type submissionStageCredentialObject struct {
 	raw       []byte
 }
 
+type submissionStageCredentialPackageIdentity struct {
+	StagePackageDigest    string                                   `json:"stagePackageDigest"`
+	InstallationAuthority string                                   `json:"installationAuthority"`
+	MaterializedAt        string                                   `json:"materializedAt"`
+	Credentials           []SubmissionStageCredentialObjectReceipt `json:"credentials"`
+}
+
 // VerifiedSubmissionStageCredentialPackage deliberately exposes only its
 // redaction-safe receipt. Secret bytes stay in-package for the later exact
 // installer boundary.
 type VerifiedSubmissionStageCredentialPackage struct {
-	objects  []submissionStageCredentialObject
-	receipt  SubmissionStageCredentialPackageReceipt
-	verified bool
+	objects               []submissionStageCredentialObject
+	receipt               SubmissionStageCredentialPackageReceipt
+	installationAuthority string
+	verified              bool
 }
 
 type submissionStageTokenClaims struct {
@@ -133,20 +142,23 @@ func BuildSubmissionStageCredentialPackage(config SubmissionStageCredentialPacka
 	if len(tokens[0]) == len(tokens[1]) && subtle.ConstantTimeCompare(tokens[0], tokens[1]) == 1 {
 		return VerifiedSubmissionStageCredentialPackage{}, errors.New("stage ledger and authority credentials must be distinct")
 	}
-	packageIdentity, err := json.Marshal(struct {
-		StagePackageDigest string                                   `json:"stagePackageDigest"`
-		MaterializedAt     string                                   `json:"materializedAt"`
-		Credentials        []SubmissionStageCredentialObjectReceipt `json:"credentials"`
-	}{StagePackageDigest: stagePlan.PackageDigest, MaterializedAt: materializedAt, Credentials: receipts})
+	packageIdentity, err := json.Marshal(submissionStageCredentialPackageIdentity{
+		StagePackageDigest: stagePlan.PackageDigest, InstallationAuthority: config.Package.installationAuthority,
+		MaterializedAt: materializedAt, Credentials: receipts,
+	})
 	if err != nil {
 		return VerifiedSubmissionStageCredentialPackage{}, errors.New("encode stage credential package identity")
 	}
 	receipt := SubmissionStageCredentialPackageReceipt{
 		Format: SubmissionStageCredentialPackageFormat, State: "VERIFIED", StageID: stagePlan.StageID,
-		StagePackageDigest: stagePlan.PackageDigest, MaterializedAt: materializedAt, PackageDigest: digest.SHA256(packageIdentity),
+		StagePackageDigest: stagePlan.PackageDigest, InstallationAuthority: config.Package.installationAuthority,
+		MaterializedAt: materializedAt, PackageDigest: digest.SHA256(packageIdentity),
 		Credentials: receipts, MutationAllowed: false,
 	}
-	return VerifiedSubmissionStageCredentialPackage{objects: cloneStageCredentialObjects(objects), receipt: receipt, verified: true}, nil
+	return VerifiedSubmissionStageCredentialPackage{
+		objects: cloneStageCredentialObjects(objects), receipt: receipt,
+		installationAuthority: config.Package.installationAuthority, verified: true,
+	}, nil
 }
 
 func (packaged VerifiedSubmissionStageCredentialPackage) Receipt() (SubmissionStageCredentialPackageReceipt, error) {
