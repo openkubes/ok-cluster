@@ -774,8 +774,10 @@ authorized stage operations and receipts consume this plan.
 Every mutating stage now has a distinct signed authorization envelope. A grant
 binds the canonical staged-plan digest, Contract identity, `R`, `E`, `P`,
 `FixtureDigest`, exact stage order and digest, operation name, authority role,
-single-use declaration and a maximum 30-minute validity window. Verification
-accepts only Ed25519 signatures from the explicitly supplied trust key.
+the exact immutable outcome digest of every required predecessor, single-use
+declaration and a maximum 30-minute validity window. Verification accepts only
+Ed25519 signatures from the explicitly supplied trust key. Even the first
+stage must carry an explicit empty predecessor set rather than omit the field.
 
 This means, for example, that `CreateCluster` authority cannot be reused for
 `CreateEnablement`, `IssueTargetCredential`, target registration or Platform
@@ -794,7 +796,8 @@ Verified mutation grants can now be consumed through the same atomic ledger
 namespace as the original CreateCluster grant. The ledger writes an immutable
 claim before any future stage write and binds the authorization, staged plan,
 stage, operation, authority and Contract revision. Concurrent claim attempts
-produce exactly one winner.
+produce exactly one winner. The claim also persists the canonical predecessor
+set digest, so a stage cannot be resumed against different prior evidence.
 
 If the process disappears after that claim, inspection returns
 `CLAIMED_INDETERMINATE_STOP`; it never makes the stage available again. A

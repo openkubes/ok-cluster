@@ -27,6 +27,7 @@ type StageClaimReceipt struct {
 	StageDigest         string `json:"stageDigest"`
 	Operation           string `json:"operation"`
 	Authority           string `json:"authority"`
+	PredecessorDigest   string `json:"predecessorDigest"`
 	ContractRevision    string `json:"contractRevision"`
 	ClaimedAt           string `json:"claimedAt"`
 }
@@ -76,7 +77,7 @@ func (ledger *Ledger) ClaimStage(ctx context.Context, grant authorization.Verifi
 		Format: StageClaimFormat, State: "CLAIMED", AuthorizationDigest: binding.AuthorizationDigest,
 		GrantID: binding.GrantID, KeyID: binding.KeyID, PlanDigest: binding.PlanDigest,
 		StageID: binding.StageID, StageDigest: binding.StageDigest, Operation: binding.Operation,
-		Authority: binding.Authority, ContractRevision: binding.ContractRevision,
+		Authority: binding.Authority, PredecessorDigest: binding.PredecessorDigest, ContractRevision: binding.ContractRevision,
 		ClaimedAt: at.UTC().Format(time.RFC3339Nano),
 	}
 	raw, _, err := canonicalRecord(receipt)
@@ -213,7 +214,7 @@ func validateStageClaim(value StageClaimReceipt) error {
 	if value.Format != StageClaimFormat || value.State != "CLAIMED" || value.GrantID == "" || value.StageID == "" || value.Operation == "" || value.Authority == "" {
 		return errors.New("stage grant claim is incomplete")
 	}
-	for _, identity := range []string{value.AuthorizationDigest, value.KeyID, value.PlanDigest, value.StageDigest, value.ContractRevision} {
+	for _, identity := range []string{value.AuthorizationDigest, value.KeyID, value.PlanDigest, value.StageDigest, value.PredecessorDigest, value.ContractRevision} {
 		if !validDigest(identity) {
 			return errors.New("stage grant claim contains an invalid digest")
 		}
@@ -246,7 +247,7 @@ func validateStageOutcome(value StageOutcomeReceipt) error {
 }
 
 func matchStageBinding(claim StageClaimReceipt, binding authorization.StageConsumptionBinding) error {
-	if claim.AuthorizationDigest != binding.AuthorizationDigest || claim.GrantID != binding.GrantID || claim.KeyID != binding.KeyID || claim.PlanDigest != binding.PlanDigest || claim.StageID != binding.StageID || claim.StageDigest != binding.StageDigest || claim.Operation != binding.Operation || claim.Authority != binding.Authority || claim.ContractRevision != binding.ContractRevision {
+	if claim.AuthorizationDigest != binding.AuthorizationDigest || claim.GrantID != binding.GrantID || claim.KeyID != binding.KeyID || claim.PlanDigest != binding.PlanDigest || claim.StageID != binding.StageID || claim.StageDigest != binding.StageDigest || claim.Operation != binding.Operation || claim.Authority != binding.Authority || claim.PredecessorDigest != binding.PredecessorDigest || claim.ContractRevision != binding.ContractRevision {
 		return errors.New("stored stage claim differs from verified authorization")
 	}
 	return nil
