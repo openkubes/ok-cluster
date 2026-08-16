@@ -62,6 +62,7 @@ type NetworkAddonSource struct {
 	EnablementRevision       string                   `json:"enablementRevision"`
 	OwnerUID                 string                   `json:"ownerUid,omitempty"`
 	TargetClusterUID         string                   `json:"targetClusterUid"`
+	TargetSelected           bool                     `json:"targetSelected"`
 	ReleaseStatus            string                   `json:"releaseStatus,omitempty"`
 	ReleaseRevision          int64                    `json:"releaseRevision,omitempty"`
 	Conditions               []NetworkSourceCondition `json:"conditions"`
@@ -259,7 +260,7 @@ func evaluateNetworkState(policy Policy, profile NetworkProfile, snapshot Networ
 }
 
 func evaluateAddonSource(source NetworkAddonSource, targetUID, ownerUID, specDigest string, policy Policy, required []string, reasonPrefix string) (string, string) {
-	if !validUID(source.UID) || source.SpecDigest != specDigest || source.IntentRevision != policy.IntentRevision || source.EnablementRevision != policy.EnablementRevision || source.TargetClusterUID != targetUID || source.OwnerUID != ownerUID {
+	if !validUID(source.UID) || source.SpecDigest != specDigest || source.IntentRevision != policy.IntentRevision || source.EnablementRevision != policy.EnablementRevision || source.TargetClusterUID != targetUID || !source.TargetSelected || source.OwnerUID != ownerUID {
 		return "False", reasonPrefix + "IdentityMismatch"
 	}
 	if source.Generation <= 0 || source.StatusObservedGeneration != source.Generation {

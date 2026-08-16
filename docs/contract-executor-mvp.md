@@ -469,11 +469,24 @@ coverage, failed paths, or stale probe evidence evaluate to `False`. The
 result is one `BoundedNetworkEvaluator` source statement carrying exact `E`
 and a deterministic snapshot digest.
 
-This checkpoint contains only the deterministic source evaluator. A later
-Kubernetes collector must obtain these inputs through separately bounded
-management/workload clients and must derive the reviewed network profile from
-a digest-bound input. No command execution, Secret read, cluster contact,
-polling, CLI/Job wiring, or mutation is introduced here.
+The following offline checkpoint adds the bounded source collector behind that
+evaluator. Its interfaces permit at most two exact management reads (the bound
+HCP and its label-selected HRP set), five workload reads (Nodes, the exact
+Cilium and Envoy DaemonSets, the exact Cilium operator Deployment, and the
+label-selected Cilium agent Pods), and one fixed functional probe. The probe
+interface accepts only the selected Pod name and UID; it has no arbitrary
+command or argument surface. The collector sorts runtime collections before
+digesting them, rejects malformed or ambiguous list members, verifies exact
+object/owner/target selection, and discards raw transport errors and probe
+output after normalization.
+
+This remains an offline boundary: fake clients exercise the complete collector
+and evaluator path, while credential materialization, TLS/token HTTP adapters,
+Secret reads, cluster contact, polling, CLI/Job wiring, and mutation remain out
+of scope. A later adapter must bind the management reader to the management
+authority and the workload reader/probe to the already verified immutable
+target Cluster UID. The collector does not infer that authority from reusable
+names or API endpoints.
 
 ## OK-141 compatibility evidence
 
