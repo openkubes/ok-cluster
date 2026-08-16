@@ -85,20 +85,9 @@ func loadWorkloadAuthorityFiles(config WorkloadAuthorityFileResolverConfig) (Wor
 	if config.Path == "" || config.TokenFile == "" || config.CAFile == "" || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
 		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("workload authority file resolver binding is invalid")
 	}
-	raw, err := readBoundedRegular(config.Path, maximumWorkloadBindingBytes)
+	binding, err := loadWorkloadAuthorityBinding(config.Path, config.ExpectedBindingDigest)
 	if err != nil {
-		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("read bounded workload authority binding")
-	}
-	var binding WorkloadAuthorityBinding
-	if err := jsonstrict.Decode(raw, &binding); err != nil {
-		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("decode strict workload authority binding")
-	}
-	bindingDigest, err := WorkloadAuthorityBindingDigest(binding)
-	if err != nil {
-		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("validate workload authority binding")
-	}
-	if bindingDigest != config.ExpectedBindingDigest {
-		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("workload authority binding differs from expected identity")
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, err
 	}
 	ca, err := readBoundedRegular(config.CAFile, maximumCABytes)
 	if err != nil {
@@ -111,6 +100,30 @@ func loadWorkloadAuthorityFiles(config WorkloadAuthorityFileResolverConfig) (Wor
 		Endpoint: binding.Endpoint, AuthorityIdentity: binding.TargetClusterUID,
 		TokenFile: config.TokenFile, CAFile: config.CAFile, CABundleDigest: binding.CABundleDigest,
 	}, nil
+}
+
+// loadWorkloadAuthorityBinding verifies only the strict private semantic
+// record. It reads no token or CA and performs no network request.
+func loadWorkloadAuthorityBinding(path, expectedDigest string) (WorkloadAuthorityBinding, error) {
+	if path == "" || !platformInputDigestPattern.MatchString(expectedDigest) {
+		return WorkloadAuthorityBinding{}, errors.New("workload authority binding source is invalid")
+	}
+	raw, err := readBoundedRegular(path, maximumWorkloadBindingBytes)
+	if err != nil {
+		return WorkloadAuthorityBinding{}, errors.New("read bounded workload authority binding")
+	}
+	var binding WorkloadAuthorityBinding
+	if err := jsonstrict.Decode(raw, &binding); err != nil {
+		return WorkloadAuthorityBinding{}, errors.New("decode strict workload authority binding")
+	}
+	bindingDigest, err := WorkloadAuthorityBindingDigest(binding)
+	if err != nil {
+		return WorkloadAuthorityBinding{}, errors.New("validate workload authority binding")
+	}
+	if bindingDigest != expectedDigest {
+		return WorkloadAuthorityBinding{}, errors.New("workload authority binding differs from expected identity")
+	}
+	return binding, nil
 }
 
 // WorkloadAuthorityBindingDigest identifies the canonical, secret-free
