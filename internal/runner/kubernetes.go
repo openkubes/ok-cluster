@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
+	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"github.com/openkubes/ok-cluster/internal/submission"
@@ -43,6 +44,7 @@ type KubernetesAuthorityConfig struct {
 	AuthorityIdentity string
 	TokenFile         string
 	CAFile            string
+	CABundleDigest    string
 }
 
 // KubernetesNetworkObserverConfig binds distinct management and workload
@@ -157,6 +159,9 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 	if err != nil {
 		return nil, errors.New("open bounded workload network credential")
 	}
+	if !platformInputDigestPattern.MatchString(config.Workload.CABundleDigest) || digest.SHA256(workloadCA) != config.Workload.CABundleDigest {
+		return nil, errors.New("workload network CA differs from the runtime-bound authority")
+	}
 	if len(managementToken) == len(workloadToken) && subtle.ConstantTimeCompare([]byte(managementToken), []byte(workloadToken)) == 1 {
 		return nil, errors.New("network observer management and workload credentials must be distinct")
 	}
@@ -246,6 +251,13 @@ func openBoundedKubernetesMaterial(tokenFile, caFile string) (string, []byte, *h
 }
 
 func readBoundedRegular(path string, maximum int64) ([]byte, error) {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || pathInfo.Size() <= 0 || pathInfo.Size() > maximum {
+		return nil, errors.New("projected file metadata is invalid")
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -255,7 +267,7 @@ func readBoundedRegular(path string, maximum int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximum {
+	if !os.SameFile(pathInfo, info) || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximum {
 		return nil, fmt.Errorf("projected file metadata is invalid")
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, maximum+1))
