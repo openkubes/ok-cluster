@@ -85,14 +85,21 @@ func TestKubernetesLedgerDeploymentBoundary(t *testing.T) {
 		t.Fatalf("admission has %d validations, want at least 7", len(validations))
 	}
 	serviceAccountBound := false
+	stageReceiptsBound := false
 	for _, validation := range validations {
 		expression, _ := validation.(map[string]any)["expression"].(string)
 		if bytes.Contains([]byte(expression), []byte("ok147-contract-executor")) {
 			serviceAccountBound = true
 		}
+		if bytes.Contains([]byte(expression), []byte("stage-receipt")) && bytes.Contains([]byte(expression), []byte("ok147-receipt-")) {
+			stageReceiptsBound = true
+		}
 	}
 	if !serviceAccountBound {
 		t.Fatal("admission validations do not bind the exact ServiceAccount")
+	}
+	if !stageReceiptsBound {
+		t.Fatal("admission validations do not bind stage-receipt names and labels")
 	}
 }
 

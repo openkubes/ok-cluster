@@ -95,11 +95,18 @@ func Open(root string) (*Ledger, error) {
 	if err := secureDirectory(abs); err != nil {
 		return nil, err
 	}
-	store := &fileStore{claims: filepath.Join(abs, "claims"), outcomes: filepath.Join(abs, "outcomes")}
+	store := &fileStore{
+		claims:        filepath.Join(abs, "claims"),
+		outcomes:      filepath.Join(abs, "outcomes"),
+		stageReceipts: filepath.Join(abs, "stage-receipts"),
+	}
 	if err := secureDirectory(store.claims); err != nil {
 		return nil, err
 	}
 	if err := secureDirectory(store.outcomes); err != nil {
+		return nil, err
+	}
+	if err := secureDirectory(store.stageReceipts); err != nil {
 		return nil, err
 	}
 	return New(store)
@@ -328,8 +335,9 @@ func secureDirectory(path string) error {
 }
 
 type fileStore struct {
-	claims   string
-	outcomes string
+	claims        string
+	outcomes      string
+	stageReceipts string
 }
 
 func (store *fileStore) Create(ctx context.Context, category, key string, raw []byte) error {
@@ -374,6 +382,8 @@ func (store *fileStore) path(category, key string) (string, string, error) {
 		directory = store.claims
 	case "outcomes":
 		directory = store.outcomes
+	case "stage-receipts":
+		directory = store.stageReceipts
 	default:
 		return "", "", fmt.Errorf("ledger record category %q is invalid", category)
 	}

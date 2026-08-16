@@ -840,6 +840,32 @@ predecessor values. The receipt is immutable evidence, not authority: it does
 not consume a grant, execute a stage, retry work or authorize a Kubernetes
 write.
 
+## Durable immutable stage-receipt slots
+
+The receipt chain can now survive process or Job replacement through the same
+create-only ledger boundary used for authorization claims. Each verified plan
+and stage maps to exactly one deterministic receipt slot:
+
+```text
+SHA-256(canonical planDigest + stageId slot identity)
+                         |
+                         v
+       immutable ok147-receipt-<key> ConfigMap
+```
+
+The local ledger uses a private `stage-receipts` directory with exclusive
+`0600` files. The Kubernetes store uses exact-name `GET` and collection
+`POST` only; admission binds the shortened object-name prefix to the distinct
+`stage-receipt` label. Both stores treat an exact create replay as idempotent
+and reject different content for an occupied plan/stage slot. This prevents a
+failed or stopped result from being replaced later by a fabricated success.
+
+Resume still requires the expected receipt digest from an independent binding
+and the complete verified direct-predecessor set. Merely finding a ConfigMap is
+not sufficient. This checkpoint only persists evidence: it does not execute a
+stage, consume a grant, select a retry, contact a cluster during construction,
+or activate the CLI/Job path.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

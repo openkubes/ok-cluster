@@ -87,8 +87,8 @@ spec:
         'system:serviceaccount:openkubes-execution-system:ok147-contract-executor'
       message: only the bounded contract executor may create ledger ConfigMaps
     - expression: >-
-        object.metadata.name.matches('^ok147-(claim|outcome)-[0-9a-f]{48}$')
-      message: ledger ConfigMap name must bind an exact claim or outcome key
+        object.metadata.name.matches('^ok147-(claim|outcome|receipt)-[0-9a-f]{48}$')
+      message: ledger ConfigMap name must bind an exact claim, outcome or stage-receipt key
     - expression: has(object.immutable) && object.immutable == true
       message: ledger ConfigMaps must be immutable
     - expression: >-
@@ -100,13 +100,15 @@ spec:
         has(object.metadata.labels) && size(object.metadata.labels) == 2 &&
         object.metadata.labels['app.kubernetes.io/managed-by'] ==
         'ok-cluster-contract-executor' &&
-        object.metadata.labels['openkubes.io/ledger-record'] in ['claim', 'outcome']
+        object.metadata.labels['openkubes.io/ledger-record'] in ['claim', 'outcome', 'stage-receipt']
       message: ledger ConfigMap labels are invalid
     - expression: >-
         (object.metadata.name.startsWith('ok147-claim-') &&
         object.metadata.labels['openkubes.io/ledger-record'] == 'claim') ||
         (object.metadata.name.startsWith('ok147-outcome-') &&
-        object.metadata.labels['openkubes.io/ledger-record'] == 'outcome')
+        object.metadata.labels['openkubes.io/ledger-record'] == 'outcome') ||
+        (object.metadata.name.startsWith('ok147-receipt-') &&
+        object.metadata.labels['openkubes.io/ledger-record'] == 'stage-receipt')
       message: ledger record label must match its name
     - expression: >-
         has(object.metadata.annotations) && size(object.metadata.annotations) == 2 &&
