@@ -1975,6 +1975,23 @@ redaction-safe package receipt retains only the binding digest plus the public
 input, prefix, profile, template, envelope and complete package digests. This
 is package coherence, not credential materialization or launch authority.
 
+The package is now exposed through an offline CLI boundary:
+
+```text
+ok cluster stage observe network package
+  + exact plan and four-receipt prefix
+  + immutable Network profile and private workload-binding digests
+  + reviewed Job-template digest and two exact API destinations
+  + three distinct external credential Secret names
+      -> new 0600 ConfigMap/NetworkPolicy/Job package
+      -> redaction-safe package receipt
+```
+
+The command accepts no `--execute`, credential bytes or grant, refuses an
+existing output path and validates all semantic digests and polling bounds
+before invoking the packager. Its tests inject package construction, so no
+private runtime file or Kubernetes API is read.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
