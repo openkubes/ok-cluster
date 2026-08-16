@@ -1881,6 +1881,40 @@ object to delete.
 The concrete service checks are still injected typed implementations in this
 checkpoint; no live Kubernetes request or capability mutation was performed.
 
+## Receipt-correlated network-observation stage
+
+The `network-observation` stage now has a narrow typed adapter around the
+existing NetworkReady source and evaluator. It does not introduce another
+network evaluator or an OpenKubes reconciliation loop. The adapter verifies
+the full four-receipt prefix through `enablement` and correlates the private
+workload Cluster UID to the digest retained by `cluster-lifecycle`:
+
+```text
+verified receipt prefix
+  cluster-lifecycle.targetClusterUidDigest
+                    |
+ SHA-256(private workload Cluster UID)
+                    |
+              exact equality
+                    v
+ existing bounded NetworkReady source + immutable E profile
+                    v
+ deterministic one-condition evaluation and bounded Unknown polling
+                    v
+ SUCCEEDED | FAILED | STOPPED stage result
+```
+
+This deliberately reaches past the direct `enablement` predecessor for
+identity correlation without weakening the direct receipt chain. A same-name
+replacement, missing historical UID digest, foreign profile, reordered prefix
+or prefix selecting another stage fails before observation. Only verified
+`Unknown` evidence is polled; terminal `True` and `False` return immediately,
+and operational source details are redacted.
+
+This checkpoint is the stage observer only. It adds no Kubernetes bundle, CLI,
+Job, credential opening, cluster request or infrastructure mutation. Those
+activation boundaries remain separate reviewable steps.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
