@@ -38,36 +38,44 @@ func BuildSubmissionStageRuntimePrerequisite(packaged VerifiedSubmissionStagePac
 	if err != nil {
 		return VerifiedSubmissionStageRuntimePrerequisite{}, err
 	}
+	raw, objectDigest, err := buildStageRuntimePrerequisiteObject(manifest, expectedDigest)
+	if err != nil {
+		return VerifiedSubmissionStageRuntimePrerequisite{}, err
+	}
+	receipt := SubmissionStageRuntimePrerequisiteReceipt{
+		Format: SubmissionStageRuntimePrerequisiteFormat, State: "VERIFIED", StagePackageDigest: plan.PackageDigest,
+		ManifestDigest: expectedDigest, ObjectDigest: objectDigest, Authority: packaged.installationAuthority,
+		Namespace: submissionStageInputNamespace, Name: "ok147-contract-executor-runtime", MutationAllowed: false,
+	}
+	return VerifiedSubmissionStageRuntimePrerequisite{raw: raw, receipt: receipt, verified: true}, nil
+}
+
+func buildStageRuntimePrerequisiteObject(manifest []byte, expectedDigest string) ([]byte, string, error) {
 	if len(manifest) == 0 || !stageReceiptPrefixDigestPattern.MatchString(expectedDigest) || digest.SHA256(manifest) != expectedDigest {
-		return VerifiedSubmissionStageRuntimePrerequisite{}, errors.New("submission stage runtime manifest differs from expected identity")
+		return nil, "", errors.New("stage runtime manifest differs from expected identity")
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
 	var object map[string]any
 	if err := decoder.Decode(&object); err != nil || len(object) == 0 {
-		return VerifiedSubmissionStageRuntimePrerequisite{}, errors.New("decode submission stage runtime manifest")
+		return nil, "", errors.New("decode stage runtime manifest")
 	}
 	var trailing map[string]any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return VerifiedSubmissionStageRuntimePrerequisite{}, errors.New("submission stage runtime manifest contains multiple objects")
+		return nil, "", errors.New("stage runtime manifest contains multiple objects")
 	}
 	metadata, _ := object["metadata"].(map[string]any)
 	labels, _ := metadata["labels"].(map[string]any)
 	if object["apiVersion"] != "v1" || object["kind"] != "ServiceAccount" || object["automountServiceAccountToken"] != false || metadata["name"] != "ok147-contract-executor-runtime" || metadata["namespace"] != submissionStageInputNamespace || labels["app.kubernetes.io/name"] != "ok-cluster-contract-executor" || labels["openkubes.io/runtime-boundary"] != "submission-stage" {
-		return VerifiedSubmissionStageRuntimePrerequisite{}, errors.New("submission stage runtime ServiceAccount semantics are invalid")
+		return nil, "", errors.New("stage runtime ServiceAccount semantics are invalid")
 	}
 	if len(object) != 4 || len(metadata) != 3 || len(labels) != 2 {
-		return VerifiedSubmissionStageRuntimePrerequisite{}, errors.New("submission stage runtime ServiceAccount contains unbound fields")
+		return nil, "", errors.New("stage runtime ServiceAccount contains unbound fields")
 	}
 	raw, err := json.Marshal(object)
 	if err != nil {
-		return VerifiedSubmissionStageRuntimePrerequisite{}, errors.New("encode submission stage runtime ServiceAccount")
+		return nil, "", errors.New("encode stage runtime ServiceAccount")
 	}
-	receipt := SubmissionStageRuntimePrerequisiteReceipt{
-		Format: SubmissionStageRuntimePrerequisiteFormat, State: "VERIFIED", StagePackageDigest: plan.PackageDigest,
-		ManifestDigest: expectedDigest, ObjectDigest: digest.SHA256(raw), Authority: packaged.installationAuthority,
-		Namespace: submissionStageInputNamespace, Name: "ok147-contract-executor-runtime", MutationAllowed: false,
-	}
-	return VerifiedSubmissionStageRuntimePrerequisite{raw: raw, receipt: receipt, verified: true}, nil
+	return raw, digest.SHA256(raw), nil
 }
 
 func (runtime VerifiedSubmissionStageRuntimePrerequisite) Receipt() (SubmissionStageRuntimePrerequisiteReceipt, error) {
