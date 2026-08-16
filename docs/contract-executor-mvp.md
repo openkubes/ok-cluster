@@ -1322,6 +1322,22 @@ adoption or retry API. This checkpoint exercises it only with an in-memory
 Kubernetes transport. Opening live credentials or invoking it against a
 cluster remains a separate, critical execution decision.
 
+That decision is now represented by a separate
+`ok147-submission-stage-launch-candidate/v1`. Candidate preparation binds the
+launch-plan digest, all three package identities, the hashed exact API
+destination, CA digest, installer TokenRequest-evidence digest and a private
+installer-token identity. The receipt exposes only a double-bound credential
+identity, never the endpoint, token digest, token path or token. Its validity
+ends 15 minutes before the earliest Job credential expires.
+
+The public launcher opener requires the exact candidate digest, recomputes the
+launch plan, verifies the destination and CA, and reads the installer token
+only after all public candidate checks pass. The opened token must match the
+candidate's retained private identity. An expired candidate stops locally
+before any API request. Preparing this candidate remains non-mutating and is
+not itself permission to launch; it provides the exact digest to which a later
+critical execution approval can be bound.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
