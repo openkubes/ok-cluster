@@ -1231,6 +1231,11 @@ must address the same exact management API IP and port; the NetworkPolicy has
 only that one egress rule. The Job submits the bound `HelmChartProxy` and never
 renders Helm or writes a `HelmReleaseProxy`. Package construction remains
 offline: no Secret, ServiceAccount, ConfigMap, NetworkPolicy or Job is created.
+`ok cluster stage run enablement package` exposes that composer as a local
+fail-closed command. It reads a digest-bound Job template, writes one new 0600
+package file without overwrite, and emits only the redaction-safe package
+receipt on stdout. It has no `--execute` flag and accepts no credential
+contents.
 
 ## Typed Contract-to-CAPI submission stages
 
