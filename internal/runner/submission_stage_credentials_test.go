@@ -27,7 +27,7 @@ func TestBuildSubmissionStageCredentialPackageBindsTwoPrivateImmutableSecrets(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Format != SubmissionStageCredentialPackageFormat || receipt.State != "VERIFIED" || receipt.StageID != "provider-prerequisites" || receipt.StagePackageDigest != stageReceipt.PackageDigest || receipt.MaterializedAt != config.MaterializationTime.Format(time.RFC3339) || !stageReceiptPrefixDigestPattern.MatchString(receipt.PackageDigest) || receipt.MutationAllowed || len(receipt.Credentials) != 2 {
+	if receipt.Format != SubmissionStageCredentialPackageFormat || receipt.State != "VERIFIED" || receipt.StageID != "provider-prerequisites" || receipt.StagePackageDigest != stageReceipt.PackageDigest || receipt.InstallationAuthority != "ok-mgmt" || receipt.MaterializedAt != config.MaterializationTime.Format(time.RFC3339) || !stageReceiptPrefixDigestPattern.MatchString(receipt.PackageDigest) || receipt.MutationAllowed || len(receipt.Credentials) != 2 {
 		t.Fatalf("unexpected credential receipt: %#v", receipt)
 	}
 	want := []struct {

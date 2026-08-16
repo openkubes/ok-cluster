@@ -1224,6 +1224,24 @@ retaining tokens, CAs, subjects or source paths. Building this package is
 non-mutating. Secret installation, TokenRequest issuance and live execution
 remain separate boundaries.
 
+The matching `KubernetesSubmissionStageCredentialInstaller` consumes only
+that private verified package. Before contacting Kubernetes it rechecks the
+credential-package digest, management installation authority, exact Secret
+semantics and at least 15 minutes of remaining token lifetime. Its own bounded
+management writer credential must be different from both Job credentials.
+It then performs both exact Secret absence GETs before the first write and, if
+both are absent, creates the ledger Secret followed by the selected-authority
+Secret. The GETs request `PartialObjectMetadata`; lack of server support stops
+zero-write instead of falling back to a full Secret response. Existing state
+is never adopted or returned.
+
+The installer is single-use and has no caller-selected Secret, path or body.
+It exposes no update, patch, apply, delete, list, watch, discovery, retry,
+rollback or cleanup operation. A redaction-safe receipt contains only the
+verified created prefix and digested runtime identities. This implementation
+is exercised only through an in-memory API transport in this checkpoint; it
+does not issue TokenRequests or authorize a live Secret installation.
+
 ## Tokenless submission runtime identity
 
 [`deploy/contract-executor-stage-runtime.yaml`](../deploy/contract-executor-stage-runtime.yaml)
