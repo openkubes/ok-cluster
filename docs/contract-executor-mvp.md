@@ -1183,6 +1183,17 @@ This checkpoint is library composition exercised with in-memory submission
 transports. It adds no CLI command, Job envelope, credential materialization,
 live Kubernetes contact, retry, rollback or cleanup.
 
+The complete public preclaim chain can also be snapshotted into one immutable
+`ok147-enablement-stage-input/v1` ConfigMap. It contains only the staged plan,
+canonical three-receipt prefix, three receipt files, signed grant, public key
+and exact HCP artifact. It deliberately excludes tokens, CA bundles,
+kubeconfigs and the unrelated Contract-to-CAPI projection artifacts.
+
+Materialization verifies the bundle both before and after every bounded source
+read, rejects symlinks and non-text input, and emits only artifact and ConfigMap
+digests. It remains an offline input package: no NetworkPolicy, Job, credential
+Secret or live launch exists at this checkpoint.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
