@@ -92,6 +92,15 @@ func (material VerifiedSubmissionStageLaunchMaterial) Receipt() (SubmissionStage
 	return material.receipt, nil
 }
 
+// CandidateReceipt exposes only the redaction-safe exact approval identity.
+// Private launch material remains inaccessible to the caller.
+func (material VerifiedSubmissionStageLaunchMaterial) CandidateReceipt() (SubmissionStageLaunchCandidateReceipt, error) {
+	if err := verifySubmissionStageLaunchMaterial(material); err != nil {
+		return SubmissionStageLaunchCandidateReceipt{}, err
+	}
+	return material.candidate.Receipt()
+}
+
 // Open requires the caller to repeat the exact candidate digest but does not
 // allow it to replace any verified package or candidate component.
 func (material VerifiedSubmissionStageLaunchMaterial) Open(config SubmissionStageLaunchOpenConfig) (*KubernetesSubmissionStageLauncher, error) {

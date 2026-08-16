@@ -49,6 +49,25 @@ var materializeSubmissionStagePackage = func(config runner.SubmissionStagePackag
 	return raw, receipt, err
 }
 
+var prepareSubmissionStageLaunch = func(config runner.SubmissionStageLaunchMaterialConfig) (stageLaunchPreparation, error) {
+	material, err := runner.BuildSubmissionStageLaunchMaterial(config)
+	if err != nil {
+		return stageLaunchPreparation{}, err
+	}
+	materialReceipt, err := material.Receipt()
+	if err != nil {
+		return stageLaunchPreparation{}, err
+	}
+	candidateReceipt, err := material.CandidateReceipt()
+	if err != nil {
+		return stageLaunchPreparation{}, err
+	}
+	return stageLaunchPreparation{
+		Format: "ok147-submission-stage-launch-preparation/v1", State: "PREPARED",
+		Material: materialReceipt, Candidate: candidateReceipt, MutationAllowed: false,
+	}, nil
+}
+
 type createPlan struct {
 	Format                  string                  `json:"format"`
 	Operation               string                  `json:"operation"`
@@ -70,6 +89,14 @@ type stageInspection struct {
 	Decision           stagecursor.Decision `json:"decision"`
 	AuthorizationState string               `json:"authorizationState"`
 	MutationAllowed    bool                 `json:"mutationAllowed"`
+}
+
+type stageLaunchPreparation struct {
+	Format          string                                       `json:"format"`
+	State           string                                       `json:"state"`
+	Material        runner.SubmissionStageLaunchMaterialReceipt  `json:"material"`
+	Candidate       runner.SubmissionStageLaunchCandidateReceipt `json:"candidate"`
+	MutationAllowed bool                                         `json:"mutationAllowed"`
 }
 
 type receiptFlags []string
@@ -248,7 +275,10 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "package" {
 		return runClusterStagePackage(arguments[3:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ... | ok cluster stage package ...")
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "prepare" {
+		return runClusterStageLaunchPrepare(arguments[4:], stdout, stderr)
+	}
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -517,6 +547,160 @@ func runClusterStagePackage(arguments []string, stdout, stderr io.Writer) error 
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(receipt)
+}
+
+type stageLaunchCredentialFlags struct {
+	authority, tokenFile, tokenDigest, caFile, caDigest, evidenceDigest *string
+	issuer, subject, audiences, issuedAt, expiresAt                     *string
+}
+
+func addStageLaunchCredentialFlags(flags *flag.FlagSet, prefix, description string) *stageLaunchCredentialFlags {
+	values := &stageLaunchCredentialFlags{}
+	values.authority = flags.String(prefix+"-authority", "", description+" authority identity")
+	values.tokenFile = flags.String(prefix+"-token-file", "", description+" bounded token file")
+	values.tokenDigest = flags.String(prefix+"-token-digest", "", description+" expected token digest")
+	values.caFile = flags.String(prefix+"-ca-file", "", description+" bounded CA file")
+	values.caDigest = flags.String(prefix+"-ca-digest", "", description+" expected CA digest")
+	values.evidenceDigest = flags.String(prefix+"-tokenrequest-evidence-digest", "", description+" TokenRequest evidence digest")
+	values.issuer = flags.String(prefix+"-issuer", "", description+" expected token issuer")
+	values.subject = flags.String(prefix+"-subject", "", description+" expected ServiceAccount subject")
+	values.audiences = flags.String(prefix+"-audiences", "", description+" comma-separated exact token audiences")
+	values.issuedAt = flags.String(prefix+"-issued-at", "", description+" exact token issued-at time")
+	values.expiresAt = flags.String(prefix+"-expires-at", "", description+" exact token expiration time")
+	return values
+}
+
+func (values *stageLaunchCredentialFlags) source(prefix string) (runner.SubmissionStageCredentialSource, error) {
+	required := []struct{ name, value string }{
+		{"--" + prefix + "-authority", *values.authority}, {"--" + prefix + "-token-file", *values.tokenFile},
+		{"--" + prefix + "-token-digest", *values.tokenDigest}, {"--" + prefix + "-ca-file", *values.caFile},
+		{"--" + prefix + "-ca-digest", *values.caDigest}, {"--" + prefix + "-tokenrequest-evidence-digest", *values.evidenceDigest},
+		{"--" + prefix + "-issuer", *values.issuer}, {"--" + prefix + "-subject", *values.subject},
+		{"--" + prefix + "-audiences", *values.audiences}, {"--" + prefix + "-issued-at", *values.issuedAt},
+		{"--" + prefix + "-expires-at", *values.expiresAt},
+	}
+	for _, input := range required {
+		if input.value == "" {
+			return runner.SubmissionStageCredentialSource{}, fmt.Errorf("%s is required", input.name)
+		}
+	}
+	issuedAt, err := time.Parse(time.RFC3339, *values.issuedAt)
+	if err != nil {
+		return runner.SubmissionStageCredentialSource{}, fmt.Errorf("parse %s issued-at: %w", prefix, err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339, *values.expiresAt)
+	if err != nil {
+		return runner.SubmissionStageCredentialSource{}, fmt.Errorf("parse %s expires-at: %w", prefix, err)
+	}
+	audiences := strings.Split(*values.audiences, ",")
+	for _, audience := range audiences {
+		if audience == "" || strings.TrimSpace(audience) != audience {
+			return runner.SubmissionStageCredentialSource{}, fmt.Errorf("--%s-audiences must contain exact non-empty values", prefix)
+		}
+	}
+	return runner.SubmissionStageCredentialSource{
+		AuthorityIdentity: *values.authority, TokenFile: *values.tokenFile, TokenDigest: *values.tokenDigest,
+		CAFile: *values.caFile, CABundleDigest: *values.caDigest, TokenRequestEvidenceDigest: *values.evidenceDigest,
+		ExpectedIssuer: *values.issuer, ExpectedSubject: *values.subject, ExpectedAudiences: audiences,
+		IssuedAt: issuedAt, ExpiresAt: expiresAt,
+	}, nil
+}
+
+func runClusterStageLaunchPrepare(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage launch prepare", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	bundleFlags := addStageBundleFlags(flags)
+	jobTemplate := flags.String("job-template", "", "path to the bounded submission-stage Job template")
+	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	runID := flags.String("run-id", "", "bounded OK-147 Job identity")
+	imageDigest := flags.String("image", "", "digest-pinned ok image")
+	inputConfigMap := flags.String("input-configmap", "", "immutable input ConfigMap name")
+	ledgerAPIURL := flags.String("ledger-api-url", "", "exact management-ledger HTTPS IP endpoint")
+	ledgerAPICIDR := flags.String("ledger-api-cidr", "", "single-address management-ledger CIDR")
+	ledgerCredentialSecret := flags.String("ledger-credential-secret", "", "ledger credential Secret name")
+	authorityAPIURL := flags.String("authority-api-url", "", "exact selected-authority HTTPS IP endpoint")
+	authorityAPICIDR := flags.String("authority-api-cidr", "", "single-address selected-authority CIDR")
+	authorityCredentialSecret := flags.String("authority-credential-secret", "", "authority credential Secret name")
+	materializedAt := flags.String("credential-materialized-at", "", "exact credential materialization time")
+	ledgerCredential := addStageLaunchCredentialFlags(flags, "ledger-job", "ledger Job credential")
+	authorityCredential := addStageLaunchCredentialFlags(flags, "authority-job", "selected-authority Job credential")
+	runtimeManifest := flags.String("runtime-manifest", "", "path to the tokenless runtime ServiceAccount manifest")
+	runtimeManifestDigest := flags.String("runtime-manifest-digest", "", "expected runtime manifest digest")
+	installerAPIEndpoint := flags.String("installer-api-endpoint", "", "exact management installer HTTPS IP endpoint")
+	installerCADigest := flags.String("installer-ca-digest", "", "expected management installer CA digest")
+	installerTokenDigest := flags.String("installer-token-digest", "", "private expected management installer token digest")
+	installerEvidenceDigest := flags.String("installer-tokenrequest-evidence-digest", "", "management installer TokenRequest evidence digest")
+	preparedAt := flags.String("prepared-at", "", "exact launch candidate preparation time")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	bundleConfig, err := bundleFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--job-template", *jobTemplate}, {"--job-template-digest", *jobTemplateDigest}, {"--run-id", *runID}, {"--image", *imageDigest},
+		{"--input-configmap", *inputConfigMap}, {"--ledger-api-url", *ledgerAPIURL}, {"--ledger-api-cidr", *ledgerAPICIDR},
+		{"--ledger-credential-secret", *ledgerCredentialSecret}, {"--authority-api-url", *authorityAPIURL},
+		{"--authority-api-cidr", *authorityAPICIDR}, {"--authority-credential-secret", *authorityCredentialSecret},
+		{"--credential-materialized-at", *materializedAt}, {"--runtime-manifest", *runtimeManifest},
+		{"--runtime-manifest-digest", *runtimeManifestDigest}, {"--installer-api-endpoint", *installerAPIEndpoint},
+		{"--installer-ca-digest", *installerCADigest}, {"--installer-token-digest", *installerTokenDigest},
+		{"--installer-tokenrequest-evidence-digest", *installerEvidenceDigest}, {"--prepared-at", *preparedAt},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	materializationTime, err := time.Parse(time.RFC3339, *materializedAt)
+	if err != nil {
+		return fmt.Errorf("parse credential materialization time: %w", err)
+	}
+	candidateTime, err := time.Parse(time.RFC3339, *preparedAt)
+	if err != nil {
+		return fmt.Errorf("parse candidate preparation time: %w", err)
+	}
+	ledgerSource, err := ledgerCredential.source("ledger-job")
+	if err != nil {
+		return err
+	}
+	authoritySource, err := authorityCredential.source("authority-job")
+	if err != nil {
+		return err
+	}
+	template, err := readBoundedLocalFile(*jobTemplate, 1024*1024)
+	if err != nil {
+		return fmt.Errorf("read Job template: %w", err)
+	}
+	runtimeRaw, err := readBoundedLocalFile(*runtimeManifest, 128*1024)
+	if err != nil {
+		return fmt.Errorf("read runtime manifest: %w", err)
+	}
+	preparation, err := prepareSubmissionStageLaunch(runner.SubmissionStageLaunchMaterialConfig{
+		Package: runner.SubmissionStagePackageConfig{
+			Bundle: bundleConfig, JobTemplate: template, JobTemplateDigest: *jobTemplateDigest,
+			RunID: *runID, ImageDigest: *imageDigest, InputConfigMap: *inputConfigMap,
+			LedgerAPIURL: *ledgerAPIURL, LedgerAPICIDR: *ledgerAPICIDR, LedgerCredentialSecret: *ledgerCredentialSecret,
+			AuthorityAPIURL: *authorityAPIURL, AuthorityAPICIDR: *authorityAPICIDR, AuthorityCredentialSecret: *authorityCredentialSecret,
+		},
+		MaterializationTime: materializationTime, Ledger: ledgerSource, SelectedAuthority: authoritySource,
+		RuntimeManifest: runtimeRaw, RuntimeManifestDigest: *runtimeManifestDigest,
+		Candidate: runner.SubmissionStageLaunchCandidateConfig{
+			AuthorityEndpoint: *installerAPIEndpoint, CABundleDigest: *installerCADigest,
+			InstallerTokenDigest: *installerTokenDigest, InstallerCredentialEvidenceDigest: *installerEvidenceDigest,
+			PreparedAt: candidateTime,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(preparation)
 }
 
 func readBoundedLocalFile(path string, maximum int64) ([]byte, error) {

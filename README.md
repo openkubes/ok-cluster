@@ -48,9 +48,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   credential evidence; preparing it remains non-mutating. Live invocation is
   still a separate critical boundary. A private launch-material builder now
   correlates all package, credential, runtime and candidate inputs without
-  exposing their bytes or contacting Kubernetes. The runner image is
-  digest-pinned, multi-architecture, non-root, SBOM- and
-  provenance-producing behind a protected publisher.
+  exposing their bytes or contacting Kubernetes. `ok cluster stage launch
+  prepare` exposes only the redacted material/candidate receipts and rejects
+  execution. The runner image is digest-pinned, multi-architecture, non-root,
+  SBOM- and provenance-producing behind a protected publisher.
 
 ---
 

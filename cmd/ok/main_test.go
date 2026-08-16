@@ -343,6 +343,89 @@ func TestStagePackageRejectsIncompleteAndSymlinkTemplate(t *testing.T) {
 	}
 }
 
+func TestStageLaunchPrepareBuildsOneNonMutatingCandidate(t *testing.T) {
+	previous := prepareSubmissionStageLaunch
+	defer func() { prepareSubmissionStageLaunch = previous }()
+	var captured runner.SubmissionStageLaunchMaterialConfig
+	prepareSubmissionStageLaunch = func(config runner.SubmissionStageLaunchMaterialConfig) (stageLaunchPreparation, error) {
+		captured = config
+		return stageLaunchPreparation{
+			Format: "ok147-submission-stage-launch-preparation/v1", State: "PREPARED",
+			Material: runner.SubmissionStageLaunchMaterialReceipt{
+				Format: runner.SubmissionStageLaunchMaterialFormat, State: "VERIFIED", StageID: "provider-prerequisites",
+				Authority: "ok-mgmt", CandidateDigest: testSHA("1"), MutationAllowed: false,
+			},
+			Candidate: runner.SubmissionStageLaunchCandidateReceipt{
+				Format: runner.SubmissionStageLaunchCandidateFormat, State: "PREPARED", CandidateDigest: testSHA("1"), MutationAllowed: false,
+			},
+			MutationAllowed: false,
+		}, nil
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "job.yaml.tpl")
+	runtimeManifest := filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	arguments := stageLaunchPrepareArguments(template, runtimeManifest)
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Package.Bundle.ExpectedStageID != "provider-prerequisites" || captured.Package.RunID != "ok147-provider-20260816-01" || captured.Package.InputConfigMap != "ok147-provider-input" || string(captured.Package.JobTemplate) != "bounded-template" || string(captured.RuntimeManifest) != "bounded-runtime" {
+		t.Fatalf("launch package/runtime input differs: %#v", captured)
+	}
+	if captured.Ledger.AuthorityIdentity != "ok-mgmt" || captured.SelectedAuthority.AuthorityIdentity != "ok-infra" || captured.Ledger.TokenFile != "/private/tmp/ledger-job-token" || captured.SelectedAuthority.TokenFile != "/private/tmp/authority-job-token" || len(captured.Ledger.ExpectedAudiences) != 1 || captured.Ledger.ExpectedAudiences[0] != "https://kubernetes.default.svc" {
+		t.Fatalf("launch credential input differs: %#v %#v", captured.Ledger, captured.SelectedAuthority)
+	}
+	if captured.Candidate.AuthorityEndpoint != "https://192.0.2.12:6443" || captured.Candidate.InstallerTokenDigest != testSHA("7") || captured.Candidate.PreparedAt.Format(time.RFC3339) != "2026-08-16T12:01:00Z" {
+		t.Fatalf("launch candidate input differs: %#v", captured.Candidate)
+	}
+	var preparation stageLaunchPreparation
+	if err := json.Unmarshal(stdout.Bytes(), &preparation); err != nil {
+		t.Fatal(err)
+	}
+	if preparation.Format != "ok147-submission-stage-launch-preparation/v1" || preparation.State != "PREPARED" || preparation.MutationAllowed || preparation.Material.MutationAllowed || preparation.Candidate.MutationAllowed {
+		t.Fatalf("unsafe launch preparation: %#v", preparation)
+	}
+}
+
+func TestStageLaunchPrepareRejectsExecuteIncompleteAndSymlinkInputs(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "job.yaml.tpl")
+	runtimeManifest := filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	valid := stageLaunchPrepareArguments(template, runtimeManifest)
+	for name, arguments := range map[string][]string{
+		"execute flag":             append(append([]string(nil), valid...), "--execute"),
+		"missing installer digest": removeArgumentWithValue(valid, "--installer-token-digest"),
+		"spaced audience":          replaceArgument(valid, "--ledger-job-audiences", "https://kubernetes.default.svc, other"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatal("unsafe launch preparation input was accepted")
+			}
+		})
+	}
+	runtimeLink := filepath.Join(root, "runtime-link.yaml")
+	if err := os.Symlink(runtimeManifest, runtimeLink); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageLaunchPrepareArguments(template, runtimeLink), &stdout, &stderr); err == nil || stdout.Len() != 0 {
+		t.Fatal("symlink runtime manifest was accepted")
+	}
+}
+
 func stageInspectArguments() []string {
 	return []string{
 		"cluster", "stage", "inspect",
@@ -375,6 +458,39 @@ func stagePackageArguments(template, output string) []string {
 		"--input-configmap", "ok147-provider-input",
 		"--ledger-api-url", "https://192.0.2.12:6443", "--ledger-api-cidr", "192.0.2.12/32", "--ledger-credential-secret", "ok147-ledger-credential",
 		"--authority-api-url", "https://192.0.2.11:6443", "--authority-api-cidr", "192.0.2.11/32", "--authority-credential-secret", "ok147-authority-credential",
+	)
+}
+
+func stageLaunchPrepareArguments(template, runtimeManifest string) []string {
+	bundle := stageInspectArguments()
+	arguments := append([]string{"cluster", "stage", "launch", "prepare"}, bundle[3:]...)
+	arguments = append(arguments,
+		"--job-template", template, "--job-template-digest", digest.SHA256([]byte("bounded-template")),
+		"--run-id", "ok147-provider-20260816-01", "--image", "ghcr.io/openkubes/ok-cluster@"+testSHA("a"),
+		"--input-configmap", "ok147-provider-input",
+		"--ledger-api-url", "https://192.0.2.12:6443", "--ledger-api-cidr", "192.0.2.12/32", "--ledger-credential-secret", "ok147-ledger-credential",
+		"--authority-api-url", "https://192.0.2.11:6443", "--authority-api-cidr", "192.0.2.11/32", "--authority-credential-secret", "ok147-authority-credential",
+		"--credential-materialized-at", "2026-08-16T12:00:00Z",
+	)
+	for _, credential := range []struct{ prefix, authority, tokenFile, tokenDigest, caFile, caDigest, evidence, subject string }{
+		{"ledger-job", "ok-mgmt", "/private/tmp/ledger-job-token", testSHA("1"), "/private/tmp/ledger-job-ca", testSHA("2"), testSHA("3"), "system:serviceaccount:openkubes-execution-system:ok147-ledger-writer"},
+		{"authority-job", "ok-infra", "/private/tmp/authority-job-token", testSHA("4"), "/private/tmp/authority-job-ca", testSHA("5"), testSHA("6"), "system:serviceaccount:openkubes-execution-system:ok147-provider-writer"},
+	} {
+		arguments = append(arguments,
+			"--"+credential.prefix+"-authority", credential.authority,
+			"--"+credential.prefix+"-token-file", credential.tokenFile, "--"+credential.prefix+"-token-digest", credential.tokenDigest,
+			"--"+credential.prefix+"-ca-file", credential.caFile, "--"+credential.prefix+"-ca-digest", credential.caDigest,
+			"--"+credential.prefix+"-tokenrequest-evidence-digest", credential.evidence,
+			"--"+credential.prefix+"-issuer", "https://kubernetes.default.svc.cluster.local", "--"+credential.prefix+"-subject", credential.subject,
+			"--"+credential.prefix+"-audiences", "https://kubernetes.default.svc",
+			"--"+credential.prefix+"-issued-at", "2026-08-16T11:59:00Z", "--"+credential.prefix+"-expires-at", "2026-08-16T12:30:00Z",
+		)
+	}
+	return append(arguments,
+		"--runtime-manifest", runtimeManifest, "--runtime-manifest-digest", digest.SHA256([]byte("bounded-runtime")),
+		"--installer-api-endpoint", "https://192.0.2.12:6443", "--installer-ca-digest", testSHA("2"),
+		"--installer-token-digest", testSHA("7"), "--installer-tokenrequest-evidence-digest", testSHA("8"),
+		"--prepared-at", "2026-08-16T12:01:00Z",
 	)
 }
 
