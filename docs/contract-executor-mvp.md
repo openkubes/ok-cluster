@@ -1338,6 +1338,21 @@ before any API request. Preparing this candidate remains non-mutating and is
 not itself permission to launch; it provides the exact digest to which a later
 critical execution approval can be bound.
 
+`BuildSubmissionStageLaunchMaterial` closes the remaining local composition
+gap. One call now rebuilds and verifies the stage package, reads the two
+bounded Job credential sources into the private immutable Secret package,
+binds the tokenless runtime manifest, and prepares the exact launch candidate.
+The returned `ok147-submission-stage-launch-material/v1` receipt contains only
+the correlated digests, stage, authority and validity limit.
+
+The verified material keeps all four private components in memory and exposes
+no bytes accessor. Its `Open` method requires the caller to repeat the exact
+candidate digest and supplies the retained candidate to the public launcher;
+the caller cannot substitute a package or candidate after composition. Local
+composition still performs no Kubernetes request. The installer credential is
+opened only by `Open`, and mutation remains possible only after a separate call
+to the single-use launch operation.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
