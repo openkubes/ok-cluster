@@ -1956,6 +1956,17 @@ file capture. The private workload-authority binding, API endpoint, token and
 CA are intentionally absent and remain inputs to a later Secret/runtime
 boundary. This step creates no Kubernetes object and performs no API request.
 
+The matching offline Job template now binds the remaining runtime geometry.
+It mounts the public ConfigMap plus three different external Secrets for the
+ledger, management reader and workload reader. Only the workload Secret may
+carry the private binding alongside its token and CA. Its NetworkPolicy permits
+exactly two single-address API destinations: the shared management/ledger API
+and the distinct workload API. The tokenless runtime ServiceAccount,
+`backoffLimit: 0`, `restartPolicy: Never`, fixed resource bounds, non-root
+security context and digest-pinned image prevent an implicit retry or broad
+ambient authority. Rendering is strict literal substitution and performs no
+cluster request or object creation.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
