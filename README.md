@@ -96,7 +96,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   read-only installation planner finally derives the fixed ConfigMap,
   NetworkPolicy, Job GET/POST sequence without opening either credential. A
   private launch planner correlates runtime, prerequisites, both Secrets and
-  the final Job behind one global six-object preflight barrier.
+  the final Job behind one global six-object preflight barrier. A prepared,
+  expiry-bound candidate then binds that plan to one exact management API,
+  CA, installer-token identity and independent credential evidence.
 
 ---
 

@@ -1272,6 +1272,14 @@ runtime alone may already exist if it matches exactly; every other object is
 create-only after global absence. The redaction-safe plan contains no object
 body or credential content and still grants no mutation authority.
 
+`ok147-enablement-stage-launch-candidate/v1` binds that plan to one normalized
+IP-literal HTTPS management endpoint, exact CA digest and independently
+evidenced installer-token identity. Its validity ends fifteen minutes before
+the earliest Job credential expires; a preparation time before credential
+materialization or after that boundary fails closed. The public receipt exposes
+only digests and times, not the endpoint or installer token, and remains
+non-mutating.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
