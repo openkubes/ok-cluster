@@ -94,7 +94,7 @@ func BuildSubmissionStagePackage(config SubmissionStagePackageConfig) (VerifiedS
 		PackageDigest: digest.SHA256(packageRaw), InputConfigMapDigest: inputReceipt.ConfigMapDigest,
 		ReceiptPrefixDigest: inputReceipt.ReceiptPrefixDigest, JobTemplateDigest: config.JobTemplateDigest,
 		JobEnvelopeDigest:  digest.SHA256(jobRaw),
-		ObjectKinds:        []string{"ConfigMap", "Job", "NetworkPolicy"},
+		ObjectKinds:        []string{"ConfigMap", "NetworkPolicy", "Job"},
 		AuthorizationState: "VERIFIED", MutationAllowed: false,
 	}
 	return VerifiedSubmissionStagePackage{raw: packageRaw, receipt: receipt, verified: true}, nil

@@ -57,8 +57,13 @@ func TestBuildSubmissionStagePackageBindsInputAndJobEnvelope(t *testing.T) {
 			if receipt.JobTemplateDigest != digest.SHA256(config.JobTemplate) {
 				t.Fatal("package does not bind the exact Job template identity")
 			}
-			if !reflect.DeepEqual(receipt.ObjectKinds, []string{"ConfigMap", "Job", "NetworkPolicy"}) || receipt.AuthorizationState != "VERIFIED" {
+			if !reflect.DeepEqual(receipt.ObjectKinds, []string{"ConfigMap", "NetworkPolicy", "Job"}) || receipt.AuthorizationState != "VERIFIED" {
 				t.Fatalf("unexpected package object/authorization state: %#v", receipt)
+			}
+			policyPosition := bytes.Index(raw, []byte("\nkind: NetworkPolicy\n"))
+			jobPosition := bytes.Index(raw, []byte("\nkind: Job\n"))
+			if policyPosition < 0 || jobPosition < 0 || policyPosition >= jobPosition {
+				t.Fatal("executable Job appears before its NetworkPolicy boundary")
 			}
 			input, err := BuildSubmissionStageInput(fixture.config, config.InputConfigMap)
 			if err != nil {
