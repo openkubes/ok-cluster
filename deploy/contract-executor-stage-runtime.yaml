@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ok147-contract-executor-runtime
+  namespace: openkubes-execution-system
+  labels:
+    app.kubernetes.io/name: ok-cluster-contract-executor
+    openkubes.io/runtime-boundary: submission-stage
+automountServiceAccountToken: false
