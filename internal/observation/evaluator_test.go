@@ -79,9 +79,10 @@ func TestEvaluateCurrentFailurePrecedesUnknown(t *testing.T) {
 
 func TestEvaluateRejectsInventedGenerationAndMalformedEvidence(t *testing.T) {
 	for name, mutate := range map[string]func(*Bundle){
-		"invented generation": func(bundle *Bundle) { bundle.Evidence[2].Generation = 1 },
-		"invalid digest":      func(bundle *Bundle) { bundle.Evidence[0].EvidenceDigest = "sha256:no" },
-		"unsupported source":  func(bundle *Bundle) { bundle.Evidence[0].Source = "OpenKubesOperator" },
+		"invented generation":       func(bundle *Bundle) { bundle.Evidence[2].Generation = 1 },
+		"invalid digest":            func(bundle *Bundle) { bundle.Evidence[0].EvidenceDigest = "sha256:no" },
+		"invalid observed revision": func(bundle *Bundle) { bundle.Evidence[0].ObservedRevision = "sha256:no" },
+		"unsupported source":        func(bundle *Bundle) { bundle.Evidence[0].Source = "OpenKubesOperator" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			policy := testPolicy(t)

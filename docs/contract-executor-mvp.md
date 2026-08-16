@@ -398,6 +398,37 @@ an internal offline primitive: there is still no mutating CLI flag, observer
 HTTP adapter, Job wiring, deployment or infrastructure contact in this
 checkpoint.
 
+## Bounded CAPI lifecycle observation
+
+The first concrete source adapter observes only the management-plane CAPI
+`Cluster` used by the verified projection. It performs one exact GET on the
+bound namespace and name and emits normalized evidence only for:
+
+```text
+InfrastructureReady
+ControlPlaneAvailable
+```
+
+The adapter binds the actual Cluster UID, resource version, object generation,
+the `openkubes.io/intent-revision` carrier, and each Condition's
+`observedGeneration` into a redacted evidence digest. Kubernetes-added fields
+and Condition messages are not copied into the normalized evidence. A missing
+revision carrier is represented as unproven correlation; a foreign UID or
+stale generation therefore evaluates to `Unknown`, never `True`. Duplicate
+authoritative Conditions, malformed runtime identity, invalid status, a
+non-200 response, or an ambiguous object stop fail-closed.
+
+The client has no discovery, list, watch, mutation, retry, repair, or status
+publication path. Its projected TLS and token adapter independently verifies
+that the credential authority matches the management authority from the
+projection plan. Network and Platform evidence remain separate bounded source
+domains; this CAPI adapter does not infer either one.
+
+This checkpoint still does not wire the observer into the CLI or Job and does
+not contact a cluster. A later composition adapter must combine this exact CAPI
+evidence with separately verified Network and Platform evidence before the
+aggregate evaluator can produce lifecycle success.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It

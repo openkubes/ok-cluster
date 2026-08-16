@@ -97,6 +97,30 @@ func TestOpenKubernetesSubmissionClientBindsOneAuthority(t *testing.T) {
 	}
 }
 
+func TestOpenKubernetesCAPILifecycleObserverBindsManagementAuthority(t *testing.T) {
+	root := t.TempDir()
+	tokenPath := filepath.Join(root, "token")
+	caPath := filepath.Join(root, "ca.crt")
+	if err := os.WriteFile(tokenPath, []byte("short-lived-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caPath, testCA(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := KubernetesAuthorityConfig{
+		Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok-mgmt", TokenFile: tokenPath, CAFile: caPath,
+	}
+	if _, err := OpenKubernetesCAPILifecycleObserver(config, "ok-mgmt", "disposable-ok141", "disposable-ok141"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenKubernetesCAPILifecycleObserver(config, "different", "disposable-ok141", "disposable-ok141"); err == nil {
+		t.Fatal("mismatched management authority accepted")
+	}
+	if _, err := OpenKubernetesCAPILifecycleObserver(config, "ok-mgmt", "INVALID", "disposable-ok141"); err == nil || strings.Contains(err.Error(), root) {
+		t.Fatalf("unsafe target identity accepted or disclosed a path: %v", err)
+	}
+}
+
 func testCA(t *testing.T) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
