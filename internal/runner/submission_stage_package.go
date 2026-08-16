@@ -48,6 +48,10 @@ type VerifiedSubmissionStagePackage struct {
 	raw                   []byte
 	receipt               SubmissionStagePackageReceipt
 	installationAuthority string
+	ledgerAuthority       string
+	selectedAuthority     string
+	ledgerCredential      string
+	selectedCredential    string
 	verified              bool
 }
 
@@ -98,9 +102,17 @@ func BuildSubmissionStagePackage(config SubmissionStagePackageConfig) (VerifiedS
 		ObjectKinds:        []string{"ConfigMap", "NetworkPolicy", "Job"},
 		AuthorizationState: "VERIFIED", MutationAllowed: false,
 	}
+	selectedAuthority := config.Bundle.PlanExpected.ManagementAuthority
+	if config.Bundle.ExpectedStageID == "provider-prerequisites" {
+		selectedAuthority = config.Bundle.PlanExpected.InfrastructureAuthority
+	}
 	return VerifiedSubmissionStagePackage{
 		raw: packageRaw, receipt: receipt,
 		installationAuthority: config.Bundle.PlanExpected.ManagementAuthority,
+		ledgerAuthority:       config.Bundle.PlanExpected.ManagementAuthority,
+		selectedAuthority:     selectedAuthority,
+		ledgerCredential:      config.LedgerCredentialSecret,
+		selectedCredential:    config.AuthorityCredentialSecret,
 		verified:              true,
 	}, nil
 }

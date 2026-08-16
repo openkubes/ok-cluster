@@ -1196,6 +1196,34 @@ the ledger and selected-authority credential Secrets mounted by the future
 Job. This checkpoint verifies the mutation behavior against an in-memory API
 transport only; it does not authorize or perform a live installation.
 
+## Short-lived credential Secret package
+
+`BuildSubmissionStageCredentialPackage` creates the two credential objects
+referenced by a verified stage package entirely in memory: one ledger Secret
+for the management authority and one writer Secret for the stage-selected
+authority. The provider stage selects the infrastructure authority; the
+lifecycle stage selects management. Both Secrets are fixed to
+`openkubes-execution-system`, immutable, distinct, and contain exactly
+`token` and `ca.crt`. The package validates that the Job mounts those exact
+names and keys before reading any credential source.
+
+Each source must be a bounded regular non-symlink file and match independently
+supplied token, CA and TokenRequest-evidence digests. The TokenRequest JWT is
+checked structurally for an accepted asymmetric algorithm, encoded signature,
+exact issuer, ServiceAccount subject, audience set, `iat`, `nbf` and `exp`.
+The token must retain at least 15 minutes at materialization time and may have
+no more than a one-hour total lifetime. The CA bundle must contain only
+currently valid CA certificates. JWT signature authenticity is not established
+by local parsing; it remains a claim of the separately verified TokenRequest
+evidence and ultimately of API-server acceptance.
+
+Secret bytes have no public accessor. The redaction-safe receipt binds the
+source stage package, exact immutable Secret object digests, CA identities,
+TokenRequest evidence, authorities, audiences and expirations without
+retaining tokens, CAs, subjects or source paths. Building this package is
+non-mutating. Secret installation, TokenRequest issuance and live execution
+remain separate boundaries.
+
 ## Tokenless submission runtime identity
 
 [`deploy/contract-executor-stage-runtime.yaml`](../deploy/contract-executor-stage-runtime.yaml)

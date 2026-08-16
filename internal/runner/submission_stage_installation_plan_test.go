@@ -71,6 +71,19 @@ func TestPlanSubmissionStageInstallationRejectsChangedPackage(t *testing.T) {
 		t.Fatal("changed object inventory was planned")
 	}
 
+	sharedCredential := valid
+	sharedCredential.selectedCredential = sharedCredential.ledgerCredential
+	if _, err := PlanSubmissionStageInstallation(sharedCredential); err == nil {
+		t.Fatal("shared credential binding was planned")
+	}
+
+	foreignInstallationAuthority := valid
+	foreignInstallationAuthority.installationAuthority = "ok-infra"
+	foreignInstallationAuthority.ledgerAuthority = "ok-infra"
+	if _, err := PlanSubmissionStageInstallation(foreignInstallationAuthority); err == nil {
+		t.Fatal("foreign installation authority was planned")
+	}
+
 	changedRuntime := valid
 	changedRuntime.raw = append([]byte(nil), valid.raw...)
 	changedRuntime.raw = bytes.Replace(changedRuntime.raw, []byte("ok147-contract-executor-runtime"), []byte("ok147-foreign-runtime"), 1)
