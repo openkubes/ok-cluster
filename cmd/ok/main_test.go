@@ -255,6 +255,99 @@ func TestStageResumeRequiresCompleteUnambiguousInputs(t *testing.T) {
 	}
 }
 
+func TestStageObserveLifecycleRequiresExplicitExecutionAndBindsRuntime(t *testing.T) {
+	previous := executeLifecycleObservationStage
+	defer func() { executeLifecycleObservationStage = previous }()
+	var capturedBundle runner.StageResumeConfig
+	var capturedRuntime runner.LifecycleObservationStageRuntimeConfig
+	var capturedContext context.Context
+	executeLifecycleObservationStage = func(ctx context.Context, bundle runner.StageResumeConfig, runtime runner.LifecycleObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		capturedContext, capturedBundle, capturedRuntime = ctx, bundle, runtime
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat, State: "COMPLETED_SUCCEEDED",
+			PlanDigest: testSHA("9"), StageID: "lifecycle-observation", StageReceiptDigest: testSHA("8"),
+		}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageObserveLifecycleArguments(), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if capturedBundle.PlanPath != "/tmp/plan.json" || len(capturedBundle.Receipts) != 2 {
+		t.Fatalf("unexpected observation bundle: %#v", capturedBundle)
+	}
+	if capturedRuntime.Ledger.Namespace != ledgerNamespace || capturedRuntime.Ledger.TokenFile != "/tmp/ledger-token" || capturedRuntime.Management.TokenFile != "/tmp/management-observer-token" || capturedRuntime.Management.AuthorityIdentity != "" {
+		t.Fatalf("unexpected observation runtime: %#v", capturedRuntime)
+	}
+	if capturedRuntime.PollInterval != 15*time.Second || capturedRuntime.PollTimeout != 5*time.Minute || capturedRuntime.Clock == nil || capturedRuntime.Wait == nil {
+		t.Fatalf("bounded observation timing differs: %#v", capturedRuntime)
+	}
+	deadline, bounded := capturedContext.Deadline()
+	remaining := time.Until(deadline)
+	if !bounded || remaining > 6*time.Minute || remaining < 5*time.Minute {
+		t.Fatalf("lifecycle observation context is not bounded: %s %t", deadline, bounded)
+	}
+	var receipt execution.ObservationStageRunReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "COMPLETED_SUCCEEDED" || receipt.StageID != "lifecycle-observation" {
+		t.Fatalf("unexpected observation receipt: %#v", receipt)
+	}
+}
+
+func TestStageObserveLifecycleFailsClosedBeforeExecution(t *testing.T) {
+	previous := executeLifecycleObservationStage
+	defer func() { executeLifecycleObservationStage = previous }()
+	calls := 0
+	executeLifecycleObservationStage = func(context.Context, runner.StageResumeConfig, runner.LifecycleObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		calls++
+		return execution.ObservationStageRunReceipt{}, nil
+	}
+	valid := stageObserveLifecycleArguments()
+	for name, arguments := range map[string][]string{
+		"missing execute":          removeArgument(valid, "--execute"),
+		"missing ledger token":     removeArgumentWithValue(valid, "--ledger-token-file"),
+		"missing management token": removeArgumentWithValue(valid, "--management-token-file"),
+		"missing poll timeout":     removeArgumentWithValue(valid, "--poll-timeout"),
+		"too frequent":             replaceArgument(valid, "--poll-interval", "500ms"),
+		"interval exceeds timeout": replaceArgument(valid, "--poll-interval", "6m"),
+		"too long":                 replaceArgument(valid, "--poll-timeout", "7h"),
+		"positional":               append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe lifecycle observation input was accepted: err=%v stdout=%s", err, stdout.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("observation execution was reached %d times for invalid input", calls)
+	}
+}
+
+func TestStageObserveLifecycleEmitsPersistedTerminalReceipt(t *testing.T) {
+	previous := executeLifecycleObservationStage
+	defer func() { executeLifecycleObservationStage = previous }()
+	executeLifecycleObservationStage = func(context.Context, runner.StageResumeConfig, runner.LifecycleObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat, State: "COMPLETED_STOPPED",
+			PlanDigest: testSHA("9"), StageID: "lifecycle-observation", StageReceiptDigest: testSHA("8"),
+		}, errors.New("bounded observation stopped")
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageObserveLifecycleArguments(), &stdout, &stderr); err == nil {
+		t.Fatal("terminal lifecycle observation returned success")
+	}
+	var receipt execution.ObservationStageRunReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "COMPLETED_STOPPED" || receipt.StageReceiptDigest == "" {
+		t.Fatalf("persisted terminal observation receipt was lost: %#v", receipt)
+	}
+}
+
 func TestStageRunRequiresExplicitExecutionAndBindsOneRuntime(t *testing.T) {
 	previous := executeSubmissionStage
 	defer func() { executeSubmissionStage = previous }()
@@ -629,6 +722,19 @@ func stageRunArguments() []string {
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
 		"--authority-api-endpoint", "https://192.0.2.11:6443", "--authority-token-file", "/tmp/authority-token", "--authority-ca-file", "/tmp/authority-ca",
+	)
+}
+
+func stageObserveLifecycleArguments() []string {
+	arguments := stageResumeArguments()
+	arguments = append([]string{"cluster", "stage", "observe", "lifecycle"}, arguments[3:]...)
+	return append(arguments,
+		"--receipt", "/tmp/provider.json@"+testSHA("6"),
+		"--receipt", "/tmp/lifecycle.json@"+testSHA("7"),
+		"--execute",
+		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
+		"--management-api-endpoint", "https://192.0.2.12:6443", "--management-token-file", "/tmp/management-observer-token", "--management-ca-file", "/tmp/management-ca",
+		"--poll-interval", "15s", "--poll-timeout", "5m",
 	)
 }
 

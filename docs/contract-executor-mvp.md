@@ -996,8 +996,29 @@ The resulting value exposes only one bounded `Run` method. Callers cannot
 replace its plan, cursor, predecessor, source implementation or credential
 after verification. An unverified zero value cannot expose a decision, open
 credentials or run. This provides the environment-neutral boundary needed by
-a later local CLI or short-lived Job without activating either one in this
-checkpoint.
+a local CLI or short-lived Job.
+
+The local CLI now activates exactly this one read-only source-observation
+stage:
+
+```text
+ok cluster stage observe lifecycle --execute
+  + exact plan identities
+  + explicit canonical receipt prefix
+  + distinct bounded ledger and management-observer credentials
+  + poll interval and maximum duration
+      -> exact CAPI GET polling
+      -> immutable lifecycle-observation receipt
+```
+
+It accepts no grant, projection, renderer, authority map or implementation
+selector. `--execute` is still mandatory because the command contacts the
+management API and persists evidence in the ledger. The context is bounded to
+the caller's poll timeout plus one minute of fixed completion overhead. Invalid
+timing or incomplete runtime input fails before credential opening; terminal
+`FAILED` and `STOPPED` receipts are still emitted while the process returns an
+error. This checkpoint does not package, launch or deploy an observation Job,
+and its tests make no Kubernetes request.
 
 ## Cursor-to-grant binding
 
