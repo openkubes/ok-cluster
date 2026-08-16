@@ -94,20 +94,29 @@ func InspectKubernetesLedger(ctx context.Context, grant authorization.VerifiedGr
 // bounded projected files. The caller is responsible for using a short-lived
 // token with the dedicated ledger ServiceAccount.
 func OpenKubernetesLedger(config KubernetesLedgerConfig) (*ledger.Ledger, error) {
+	store, _, err := openKubernetesLedger(config)
+	return store, err
+}
+
+func openKubernetesLedger(config KubernetesLedgerConfig) (*ledger.Ledger, string, error) {
 	if config.Endpoint == "" || config.Namespace == "" || config.TokenFile == "" || config.CAFile == "" {
-		return nil, errors.New("Kubernetes ledger endpoint, namespace, token file, and CA file are required")
+		return nil, "", errors.New("Kubernetes ledger endpoint, namespace, token file, and CA file are required")
 	}
 	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	backend, err := ledger.NewKubernetesStore(ledger.KubernetesStoreConfig{
 		Endpoint: config.Endpoint, Namespace: config.Namespace, BearerToken: token, Client: client,
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return ledger.New(backend)
+	store, err := ledger.New(backend)
+	if err != nil {
+		return nil, "", err
+	}
+	return store, token, nil
 }
 
 // OpenKubernetesSubmissionClient materializes a redirect-denying TLS client
