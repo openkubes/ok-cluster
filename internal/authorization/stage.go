@@ -14,6 +14,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
+	"github.com/openkubes/ok-cluster/internal/stagereceipt"
 )
 
 const (
@@ -108,7 +109,7 @@ func (grant VerifiedStageGrant) ConsumptionBinding() (StageConsumptionBinding, e
 
 // VerifyStage verifies a signature and binds it to one exact mutating stage
 // from an already verified staged execution plan.
-func VerifyStage(raw, publicKeyRaw []byte, plan stageplan.Binding, expectedStageID string, expectedPredecessors []StagePredecessor, at time.Time) (VerifiedStageGrant, error) {
+func VerifyStage(raw, publicKeyRaw []byte, plan stageplan.Binding, expectedStageID string, expectedPredecessors []stagereceipt.Verified, at time.Time) (VerifiedStageGrant, error) {
 	stage, stageDigest, err := plan.Stage(expectedStageID)
 	if err != nil {
 		return VerifiedStageGrant{}, err
@@ -180,7 +181,7 @@ func StageSigningBytes(payload StagePayload) ([]byte, error) {
 	return contract.JCS(value)
 }
 
-func verifyStagePayload(payload StagePayload, plan stageplan.Binding, stage stageplan.Stage, stageDigest string, expectedPredecessors []StagePredecessor, at time.Time) (string, error) {
+func verifyStagePayload(payload StagePayload, plan stageplan.Binding, stage stageplan.Stage, stageDigest string, expectedPredecessors []stagereceipt.Verified, at time.Time) (string, error) {
 	if payload.Audience != StageAudience || payload.Decision != "ALLOW" {
 		return "", errors.New("stage authorization audience or decision is not accepted")
 	}
@@ -193,7 +194,7 @@ func verifyStagePayload(payload StagePayload, plan stageplan.Binding, stage stag
 	if payload.StageID != stage.ID || payload.StageOrder != stage.Order || payload.StageDigest != stageDigest || payload.Operation != stage.GrantOperation || payload.Authority != stage.Authority {
 		return "", errors.New("stage authorization does not bind the exact stage")
 	}
-	predecessorDigest, err := verifyStagePredecessors(payload.Predecessors, expectedPredecessors, stage.Requires)
+	predecessorDigest, err := verifyStagePredecessors(payload.Predecessors, expectedPredecessors, stage.Requires, plan.PlanDigest)
 	if err != nil {
 		return "", err
 	}
@@ -217,16 +218,26 @@ func verifyStagePayload(payload StagePayload, plan stageplan.Binding, stage stag
 	return predecessorDigest, nil
 }
 
-func verifyStagePredecessors(payload, expected []StagePredecessor, required []string) (string, error) {
+func verifyStagePredecessors(payload []StagePredecessor, expected []stagereceipt.Verified, required []string, planDigest string) (string, error) {
 	if payload == nil || expected == nil || len(payload) != len(required) || len(expected) != len(required) {
 		return "", errors.New("stage authorization predecessor set is incomplete")
 	}
+	bindings := make([]StagePredecessor, len(expected))
 	for index, stageID := range required {
-		if payload[index].StageID != stageID || expected[index].StageID != stageID || payload[index] != expected[index] || !stageDigestPattern.MatchString(payload[index].OutcomeDigest) {
+		receipt, err := expected[index].Receipt()
+		if err != nil {
+			return "", err
+		}
+		receiptDigest, err := expected[index].Digest()
+		if err != nil {
+			return "", err
+		}
+		bindings[index] = StagePredecessor{StageID: receipt.StageID, OutcomeDigest: receiptDigest}
+		if receipt.PlanDigest != planDigest || receipt.State != "SUCCEEDED" || bindings[index].StageID != stageID || payload[index] != bindings[index] || !stageDigestPattern.MatchString(payload[index].OutcomeDigest) {
 			return "", errors.New("stage authorization predecessor evidence differs")
 		}
 	}
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(bindings)
 	if err != nil {
 		return "", err
 	}

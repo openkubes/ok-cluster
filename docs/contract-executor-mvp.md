@@ -774,7 +774,7 @@ authorized stage operations and receipts consume this plan.
 Every mutating stage now has a distinct signed authorization envelope. A grant
 binds the canonical staged-plan digest, Contract identity, `R`, `E`, `P`,
 `FixtureDigest`, exact stage order and digest, operation name, authority role,
-the exact immutable outcome digest of every required predecessor, single-use
+the exact immutable receipt digest of every required predecessor, single-use
 declaration and a maximum 30-minute validity window. Verification accepts only
 Ed25519 signatures from the explicitly supplied trust key. Even the first
 stage must carry an explicit empty predecessor set rather than omit the field.
@@ -808,6 +808,37 @@ closed. A successful mutating stage must report `ATTEMPTED`.
 This checkpoint still invokes no stage implementation. It provides the durable
 crash boundary needed before separately bounded HCP, target-access,
 TokenRequest, registration and Application submitters can be composed.
+
+## Immutable stage receipt chain
+
+Every one of the twelve stages now produces the same canonical
+`ok147-stage-receipt/v1` evidence shape. A receipt binds the staged-plan and
+Contract identities, exact stage metadata, completion state, evidence digest
+and the receipt digest of each direct predecessor:
+
+```text
+verified successful predecessor receipt(s)
+                  |
+                  v
+       current canonical stage receipt
+                  |
+                  v
+      independently retained receipt digest
+```
+
+Mutating stages additionally bind whether mutation was attempted and the exact
+operation-outcome digest. Read-only stages must declare
+`mutationState: NOT_APPLICABLE` and cannot carry an operation outcome. Only a
+`SUCCEEDED` receipt may open a dependent stage. Failed, stopped, foreign-plan,
+wrong-order or wrong-stage receipts fail closed.
+
+Loading a receipt during resume requires both its canonical bytes and an
+independently supplied expected digest; otherwise a semantically valid rewrite
+could silently acquire a new identity. A per-stage signed authorization must
+likewise match verified successful receipts rather than caller-asserted
+predecessor values. The receipt is immutable evidence, not authority: it does
+not consume a grant, execute a stage, retry work or authorize a Kubernetes
+write.
 
 ## Typed first-run Platform capability boundary
 

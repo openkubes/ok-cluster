@@ -18,6 +18,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
+	"github.com/openkubes/ok-cluster/internal/stagereceipt"
 )
 
 func TestStageClaimIsAtomicAndCrashStopsRetry(t *testing.T) {
@@ -151,7 +152,7 @@ func verifiedStageGrant(t *testing.T, at time.Time) authorization.VerifiedStageG
 		"format": authorization.StageFormat, "payload": payload,
 		"signature": map[string]any{"algorithm": "Ed25519", "keyId": digest.SHA256(publicKey), "value": base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, signed))},
 	})
-	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, payload.Predecessors, at)
+	grant, err := authorization.VerifyStage(document, []byte(base64.StdEncoding.EncodeToString(publicKey)), plan, stage.ID, []stagereceipt.Verified{}, at)
 	if err != nil {
 		t.Fatal(err)
 	}
