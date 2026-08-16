@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/openkubes/ok-cluster/internal/digest"
 )
 
 const (
@@ -82,36 +84,74 @@ func (observer *CAPILifecycleObserver) Collect(ctx context.Context, policy Polic
 	if err := validatePolicy(policy, true); err != nil {
 		return nil, err
 	}
+	cluster, err := observer.readCluster(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeCAPICluster(cluster, policy)
+}
+
+// CollectBound establishes the raw-UID-free runtime correlation required
+// after executor restart. The policy must not already carry a caller-selected
+// UID; the exact Cluster GET supplies it and its digest must equal the durable
+// lifecycle-submission binding before any Conditions are normalized.
+func (observer *CAPILifecycleObserver) CollectBound(ctx context.Context, policy Policy, expectedTargetUIDDigest string) (Policy, []Evidence, error) {
+	if err := validatePolicy(policy, false); err != nil || policy.TargetClusterUID != "" || !validDigest(expectedTargetUIDDigest) {
+		return Policy{}, nil, errors.New("unbound CAPI observation policy or target identity digest is invalid")
+	}
+	cluster, err := observer.readCluster(ctx)
+	if err != nil {
+		return Policy{}, nil, err
+	}
+	if digest.SHA256([]byte(cluster.Metadata.UID)) != expectedTargetUIDDigest {
+		return Policy{}, nil, errors.New("CAPI Cluster runtime identity differs from durable lifecycle binding")
+	}
+	bound, err := BindTarget(policy, cluster.Metadata.UID)
+	if err != nil {
+		return Policy{}, nil, err
+	}
+	evidence, err := normalizeCAPICluster(cluster, bound)
+	if err != nil {
+		return Policy{}, nil, err
+	}
+	return bound, evidence, nil
+}
+
+func (observer *CAPILifecycleObserver) readCluster(ctx context.Context) (capiCluster, error) {
 	endpoint := *observer.endpoint
 	endpoint.Path = "/apis/cluster.x-k8s.io/v1beta2/namespaces/" + observer.namespace + "/clusters/" + observer.name
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return nil, errors.New("construct bounded CAPI observation request")
+		return capiCluster{}, errors.New("construct bounded CAPI observation request")
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+observer.token)
 	response, err := observer.client.Do(request)
 	if err != nil {
-		return nil, errors.New("bounded CAPI observation request failed")
+		return capiCluster{}, errors.New("bounded CAPI observation request failed")
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumCAPIResponse+1))
 	if err != nil || len(raw) > maximumCAPIResponse {
-		return nil, errors.New("bounded CAPI observation response exceeds accepted size")
+		return capiCluster{}, errors.New("bounded CAPI observation response exceeds accepted size")
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bounded CAPI observation returned HTTP %d", response.StatusCode)
+		return capiCluster{}, fmt.Errorf("bounded CAPI observation returned HTTP %d", response.StatusCode)
 	}
 	cluster, err := decodeCAPICluster(raw)
 	if err != nil {
-		return nil, err
+		return capiCluster{}, err
 	}
 	if cluster.APIVersion != capiClusterAPIVersion || cluster.Kind != capiClusterKind || cluster.Metadata.Namespace != observer.namespace || cluster.Metadata.Name != observer.name {
-		return nil, errors.New("CAPI observation object identity differs from the exact target")
+		return capiCluster{}, errors.New("CAPI observation object identity differs from the exact target")
 	}
 	if !validUID(cluster.Metadata.UID) || cluster.Metadata.ResourceVersion == "" || cluster.Metadata.Generation <= 0 {
-		return nil, errors.New("CAPI observation object lacks runtime identity")
+		return capiCluster{}, errors.New("CAPI observation object lacks runtime identity")
 	}
+	return cluster, nil
+}
+
+func normalizeCAPICluster(cluster capiCluster, policy Policy) ([]Evidence, error) {
 	observedRevision := cluster.Metadata.Annotations[intentRevisionKey]
 	if !validDigest(observedRevision) {
 		observedRevision = ""

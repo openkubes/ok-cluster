@@ -940,6 +940,50 @@ typed stage adapter must still prove its own authoritative evidence and append
 one canonical receipt. The command cannot turn `NEXT` into authorization or
 execute the selected stage.
 
+## Crash-safe lifecycle-observation stage
+
+The first read-only stage can now be executed through a typed operation rather
+than a generic dispatcher. Its constructor accepts only a verified cursor that
+selects `lifecycle-observation`, and derives the durable target identity from
+the successful `cluster-lifecycle` predecessor receipt:
+
+```text
+cluster-lifecycle receipt
+  targetClusterUidDigest
+            |
+            v
+exact CAPI Cluster GET on ok-mgmt
+  SHA-256(observed metadata.uid) == retained digest?
+            |
+      no -> fail closed
+      yes
+            v
+bind runtime policy to observed raw UID
+            |
+bounded InfrastructureReady + ControlPlaneAvailable polling
+            |
+immutable lifecycle-observation receipt
+```
+
+The raw Cluster UID exists only inside the runtime policy and normalized
+source evidence; redaction-safe stage output carries only evidence and receipt
+digests. A Cluster recreated under the same namespace, name and intent
+revision therefore cannot be mistaken for the originally submitted target.
+The observer has one exact GET path and no discovery, list, watch, mutation,
+authorization or retry of operational errors. Only verified `Unknown`
+readiness is polled until the bounded deadline; `True` succeeds, `False` fails
+and deadline expiry stops the stage.
+
+Before contacting its observer, the operation inspects the ledger's
+deterministic immutable stage-receipt slot. If a fully verified receipt already
+exists for the same plan and predecessor chain, it returns that receipt and
+does not observe again. This closes the process-termination window after
+receipt persistence but before caller acknowledgement without turning a
+read-only stage into a controller loop.
+
+This remains library-only composition. No CLI or Job activates the observer,
+and this checkpoint performs no Kubernetes request or infrastructure change.
+
 ## Cursor-to-grant binding
 
 Selecting a next stage is not claim authority. Before a later runner may claim
