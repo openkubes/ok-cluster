@@ -835,6 +835,27 @@ object to delete.
 The concrete service checks are still injected typed implementations in this
 checkpoint; no live Kubernetes request or capability mutation was performed.
 
+## Bounded convergence observation polling
+
+The aggregate observer can now be wrapped by a bounded polling observer before
+it is supplied to `execution.Operation`. This closes the immediate-observation
+gap: CAPI, Network and Platform sources may remain `Unknown` while their
+existing owners converge after submission without causing the executor to
+pretend the run is complete.
+
+Only `Ready=Unknown` permits another read-oriented observation. `Ready=True`
+and `Ready=False` return immediately. An operational source error, invalid or
+unverified result, cancellation or wait failure also stops immediately and is
+never retried. Interval and total duration have hard constructor bounds; the
+final delay is shortened to the exact deadline. If the deadline is reached
+while state remains Unknown, the latest verified fail-closed result is returned
+so the execution outcome remains STOPPED rather than fabricated success.
+
+This wrapper never repeats submission or another mutation. Because the
+Platform collector's separately hashed Application gate invokes capability
+code only after Argo is current, ordinary pre-convergence polling also does not
+consume the single-use first-run capability source.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
