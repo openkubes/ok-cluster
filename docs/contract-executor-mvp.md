@@ -1282,13 +1282,14 @@ The plan places all six object checks behind one global barrier:
 
 ```text
 GET ServiceAccount (verify exact or absent)
-GET ledger Secret (PartialObjectMetadata, must be absent)
-GET authority Secret (PartialObjectMetadata, must be absent)
-GET ConfigMap (must be absent)
-GET NetworkPolicy (must be absent)
-GET Job (must be absent)
+GET ledger Secret (verify exact or absent)
+GET authority Secret (verify exact or absent)
+GET ConfigMap (verify exact or absent)
+GET NetworkPolicy (verify exact or absent)
+GET Job (verify exact or absent)
         |
-        +-- any failure or conflicting state --> STOP, zero writes
+        +-- all exact --> ALREADY_LAUNCHED, zero writes
+        +-- any mixed, changed or uncertain state --> STOP, zero writes
         v
 fixed create sequence:
 ServiceAccount -> ledger Secret -> authority Secret
@@ -1306,15 +1307,19 @@ as one single-use operation. It opens one separately supplied short-lived
 management installer credential, rechecks that this credential is distinct
 from both Job credentials, and rejects launch when either Job credential has
 less than 15 minutes remaining. All six exact GETs then run before the first
-POST. Secret GETs request only `PartialObjectMetadata`; the other objects never
-fall back to list, watch or discovery.
+POST. Full Secret bodies are required only to compare them with the already
+held private package; they never enter a receipt or error. No object lookup
+falls back to list, watch or discovery.
 
-Only an exactly matching existing tokenless ServiceAccount may be reused. The
-other five objects must all be absent. After the barrier, the launcher creates
-the absent ServiceAccount, both immutable Secrets and the ConfigMap,
+Exactly three global outcomes are accepted: all six objects absent; only the
+exact tokenless ServiceAccount present; or all six objects present and exact.
+The last outcome returns `ALREADY_LAUNCHED` with six redaction-safe
+`EXISTING_VERIFIED` results and performs no POST. Every mixed state, including
+an exact partial prefix, stops zero-write. For an absent set, the launcher
+creates the ServiceAccount, both immutable Secrets and the ConfigMap,
 NetworkPolicy and Job in fixed order. Every create response must contain the
-exact desired fields and bounded runtime identity. Failure stops without
-retry, rollback or cleanup and retains only a redaction-safe verified prefix;
+exact desired fields and bounded runtime identity. Failure stops without retry,
+rollback or cleanup and retains only a redaction-safe verified prefix;
 transport-ambiguous results remain explicitly unknown.
 
 The launcher has no update, patch, apply, delete, list, watch, discovery,
@@ -1394,8 +1399,9 @@ the recomputed candidate to equal the separately supplied digest, and only
 after that opens the bounded installer credential. Execution has a five-minute
 outer deadline and delegates to the single-use launcher: all six exact GET
 preflights complete before the first create, followed by at most six fixed-order
-create requests. There is no update, patch, apply, delete, list, watch, retry or
-rollback path.
+create requests. A complete exact duplicate instead returns
+`ALREADY_LAUNCHED` with zero writes. There is no update, patch, apply, delete,
+list, watch, retry or rollback path.
 
 The command emits the redaction-safe launch receipt whenever the launcher
 returns one, including `STOPPED_ZERO_WRITE` or

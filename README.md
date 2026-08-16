@@ -42,13 +42,14 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   non-mutating launch plan binds all six objects behind one complete preflight
   barrier and fixes their eventual create order without exposing object bodies
   or credentials. A single-use composite launcher implements the same order,
-  preserves a redaction-safe partial receipt and has no update, delete, retry
-  or rollback path. Its public opener additionally requires an exact,
-  expiry-bound launch-candidate digest that binds destination, CA and installer
-  credential evidence; preparing it remains non-mutating. Live invocation is
-  still a separate critical boundary. A private launch-material builder now
-  correlates all package, credential, runtime and candidate inputs without
-  exposing their bytes or contacting Kubernetes. `ok cluster stage launch
+  verifies a complete exact duplicate as `ALREADY_LAUNCHED`, rejects every
+  mixed partial state, preserves a redaction-safe receipt and has no update,
+  delete, retry or rollback path. Its public opener additionally requires an
+  exact, expiry-bound launch-candidate digest that binds destination, CA and
+  installer credential evidence; preparing it remains non-mutating. Live
+  invocation is still a separate critical boundary. A private launch-material
+  builder now correlates all package, credential, runtime and candidate inputs
+  without exposing their bytes or contacting Kubernetes. `ok cluster stage launch
   prepare` exposes only the redacted material/candidate receipts and rejects
   execution. A separate `ok cluster stage launch execute` boundary requires the
   exact prepared candidate, explicit `--execute`, bounded installer credentials

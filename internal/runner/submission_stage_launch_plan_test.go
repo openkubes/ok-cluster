@@ -26,7 +26,7 @@ func TestPlanSubmissionStageLaunchBindsSixObjectsBehindOneBarrier(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Format != SubmissionStageLaunchPlanFormat || plan.State != "VERIFIED" || plan.StageID != stageReceipt.StageID || plan.Authority != "ok-mgmt" || plan.StagePackageDigest != stageReceipt.PackageDigest || plan.CredentialPackageDigest != credentialReceipt.PackageDigest || plan.RuntimeManifestDigest != runtimeReceipt.ManifestDigest || plan.PreflightBarrier != "ALL_SIX_PASS_BEFORE_FIRST_CREATE" || plan.MutationAllowed {
+	if plan.Format != SubmissionStageLaunchPlanFormat || plan.State != "VERIFIED" || plan.StageID != stageReceipt.StageID || plan.Authority != "ok-mgmt" || plan.StagePackageDigest != stageReceipt.PackageDigest || plan.CredentialPackageDigest != credentialReceipt.PackageDigest || plan.RuntimeManifestDigest != runtimeReceipt.ManifestDigest || plan.PreflightBarrier != "ALL_ABSENT_OR_RUNTIME_ONLY_OR_ALL_EXACT" || plan.MutationAllowed {
 		t.Fatalf("unexpected launch identity: %#v", plan)
 	}
 	if len(plan.Preflights) != 6 || len(plan.Creates) != 6 {
@@ -45,13 +45,10 @@ func TestPlanSubmissionStageLaunchBindsSixObjectsBehindOneBarrier(t *testing.T) 
 			}
 			continue
 		}
-		if preflight.ExistingPolicy != "STOP_ZERO_WRITE" || create.CreatePolicy != "CREATE_ONLY_AFTER_ABSENCE" {
-			t.Fatalf("create-only policy differs at step %d: %#v %#v", index+1, preflight, create)
+		if preflight.ExistingPolicy != "VERIFY_EXACT_GLOBAL_STATE" || create.CreatePolicy != "CREATE_ONLY_AFTER_GLOBAL_ABSENCE" {
+			t.Fatalf("idempotent global policy differs at step %d: %#v %#v", index+1, preflight, create)
 		}
-		if index < 3 && preflight.ResponseMode != "PARTIAL_OBJECT_METADATA" {
-			t.Fatalf("Secret preflight could expose a body: %#v", preflight)
-		}
-		if index >= 3 && preflight.ResponseMode != "FULL_OBJECT" {
+		if preflight.ResponseMode != "FULL_OBJECT" {
 			t.Fatalf("stage object preflight mode differs: %#v", preflight)
 		}
 	}

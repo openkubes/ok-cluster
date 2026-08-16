@@ -2,7 +2,7 @@ package runner
 
 import "errors"
 
-const SubmissionStageLaunchPlanFormat = "ok147-submission-stage-launch-plan/v1"
+const SubmissionStageLaunchPlanFormat = "ok147-submission-stage-launch-plan/v2"
 
 type SubmissionStageLaunchPreflight struct {
 	Order          int    `json:"order"`
@@ -85,30 +85,30 @@ func PlanSubmissionStageLaunch(packaged VerifiedSubmissionStagePackage, credenti
 		preflights = append(preflights, SubmissionStageLaunchPreflight{
 			Order: index + 2, Phase: "credentials", APIVersion: "v1", Kind: "Secret",
 			Namespace: submissionStageInputNamespace, Name: object.name, Method: "GET", ObjectPath: object.objectPath,
-			ResponseMode: "PARTIAL_OBJECT_METADATA", ExistingPolicy: "STOP_ZERO_WRITE", ObjectDigest: object.objectDigest,
+			ResponseMode: "FULL_OBJECT", ExistingPolicy: "VERIFY_EXACT_GLOBAL_STATE", ObjectDigest: object.objectDigest,
 		})
 		creates = append(creates, SubmissionStageLaunchCreate{
 			Order: index + 2, Phase: "credentials", APIVersion: "v1", Kind: "Secret",
 			Namespace: submissionStageInputNamespace, Name: object.name, Method: "POST", CollectionPath: object.collectionPath,
-			CreatePolicy: "CREATE_ONLY_AFTER_ABSENCE", ObjectDigest: object.objectDigest,
+			CreatePolicy: "CREATE_ONLY_AFTER_GLOBAL_ABSENCE", ObjectDigest: object.objectDigest,
 		})
 	}
 	for index, object := range stage.Creates {
 		preflights = append(preflights, SubmissionStageLaunchPreflight{
 			Order: index + 4, Phase: "stage-package", APIVersion: object.APIVersion, Kind: object.Kind,
 			Namespace: object.Namespace, Name: object.Name, Method: object.PreflightMethod, ObjectPath: object.ObjectPath,
-			ResponseMode: "FULL_OBJECT", ExistingPolicy: "STOP_ZERO_WRITE", ObjectDigest: object.ObjectDigest,
+			ResponseMode: "FULL_OBJECT", ExistingPolicy: "VERIFY_EXACT_GLOBAL_STATE", ObjectDigest: object.ObjectDigest,
 		})
 		creates = append(creates, SubmissionStageLaunchCreate{
 			Order: index + 4, Phase: "stage-package", APIVersion: object.APIVersion, Kind: object.Kind,
 			Namespace: object.Namespace, Name: object.Name, Method: object.CreateMethod, CollectionPath: object.CollectionPath,
-			CreatePolicy: "CREATE_ONLY_AFTER_ABSENCE", ObjectDigest: object.ObjectDigest,
+			CreatePolicy: "CREATE_ONLY_AFTER_GLOBAL_ABSENCE", ObjectDigest: object.ObjectDigest,
 		})
 	}
 	return SubmissionStageLaunchPlan{
 		Format: SubmissionStageLaunchPlanFormat, State: "VERIFIED", StageID: stage.StageID,
 		Authority: packaged.installationAuthority, StagePackageDigest: stage.PackageDigest,
 		CredentialPackageDigest: credentialReceipt.PackageDigest, RuntimeManifestDigest: runtime.receipt.ManifestDigest,
-		PreflightBarrier: "ALL_SIX_PASS_BEFORE_FIRST_CREATE", Preflights: preflights, Creates: creates, MutationAllowed: false,
+		PreflightBarrier: "ALL_ABSENT_OR_RUNTIME_ONLY_OR_ALL_EXACT", Preflights: preflights, Creates: creates, MutationAllowed: false,
 	}, nil
 }
