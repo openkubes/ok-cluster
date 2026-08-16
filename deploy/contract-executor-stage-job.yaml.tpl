@@ -1,3 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: "${OK147_RUN_ID}"
+  namespace: openkubes-execution-system
+spec:
+  podSelector:
+    matchLabels:
+      openkubes.io/execution-id: "${OK147_RUN_ID}"
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to: [{ipBlock: {cidr: "${OK147_LEDGER_API_CIDR}"}}]
+      ports: [{protocol: TCP, port: ${OK147_LEDGER_API_PORT}}]
+    - to: [{ipBlock: {cidr: "${OK147_AUTHORITY_API_CIDR}"}}]
+      ports: [{protocol: TCP, port: ${OK147_AUTHORITY_API_PORT}}]
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -150,20 +167,3 @@ ${OK147_RECEIPT_CONFIGMAP_ITEM}        - name: ledger-credential
             items:
               - {key: token, path: token}
               - {key: ca.crt, path: ca.crt}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: "${OK147_RUN_ID}"
-  namespace: openkubes-execution-system
-spec:
-  podSelector:
-    matchLabels:
-      openkubes.io/execution-id: "${OK147_RUN_ID}"
-  policyTypes: ["Ingress", "Egress"]
-  ingress: []
-  egress:
-    - to: [{ipBlock: {cidr: "${OK147_LEDGER_API_CIDR}"}}]
-      ports: [{protocol: TCP, port: ${OK147_LEDGER_API_PORT}}]
-    - to: [{ipBlock: {cidr: "${OK147_AUTHORITY_API_CIDR}"}}]
-      ports: [{protocol: TCP, port: ${OK147_AUTHORITY_API_PORT}}]

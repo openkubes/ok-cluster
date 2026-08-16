@@ -1136,6 +1136,9 @@ inputs stop execution rather than authorizing them.
 
 `BuildSubmissionStagePackage` now composes the immutable input ConfigMap with
 the bounded Job and NetworkPolicy as one deterministic three-object stream.
+Its fixed create order is ConfigMap, NetworkPolicy, then Job, so the executable
+Pod is always the final object and cannot intentionally precede its egress
+boundary.
 The caller supplies only runtime object names, a digest-pinned image, a
 separately SHA-256-bound Job template and exact API endpoint/CIDR identities.
 Stage ID, Contract identities, evaluation time, input ConfigMap identity and
