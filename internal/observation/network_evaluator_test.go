@@ -27,6 +27,22 @@ func TestEvaluateNetworkSnapshotProducesCurrentEVIDENCE(t *testing.T) {
 	}
 }
 
+func TestEvaluateNetworkSnapshotBindsSemanticProfileIdentity(t *testing.T) {
+	policy, profile, snapshot := validNetworkFixture(t)
+	first, err := EvaluateNetworkSnapshot(policy, profile, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.MinimumProbeFreshnessSeconds++
+	second, err := EvaluateNetworkSnapshot(policy, profile, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != "True" || second.Status != "True" || first.EvidenceDigest == second.EvidenceDigest || first.SourceUID == second.SourceUID {
+		t.Fatalf("semantic profile change was not bound into evidence: first=%#v second=%#v", first, second)
+	}
+}
+
 func TestEvaluateNetworkSnapshotFailsClosed(t *testing.T) {
 	tests := map[string]struct {
 		mutate func(*NetworkSnapshot)
