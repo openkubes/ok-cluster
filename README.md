@@ -80,7 +80,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   an expiry-bound installer candidate. Only `observe lifecycle launch execute`
   can open the installer credential and run the single-use six-object
   exact-create launcher; it requires the separately copied candidate digest
-  and explicit `--execute`.
+  and explicit `--execute`. Stage 4 now has its first distinct path as well:
+  `ok cluster stage run enablement --execute` binds the verified three-receipt
+  prefix and signed `CreateEnablement` grant to exactly one externally rendered
+  `HelmChartProxy`; it neither renders Helm nor writes the controller-owned
+  `HelmReleaseProxy`.
 
 ---
 
