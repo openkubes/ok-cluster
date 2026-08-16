@@ -1,6 +1,6 @@
-// Package submission turns an already verified renderer projection into a
-// bounded exact-create plan. It never renders Contract intent and accepts only
-// the resource kinds required by the OK-141 CreateCluster reference path.
+// Package submission turns already verified renderer projections into bounded
+// exact-create plans. It never renders Contract intent. Every projection path
+// has its own explicit resource-kind and authority allow-list.
 package submission
 
 import (
