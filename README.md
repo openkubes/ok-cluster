@@ -26,14 +26,15 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Blue/Green upgrades** — rolling Kubernetes version upgrades with workload migration
 - **GitOps-ready** — all cluster state is declarative YAML, rendered from templates
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
-- **Bounded Contract Executor MVP** — a shared Go core for local CLI and future
-  short-lived `ok-mgmt` Jobs; it remains dry-run-only while verifying the
-  OK-141 revision, existing projection, authority split, signed grant binding,
-  fail-closed single-use receipt semantics, and an offline-tested durable
-  Kubernetes ledger plus short-lived read-only Job preflight boundary; its
-  container build is digest-pinned, multi-architecture, non-root, SBOM- and
-  provenance-producing, with a separate manual, protected and digest-verifying
-  GHCR publication boundary
+- **Bounded Contract Executor MVP** — one shared Go core for the local `ok` CLI
+  and short-lived `ok-mgmt` Jobs. `cluster create` remains non-mutating, while
+  the separately authorized `cluster stage run --execute` path supports only
+  the first two Contract-to-CAPI submission stages with a durable ledger,
+  exact split authorities and no retry. `cluster stage package` produces the
+  digest-bound immutable ConfigMap/Job/NetworkPolicy envelope offline; the
+  tokenless runtime identity and credential Secrets remain separately managed
+  prerequisites. The runner image is digest-pinned, multi-architecture,
+  non-root, SBOM- and provenance-producing behind a protected publisher.
 
 ---
 
