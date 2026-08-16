@@ -1160,6 +1160,26 @@ output, writes the package with mode `0600`, and emits only the redaction-safe
 package receipt on stdout. The Job-template digest is required explicitly and
 is retained in that receipt.
 
+## Exact-create installation plan
+
+`PlanSubmissionStageInstallation` converts only an in-memory verified package
+into a redaction-safe, non-mutating create plan. It rechecks the package and
+component digests, exact three-object membership, namespace, names, immutable
+ConfigMap, NetworkPolicy selector, tokenless ServiceAccount reference and
+ConfigMap volume binding. The output fixes this sequence:
+
+```text
+1. exact GET ConfigMap       → collection POST only when absent
+2. exact GET NetworkPolicy   → collection POST only when absent
+3. exact GET Job             → collection POST only when absent
+```
+
+Every entry records the exact object and collection paths plus a canonical
+object digest. The plan has `mutationAllowed: false`; it contains no Secret,
+credential, generic path, update, patch, apply, delete, retry or API client.
+The future installer must remain a separately reviewed mutation boundary and
+must preserve the fail-closed order and absence preconditions.
+
 ## Tokenless submission runtime identity
 
 [`deploy/contract-executor-stage-runtime.yaml`](../deploy/contract-executor-stage-runtime.yaml)
