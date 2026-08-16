@@ -138,10 +138,55 @@ Ledger directories must be real private directories and records must remain
 regular `0600` files. Non-canonical or modified records are rejected. Tests
 prove that 24 concurrent claim attempts produce exactly one winner.
 
-This local ledger proves the consumption and restart algorithm only. A real
-Job must use a durable, authority-controlled backing store that survives Job and
-node loss; an `emptyDir` alone cannot enforce single use across Job recreation.
-Selecting and integrating that backing store remains a later checkpoint.
+The filesystem backend proves the consumption algorithm for local execution.
+It is not sufficient for a Job because an `emptyDir` cannot enforce single use
+across Job recreation.
+
+## Durable Kubernetes ledger boundary
+
+The fourth checkpoint adds a `RecordStore` implementation that persists the
+same canonical receipts as immutable ConfigMaps on `ok-mgmt`. It is a durable
+execution-evidence store, not a second lifecycle source of truth:
+
+```text
+verified grant
+      |
+      v
+POST immutable claim ConfigMap (create-if-absent)
+      |
+      +-- executor disappears --> replacement GETs the same exact name
+      |                          --> CLAIMED_INDETERMINATE_STOP
+      v
+future bounded operation
+      |
+      v
+POST immutable outcome ConfigMap
+```
+
+The client performs only exact-name `GET` requests and collection `POST`
+creates. It never lists, watches, updates, patches, deletes, or follows an API
+redirect. A `409 Conflict` consumes the grant fail-closed. Every object uses a
+deterministic name derived from the full grant-key digest, is `immutable: true`,
+and carries the full key plus the canonical receipt digest. Responses are
+verified before they are trusted.
+
+[`deploy/contract-executor-ledger.yaml`](../deploy/contract-executor-ledger.yaml)
+is an offline deployment candidate containing a dedicated namespace, Service
+Account, `get`/`create`-only Role, and a fail-closed
+`ValidatingAdmissionPolicy`. Within the dedicated namespace, the admission
+policy denies ConfigMap creation by every identity except the exact Service
+Account and binds object-name shape, immutable flag, receipt-only data shape,
+exact labels, and digest syntax. Kubernetes CEL has no SHA-256 primitive, so admission
+cannot prove that `content-digest` equals `receipt.json`; the Go client performs
+that equality check on every create response and read. Likewise, RBAC cannot
+restrict `create` to one exact body. Signed request binding and strict receipt
+validation remain required application-level controls.
+
+The Service Account deliberately has no mutation authority over CAPI, provider,
+enablement, GitOps, or workload resources in this checkpoint. The manifest is
+not deployed, the Kubernetes store is not yet wired to a Job, and no cluster was
+contacted. Tests use an in-memory API transport and prove that a replacement
+executor observes the original claim and cannot reuse it.
 
 ## OK-141 compatibility evidence
 
