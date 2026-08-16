@@ -50,6 +50,7 @@ type Receipt struct {
 	MutationState          string            `json:"mutationState"`
 	OperationOutcomeDigest string            `json:"operationOutcomeDigest,omitempty"`
 	EvidenceDigest         string            `json:"evidenceDigest"`
+	TargetClusterUIDDigest string            `json:"targetClusterUidDigest,omitempty"`
 	CompletedAt            string            `json:"completedAt"`
 }
 
@@ -65,6 +66,12 @@ type Verified struct {
 // New builds a receipt only after all direct predecessor receipts have been
 // verified, completed successfully and matched to the same staged plan.
 func New(plan stageplan.Binding, stageID string, predecessors []Verified, state, mutationState, operationOutcomeDigest, evidenceDigest string, completedAt time.Time) (Verified, error) {
+	return NewWithTargetClusterUIDDigest(plan, stageID, predecessors, state, mutationState, operationOutcomeDigest, evidenceDigest, "", completedAt)
+}
+
+// NewWithTargetClusterUIDDigest binds the raw-UID-free correlation emitted by
+// a successful Cluster lifecycle submission into its immutable receipt.
+func NewWithTargetClusterUIDDigest(plan stageplan.Binding, stageID string, predecessors []Verified, state, mutationState, operationOutcomeDigest, evidenceDigest, targetClusterUIDDigest string, completedAt time.Time) (Verified, error) {
 	stage, stageDigest, err := plan.Stage(stageID)
 	if err != nil {
 		return Verified{}, err
@@ -80,7 +87,8 @@ func New(plan stageplan.Binding, stageID string, predecessors []Verified, state,
 		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Kind: stage.Kind,
 		Authority: stage.Authority, Operation: stage.GrantOperation, Predecessors: links,
 		State: state, MutationState: mutationState, OperationOutcomeDigest: operationOutcomeDigest,
-		EvidenceDigest: evidenceDigest, CompletedAt: completedAt.UTC().Format(time.RFC3339Nano),
+		EvidenceDigest: evidenceDigest, TargetClusterUIDDigest: targetClusterUIDDigest,
+		CompletedAt: completedAt.UTC().Format(time.RFC3339Nano),
 	}
 	return verifyReceipt(receipt, plan, predecessors)
 }
@@ -189,6 +197,9 @@ func verifyReceipt(receipt Receipt, plan stageplan.Binding, predecessors []Verif
 		}
 	} else if receipt.MutationState != "NOT_APPLICABLE" || receipt.OperationOutcomeDigest != "" {
 		return Verified{}, errors.New("read-only stage receipt contains mutation state")
+	}
+	if receipt.TargetClusterUIDDigest != "" && (stage.ID != "cluster-lifecycle" || receipt.State != "SUCCEEDED" || !receiptDigestPattern.MatchString(receipt.TargetClusterUIDDigest)) {
+		return Verified{}, errors.New("stage receipt target Cluster identity binding is invalid")
 	}
 	raw, receiptDigest, err := canonicalReceipt(receipt)
 	if err != nil {

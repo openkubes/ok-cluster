@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/openkubes/ok-cluster/internal/contract"
+	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/submission"
 )
@@ -93,7 +94,32 @@ func (mutator *SubmissionPlaneMutator) Mutate(ctx context.Context, request Stage
 	if mutationState != "ATTEMPTED" {
 		return StageMutationResult{Outcome: "STOPPED", MutationState: mutationState, EvidenceDigest: evidenceDigest}, nil
 	}
-	return StageMutationResult{Outcome: "SUCCEEDED", MutationState: mutationState, EvidenceDigest: evidenceDigest}, nil
+	result := StageMutationResult{Outcome: "SUCCEEDED", MutationState: mutationState, EvidenceDigest: evidenceDigest}
+	if mutator.binding.StageID == "cluster-lifecycle" {
+		uid, err := submittedLifecycleClusterUID(receipt, mutator.plane, mutator.identity)
+		if err != nil {
+			return StageMutationResult{}, err
+		}
+		result.TargetClusterUIDDigest = digest.SHA256([]byte(uid))
+	}
+	return result, nil
+}
+
+func submittedLifecycleClusterUID(receipt submission.PlaneReceipt, plane submission.Plane, identity contract.Identity) (string, error) {
+	var uid string
+	for index, object := range plane.Objects {
+		if object.Identity.APIVersion != "cluster.x-k8s.io/v1beta2" || object.Identity.Kind != "Cluster" || object.Identity.Namespace != identity.Namespace || object.Identity.Name != identity.Name {
+			continue
+		}
+		if uid != "" || index >= len(receipt.Results) || receipt.Results[index].UID == "" {
+			return "", errors.New("Cluster lifecycle submission has ambiguous runtime identity")
+		}
+		uid = receipt.Results[index].UID
+	}
+	if uid == "" {
+		return "", errors.New("Cluster lifecycle submission lacks exact runtime identity")
+	}
+	return uid, nil
 }
 
 func validateSubmissionPlaneOutcome(receipt submission.PlaneReceipt, plane submission.Plane, stopped bool) (string, error) {

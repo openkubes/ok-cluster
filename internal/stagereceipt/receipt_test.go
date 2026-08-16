@@ -75,6 +75,23 @@ func TestReceiptEnforcesMutationBoundary(t *testing.T) {
 	}
 }
 
+func TestLifecycleReceiptBindsOnlyTargetUIDDigest(t *testing.T) {
+	plan := receiptPlan(t)
+	at := time.Date(2026, 8, 16, 16, 0, 0, 0, time.UTC)
+	provider, _ := New(plan, "provider-prerequisites", []Verified{}, "SUCCEEDED", "ATTEMPTED", receiptSHA("1"), receiptSHA("a"), at)
+	verified, err := NewWithTargetClusterUIDDigest(plan, "cluster-lifecycle", []Verified{provider}, "SUCCEEDED", "ATTEMPTED", receiptSHA("2"), receiptSHA("b"), receiptSHA("7"), at.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := verified.Receipt()
+	if receipt.TargetClusterUIDDigest != receiptSHA("7") {
+		t.Fatalf("target UID digest differs: %#v", receipt)
+	}
+	if _, err := NewWithTargetClusterUIDDigest(plan, "provider-prerequisites", []Verified{}, "SUCCEEDED", "ATTEMPTED", receiptSHA("1"), receiptSHA("a"), receiptSHA("7"), at); err == nil {
+		t.Fatal("target identity binding outside Cluster lifecycle was accepted")
+	}
+}
+
 func TestReceiptRejectsCompletionBeforePredecessor(t *testing.T) {
 	plan := receiptPlan(t)
 	at := time.Date(2026, 8, 16, 16, 0, 0, 0, time.UTC)

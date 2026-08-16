@@ -40,9 +40,10 @@ type StageMutationRequest struct {
 
 // StageMutationResult is the complete redaction-safe result of one call.
 type StageMutationResult struct {
-	Outcome        string
-	MutationState  string
-	EvidenceDigest string
+	Outcome                string
+	MutationState          string
+	EvidenceDigest         string
+	TargetClusterUIDDigest string
 }
 
 // StageMutator is a single, preconstructed mutation capability.
@@ -137,10 +138,10 @@ func (operation StagedOperation) Run(ctx context.Context, plan stageplan.Binding
 		GrantID:              binding.GrantID,
 		PredecessorDigest:    binding.PredecessorDigest,
 	})
-	if err := validateStageMutationResult(result, mutationErr); err != nil {
+	if err := validateStageMutationResult(decision.StageID, result, mutationErr); err != nil {
 		return receipt, err
 	}
-	outcome, err := operation.Ledger.CompleteStage(ctx, claim, result.Outcome, result.MutationState, result.EvidenceDigest, operation.Clock())
+	outcome, err := operation.Ledger.CompleteStageWithTarget(ctx, claim, result.Outcome, result.MutationState, result.EvidenceDigest, result.TargetClusterUIDDigest, operation.Clock())
 	if err != nil {
 		return receipt, err
 	}
@@ -169,12 +170,19 @@ func (operation StagedOperation) finalize(ctx context.Context, receipt StagedOpe
 	return receipt, nil
 }
 
-func validateStageMutationResult(result StageMutationResult, mutationErr error) error {
+func validateStageMutationResult(stageID string, result StageMutationResult, mutationErr error) error {
 	if !oneOf(result.Outcome, "SUCCEEDED", "FAILED", "STOPPED") || !oneOf(result.MutationState, "NOT_ATTEMPTED", "ATTEMPTED", "UNKNOWN") || !stagedDigestPattern.MatchString(result.EvidenceDigest) {
 		return errors.New("stage mutator returned an invalid redaction-safe result")
 	}
 	if result.Outcome == "SUCCEEDED" && (result.MutationState != "ATTEMPTED" || mutationErr != nil) {
 		return errors.New("stage mutator reported an inconsistent successful result")
+	}
+	if stageID == "cluster-lifecycle" && result.Outcome == "SUCCEEDED" {
+		if !stagedDigestPattern.MatchString(result.TargetClusterUIDDigest) {
+			return errors.New("successful Cluster lifecycle mutation lacks a runtime identity digest")
+		}
+	} else if result.TargetClusterUIDDigest != "" {
+		return errors.New("stage mutation returned runtime identity outside successful Cluster lifecycle")
 	}
 	return nil
 }

@@ -43,7 +43,7 @@ func (ledger *Ledger) FinalizeStageReceipt(ctx context.Context, plan stageplan.B
 	if err != nil {
 		return stagereceipt.Verified{}, errors.New("mutating stage completion time is invalid")
 	}
-	verified, err := stagereceipt.New(
+	verified, err := stagereceipt.NewWithTargetClusterUIDDigest(
 		plan,
 		stage.ID,
 		predecessors,
@@ -51,6 +51,7 @@ func (ledger *Ledger) FinalizeStageReceipt(ctx context.Context, plan stageplan.B
 		inspection.Outcome.MutationState,
 		inspection.OutcomeDigest,
 		inspection.Outcome.EvidenceDigest,
+		inspection.Outcome.TargetClusterUIDDigest,
 		completedAt,
 	)
 	if err != nil {

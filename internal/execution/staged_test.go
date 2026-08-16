@@ -145,6 +145,29 @@ func TestStagedOperationRejectsReadOnlyCursor(t *testing.T) {
 	}
 }
 
+func TestStagedOperationRequiresLifecycleRuntimeIdentityDigest(t *testing.T) {
+	plan := stagedPlan(t)
+	at := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
+	provider, err := stagereceipt.New(plan, "provider-prerequisites", []stagereceipt.Verified{}, "SUCCEEDED", "ATTEMPTED", stagedSHA("1"), stagedSHA("e"), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := stagecursor.Evaluate(plan, []stagereceipt.Verified{provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := stagedGrant(t, plan, "cluster-lifecycle", []stagereceipt.Verified{provider}, at.Add(time.Second))
+	store, _ := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
+	mutator := &fakeStageMutator{
+		binding: stagedMutationBinding(t, plan, "cluster-lifecycle"),
+		result:  StageMutationResult{Outcome: "SUCCEEDED", MutationState: "ATTEMPTED", EvidenceDigest: stagedSHA("e")},
+	}
+	receipt, err := (StagedOperation{Ledger: store, Mutator: mutator, Clock: stagedClock(at.Add(time.Second))}).Run(context.Background(), plan, cursor, grant)
+	if err == nil || receipt.State != "CLAIMED_INDETERMINATE_STOP" || mutator.calls != 1 {
+		t.Fatalf("lifecycle result without target correlation did not stop: %#v calls=%d err=%v", receipt, mutator.calls, err)
+	}
+}
+
 type fakeStageMutator struct {
 	binding StageMutationBinding
 	result  StageMutationResult

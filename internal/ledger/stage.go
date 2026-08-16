@@ -33,18 +33,19 @@ type StageClaimReceipt struct {
 }
 
 type StageOutcomeReceipt struct {
-	Format         string `json:"format"`
-	State          string `json:"state"`
-	GrantID        string `json:"grantId"`
-	PlanDigest     string `json:"planDigest"`
-	StageID        string `json:"stageId"`
-	StageDigest    string `json:"stageDigest"`
-	Operation      string `json:"operation"`
-	ClaimDigest    string `json:"claimDigest"`
-	Outcome        string `json:"outcome"`
-	MutationState  string `json:"mutationState"`
-	EvidenceDigest string `json:"evidenceDigest"`
-	CompletedAt    string `json:"completedAt"`
+	Format                 string `json:"format"`
+	State                  string `json:"state"`
+	GrantID                string `json:"grantId"`
+	PlanDigest             string `json:"planDigest"`
+	StageID                string `json:"stageId"`
+	StageDigest            string `json:"stageDigest"`
+	Operation              string `json:"operation"`
+	ClaimDigest            string `json:"claimDigest"`
+	Outcome                string `json:"outcome"`
+	MutationState          string `json:"mutationState"`
+	EvidenceDigest         string `json:"evidenceDigest"`
+	TargetClusterUIDDigest string `json:"targetClusterUidDigest,omitempty"`
+	CompletedAt            string `json:"completedAt"`
 }
 
 type StageInspection struct {
@@ -96,6 +97,13 @@ func (ledger *Ledger) ClaimStage(ctx context.Context, grant authorization.Verifi
 // CompleteStage records one immutable result. An exact repeat is idempotent;
 // a successful mutating stage must have attempted its mutation.
 func (ledger *Ledger) CompleteStage(ctx context.Context, claim StageClaimReceipt, outcome, mutationState, evidenceDigest string, at time.Time) (StageOutcomeReceipt, error) {
+	return ledger.CompleteStageWithTarget(ctx, claim, outcome, mutationState, evidenceDigest, "", at)
+}
+
+// CompleteStageWithTarget records the irreversible runtime correlation from a
+// successful Cluster lifecycle create without retaining the raw Kubernetes
+// UID in redaction-safe ledger evidence.
+func (ledger *Ledger) CompleteStageWithTarget(ctx context.Context, claim StageClaimReceipt, outcome, mutationState, evidenceDigest, targetClusterUIDDigest string, at time.Time) (StageOutcomeReceipt, error) {
 	if !allowed(outcome, "SUCCEEDED", "FAILED", "STOPPED") || !allowed(mutationState, "NOT_ATTEMPTED", "ATTEMPTED", "UNKNOWN") {
 		return StageOutcomeReceipt{}, errors.New("stage completion state is invalid")
 	}
@@ -104,6 +112,9 @@ func (ledger *Ledger) CompleteStage(ctx context.Context, claim StageClaimReceipt
 	}
 	if !validDigest(evidenceDigest) {
 		return StageOutcomeReceipt{}, errors.New("stage evidence digest is invalid")
+	}
+	if targetClusterUIDDigest != "" && (claim.StageID != "cluster-lifecycle" || outcome != "SUCCEEDED" || !validDigest(targetClusterUIDDigest)) {
+		return StageOutcomeReceipt{}, errors.New("stage target Cluster identity binding is invalid")
 	}
 	stored, claimDigest, err := ledger.readStageClaim(ctx, claim.GrantID)
 	if err != nil {
@@ -121,7 +132,7 @@ func (ledger *Ledger) CompleteStage(ctx context.Context, claim StageClaimReceipt
 		Format: StageOutcomeFormat, State: "COMPLETED", GrantID: claim.GrantID,
 		PlanDigest: claim.PlanDigest, StageID: claim.StageID, StageDigest: claim.StageDigest,
 		Operation: claim.Operation, ClaimDigest: claimDigest, Outcome: outcome,
-		MutationState: mutationState, EvidenceDigest: evidenceDigest,
+		MutationState: mutationState, EvidenceDigest: evidenceDigest, TargetClusterUIDDigest: targetClusterUIDDigest,
 		CompletedAt: at.UTC().Format(time.RFC3339Nano),
 	}
 	raw, expectedDigest, err := canonicalRecord(receipt)
@@ -236,6 +247,9 @@ func validateStageOutcome(value StageOutcomeReceipt) error {
 		if !validDigest(identity) {
 			return errors.New("stage outcome contains an invalid digest")
 		}
+	}
+	if value.TargetClusterUIDDigest != "" && (value.StageID != "cluster-lifecycle" || value.Outcome != "SUCCEEDED" || !validDigest(value.TargetClusterUIDDigest)) {
+		return errors.New("stage outcome contains an invalid target Cluster identity binding")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, value.CompletedAt); err != nil {
 		return errors.New("stage outcome has an invalid timestamp")
