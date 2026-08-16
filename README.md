@@ -55,7 +55,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   exact prepared candidate, explicit `--execute`, bounded installer credentials
   and a single-use global-preflight launcher. The runner image is digest-pinned,
   multi-architecture, non-root, SBOM- and provenance-producing behind a
-  protected publisher.
+  protected publisher. `ok cluster stage resume` independently re-verifies an
+  explicit canonical receipt prefix and reports only the next, completed or
+  stopped cursor state; it has no grant, credential, endpoint or execution
+  capability and can safely select the next read-only stage after a restart.
 
 ---
 

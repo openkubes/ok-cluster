@@ -112,6 +112,12 @@ type stageInspection struct {
 	MutationAllowed    bool                 `json:"mutationAllowed"`
 }
 
+type stageResumeInspection struct {
+	Format          string               `json:"format"`
+	Decision        stagecursor.Decision `json:"decision"`
+	MutationAllowed bool                 `json:"mutationAllowed"`
+}
+
 type stageLaunchPreparation struct {
 	Format          string                                       `json:"format"`
 	State           string                                       `json:"state"`
@@ -139,6 +145,77 @@ type stageBundleFlags struct {
 	evaluationTime                                                *string
 	receipts                                                      receiptFlags
 	receiptPrefix, receiptPrefixDigest                            *string
+}
+
+type stageResumeFlags struct {
+	planPath, contractNamespace, contractName                     *string
+	intentRevision, enablementRevision, platformRevision          *string
+	executionFixture                                              *string
+	infrastructureAuthority, managementAuthority, gitOpsAuthority *string
+	receipts                                                      receiptFlags
+	receiptPrefix, receiptPrefixDigest                            *string
+}
+
+func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
+	values := &stageResumeFlags{}
+	values.planPath = flags.String("plan", "", "path to the bounded staged execution plan")
+	values.contractNamespace = flags.String("contract-namespace", "", "expected Contract namespace")
+	values.contractName = flags.String("contract-name", "", "expected Contract name")
+	values.intentRevision = flags.String("intent-revision", "", "expected normalized Contract revision R")
+	values.enablementRevision = flags.String("enablement-revision", "", "expected Enablement revision E")
+	values.platformRevision = flags.String("platform-revision", "", "expected Platform revision P")
+	values.executionFixture = flags.String("execution-fixture", "", "expected execution FixtureDigest")
+	values.infrastructureAuthority = flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
+	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
+	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
+	flags.Var(&values.receipts, "receipt", "ordered canonical receipt as PATH@sha256:<digest>; repeat for each completed stage")
+	values.receiptPrefix = flags.String("receipt-prefix", "", "path to a digest-bound ordered receipt-prefix manifest")
+	values.receiptPrefixDigest = flags.String("receipt-prefix-digest", "", "expected SHA-256 digest of the receipt-prefix manifest")
+	return values
+}
+
+func (values *stageResumeFlags) config() (runner.StageResumeConfig, error) {
+	required := []struct{ name, value string }{
+		{"--plan", *values.planPath}, {"--contract-namespace", *values.contractNamespace}, {"--contract-name", *values.contractName},
+		{"--intent-revision", *values.intentRevision}, {"--enablement-revision", *values.enablementRevision}, {"--platform-revision", *values.platformRevision},
+		{"--execution-fixture", *values.executionFixture}, {"--infrastructure-authority", *values.infrastructureAuthority},
+		{"--management-authority", *values.managementAuthority}, {"--gitops-authority", *values.gitOpsAuthority},
+	}
+	for _, input := range required {
+		if input.value == "" {
+			return runner.StageResumeConfig{}, fmt.Errorf("%s is required", input.name)
+		}
+	}
+	providedPrefix := countNonEmpty(*values.receiptPrefix, *values.receiptPrefixDigest)
+	if providedPrefix != 0 && (providedPrefix != 2 || len(values.receipts) != 0) {
+		return runner.StageResumeConfig{}, errors.New("--receipt-prefix and --receipt-prefix-digest must be provided together and cannot be combined with --receipt")
+	}
+	receipts := make([]runner.StageReceiptSource, 0, len(values.receipts))
+	var err error
+	if providedPrefix == 2 {
+		receipts, err = runner.LoadStageReceiptPrefix(*values.receiptPrefix, *values.receiptPrefixDigest)
+		if err != nil {
+			return runner.StageResumeConfig{}, err
+		}
+	} else {
+		for _, value := range values.receipts {
+			if !stageReceiptFlagPattern.MatchString(value) {
+				return runner.StageResumeConfig{}, errors.New("receipt must use PATH@sha256:<64 lowercase hex> format")
+			}
+			separator := strings.LastIndex(value, "@sha256:")
+			receipts = append(receipts, runner.StageReceiptSource{Path: value[:separator], Digest: value[separator+1:]})
+		}
+	}
+	return runner.StageResumeConfig{
+		PlanPath: *values.planPath,
+		PlanExpected: stageplan.Expected{
+			ContractIdentity: contract.Identity{Namespace: *values.contractNamespace, Name: *values.contractName},
+			IntentRevision:   *values.intentRevision, EnablementRevision: *values.enablementRevision,
+			PlatformRevision: *values.platformRevision, ExecutionFixture: *values.executionFixture,
+			InfrastructureAuthority: *values.infrastructureAuthority, ManagementAuthority: *values.managementAuthority, GitOpsAuthority: *values.gitOpsAuthority,
+		},
+		Receipts: receipts,
+	}, nil
 }
 
 func addStageBundleFlags(flags *flag.FlagSet) *stageBundleFlags {
@@ -234,6 +311,14 @@ var inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (st
 	}, nil
 }
 
+var inspectStageResume = func(config runner.StageResumeConfig) (stageResumeInspection, error) {
+	decision, err := runner.InspectStageResume(config)
+	if err != nil {
+		return stageResumeInspection{}, err
+	}
+	return stageResumeInspection{Format: "ok147-stage-resume-inspection/v1", Decision: decision, MutationAllowed: false}, nil
+}
+
 var executeSubmissionStage = func(ctx context.Context, bundleConfig runner.SubmissionStageBundleConfig, runtimeConfig runner.SubmissionStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
 	bundle, err := runner.LoadSubmissionStageBundle(bundleConfig)
 	if err != nil {
@@ -290,6 +375,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "inspect" {
 		return runClusterStageInspect(arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "resume" {
+		return runClusterStageResume(arguments[3:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" {
 		return runClusterStageRun(ctx, arguments[3:], stdout, stderr)
 	}
@@ -302,7 +390,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -450,6 +538,30 @@ func runClusterStageInspect(arguments []string, stdout, stderr io.Writer) error 
 		return err
 	}
 	inspection, err := inspectSubmissionStage(bundleConfig)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(inspection)
+}
+
+func runClusterStageResume(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage resume", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	config, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	inspection, err := inspectStageResume(config)
 	if err != nil {
 		return err
 	}

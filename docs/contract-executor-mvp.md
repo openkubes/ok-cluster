@@ -917,6 +917,29 @@ set. It contains no dispatcher, implementation registry, credential, endpoint
 or retry policy. Therefore it can guide a later local or Job runner without
 becoming a second desired-state source or allowing a terminal plan to resume.
 
+The same cursor is now available through a generic, local-only inspection
+entrypoint:
+
+```text
+ok cluster stage resume
+  + exact plan identity
+  + explicit canonical receipt prefix
+      -> NEXT | COMPLETED | STOPPED
+```
+
+Unlike the earlier submission-specific `stage inspect`, this command does not
+require a grant or projection and can therefore select read-only stages such
+as `lifecycle-observation`. It verifies every receipt and its direct
+predecessor again before returning a decision. It has no credential, endpoint,
+ledger, stage implementation, write or cluster-contact input. An explicit
+empty prefix selects only the first stage; changed, missing, reordered or
+foreign receipts fail closed.
+
+This is the resume decision boundary, not observation execution. A later
+typed stage adapter must still prove its own authoritative evidence and append
+one canonical receipt. The command cannot turn `NEXT` into authorization or
+execute the selected stage.
+
 ## Cursor-to-grant binding
 
 Selecting a next stage is not claim authority. Before a later runner may claim
