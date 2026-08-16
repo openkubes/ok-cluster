@@ -21,7 +21,7 @@ type PlatformProfile struct {
 	IntentRevision              string                           `json:"intentRevision"`
 	PlatformRevision            string                           `json:"platformRevision"`
 	ExecutionFixture            string                           `json:"executionFixture"`
-	TargetClusterUID            string                           `json:"targetClusterUid"`
+	TargetIdentityScheme        string                           `json:"targetIdentityScheme"`
 	ArgoNamespace               string                           `json:"argoNamespace"`
 	RegistrationName            string                           `json:"registrationName"`
 	RequiredApplications        []PlatformApplicationExpectation `json:"requiredApplications"`
@@ -118,7 +118,7 @@ func EvaluatePlatformSnapshot(policy Policy, profile PlatformProfile, snapshot P
 }
 
 func ValidatePlatformProfile(profile PlatformProfile) error {
-	if profile.Format != PlatformProfileFormat || !validDigest(profile.IntentRevision) || !validDigest(profile.PlatformRevision) || !validDigest(profile.ExecutionFixture) || !validUID(profile.TargetClusterUID) {
+	if profile.Format != PlatformProfileFormat || !validDigest(profile.IntentRevision) || !validDigest(profile.PlatformRevision) || !validDigest(profile.ExecutionFixture) || profile.TargetIdentityScheme != "capi-cluster-uid/v1" {
 		return errors.New("platform profile format or revision identity is invalid")
 	}
 	if !validDNSLabel(profile.ArgoNamespace) || !validDNSLabel(profile.RegistrationName) || len(profile.RequiredApplications) == 0 || len(profile.RequiredApplications) > 20 {
@@ -156,7 +156,7 @@ func validatePlatformProfile(policy Policy, profile PlatformProfile) error {
 	if err := ValidatePlatformProfile(profile); err != nil {
 		return err
 	}
-	if profile.IntentRevision != policy.IntentRevision || profile.PlatformRevision != policy.PlatformRevision || profile.TargetClusterUID != policy.TargetClusterUID {
+	if profile.IntentRevision != policy.IntentRevision || profile.PlatformRevision != policy.PlatformRevision {
 		return errors.New("platform profile identity differs from observation policy")
 	}
 	return nil

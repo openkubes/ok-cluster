@@ -13,7 +13,7 @@ func TestPlatformCollectorReadsExactApplicationsAndComposes(t *testing.T) {
 	policy, profile, capability, getter := platformCollectorFixture(t)
 	source := &fakePlatformCapabilitySource{capability: capability}
 	collector, err := NewPlatformSourceCollector(getter, source, PlatformCollectorConfig{
-		Profile: profile, Clock: func() time.Time { return time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC) },
+		Profile: profile, TargetClusterUID: policy.TargetClusterUID, Clock: func() time.Time { return time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestPlatformCollectorRejectsRawIdentityAndMutableSource(t *testing.T) {
 			}
 			mutate(object)
 			localGetter.responses[first], _ = json.Marshal(object)
-			collector, err := NewPlatformSourceCollector(localGetter, &fakePlatformCapabilitySource{capability: localCapability}, PlatformCollectorConfig{Profile: localProfile, Clock: time.Now})
+			collector, err := NewPlatformSourceCollector(localGetter, &fakePlatformCapabilitySource{capability: localCapability}, PlatformCollectorConfig{Profile: localProfile, TargetClusterUID: policy.TargetClusterUID, Clock: time.Now})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestPlatformCollectorRedactsSourceErrorsAndDoesNotRunCapabilityEarly(t *tes
 	policy, profile, capability, getter := platformCollectorFixture(t)
 	getter.err = errors.New("secret endpoint detail")
 	source := &fakePlatformCapabilitySource{capability: capability}
-	collector, err := NewPlatformSourceCollector(getter, source, PlatformCollectorConfig{Profile: profile, Clock: time.Now})
+	collector, err := NewPlatformSourceCollector(getter, source, PlatformCollectorConfig{Profile: profile, TargetClusterUID: policy.TargetClusterUID, Clock: time.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +77,23 @@ func TestPlatformCollectorRedactsSourceErrorsAndDoesNotRunCapabilityEarly(t *tes
 	}
 	if source.calls != 0 {
 		t.Fatal("capability source ran after Application collection failed")
+	}
+}
+
+func TestPlatformCollectorBindsRuntimeTargetAfterSubmission(t *testing.T) {
+	policy, profile, capability, getter := platformCollectorFixture(t)
+	if _, err := NewPlatformSourceCollector(getter, &fakePlatformCapabilitySource{capability: capability}, PlatformCollectorConfig{Profile: profile, Clock: time.Now}); err == nil {
+		t.Fatal("platform collector accepted no runtime target")
+	}
+	collector, err := NewPlatformSourceCollector(getter, &fakePlatformCapabilitySource{capability: capability}, PlatformCollectorConfig{Profile: profile, TargetClusterUID: "different-cluster-uid", Clock: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collector.Collect(context.Background(), policy); err == nil {
+		t.Fatal("platform collector accepted a target different from the post-submission policy")
+	}
+	if len(getter.paths) != 0 {
+		t.Fatal("platform collector contacted Argo before rejecting runtime target mismatch")
 	}
 }
 

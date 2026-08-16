@@ -158,6 +158,7 @@ func TestValidatePlatformProfileRejectsMutableOrAmbiguousInputs(t *testing.T) {
 		"invalid spec digest":      func(value *PlatformProfile) { value.RequiredApplications[0].SpecDigest = "sha256:no" },
 		"unbounded capability age": func(value *PlatformProfile) { value.MaximumCapabilityAgeSeconds = 86401 },
 		"missing fixture":          func(value *PlatformProfile) { value.ExecutionFixture = "" },
+		"wrong target scheme":      func(value *PlatformProfile) { value.TargetIdentityScheme = "name/v1" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := profile
@@ -181,7 +182,7 @@ func validPlatformFixture(t *testing.T) (Policy, PlatformProfile, PlatformSnapsh
 	fixture := "sha256:" + strings.Repeat("d", 64)
 	profile := PlatformProfile{
 		Format: PlatformProfileFormat, IntentRevision: policy.IntentRevision, PlatformRevision: policy.PlatformRevision,
-		ExecutionFixture: fixture, TargetClusterUID: policy.TargetClusterUID, ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
+		ExecutionFixture: fixture, TargetIdentityScheme: "capi-cluster-uid/v1", ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
 		RequiredApplications: []PlatformApplicationExpectation{
 			{Name: "disposable-ok141-observability-core", SpecDigest: "sha256:" + strings.Repeat("1", 64)},
 			{Name: "disposable-ok141-observability-alerting", SpecDigest: "sha256:" + strings.Repeat("2", 64)},

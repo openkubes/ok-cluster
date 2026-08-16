@@ -67,6 +67,7 @@ type KubernetesPlatformObserverConfig struct {
 	ExpectedArgoAuthority string
 	Profile               observation.PlatformProfile
 	Capability            observation.PlatformCapabilitySource
+	TargetClusterUID      string
 	Clock                 func() time.Time
 }
 
@@ -203,7 +204,7 @@ func OpenKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConf
 		return nil, err
 	}
 	return observation.NewPlatformSourceCollector(reader, config.Capability, observation.PlatformCollectorConfig{
-		Profile: config.Profile, Clock: config.Clock,
+		Profile: config.Profile, TargetClusterUID: config.TargetClusterUID, Clock: config.Clock,
 	})
 }
 

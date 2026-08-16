@@ -24,7 +24,6 @@ type PlatformProfileFileConfig struct {
 	ExpectedIntentRevision   string
 	ExpectedPlatformRevision string
 	ExpectedExecutionFixture string
-	ExpectedTargetClusterUID string
 }
 
 type LoadedPlatformProfile struct {
@@ -35,7 +34,7 @@ type LoadedPlatformProfile struct {
 // LoadPlatformProfileFile reads one bounded regular strict-JSON document and
 // rejects any semantic or canonical-identity difference from its bindings.
 func LoadPlatformProfileFile(config PlatformProfileFileConfig) (LoadedPlatformProfile, error) {
-	if config.Path == "" || !platformInputDigestPattern.MatchString(config.ExpectedProfileDigest) || !platformInputDigestPattern.MatchString(config.ExpectedIntentRevision) || !platformInputDigestPattern.MatchString(config.ExpectedPlatformRevision) || !platformInputDigestPattern.MatchString(config.ExpectedExecutionFixture) || config.ExpectedTargetClusterUID == "" {
+	if config.Path == "" || !platformInputDigestPattern.MatchString(config.ExpectedProfileDigest) || !platformInputDigestPattern.MatchString(config.ExpectedIntentRevision) || !platformInputDigestPattern.MatchString(config.ExpectedPlatformRevision) || !platformInputDigestPattern.MatchString(config.ExpectedExecutionFixture) {
 		return LoadedPlatformProfile{}, errors.New("platform profile file binding is invalid")
 	}
 	raw, err := readBoundedRegular(config.Path, maximumPlatformProfileBytes)
@@ -46,7 +45,7 @@ func LoadPlatformProfileFile(config PlatformProfileFileConfig) (LoadedPlatformPr
 	if err := jsonstrict.Decode(raw, &profile); err != nil {
 		return LoadedPlatformProfile{}, errors.New("decode strict platform profile")
 	}
-	if profile.IntentRevision != config.ExpectedIntentRevision || profile.PlatformRevision != config.ExpectedPlatformRevision || profile.ExecutionFixture != config.ExpectedExecutionFixture || profile.TargetClusterUID != config.ExpectedTargetClusterUID {
+	if profile.IntentRevision != config.ExpectedIntentRevision || profile.PlatformRevision != config.ExpectedPlatformRevision || profile.ExecutionFixture != config.ExpectedExecutionFixture {
 		return LoadedPlatformProfile{}, errors.New("platform profile identity differs from verified execution input")
 	}
 	digest, err := observation.PlatformProfileDigest(profile)

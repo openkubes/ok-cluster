@@ -24,8 +24,9 @@ type PlatformCapabilitySource interface {
 }
 
 type PlatformCollectorConfig struct {
-	Profile PlatformProfile
-	Clock   func() time.Time
+	Profile          PlatformProfile
+	TargetClusterUID string
+	Clock            func() time.Time
 }
 
 type PlatformSourceCollector struct {
@@ -38,7 +39,7 @@ func NewPlatformSourceCollector(argo PlatformRawGetter, capability PlatformCapab
 	if argo == nil || capability == nil || config.Clock == nil {
 		return nil, errors.New("platform collector sources and clock are required")
 	}
-	if err := ValidatePlatformProfile(config.Profile); err != nil {
+	if err := ValidatePlatformProfile(config.Profile); err != nil || !validUID(config.TargetClusterUID) {
 		return nil, errors.New("platform collector profile is invalid")
 	}
 	return &PlatformSourceCollector{argo: argo, capability: capability, config: config}, nil
@@ -62,6 +63,9 @@ func (collector *PlatformSourceCollector) Collect(ctx context.Context, policy Po
 	if err := validatePlatformProfile(policy, collector.config.Profile); err != nil {
 		return PlatformSnapshot{}, err
 	}
+	if collector.config.TargetClusterUID != policy.TargetClusterUID {
+		return PlatformSnapshot{}, errors.New("platform collector target differs from the runtime-bound Cluster")
+	}
 	applications := make([]PlatformApplicationState, 0, len(collector.config.Profile.RequiredApplications))
 	for _, expected := range collector.config.Profile.RequiredApplications {
 		path := platformApplicationPath(collector.config.Profile.ArgoNamespace, expected.Name)
@@ -82,7 +86,7 @@ func (collector *PlatformSourceCollector) Collect(ctx context.Context, policy Po
 	}
 	return PlatformSnapshot{
 		Format: PlatformSnapshotFormat, ObservedAt: collector.config.Clock().UTC().Format(time.RFC3339Nano),
-		TargetClusterUID: collector.config.Profile.TargetClusterUID,
+		TargetClusterUID: collector.config.TargetClusterUID,
 		Applications:     applications, Capability: capability,
 	}, nil
 }

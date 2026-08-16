@@ -23,13 +23,12 @@ func TestLoadPlatformProfileFileBindsCanonicalMembership(t *testing.T) {
 	config := PlatformProfileFileConfig{
 		Path: path, ExpectedProfileDigest: digest, ExpectedIntentRevision: profile.IntentRevision,
 		ExpectedPlatformRevision: profile.PlatformRevision, ExpectedExecutionFixture: profile.ExecutionFixture,
-		ExpectedTargetClusterUID: profile.TargetClusterUID,
 	}
 	loaded, err := LoadPlatformProfileFile(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Digest != digest || loaded.Profile.TargetClusterUID != profile.TargetClusterUID {
+	if loaded.Digest != digest || loaded.Profile.TargetIdentityScheme != "capi-cluster-uid/v1" {
 		t.Fatalf("loaded Platform profile differs: %#v", loaded)
 	}
 	profile.RequiredApplications[0], profile.RequiredApplications[2] = profile.RequiredApplications[2], profile.RequiredApplications[0]
@@ -48,7 +47,6 @@ func TestLoadPlatformProfileFileRejectsMalformedOrUnboundInput(t *testing.T) {
 	base := PlatformProfileFileConfig{
 		ExpectedProfileDigest: digest, ExpectedIntentRevision: profile.IntentRevision,
 		ExpectedPlatformRevision: profile.PlatformRevision, ExpectedExecutionFixture: profile.ExecutionFixture,
-		ExpectedTargetClusterUID: profile.TargetClusterUID,
 	}
 	for name, raw := range map[string][]byte{
 		"unknown field":   append(validRaw[:len(validRaw)-1], []byte(`,"extra":true}`)...),
@@ -76,7 +74,6 @@ func TestLoadPlatformProfileFileRejectsMalformedOrUnboundInput(t *testing.T) {
 		"wrong R":       func(config *PlatformProfileFileConfig) { config.ExpectedIntentRevision = digestOf("9") },
 		"wrong P":       func(config *PlatformProfileFileConfig) { config.ExpectedPlatformRevision = digestOf("9") },
 		"wrong fixture": func(config *PlatformProfileFileConfig) { config.ExpectedExecutionFixture = digestOf("9") },
-		"wrong target":  func(config *PlatformProfileFileConfig) { config.ExpectedTargetClusterUID = "other-cluster-uid" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := base
@@ -85,6 +82,11 @@ func TestLoadPlatformProfileFileRejectsMalformedOrUnboundInput(t *testing.T) {
 				t.Fatalf("unbound Platform profile accepted or disclosed path: %v", err)
 			}
 		})
+	}
+	profile.TargetIdentityScheme = "name/v1"
+	writePlatformJSON(t, path, profile)
+	if _, err := LoadPlatformProfileFile(base); err == nil {
+		t.Fatal("invalid target identity scheme retained the old profile binding")
 	}
 }
 
@@ -185,7 +187,7 @@ func TestLoadPlatformCapabilityFileRejectsMalformedInput(t *testing.T) {
 func runnerPlatformProfile() observation.PlatformProfile {
 	return observation.PlatformProfile{
 		Format: observation.PlatformProfileFormat, IntentRevision: digestOf("a"), PlatformRevision: digestOf("b"), ExecutionFixture: digestOf("c"),
-		TargetClusterUID: "cluster-uid-disposable-ok141", ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
+		TargetIdentityScheme: "capi-cluster-uid/v1", ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
 		RequiredApplications: []observation.PlatformApplicationExpectation{
 			{Name: "disposable-ok141-observability-core", SpecDigest: digestOf("1")},
 			{Name: "disposable-ok141-observability-alerting", SpecDigest: digestOf("2")},
@@ -199,7 +201,7 @@ func runnerPlatformCapability(t *testing.T) observation.PlatformCapabilityState 
 	t.Helper()
 	profile := runnerPlatformProfile()
 	state := observation.PlatformCapabilityState{
-		Format: observation.PlatformCapabilityFormat, ObservedAt: "2026-08-16T09:55:00Z", TargetClusterUID: profile.TargetClusterUID,
+		Format: observation.PlatformCapabilityFormat, ObservedAt: "2026-08-16T09:55:00Z", TargetClusterUID: "cluster-uid-disposable-ok141",
 		IntentRevision: profile.IntentRevision, PlatformRevision: profile.PlatformRevision, ExecutionFixture: profile.ExecutionFixture,
 		ContractDigest: profile.CapabilityContractDigest, ExecutableDigest: profile.CapabilityExecutableDigest, Passed: true,
 	}
