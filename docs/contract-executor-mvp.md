@@ -1166,6 +1166,23 @@ Kubernetes or write a `HelmReleaseProxy`; the latter remains exclusively owned
 by CAAPH. Cursor/grant composition and live exact-create execution are later
 boundaries.
 
+That projection can now be composed with the verified three-receipt prefix,
+the `enablement` resume cursor and one signed `CreateEnablement` grant. The
+bundle requires `stage.enablement` to bind exactly the raw renderer artifact;
+neither a caller nor the operation can replace the HCP after verification.
+
+Opening the bundle binds the management exact-create client and durable ledger
+with two distinct credentials but performs no API request. The resulting typed
+mutator can submit only the one HCP already retained by the bundle. It rejects
+a foreign R, E, fixture, authority, stage input, object kind or mutation
+request. A partial or ambiguous API result produces redacted stopped evidence;
+an exact no-write result cannot claim stage success. Grant claim and completion
+remain crash-safe in the existing staged ledger.
+
+This checkpoint is library composition exercised with in-memory submission
+transports. It adds no CLI command, Job envelope, credential materialization,
+live Kubernetes contact, retry, rollback or cleanup.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
