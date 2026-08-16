@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test contract-executor-test contract-executor-dry-run
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -191,6 +191,16 @@ verify-cilium-chart: ## Offline-verify an existing pinned Cilium chart
 cilium-chart-tool-test: ## Offline-test Cilium acquisition/cache guards
 	@PYTHONDONTWRITEBYTECODE=1 \
 		python3 $(SCRIPT_DIR)/tests/cilium_chart_tool_test.py
+
+# ── bounded Contract Executor MVP (OK-147) ──────────────────────────────────
+contract-executor-test: ## Test the side-effect-free Go Contract Executor core
+	@go test ./cmd/ok ./internal/contract
+
+contract-executor-dry-run: ## Reproduce the OK-141 R and emit a non-mutating plan
+	@go run ./cmd/ok cluster create \
+		--contract internal/contract/testdata/ok141-contract-v5.yaml \
+		--schema internal/contract/testdata/ok141-contract-v3.schema.json \
+		--dry-run
 
 # OK-125 candidate evidence is intentionally outside the ordinary TYPE allowlist.
 # It consumes ok-linux profile truth and never applies resources.
@@ -1069,6 +1079,8 @@ help:
 	@echo "── All targets ──────────────────────────────────────────────────────"
 	@echo "  make prepare-cilium-chart [CILIUM_CHART_SOURCE=<predownloaded.tgz>]"
 	@echo "  make verify-cilium-chart"
+	@echo "  make contract-executor-test          # OK-147: offline Go core tests"
+	@echo "  make contract-executor-dry-run       # OK-147: immutable plan; no cluster contact"
 	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"

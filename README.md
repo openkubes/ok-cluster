@@ -26,6 +26,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Blue/Green upgrades** — rolling Kubernetes version upgrades with workload migration
 - **GitOps-ready** — all cluster state is declarative YAML, rendered from templates
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
+- **Bounded Contract Executor MVP** — a shared Go core for local CLI and future
+  short-lived `ok-mgmt` Jobs; the first checkpoint is deliberately dry-run-only
+  and reproduces the OK-141 semantic contract revision
 
 ---
 
