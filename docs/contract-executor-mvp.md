@@ -1948,6 +1948,14 @@ This checkpoint adds no Job, credential issuance, infrastructure mutation,
 repair or controller loop; command tests inject the execution boundary and
 make no Kubernetes request.
 
+The first packaging boundary now emits one immutable public input ConfigMap.
+It contains exactly the staged plan, the four canonical receipts, their
+digest-bound prefix manifest and the immutable Network profile. It is built
+only after the bundle and profile have been verified both before and after
+file capture. The private workload-authority binding, API endpoint, token and
+CA are intentionally absent and remain inputs to a later Secret/runtime
+boundary. This step creates no Kubernetes object and performs no API request.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
