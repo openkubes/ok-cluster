@@ -107,6 +107,30 @@ func (grant VerifiedStageGrant) ConsumptionBinding() (StageConsumptionBinding, e
 	return grant.binding, nil
 }
 
+// BindStageGrant rechecks a verified grant against the exact next mutating
+// stage and its verified direct predecessor receipts before ledger claim.
+func BindStageGrant(grant VerifiedStageGrant, plan stageplan.Binding, expectedStageID string, expectedPredecessors []stagereceipt.Verified) (StageConsumptionBinding, error) {
+	binding, err := grant.ConsumptionBinding()
+	if err != nil {
+		return StageConsumptionBinding{}, err
+	}
+	stage, stageDigest, err := plan.Stage(expectedStageID)
+	if err != nil {
+		return StageConsumptionBinding{}, err
+	}
+	if !stageplan.IsMutating(stage) {
+		return StageConsumptionBinding{}, errors.New("read-only stage cannot bind a mutation grant")
+	}
+	_, predecessorDigest, err := verifiedStagePredecessors(expectedPredecessors, stage.Requires, plan.PlanDigest)
+	if err != nil {
+		return StageConsumptionBinding{}, err
+	}
+	if binding.PlanDigest != plan.PlanDigest || binding.StageID != stage.ID || binding.StageDigest != stageDigest || binding.Operation != stage.GrantOperation || binding.Authority != stage.Authority || binding.PredecessorDigest != predecessorDigest || binding.ContractRevision != plan.IntentRevision {
+		return StageConsumptionBinding{}, errors.New("verified stage grant differs from the selected stage cursor")
+	}
+	return binding, nil
+}
+
 // VerifyStage verifies a signature and binds it to one exact mutating stage
 // from an already verified staged execution plan.
 func VerifyStage(raw, publicKeyRaw []byte, plan stageplan.Binding, expectedStageID string, expectedPredecessors []stagereceipt.Verified, at time.Time) (VerifiedStageGrant, error) {
@@ -222,34 +246,50 @@ func verifyStagePredecessors(payload []StagePredecessor, expected []stagereceipt
 	if payload == nil || expected == nil || len(payload) != len(required) || len(expected) != len(required) {
 		return "", errors.New("stage authorization predecessor set is incomplete")
 	}
+	bindings, predecessorDigest, err := verifiedStagePredecessors(expected, required, planDigest)
+	if err != nil {
+		return "", err
+	}
+	for index := range bindings {
+		if payload[index] != bindings[index] || !stageDigestPattern.MatchString(payload[index].OutcomeDigest) {
+			return "", errors.New("stage authorization predecessor evidence differs")
+		}
+	}
+	return predecessorDigest, nil
+}
+
+func verifiedStagePredecessors(expected []stagereceipt.Verified, required []string, planDigest string) ([]StagePredecessor, string, error) {
+	if expected == nil || len(expected) != len(required) {
+		return nil, "", errors.New("stage authorization predecessor set is incomplete")
+	}
 	bindings := make([]StagePredecessor, len(expected))
 	for index, stageID := range required {
 		receipt, err := expected[index].Receipt()
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 		receiptDigest, err := expected[index].Digest()
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 		bindings[index] = StagePredecessor{StageID: receipt.StageID, OutcomeDigest: receiptDigest}
-		if receipt.PlanDigest != planDigest || receipt.State != "SUCCEEDED" || bindings[index].StageID != stageID || payload[index] != bindings[index] || !stageDigestPattern.MatchString(payload[index].OutcomeDigest) {
-			return "", errors.New("stage authorization predecessor evidence differs")
+		if receipt.PlanDigest != planDigest || receipt.State != "SUCCEEDED" || bindings[index].StageID != stageID || !stageDigestPattern.MatchString(receiptDigest) {
+			return nil, "", errors.New("stage authorization predecessor evidence differs")
 		}
 	}
 	raw, err := json.Marshal(bindings)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return "", err
+		return nil, "", err
 	}
 	canonical, err := contract.JCS(value)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
-	return digest.SHA256(canonical), nil
+	return bindings, digest.SHA256(canonical), nil
 }

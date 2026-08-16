@@ -914,6 +914,19 @@ set. It contains no dispatcher, implementation registry, credential, endpoint
 or retry policy. Therefore it can guide a later local or Job runner without
 becoming a second desired-state source or allowing a terminal plan to resume.
 
+## Cursor-to-grant binding
+
+Selecting a next stage is not claim authority. Before a later runner may claim
+a mutating ledger slot, the verified single-use grant can now be rebound to the
+cursor's exact plan digest, stage identity and digest, operation, authority,
+Contract revision and verified direct-predecessor receipt digest. A read-only
+stage can never accept such a grant, and a grant verified for another stage or
+another predecessor outcome fails closed.
+
+The ledger still owns the final claim-time validity-window and single-use
+checks. This checkpoint adds no stage implementation, dispatcher, mutation,
+credential handling, cluster contact or CLI/Job activation.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

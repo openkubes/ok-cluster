@@ -120,6 +120,86 @@ func TestVerifyStageRejectsTamperingAndNonStrictEnvelope(t *testing.T) {
 	}
 }
 
+func TestBindStageGrantAcceptsExactCursorStage(t *testing.T) {
+	plan := stagePlanFixture(t)
+	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	predecessors := stagePredecessorReceipts(t, plan, "enablement", at)
+	payload := stagePayloadFixture(t, plan, "enablement", at)
+	grant, err := VerifyStage(
+		signStage(t, payload, publicKey, privateKey),
+		[]byte(base64.StdEncoding.EncodeToString(publicKey)),
+		plan,
+		"enablement",
+		predecessors,
+		at,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := BindStageGrant(grant, plan, "enablement", predecessors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.StageID != "enablement" || binding.PlanDigest != plan.PlanDigest || binding.PredecessorDigest != grant.Receipt().PredecessorDigest {
+		t.Fatalf("unexpected cursor binding: %#v", binding)
+	}
+}
+
+func TestBindStageGrantRejectsCrossStageAndSubstitutedPredecessor(t *testing.T) {
+	plan := stagePlanFixture(t)
+	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	predecessors := stagePredecessorReceipts(t, plan, "enablement", at)
+	payload := stagePayloadFixture(t, plan, "enablement", at)
+	grant, err := VerifyStage(
+		signStage(t, payload, publicKey, privateKey),
+		[]byte(base64.StdEncoding.EncodeToString(publicKey)),
+		plan,
+		"enablement",
+		predecessors,
+		at,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BindStageGrant(grant, plan, "platform-applications", stagePredecessorReceipts(t, plan, "platform-applications", at)); err == nil {
+		t.Fatal("enablement grant was rebound to the Platform cursor stage")
+	}
+	lifecyclePredecessors := stagePredecessorReceipts(t, plan, "lifecycle-observation", at)
+	alternative, err := stagereceipt.New(plan, "lifecycle-observation", lifecyclePredecessors, "SUCCEEDED", "NOT_APPLICABLE", "", authSHA("d"), at.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BindStageGrant(grant, plan, "enablement", []stagereceipt.Verified{alternative}); err == nil {
+		t.Fatal("grant was rebound to a substituted predecessor receipt")
+	}
+}
+
+func TestBindStageGrantRejectsUnverifiedGrantAndReadOnlyStage(t *testing.T) {
+	plan := stagePlanFixture(t)
+	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	if _, err := BindStageGrant(VerifiedStageGrant{}, plan, "enablement", stagePredecessorReceipts(t, plan, "enablement", at)); err == nil {
+		t.Fatal("unverified stage grant was accepted")
+	}
+	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	predecessors := stagePredecessorReceipts(t, plan, "enablement", at)
+	grant, err := VerifyStage(
+		signStage(t, stagePayloadFixture(t, plan, "enablement", at), publicKey, privateKey),
+		[]byte(base64.StdEncoding.EncodeToString(publicKey)),
+		plan,
+		"enablement",
+		predecessors,
+		at,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BindStageGrant(grant, plan, "lifecycle-observation", stagePredecessorReceipts(t, plan, "lifecycle-observation", at)); err == nil {
+		t.Fatal("read-only cursor stage accepted a mutation grant")
+	}
+}
+
 func stagePayloadFixture(t *testing.T, plan stageplan.Binding, stageID string, at time.Time) StagePayload {
 	t.Helper()
 	stage, stageDigest, err := plan.Stage(stageID)
