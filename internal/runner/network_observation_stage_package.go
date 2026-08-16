@@ -52,6 +52,11 @@ type VerifiedNetworkObservationStagePackage struct {
 	ledgerCredential     string
 	managementCredential string
 	workloadCredential   string
+	managementAuthority  string
+	workloadAuthority    string
+	intentRevision       string
+	workloadEndpoint     string
+	workloadCABundle     string
 	verified             bool
 }
 
@@ -117,7 +122,11 @@ func BuildNetworkObservationStagePackage(config NetworkObservationStagePackageCo
 	return VerifiedNetworkObservationStagePackage{
 		raw: packageRaw, receipt: receipt, ledgerCredential: config.LedgerCredentialSecret,
 		managementCredential: config.ManagementCredentialSecret, workloadCredential: config.WorkloadCredentialSecret,
-		verified: true,
+		managementAuthority: bundle.plan.Authorities.Management,
+		workloadAuthority:   digest.SHA256([]byte(binding.TargetClusterUID)),
+		intentRevision:      binding.IntentRevision, workloadEndpoint: binding.Endpoint,
+		workloadCABundle: binding.CABundleDigest,
+		verified:         true,
 	}, nil
 }
 
@@ -129,7 +138,7 @@ func (packaged VerifiedNetworkObservationStagePackage) Bytes() ([]byte, error) {
 }
 
 func (packaged VerifiedNetworkObservationStagePackage) Receipt() (NetworkObservationStagePackageReceipt, error) {
-	if !packaged.verified || packaged.receipt.State != "VERIFIED" || digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest || packaged.ledgerCredential == "" || packaged.managementCredential == "" || packaged.workloadCredential == "" || packaged.ledgerCredential == packaged.managementCredential || packaged.ledgerCredential == packaged.workloadCredential || packaged.managementCredential == packaged.workloadCredential {
+	if !packaged.verified || packaged.receipt.State != "VERIFIED" || digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest || packaged.ledgerCredential == "" || packaged.managementCredential == "" || packaged.workloadCredential == "" || packaged.ledgerCredential == packaged.managementCredential || packaged.ledgerCredential == packaged.workloadCredential || packaged.managementCredential == packaged.workloadCredential || packaged.managementAuthority == "" || !stageReceiptPrefixDigestPattern.MatchString(packaged.workloadAuthority) || !stageReceiptPrefixDigestPattern.MatchString(packaged.intentRevision) || packaged.workloadEndpoint == "" || !stageReceiptPrefixDigestPattern.MatchString(packaged.workloadCABundle) {
 		return NetworkObservationStagePackageReceipt{}, errors.New("network observation package was not produced by verification")
 	}
 	receipt := packaged.receipt
