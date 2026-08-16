@@ -270,8 +270,12 @@ func cloneStages(stages []Stage) []Stage {
 	result := make([]Stage, len(stages))
 	for index, stage := range stages {
 		result[index] = stage
-		result[index].Requires = append([]string(nil), stage.Requires...)
-		result[index].Inputs = append([]Input(nil), stage.Inputs...)
+		if stage.Requires != nil {
+			result[index].Requires = append([]string{}, stage.Requires...)
+		}
+		if stage.Inputs != nil {
+			result[index].Inputs = append([]Input{}, stage.Inputs...)
+		}
 	}
 	return result
 }
@@ -314,7 +318,7 @@ func (binding Binding) Stage(id string) (Stage, string, error) {
 		return Stage{}, "", errors.New("verified staged execution binding is required")
 	}
 	if binding.ContractIdentity != binding.verifiedIdentity || [4]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities {
-		return Stage{}, "", errors.New("staged execution binding changed after verification")
+		return Stage{}, "", errors.New("staged execution top-level binding changed after verification")
 	}
 	if err := validateStages(binding.Stages); err != nil {
 		return Stage{}, "", fmt.Errorf("revalidate staged execution binding: %w", err)
@@ -323,7 +327,7 @@ func (binding Binding) Stage(id string) (Stage, string, error) {
 		if stage.ID == id {
 			stageDigest, err := canonicalDigest(stage)
 			if err != nil || stageDigest != binding.stageDigests[id] {
-				return Stage{}, "", errors.New("staged execution binding changed after verification")
+				return Stage{}, "", errors.New("staged execution stage binding changed after verification")
 			}
 			return cloneStages([]Stage{stage})[0], stageDigest, nil
 		}
