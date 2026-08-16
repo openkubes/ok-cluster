@@ -1992,6 +1992,14 @@ existing output path and validates all semantic digests and polling bounds
 before invoking the packager. Its tests inject package construction, so no
 private runtime file or Kubernetes API is read.
 
+The package now also produces a tokenless offline installation plan for its
+three public objects. It re-decodes the sealed package, verifies component and
+per-object digests, enforces ConfigMap → NetworkPolicy → Job order, checks the
+shared run identity, tokenless runtime ServiceAccount, management-authority
+argument and exact three-Secret volume geometry (including `binding.json`
+only on the workload credential). The plan exposes only GET/POST paths and
+object digests and grants no mutation or credential access.
+
 The next offline boundary materializes three pairwise-distinct, immutable
 credential Secrets from independently bound short-lived TokenRequest results:
 one ledger writer and one management reader from the management authority,
