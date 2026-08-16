@@ -969,6 +969,21 @@ Malformed or foreign receipts stop indeterminately rather than manufacturing a
 stage outcome. Tests use a fake plane submitter: Kubernetes credentials and the
 live client are not yet composed into the staged runner path.
 
+## Runtime composition for one submission stage
+
+The runner package can now construct one staged submission operation from an
+explicit ledger credential, one explicit write-authority credential, the
+verified staged plan and the already verified projection plan. The selected
+stage determines exactly one expected authority: infrastructure for provider
+prerequisites or management for Cluster lifecycle. Ledger and writer tokens
+must be distinct even when both APIs are served by `ok-mgmt`.
+
+Construction reads bounded token and CA files and creates redirect-denying TLS
+clients, but makes no API request. The returned `execution.StagedOperation` is
+environment-neutral: the same value can be invoked by a later local CLI path or
+ephemeral Job path. Invocation, artifact loading, cursor/grant loading and CLI
+activation remain outside this checkpoint.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
