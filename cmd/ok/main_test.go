@@ -348,6 +348,101 @@ func TestStageObserveLifecycleEmitsPersistedTerminalReceipt(t *testing.T) {
 	}
 }
 
+func TestStageObserveNetworkRequiresExplicitExecutionAndBindsRuntime(t *testing.T) {
+	previous := executeNetworkObservationStage
+	defer func() { executeNetworkObservationStage = previous }()
+	var capturedBundle runner.StageResumeConfig
+	var capturedRuntime runner.NetworkObservationStageRuntimeConfig
+	var capturedContext context.Context
+	executeNetworkObservationStage = func(ctx context.Context, bundle runner.StageResumeConfig, runtime runner.NetworkObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		capturedContext, capturedBundle, capturedRuntime = ctx, bundle, runtime
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat, State: "COMPLETED_SUCCEEDED",
+			PlanDigest: testSHA("9"), StageID: "network-observation", StageReceiptDigest: testSHA("8"),
+		}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageObserveNetworkArguments(), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if capturedBundle.PlanPath != "/tmp/plan.json" || len(capturedBundle.Receipts) != 4 {
+		t.Fatalf("unexpected network observation bundle: %#v", capturedBundle)
+	}
+	if capturedRuntime.Ledger.Namespace != ledgerNamespace || capturedRuntime.Management.AuthorityIdentity != "" || capturedRuntime.Workload.ExpectedBindingDigest != testSHA("4") || capturedRuntime.ExpectedNetworkProfileDigest != testSHA("5") {
+		t.Fatalf("unexpected network observation runtime: %#v", capturedRuntime)
+	}
+	if capturedRuntime.PollInterval != 15*time.Second || capturedRuntime.PollTimeout != 5*time.Minute || capturedRuntime.Clock == nil || capturedRuntime.Wait == nil {
+		t.Fatalf("bounded network observation timing differs: %#v", capturedRuntime)
+	}
+	deadline, bounded := capturedContext.Deadline()
+	remaining := time.Until(deadline)
+	if !bounded || remaining > 6*time.Minute || remaining < 5*time.Minute {
+		t.Fatalf("network observation context is not bounded: %s %t", deadline, bounded)
+	}
+	var receipt execution.ObservationStageRunReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "COMPLETED_SUCCEEDED" || receipt.StageID != "network-observation" {
+		t.Fatalf("unexpected network observation receipt: %#v", receipt)
+	}
+}
+
+func TestStageObserveNetworkFailsClosedBeforeExecution(t *testing.T) {
+	previous := executeNetworkObservationStage
+	defer func() { executeNetworkObservationStage = previous }()
+	calls := 0
+	executeNetworkObservationStage = func(context.Context, runner.StageResumeConfig, runner.NetworkObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		calls++
+		return execution.ObservationStageRunReceipt{}, nil
+	}
+	valid := stageObserveNetworkArguments()
+	for name, arguments := range map[string][]string{
+		"missing execute":          removeArgument(valid, "--execute"),
+		"missing workload binding": removeArgumentWithValue(valid, "--workload-binding"),
+		"bad binding digest":       replaceArgument(valid, "--workload-binding-digest", "sha256:bad"),
+		"missing profile":          removeArgumentWithValue(valid, "--network-profile"),
+		"bad profile digest":       replaceArgument(valid, "--network-profile-digest", "sha256:bad"),
+		"missing poll timeout":     removeArgumentWithValue(valid, "--poll-timeout"),
+		"too frequent":             replaceArgument(valid, "--poll-interval", "500ms"),
+		"interval exceeds timeout": replaceArgument(valid, "--poll-interval", "6m"),
+		"too long":                 replaceArgument(valid, "--poll-timeout", "7h"),
+		"positional":               append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe network observation input was accepted: err=%v stdout=%s", err, stdout.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("network observation execution was reached %d times for invalid input", calls)
+	}
+}
+
+func TestStageObserveNetworkEmitsPersistedTerminalReceipt(t *testing.T) {
+	previous := executeNetworkObservationStage
+	defer func() { executeNetworkObservationStage = previous }()
+	executeNetworkObservationStage = func(context.Context, runner.StageResumeConfig, runner.NetworkObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat, State: "COMPLETED_STOPPED",
+			PlanDigest: testSHA("9"), StageID: "network-observation", StageReceiptDigest: testSHA("8"),
+		}, errors.New("bounded observation stopped")
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageObserveNetworkArguments(), &stdout, &stderr); err == nil {
+		t.Fatal("terminal network observation returned success")
+	}
+	var receipt execution.ObservationStageRunReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "COMPLETED_STOPPED" || receipt.StageReceiptDigest == "" {
+		t.Fatalf("persisted terminal network observation receipt was lost: %#v", receipt)
+	}
+}
+
 func TestStageObserveLifecyclePackageWritesVerifiedOfflineArtifact(t *testing.T) {
 	previous := materializeLifecycleObservationStagePackage
 	defer func() { materializeLifecycleObservationStagePackage = previous }()
@@ -1077,6 +1172,24 @@ func stageObserveLifecycleArguments() []string {
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
 		"--management-api-endpoint", "https://192.0.2.12:6443", "--management-token-file", "/tmp/management-observer-token", "--management-ca-file", "/tmp/management-ca",
+		"--poll-interval", "15s", "--poll-timeout", "5m",
+	)
+}
+
+func stageObserveNetworkArguments() []string {
+	arguments := stageResumeArguments()
+	arguments = append([]string{"cluster", "stage", "observe", "network"}, arguments[3:]...)
+	return append(arguments,
+		"--receipt", "/tmp/provider.json@"+testSHA("1"),
+		"--receipt", "/tmp/lifecycle.json@"+testSHA("2"),
+		"--receipt", "/tmp/lifecycle-observation.json@"+testSHA("3"),
+		"--receipt", "/tmp/enablement.json@"+testSHA("4"),
+		"--execute",
+		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
+		"--management-api-endpoint", "https://192.0.2.12:6443", "--management-token-file", "/tmp/management-observer-token", "--management-ca-file", "/tmp/management-ca",
+		"--workload-binding", "/tmp/workload-binding.json", "--workload-binding-digest", testSHA("4"),
+		"--workload-token-file", "/tmp/workload-observer-token", "--workload-ca-file", "/tmp/workload-ca",
+		"--network-profile", "/tmp/network-profile.json", "--network-profile-digest", testSHA("5"),
 		"--poll-interval", "15s", "--poll-timeout", "5m",
 	)
 }
