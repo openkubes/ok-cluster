@@ -793,6 +793,28 @@ This checkpoint still performs no Kubernetes request. Exact absence/create,
 UID/resourceVersion observation, service-proxy checks and guarded cleanup will
 consume this generated fixture in later transport checkpoints.
 
+## Exact synthetic fixture create and cleanup client
+
+The generated fixture now feeds a dedicated workload-cluster client frozen to
+one runtime Cluster UID. The client accepts no manifests, names or paths at
+execution time. Before its first mutation it performs exact object GETs for
+the complete four-object fixture; any existing object or uncertain response
+stops with zero writes. Only after all four are absent does it issue the four
+fixed collection POSTs in fixture order. A redacted receipt preserves the
+exact successfully created prefix if a later create fails.
+
+Synthetic cleanup accepts only a receipt for the same fixture digest and
+created prefix. It processes that prefix in reverse order, re-reads each exact
+object, verifies the original UID and complete desired subset, and uses the
+current resourceVersion plus UID as Kubernetes DeleteOptions preconditions.
+Deletion is Foreground and any first error stops without retry. Redirects are
+denied, responses are bounded JSON, credentials are never included in errors,
+and no list, watch, discovery, apply, update, patch or force-delete path exists.
+
+The implementation has so far been exercised only against an in-memory HTTP
+transport. Opening credentials and invoking it against a live workload cluster
+remain later integration steps.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
