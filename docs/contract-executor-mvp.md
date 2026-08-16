@@ -984,6 +984,18 @@ environment-neutral: the same value can be invoked by a later local CLI path or
 ephemeral Job path. Invocation, artifact loading, cursor/grant loading and CLI
 activation remain outside this checkpoint.
 
+## Bounded stage-authorization loading
+
+A signed per-stage grant and its trusted Ed25519 public key can now be loaded
+through one shared file boundary before verification. Both inputs must be
+non-empty regular non-symlink files within separate size limits; source paths
+are neither retained nor disclosed by loader errors. The resulting grant is
+identical to in-memory `VerifyStage` output and remains bound to the exact plan,
+cursor stage, predecessor receipts and evaluation time.
+
+This loader reads and verifies only. It does not consume the grant, construct a
+writer, inspect the ledger, contact Kubernetes or activate a CLI command.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
