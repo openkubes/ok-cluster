@@ -69,7 +69,7 @@ func New(plan stageplan.Binding, stageID string, predecessors []Verified, state,
 	if err != nil {
 		return Verified{}, err
 	}
-	links, err := verifiedLinks(plan, stage, predecessors)
+	links, err := verifiedLinks(plan, stage, predecessors, completedAt)
 	if err != nil {
 		return Verified{}, err
 	}
@@ -166,7 +166,11 @@ func verifyReceipt(receipt Receipt, plan stageplan.Binding, predecessors []Verif
 	if receipt.StageOrder != stage.Order || receipt.StageDigest != stageDigest || receipt.Kind != stage.Kind || receipt.Authority != stage.Authority || receipt.Operation != stage.GrantOperation {
 		return Verified{}, errors.New("stage receipt does not bind the exact stage")
 	}
-	expectedLinks, err := verifiedLinks(plan, stage, predecessors)
+	completedAt, err := time.Parse(time.RFC3339Nano, receipt.CompletedAt)
+	if err != nil {
+		return Verified{}, errors.New("stage receipt completion time is invalid")
+	}
+	expectedLinks, err := verifiedLinks(plan, stage, predecessors, completedAt)
 	if err != nil {
 		return Verified{}, err
 	}
@@ -186,9 +190,6 @@ func verifyReceipt(receipt Receipt, plan stageplan.Binding, predecessors []Verif
 	} else if receipt.MutationState != "NOT_APPLICABLE" || receipt.OperationOutcomeDigest != "" {
 		return Verified{}, errors.New("read-only stage receipt contains mutation state")
 	}
-	if _, err := time.Parse(time.RFC3339Nano, receipt.CompletedAt); err != nil {
-		return Verified{}, errors.New("stage receipt completion time is invalid")
-	}
 	raw, receiptDigest, err := canonicalReceipt(receipt)
 	if err != nil {
 		return Verified{}, err
@@ -196,7 +197,7 @@ func verifyReceipt(receipt Receipt, plan stageplan.Binding, predecessors []Verif
 	return Verified{receipt: receipt, digest: receiptDigest, raw: raw, verified: true}, nil
 }
 
-func verifiedLinks(plan stageplan.Binding, stage stageplan.Stage, predecessors []Verified) ([]Predecessor, error) {
+func verifiedLinks(plan stageplan.Binding, stage stageplan.Stage, predecessors []Verified, completedAt time.Time) ([]Predecessor, error) {
 	if predecessors == nil || len(predecessors) != len(stage.Requires) {
 		return nil, errors.New("stage receipt predecessor set is incomplete")
 	}
@@ -212,6 +213,10 @@ func verifiedLinks(plan stageplan.Binding, stage stageplan.Stage, predecessors [
 		}
 		if receipt.PlanDigest != plan.PlanDigest || receipt.StageID != stage.Requires[index] || receipt.State != "SUCCEEDED" || receipt.StageOrder >= stage.Order {
 			return nil, errors.New("stage receipt predecessor is foreign, unsuccessful or out of order")
+		}
+		predecessorCompletedAt, err := time.Parse(time.RFC3339Nano, receipt.CompletedAt)
+		if err != nil || completedAt.Before(predecessorCompletedAt) {
+			return nil, errors.New("stage receipt completion precedes its predecessor")
 		}
 		links[index] = Predecessor{StageID: receipt.StageID, ReceiptDigest: predecessorDigest}
 	}
