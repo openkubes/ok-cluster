@@ -86,7 +86,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   `HelmChartProxy`; it neither renders Helm nor writes the controller-owned
   `HelmReleaseProxy`. A distinct offline package now composes the immutable
   eight-key input ConfigMap with a tokenless, non-retrying Job and a deny-all
-  NetworkPolicy that permits only the exact management API endpoint.
+  NetworkPolicy that permits only the exact management API endpoint. The
+  package is emitted locally with `ok cluster stage run enablement package`.
 
 ---
 

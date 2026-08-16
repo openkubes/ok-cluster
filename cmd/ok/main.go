@@ -65,6 +65,19 @@ var materializeLifecycleObservationStagePackage = func(config runner.LifecycleOb
 	return raw, receipt, err
 }
 
+var materializeEnablementStagePackage = func(config runner.EnablementStagePackageConfig) ([]byte, runner.EnablementStagePackageReceipt, error) {
+	packaged, err := runner.BuildEnablementStagePackage(config)
+	if err != nil {
+		return nil, runner.EnablementStagePackageReceipt{}, err
+	}
+	raw, err := packaged.Bytes()
+	if err != nil {
+		return nil, runner.EnablementStagePackageReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	return raw, receipt, err
+}
+
 var prepareSubmissionStageLaunch = func(config runner.SubmissionStageLaunchMaterialConfig) (stageLaunchPreparation, error) {
 	material, err := runner.BuildSubmissionStageLaunchMaterial(config)
 	if err != nil {
@@ -475,6 +488,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "lifecycle" {
 		return runClusterStageObserveLifecycle(ctx, arguments[4:], stdout, stderr)
 	}
+	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "enablement" && arguments[4] == "package" {
+		return runClusterStageRunEnablementPackage(arguments[5:], stdout, stderr)
+	}
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "enablement" {
 		return runClusterStageRunEnablement(ctx, arguments[4:], stdout, stderr)
 	}
@@ -490,7 +506,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run enablement package ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -1097,6 +1113,83 @@ func runClusterStageRunEnablement(ctx context.Context, arguments []string, stdou
 		}
 	}
 	return runErr
+}
+
+func runClusterStageRunEnablementPackage(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run enablement package", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
+	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
+	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
+	artifactPath := flags.String("enablement-artifact", "", "path to the exact externally rendered HelmChartProxy")
+	objectName := flags.String("helmchartproxy-name", "", "independently expected HelmChartProxy name")
+	jobTemplate := flags.String("job-template", "", "path to the bounded enablement Job template")
+	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	output := flags.String("output", "", "new local file for the verified enablement package")
+	runID := flags.String("run-id", "", "bounded OK-147 enablement Job identity")
+	imageDigest := flags.String("image", "", "digest-pinned ok image")
+	inputConfigMap := flags.String("input-configmap", "", "immutable enablement input ConfigMap name")
+	ledgerAPIURL := flags.String("ledger-api-url", "", "exact management-ledger HTTPS IP endpoint")
+	ledgerAPICIDR := flags.String("ledger-api-cidr", "", "single-address management-ledger CIDR")
+	ledgerCredentialSecret := flags.String("ledger-credential-secret", "", "externally materialized ledger credential Secret name")
+	managementAPIURL := flags.String("management-api-url", "", "exact management-writer HTTPS IP endpoint")
+	managementAPICIDR := flags.String("management-api-cidr", "", "single-address management-writer CIDR")
+	managementCredentialSecret := flags.String("management-credential-secret", "", "externally materialized management-writer credential Secret name")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	resume, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--grant", *grantPath}, {"--grant-key", *grantKeyPath}, {"--evaluation-time", *evaluationTime},
+		{"--enablement-artifact", *artifactPath}, {"--helmchartproxy-name", *objectName},
+		{"--job-template", *jobTemplate}, {"--job-template-digest", *jobTemplateDigest}, {"--output", *output},
+		{"--run-id", *runID}, {"--image", *imageDigest}, {"--input-configmap", *inputConfigMap},
+		{"--ledger-api-url", *ledgerAPIURL}, {"--ledger-api-cidr", *ledgerAPICIDR}, {"--ledger-credential-secret", *ledgerCredentialSecret},
+		{"--management-api-url", *managementAPIURL}, {"--management-api-cidr", *managementAPICIDR}, {"--management-credential-secret", *managementCredentialSecret},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	at, err := time.Parse(time.RFC3339, *evaluationTime)
+	if err != nil {
+		return fmt.Errorf("parse evaluation time: %w", err)
+	}
+	template, err := readBoundedLocalFile(*jobTemplate, 1024*1024)
+	if err != nil {
+		return fmt.Errorf("read enablement Job template: %w", err)
+	}
+	raw, receipt, err := materializeEnablementStagePackage(runner.EnablementStagePackageConfig{
+		Bundle: runner.EnablementStageBundleConfig{
+			PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
+			GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at, ArtifactPath: *artifactPath,
+			ExpectedObject: projection.ResourceIdentity{
+				APIVersion: "addons.cluster.x-k8s.io/v1alpha1", Kind: "HelmChartProxy",
+				Namespace: resume.PlanExpected.ContractIdentity.Namespace, Name: *objectName,
+			},
+		},
+		JobTemplate: template, JobTemplateDigest: *jobTemplateDigest,
+		RunID: *runID, ImageDigest: *imageDigest, InputConfigMap: *inputConfigMap, HelmChartProxyName: *objectName,
+		LedgerAPIURL: *ledgerAPIURL, LedgerAPICIDR: *ledgerAPICIDR, LedgerCredentialSecret: *ledgerCredentialSecret,
+		ManagementAPIURL: *managementAPIURL, ManagementAPICIDR: *managementAPICIDR, ManagementCredentialSecret: *managementCredentialSecret,
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeNewLocalFile(*output, raw); err != nil {
+		return fmt.Errorf("write enablement stage package: %w", err)
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(receipt)
 }
 
 func runClusterStagePackage(arguments []string, stdout, stderr io.Writer) error {

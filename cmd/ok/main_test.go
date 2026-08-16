@@ -541,6 +541,81 @@ func TestEnablementStageRunFailsClosedBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestEnablementStagePackageWritesVerifiedOfflineArtifact(t *testing.T) {
+	previous := materializeEnablementStagePackage
+	defer func() { materializeEnablementStagePackage = previous }()
+	var captured runner.EnablementStagePackageConfig
+	materializeEnablementStagePackage = func(config runner.EnablementStagePackageConfig) ([]byte, runner.EnablementStagePackageReceipt, error) {
+		captured = config
+		return []byte("verified-enablement-package\n"), runner.EnablementStagePackageReceipt{
+			Format: runner.EnablementStagePackageFormat, State: "VERIFIED", StageID: "enablement",
+			PackageDigest: testSHA("1"), InputConfigMapDigest: testSHA("2"), ReceiptPrefixDigest: testSHA("3"), EnablementDigest: testSHA("4"),
+			JobTemplateDigest: testSHA("5"), JobEnvelopeDigest: testSHA("6"), ObjectKinds: []string{"ConfigMap", "NetworkPolicy", "Job"},
+			AuthorizationState: "VERIFIED", MutationAllowed: false,
+		}, nil
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "enablement-job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-enablement-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "enablement-package.yaml")
+	arguments := enablementStagePackageArguments(template, output)
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Bundle.PlanPath != "/tmp/plan.json" || len(captured.Bundle.Receipts) != 3 || captured.RunID != "ok147-enablement-20260816-01" || captured.HelmChartProxyName != "disposable-ok147-cilium" {
+		t.Fatalf("unexpected enablement package config: %#v", captured)
+	}
+	if string(captured.JobTemplate) != "bounded-enablement-template" || captured.JobTemplateDigest != digest.SHA256([]byte("bounded-enablement-template")) || captured.LedgerCredentialSecret == captured.ManagementCredentialSecret {
+		t.Fatalf("enablement template or credentials were not bound: %#v", captured)
+	}
+	written, err := os.ReadFile(output)
+	if err != nil || string(written) != "verified-enablement-package\n" {
+		t.Fatalf("unexpected enablement package: %q %v", written, err)
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("enablement package mode is not 0600: %v %v", info, err)
+	}
+	var receipt runner.EnablementStagePackageReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.AuthorizationState != "VERIFIED" || receipt.MutationAllowed {
+		t.Fatalf("unsafe enablement package receipt: %#v", receipt)
+	}
+	stdout.Reset()
+	if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+		t.Fatal("existing enablement package was overwritten")
+	}
+}
+
+func TestEnablementStagePackageRejectsIncompleteInputs(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "enablement-job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-enablement-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "enablement-package.yaml")
+	valid := enablementStagePackageArguments(template, output)
+	for name, arguments := range map[string][]string{
+		"execute":                   append(append([]string{}, valid...), "--execute"),
+		"missing template digest":   removeArgumentWithValue(valid, "--job-template-digest"),
+		"missing management secret": removeArgumentWithValue(valid, "--management-credential-secret"),
+		"invalid time":              replaceArgument(valid, "--evaluation-time", "not-time"),
+		"positional":                append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe enablement package input was accepted: %v %s", err, stdout.String())
+			}
+		})
+	}
+}
+
 func TestSubmissionStageAuthorityIsDerivedFromVerifiedTopology(t *testing.T) {
 	expected := stageplan.Expected{InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt"}
 	for symbolic, want := range map[string]string{"infrastructure": "ok-infra", "management": "ok-mgmt"} {
@@ -974,6 +1049,22 @@ func enablementStageRunArguments() []string {
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
 		"--management-api-endpoint", "https://192.0.2.12:6443", "--management-token-file", "/tmp/management-token", "--management-ca-file", "/tmp/management-ca",
+	)
+}
+
+func enablementStagePackageArguments(template, output string) []string {
+	arguments := enablementStageRunArguments()
+	arguments = removeArgument(arguments, "--execute")
+	for _, name := range []string{"--ledger-api-endpoint", "--ledger-token-file", "--ledger-ca-file", "--management-api-endpoint", "--management-token-file", "--management-ca-file"} {
+		arguments = removeArgumentWithValue(arguments, name)
+	}
+	arguments = append(arguments[:4], append([]string{"package"}, arguments[4:]...)...)
+	return append(arguments,
+		"--job-template", template, "--job-template-digest", digest.SHA256([]byte("bounded-enablement-template")),
+		"--output", output, "--run-id", "ok147-enablement-20260816-01",
+		"--image", "ghcr.io/openkubes/ok-cluster@"+testSHA("a"), "--input-configmap", "ok147-enablement-input",
+		"--ledger-api-url", "https://192.0.2.12:6443", "--ledger-api-cidr", "192.0.2.12/32", "--ledger-credential-secret", "ok147-ledger-enablement",
+		"--management-api-url", "https://192.0.2.12:6443", "--management-api-cidr", "192.0.2.12/32", "--management-credential-secret", "ok147-management-enablement",
 	)
 }
 
