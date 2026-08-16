@@ -45,6 +45,10 @@ func TestEvaluateNetworkSnapshotFailsClosed(t *testing.T) {
 			mutate: func(snapshot *NetworkSnapshot) { snapshot.HCP.SpecDigest = "sha256:" + strings.Repeat("f", 64) },
 			status: "False", reason: "EnablementOwnerIdentityMismatch",
 		},
+		"HCP target not selected": {
+			mutate: func(snapshot *NetworkSnapshot) { snapshot.HCP.TargetSelected = false },
+			status: "False", reason: "EnablementOwnerIdentityMismatch",
+		},
 		"multiple HRPs": {
 			mutate: func(snapshot *NetworkSnapshot) { snapshot.HRPCount = 2 },
 			status: "Unknown", reason: "EnablementReleaseNotReady",
@@ -167,13 +171,13 @@ func validNetworkFixture(t *testing.T) (Policy, NetworkProfile, NetworkSnapshot)
 	hcp := NetworkAddonSource{
 		UID: "hcp-uid-1", Generation: 4, StatusObservedGeneration: 4, SpecDigest: digestA,
 		IntentRevision: policy.IntentRevision, EnablementRevision: policy.EnablementRevision,
-		TargetClusterUID: policy.TargetClusterUID,
-		Conditions:       conditions("Ready", "HelmReleaseProxySpecsUpToDate", "HelmReleaseProxiesReady"),
+		TargetClusterUID: policy.TargetClusterUID, TargetSelected: true,
+		Conditions: conditions("Ready", "HelmReleaseProxySpecsUpToDate", "HelmReleaseProxiesReady"),
 	}
 	hrp := NetworkAddonSource{
 		UID: "hrp-uid-1", Generation: 4, StatusObservedGeneration: 4, SpecDigest: digestB,
 		IntentRevision: policy.IntentRevision, EnablementRevision: policy.EnablementRevision,
-		OwnerUID: hcp.UID, TargetClusterUID: policy.TargetClusterUID,
+		OwnerUID: hcp.UID, TargetClusterUID: policy.TargetClusterUID, TargetSelected: true,
 		ReleaseStatus: "deployed", ReleaseRevision: 1,
 		Conditions: conditions("Ready", "HelmReleaseReady"),
 	}
