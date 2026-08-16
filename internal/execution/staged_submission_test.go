@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
@@ -31,6 +33,46 @@ func TestSubmissionPlaneMutatorCompletesStagedOperation(t *testing.T) {
 	receipt, err := (StagedOperation{Ledger: store, Mutator: mutator, Clock: stagedClock(at)}).Run(context.Background(), plan, cursor, grant)
 	if err != nil || receipt.State != "COMPLETED_SUCCEEDED" || receipt.StageReceiptDigest == "" || submitter.calls != 1 {
 		t.Fatalf("typed submission stage did not complete: %#v calls=%d err=%v", receipt, submitter.calls, err)
+	}
+}
+
+func TestLifecycleSubmissionPersistsRuntimeCorrelationAcrossResume(t *testing.T) {
+	plan := stagedPlan(t)
+	at := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
+	provider, err := stagereceipt.New(plan, "provider-prerequisites", []stagereceipt.Verified{}, "SUCCEEDED", "ATTEMPTED", stagedSHA("1"), stagedSHA("e"), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
+	submissionReceipt := successfulPlaneReceipt(projected.Management, "CREATED", "ATTEMPTED")
+	const targetUID = "cluster-runtime-uid-147"
+	submissionReceipt.Results[0].UID = targetUID
+	mutator, err := NewSubmissionPlaneMutator(plan, "cluster-lifecycle", projected, &fakePlaneSubmitter{receipt: submissionReceipt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, _ := stagecursor.Evaluate(plan, []stagereceipt.Verified{provider})
+	grant := stagedGrant(t, plan, "cluster-lifecycle", []stagereceipt.Verified{provider}, at.Add(time.Second))
+	store, _ := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
+	receipt, err := (StagedOperation{Ledger: store, Mutator: mutator, Clock: stagedClock(at.Add(time.Second))}).Run(context.Background(), plan, cursor, grant)
+	if err != nil || receipt.State != "COMPLETED_SUCCEEDED" {
+		t.Fatalf("lifecycle stage did not complete: %#v %v", receipt, err)
+	}
+	verified, err := store.LoadStageReceipt(context.Background(), plan, "cluster-lifecycle", receipt.StageReceiptDigest, []stagereceipt.Verified{provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := verified.Receipt()
+	if stored.TargetClusterUIDDigest != digest.SHA256([]byte(targetUID)) {
+		t.Fatalf("runtime correlation did not survive durable resume: %#v", stored)
+	}
+	resumed, err := stagecursor.Evaluate(plan, []stagereceipt.Verified{provider, verified})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, _ := resumed.Decision()
+	if decision.StageID != "lifecycle-observation" || decision.State != "NEXT" {
+		t.Fatalf("runtime-bound lifecycle receipt did not resume observation: %#v", decision)
 	}
 }
 
@@ -63,6 +105,36 @@ func TestSubmissionPlaneMutatorNoWriteCannotClaimStageSuccess(t *testing.T) {
 	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
 	if err != nil || result.Outcome != "STOPPED" || result.MutationState != "NOT_ATTEMPTED" {
 		t.Fatalf("no-write submission claimed success: %#v %v", result, err)
+	}
+}
+
+func TestSubmissionPlaneMutatorBindsLifecycleRuntimeIdentityWithoutExposingUID(t *testing.T) {
+	plan := stagedPlan(t)
+	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
+	receipt := successfulPlaneReceipt(projected.Management, "CREATED", "ATTEMPTED")
+	const runtimeUID = "cluster-runtime-uid-147"
+	receipt.Results[0].UID = runtimeUID
+	mutator, err := NewSubmissionPlaneMutator(plan, "cluster-lifecycle", projected, &fakePlaneSubmitter{receipt: receipt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TargetClusterUIDDigest != digest.SHA256([]byte(runtimeUID)) || bytes.Contains([]byte(result.TargetClusterUIDDigest), []byte(runtimeUID)) {
+		t.Fatalf("runtime identity was not safely bound: %#v", result)
+	}
+}
+
+func TestSubmissionPlaneMutatorRejectsMissingLifecycleRuntimeIdentity(t *testing.T) {
+	plan := stagedPlan(t)
+	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
+	receipt := successfulPlaneReceipt(projected.Management, "CREATED", "ATTEMPTED")
+	receipt.Results[0].UID = ""
+	mutator, _ := NewSubmissionPlaneMutator(plan, "cluster-lifecycle", projected, &fakePlaneSubmitter{receipt: receipt})
+	if _, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding())); err == nil {
+		t.Fatal("successful lifecycle submission without runtime identity was accepted")
 	}
 }
 

@@ -995,6 +995,15 @@ Malformed or foreign receipts stop indeterminately rather than manufacturing a
 stage outcome. Tests use a fake plane submitter: Kubernetes credentials and the
 live client are not yet composed into the staged runner path.
 
+The successful `cluster-lifecycle` stage additionally hashes the exact CAPI
+Cluster UID returned by the create response. That digest is carried through
+the immutable operation outcome and common stage receipt, so it survives
+executor termination and ledger recreation. The raw Kubernetes UID is not
+retained in redaction-safe output. A later lifecycle observer must hash the UID
+from its exact GET and match this durable value before it can correlate current
+Conditions. Successful lifecycle submission without that runtime identity, or
+a target-identity digest on any other stage, fails closed.
+
 ## Runtime composition for one submission stage
 
 The runner package can now construct one staged submission operation from an
