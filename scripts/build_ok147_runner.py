@@ -31,6 +31,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def sbom_path(output: Path, platform: str) -> Path:
+    return output.with_suffix(f".{platform.replace('/', '-')}.sbom.spdx.json")
+
+
 def validate(args: argparse.Namespace, root: Path) -> tuple[Path, dt.datetime]:
     if not VERSION_RE.fullmatch(args.version):
         raise ValueError("version must be an explicit semantic version")
@@ -45,8 +49,10 @@ def validate(args: argparse.Namespace, root: Path) -> tuple[Path, dt.datetime]:
     output = Path(args.output).expanduser().resolve()
     if output.suffix != ".tar":
         raise ValueError("output must be an OCI .tar archive")
-    if output.exists() or output.with_suffix(".sbom.spdx.json").exists() or output.with_suffix(".build-record.json").exists():
-        raise ValueError("output, SBOM, or build record already exists")
+    generated = [output, output.with_suffix(".build-record.json")]
+    generated.extend(sbom_path(output, platform) for platform in PLATFORMS.split(","))
+    if any(path.exists() for path in generated):
+        raise ValueError("output, platform SBOM, or build record already exists")
     if not output.parent.is_dir():
         raise ValueError("output parent directory does not exist")
     if not (root / "Containerfile.ok147").is_file():
@@ -95,6 +101,19 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return "sha256:" + digest.hexdigest()
+
+
+def semantic_sbom_digest(path: Path) -> str:
+    document = json.loads(path.read_bytes())
+    if document.get("spdxVersion") != "SPDX-2.3" or not isinstance(document.get("packages"), list):
+        raise ValueError("generated SBOM is not SPDX 2.3 JSON")
+    normalized = dict(document)
+    normalized.pop("documentNamespace", None)
+    creation = dict(normalized.get("creationInfo") or {})
+    creation.pop("created", None)
+    normalized["creationInfo"] = creation
+    raw = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def inspect_oci_archive(path: Path) -> dict[str, object]:
@@ -223,13 +242,25 @@ def main() -> int:
             raise ValueError("revision differs from the checked-out commit")
         subprocess.run(command, cwd=root, check=True)
         oci_identity = inspect_oci_archive(output)
-        sbom = output.with_suffix(".sbom.spdx.json")
-        subprocess.run(["syft", "scan", f"oci-archive:{output}", "--output", f"spdx-json={sbom}"], cwd=root, check=True)
+        sbom_digests: dict[str, str] = {}
+        sbom_semantic_digests: dict[str, str] = {}
+        for platform, manifest_digest in oci_identity["platformManifestDigests"].items():
+            sbom = sbom_path(output, platform)
+            subprocess.run([
+                "syft", "scan", f"oci-archive:{output}",
+                "--platform", platform,
+                "--source-name", "ghcr.io/openkubes/ok-cluster-runner",
+                "--source-version", manifest_digest,
+                "--output", f"spdx-json={sbom}",
+            ], cwd=root, check=True)
+            sbom_digests[platform] = sha256(sbom)
+            sbom_semantic_digests[platform] = semantic_sbom_digest(sbom)
         record = {
             **{key: value for key, value in plan.items() if key != "command"},
             "format": "ok147-runner-image-build-record/v1",
             "ociArchiveDigest": sha256(output),
-            "sbomDigest": sha256(sbom),
+            "sbomDigests": sbom_digests,
+            "sbomSemanticDigests": sbom_semantic_digests,
             **oci_identity,
         }
         write_exclusive(output.with_suffix(".build-record.json"), record)

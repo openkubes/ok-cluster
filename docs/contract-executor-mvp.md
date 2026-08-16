@@ -256,10 +256,18 @@ make ok147-runner-image-plan \
 
 An actual local build additionally requires a clean worktree, the exact checked
 out 40-character revision, and `OK147_IMAGE_BUILD=yes`. It produces only a local
-multi-platform OCI archive, BuildKit `mode=max` provenance attestations, a Syft
-SPDX JSON SBOM and an exclusive `0600` build record. The verifier rejects a
-missing or extra platform, absent per-platform provenance, a changed pinned base
-image, or a revision mismatch.
+multi-platform OCI archive, BuildKit `mode=max` provenance attestations, one
+Syft SPDX JSON SBOM per platform and an exclusive `0600` build record. The
+record keeps both each raw SBOM digest and a deterministic semantic digest that
+excludes only the generated SPDX document namespace and creation timestamp. The
+verifier rejects a missing or extra platform, absent per-platform provenance, a
+changed pinned base image, or a revision mismatch.
+
+Repeated builds must reproduce the two platform image-manifest digests and the
+semantic SBOM digests. The overall OCI index, provenance manifests and raw SBOM
+files are run evidence and may differ because their envelopes contain build
+timestamps or generated document identities; they are bound exactly per build,
+not presented as reproducible payload identities.
 
 This checkpoint deliberately has no registry destination and never uses
 `--push`. It does not publish an image, deploy a Job, contact Kubernetes, consume
