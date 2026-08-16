@@ -1263,6 +1263,15 @@ NetworkPolicy/Job run identity, tokenless ServiceAccount, `ok-mgmt` authority
 and the two exact credential Secret names. It deliberately excludes the Secret
 objects themselves and grants no mutation authority.
 
+`ok147-enablement-stage-launch-plan/v1` then correlates the verified package,
+private credential package and tokenless runtime prerequisite into six exact
+objects: runtime ServiceAccount, input ConfigMap, NetworkPolicy, ledger Secret,
+writer Secret and finally the Job. Every GET must establish the single global
+state `ALL_ABSENT_OR_RUNTIME_ONLY_OR_ALL_EXACT` before any POST may start. The
+runtime alone may already exist if it matches exactly; every other object is
+create-only after global absence. The redaction-safe plan contains no object
+body or credential content and still grants no mutation authority.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter

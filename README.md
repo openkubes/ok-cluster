@@ -94,7 +94,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   shared tokenless runtime ServiceAccount is also bound offline to the exact
   Enablement package and contains no RBAC or implicit Pod credential. A
   read-only installation planner finally derives the fixed ConfigMap,
-  NetworkPolicy, Job GET/POST sequence without opening either credential.
+  NetworkPolicy, Job GET/POST sequence without opening either credential. A
+  private launch planner correlates runtime, prerequisites, both Secrets and
+  the final Job behind one global six-object preflight barrier.
 
 ---
 
