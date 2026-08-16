@@ -59,6 +59,17 @@ type KubernetesNetworkObserverConfig struct {
 	Clock                       func() time.Time
 }
 
+// KubernetesPlatformObserverConfig binds the GitOps control-plane authority,
+// an immutable Platform profile and an independently verified capability
+// source. The Argo adapter itself cannot execute capability code.
+type KubernetesPlatformObserverConfig struct {
+	Argo                  KubernetesAuthorityConfig
+	ExpectedArgoAuthority string
+	Profile               observation.PlatformProfile
+	Capability            observation.PlatformCapabilitySource
+	Clock                 func() time.Time
+}
+
 // InspectKubernetesLedger performs a read-only restart decision. It does not
 // claim the grant and therefore cannot authorize a later mutation by itself.
 func InspectKubernetesLedger(ctx context.Context, grant authorization.VerifiedGrant, config KubernetesLedgerConfig) (ledger.Inspection, error) {
@@ -171,6 +182,28 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 	return observation.NewNetworkSourceCollector(management, workload, probe, observation.NetworkCollectorConfig{
 		Namespace: config.Namespace, Name: config.Name, HCPName: config.HCPName,
 		TargetClusterUID: config.TargetClusterUID, Clock: config.Clock,
+	})
+}
+
+// OpenKubernetesPlatformSourceCollector materializes one TLS client restricted
+// to exact Argo Application GETs on the configured GitOps control plane. It
+// performs no API request itself and exposes no sync or mutation operation.
+func OpenKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConfig) (*observation.PlatformSourceCollector, error) {
+	if config.ExpectedArgoAuthority == "" || config.Argo.AuthorityIdentity != config.ExpectedArgoAuthority {
+		return nil, errors.New("platform observer authority differs from the verified GitOps control plane")
+	}
+	token, client, err := openBoundedKubernetesHTTP(config.Argo.TokenFile, config.Argo.CAFile)
+	if err != nil {
+		return nil, errors.New("open bounded GitOps observation credential")
+	}
+	reader, err := observation.NewKubernetesPlatformReader(observation.KubernetesPlatformReaderConfig{
+		Endpoint: config.Argo.Endpoint, BearerToken: token, Client: client,
+	}, config.Profile)
+	if err != nil {
+		return nil, err
+	}
+	return observation.NewPlatformSourceCollector(reader, config.Capability, observation.PlatformCollectorConfig{
+		Profile: config.Profile, Clock: config.Clock,
 	})
 }
 

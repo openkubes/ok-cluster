@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
 func TestOpenKubernetesLedgerValidatesProjectedInputs(t *testing.T) {
@@ -173,6 +176,44 @@ func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing
 			}
 		})
 	}
+}
+
+func TestOpenKubernetesPlatformSourceCollectorBindsGitOpsAuthority(t *testing.T) {
+	root := t.TempDir()
+	tokenPath := filepath.Join(root, "token")
+	caPath := filepath.Join(root, "ca.crt")
+	if err := os.WriteFile(tokenPath, []byte("short-lived-platform-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caPath, testCA(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := func(character string) string { return "sha256:" + strings.Repeat(character, 64) }
+	profile := observation.PlatformProfile{
+		Format: observation.PlatformProfileFormat, IntentRevision: digest("a"), PlatformRevision: digest("b"), ExecutionFixture: digest("c"),
+		TargetClusterUID: "cluster-uid-disposable-ok141", ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
+		RequiredApplications:     []observation.PlatformApplicationExpectation{{Name: "disposable-ok141-observability-core", SpecDigest: digest("d")}},
+		CapabilityContractDigest: digest("e"), CapabilityExecutableDigest: digest("f"), MaximumCapabilityAgeSeconds: 3600,
+	}
+	config := KubernetesPlatformObserverConfig{
+		Argo: KubernetesAuthorityConfig{
+			Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok-shared", TokenFile: tokenPath, CAFile: caPath,
+		},
+		ExpectedArgoAuthority: "ok-shared", Profile: profile, Capability: inertPlatformCapabilitySource{}, Clock: time.Now,
+	}
+	if _, err := OpenKubernetesPlatformSourceCollector(config); err != nil {
+		t.Fatal(err)
+	}
+	config.ExpectedArgoAuthority = "other"
+	if _, err := OpenKubernetesPlatformSourceCollector(config); err == nil || strings.Contains(err.Error(), root) {
+		t.Fatalf("unsafe GitOps authority accepted or disclosed a path: %v", err)
+	}
+}
+
+type inertPlatformCapabilitySource struct{}
+
+func (inertPlatformCapabilitySource) Capability(context.Context) (observation.PlatformCapabilityState, error) {
+	return observation.PlatformCapabilityState{}, nil
 }
 
 func testCA(t *testing.T) []byte {
