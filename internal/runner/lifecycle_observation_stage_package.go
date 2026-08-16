@@ -41,9 +41,12 @@ type LifecycleObservationStagePackageReceipt struct {
 }
 
 type VerifiedLifecycleObservationStagePackage struct {
-	raw      []byte
-	receipt  LifecycleObservationStagePackageReceipt
-	verified bool
+	raw                  []byte
+	receipt              LifecycleObservationStagePackageReceipt
+	ledgerCredential     string
+	managementCredential string
+	managementAuthority  string
+	verified             bool
 }
 
 // BuildLifecycleObservationStagePackage composes one immutable public input
@@ -88,7 +91,11 @@ func BuildLifecycleObservationStagePackage(config LifecycleObservationStagePacka
 		JobEnvelopeDigest: digest.SHA256(jobRaw), ObjectKinds: []string{"ConfigMap", "NetworkPolicy", "Job"},
 		AuthorizationState: "NOT_REQUIRED", MutationAllowed: false,
 	}
-	return VerifiedLifecycleObservationStagePackage{raw: packageRaw, receipt: receipt, verified: true}, nil
+	return VerifiedLifecycleObservationStagePackage{
+		raw: packageRaw, receipt: receipt,
+		ledgerCredential: config.LedgerCredentialSecret, managementCredential: config.ManagementCredentialSecret,
+		managementAuthority: config.Bundle.PlanExpected.ManagementAuthority, verified: true,
+	}, nil
 }
 
 func (packaged VerifiedLifecycleObservationStagePackage) Bytes() ([]byte, error) {
@@ -99,7 +106,7 @@ func (packaged VerifiedLifecycleObservationStagePackage) Bytes() ([]byte, error)
 }
 
 func (packaged VerifiedLifecycleObservationStagePackage) Receipt() (LifecycleObservationStagePackageReceipt, error) {
-	if !packaged.verified || packaged.receipt.State != "VERIFIED" {
+	if !packaged.verified || packaged.receipt.State != "VERIFIED" || digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest || packaged.managementAuthority == "" || packaged.ledgerCredential == "" || packaged.managementCredential == "" || packaged.ledgerCredential == packaged.managementCredential {
 		return LifecycleObservationStagePackageReceipt{}, errors.New("lifecycle observation package was not produced by verification")
 	}
 	receipt := packaged.receipt
