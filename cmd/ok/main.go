@@ -36,6 +36,19 @@ var (
 	stageReceiptFlagPattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
 )
 
+var materializeSubmissionStagePackage = func(config runner.SubmissionStagePackageConfig) ([]byte, runner.SubmissionStagePackageReceipt, error) {
+	packaged, err := runner.BuildSubmissionStagePackage(config)
+	if err != nil {
+		return nil, runner.SubmissionStagePackageReceipt{}, err
+	}
+	raw, err := packaged.Bytes()
+	if err != nil {
+		return nil, runner.SubmissionStagePackageReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	return raw, receipt, err
+}
+
 type createPlan struct {
 	Format                  string                  `json:"format"`
 	Operation               string                  `json:"operation"`
@@ -232,7 +245,10 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" {
 		return runClusterStageRun(ctx, arguments[3:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ...")
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "package" {
+		return runClusterStagePackage(arguments[3:], stdout, stderr)
+	}
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage run ... | ok cluster stage package ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -443,6 +459,116 @@ func runClusterStageRun(ctx context.Context, arguments []string, stdout, stderr 
 		}
 	}
 	return runErr
+}
+
+func runClusterStagePackage(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage package", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	bundleFlags := addStageBundleFlags(flags)
+	jobTemplate := flags.String("job-template", "", "path to the bounded submission-stage Job template")
+	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	output := flags.String("output", "", "new local file for the verified ConfigMap/Job/NetworkPolicy package")
+	runID := flags.String("run-id", "", "bounded OK-147 Job identity")
+	imageDigest := flags.String("image", "", "digest-pinned ok image")
+	inputConfigMap := flags.String("input-configmap", "", "immutable input ConfigMap name")
+	ledgerAPIURL := flags.String("ledger-api-url", "", "exact management-ledger HTTPS IP endpoint")
+	ledgerAPICIDR := flags.String("ledger-api-cidr", "", "single-address management-ledger CIDR")
+	ledgerCredentialSecret := flags.String("ledger-credential-secret", "", "externally materialized ledger credential Secret name")
+	authorityAPIURL := flags.String("authority-api-url", "", "exact selected-authority HTTPS IP endpoint")
+	authorityAPICIDR := flags.String("authority-api-cidr", "", "single-address selected-authority CIDR")
+	authorityCredentialSecret := flags.String("authority-credential-secret", "", "externally materialized authority credential Secret name")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	bundleConfig, err := bundleFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--job-template", *jobTemplate}, {"--job-template-digest", *jobTemplateDigest}, {"--output", *output}, {"--run-id", *runID}, {"--image", *imageDigest},
+		{"--input-configmap", *inputConfigMap}, {"--ledger-api-url", *ledgerAPIURL}, {"--ledger-api-cidr", *ledgerAPICIDR},
+		{"--ledger-credential-secret", *ledgerCredentialSecret}, {"--authority-api-url", *authorityAPIURL},
+		{"--authority-api-cidr", *authorityAPICIDR}, {"--authority-credential-secret", *authorityCredentialSecret},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	template, err := readBoundedLocalFile(*jobTemplate, 1024*1024)
+	if err != nil {
+		return fmt.Errorf("read Job template: %w", err)
+	}
+	raw, receipt, err := materializeSubmissionStagePackage(runner.SubmissionStagePackageConfig{
+		Bundle: bundleConfig, JobTemplate: template, JobTemplateDigest: *jobTemplateDigest,
+		RunID: *runID, ImageDigest: *imageDigest, InputConfigMap: *inputConfigMap,
+		LedgerAPIURL: *ledgerAPIURL, LedgerAPICIDR: *ledgerAPICIDR, LedgerCredentialSecret: *ledgerCredentialSecret,
+		AuthorityAPIURL: *authorityAPIURL, AuthorityAPICIDR: *authorityAPICIDR, AuthorityCredentialSecret: *authorityCredentialSecret,
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeNewLocalFile(*output, raw); err != nil {
+		return fmt.Errorf("write stage package: %w", err)
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(receipt)
+}
+
+func readBoundedLocalFile(path string, maximum int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximum {
+		return nil, errors.New("local file metadata is invalid")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Size() <= 0 || opened.Size() > maximum {
+		return nil, errors.New("local file changed while opening")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil || int64(len(raw)) > maximum {
+		return nil, errors.New("read bounded local file")
+	}
+	return raw, nil
+}
+
+func writeNewLocalFile(path string, raw []byte) (err error) {
+	if path == "" || len(raw) == 0 {
+		return errors.New("non-empty output path and package are required")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err = file.Write(raw); err != nil {
+		return err
+	}
+	if err = file.Sync(); err != nil {
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	complete = true
+	return nil
 }
 
 func countNonEmpty(values ...string) int {

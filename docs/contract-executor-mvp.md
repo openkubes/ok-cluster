@@ -1133,11 +1133,11 @@ inputs stop execution rather than authorizing them.
 
 `BuildSubmissionStagePackage` now composes the immutable input ConfigMap with
 the bounded Job and NetworkPolicy as one deterministic three-object stream.
-The caller supplies only runtime object names, a digest-pinned image and exact
-API endpoint/CIDR identities. Stage ID, Contract identities, evaluation time,
-input ConfigMap identity and receipt-prefix digest are derived from the same
-verified bundle and materialization receipt, so they cannot drift across the
-two artifacts.
+The caller supplies only runtime object names, a digest-pinned image, a
+separately SHA-256-bound Job template and exact API endpoint/CIDR identities.
+Stage ID, Contract identities, evaluation time, input ConfigMap identity and
+receipt-prefix digest are derived from the same verified bundle and
+materialization receipt, so they cannot drift across the two artifacts.
 
 The package receipt independently binds the complete stream, ConfigMap and
 Job/NetworkPolicy envelope digests plus the exact object-kind inventory. It is
@@ -1146,6 +1146,13 @@ not read credential content, contact Kubernetes, create the externally named
 credential Secrets or apply any of its objects. Reusing a credential Secret
 name as the input ConfigMap identity is rejected in addition to the Job's
 existing distinct-credential and endpoint boundaries.
+
+`ok cluster stage package` exposes this composition as an offline CLI. It
+accepts no credential file and has no execute flag. The command reads the
+bounded regular non-symlink template, refuses to overwrite its requested local
+output, writes the package with mode `0600`, and emits only the redaction-safe
+package receipt on stdout. The Job-template digest is required explicitly and
+is retained in that receipt.
 
 ## Typed first-run Platform capability boundary
 

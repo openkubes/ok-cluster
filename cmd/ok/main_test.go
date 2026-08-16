@@ -270,6 +270,79 @@ func TestSubmissionStageAuthorityIsDerivedFromVerifiedTopology(t *testing.T) {
 	}
 }
 
+func TestStagePackageWritesOneVerifiedOfflineArtifact(t *testing.T) {
+	previous := materializeSubmissionStagePackage
+	defer func() { materializeSubmissionStagePackage = previous }()
+	var captured runner.SubmissionStagePackageConfig
+	materializeSubmissionStagePackage = func(config runner.SubmissionStagePackageConfig) ([]byte, runner.SubmissionStagePackageReceipt, error) {
+		captured = config
+		return []byte("verified-package\n"), runner.SubmissionStagePackageReceipt{
+			Format: runner.SubmissionStagePackageFormat, State: "VERIFIED", StageID: "provider-prerequisites",
+			PackageDigest: testSHA("1"), InputConfigMapDigest: testSHA("2"), ReceiptPrefixDigest: testSHA("3"),
+			JobTemplateDigest: testSHA("4"), JobEnvelopeDigest: testSHA("5"), ObjectKinds: []string{"ConfigMap", "Job", "NetworkPolicy"},
+			AuthorizationState: "VERIFIED", MutationAllowed: false,
+		}, nil
+	}
+	root := t.TempDir()
+	template := filepath.Join(root, "job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "package.yaml")
+	arguments := stagePackageArguments(template, output)
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Bundle.ExpectedStageID != "provider-prerequisites" || captured.RunID != "ok147-provider-20260816-01" || captured.InputConfigMap != "ok147-provider-input" {
+		t.Fatalf("unexpected package config: %#v", captured)
+	}
+	if string(captured.JobTemplate) != "bounded-template" || captured.JobTemplateDigest != digest.SHA256([]byte("bounded-template")) || captured.LedgerCredentialSecret == captured.AuthorityCredentialSecret {
+		t.Fatalf("template or credential identities were not bound: %#v", captured)
+	}
+	written, err := os.ReadFile(output)
+	if err != nil || string(written) != "verified-package\n" {
+		t.Fatalf("unexpected package file: %q %v", written, err)
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("package mode is not 0600: %v %v", info, err)
+	}
+	var receipt runner.SubmissionStagePackageReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "VERIFIED" || receipt.MutationAllowed {
+		t.Fatalf("unsafe package receipt: %#v", receipt)
+	}
+
+	stdout.Reset()
+	if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+		t.Fatal("existing output was overwritten or emitted a false receipt")
+	}
+}
+
+func TestStagePackageRejectsIncompleteAndSymlinkTemplate(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "job.yaml.tpl")
+	if err := os.WriteFile(template, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "package.yaml")
+	missingImage := removeArgumentWithValue(stagePackageArguments(template, output), "--image")
+	var stdout, stderr bytes.Buffer
+	if err := run(missingImage, &stdout, &stderr); err == nil {
+		t.Fatal("incomplete package input was accepted")
+	}
+	symlink := filepath.Join(root, "job-link.yaml.tpl")
+	if err := os.Symlink(template, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(stagePackageArguments(symlink, output), &stdout, &stderr); err == nil {
+		t.Fatal("symlink Job template was accepted")
+	}
+}
+
 func stageInspectArguments() []string {
 	return []string{
 		"cluster", "stage", "inspect",
@@ -289,6 +362,19 @@ func stageRunArguments() []string {
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
 		"--authority-api-endpoint", "https://192.0.2.11:6443", "--authority-token-file", "/tmp/authority-token", "--authority-ca-file", "/tmp/authority-ca",
+	)
+}
+
+func stagePackageArguments(template, output string) []string {
+	arguments := stageInspectArguments()
+	arguments[2] = "package"
+	return append(arguments,
+		"--job-template", template, "--job-template-digest", digest.SHA256([]byte("bounded-template")), "--output", output,
+		"--run-id", "ok147-provider-20260816-01",
+		"--image", "ghcr.io/openkubes/ok-cluster@"+testSHA("a"),
+		"--input-configmap", "ok147-provider-input",
+		"--ledger-api-url", "https://192.0.2.12:6443", "--ledger-api-cidr", "192.0.2.12/32", "--ledger-credential-secret", "ok147-ledger-credential",
+		"--authority-api-url", "https://192.0.2.11:6443", "--authority-api-cidr", "192.0.2.11/32", "--authority-credential-secret", "ok147-authority-credential",
 	)
 }
 

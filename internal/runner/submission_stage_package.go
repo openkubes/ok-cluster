@@ -15,6 +15,7 @@ const SubmissionStagePackageFormat = "ok147-submission-stage-package/v1"
 type SubmissionStagePackageConfig struct {
 	Bundle                    SubmissionStageBundleConfig
 	JobTemplate               []byte
+	JobTemplateDigest         string
 	RunID                     string
 	ImageDigest               string
 	InputConfigMap            string
@@ -36,6 +37,7 @@ type SubmissionStagePackageReceipt struct {
 	PackageDigest        string   `json:"packageDigest"`
 	InputConfigMapDigest string   `json:"inputConfigMapDigest"`
 	ReceiptPrefixDigest  string   `json:"receiptPrefixDigest"`
+	JobTemplateDigest    string   `json:"jobTemplateDigest"`
 	JobEnvelopeDigest    string   `json:"jobEnvelopeDigest"`
 	ObjectKinds          []string `json:"objectKinds"`
 	AuthorizationState   string   `json:"authorizationState"`
@@ -52,6 +54,9 @@ type VerifiedSubmissionStagePackage struct {
 // bounded Job/NetworkPolicy envelope. It does not create Kubernetes objects,
 // read credentials or contact an API server.
 func BuildSubmissionStagePackage(config SubmissionStagePackageConfig) (VerifiedSubmissionStagePackage, error) {
+	if !stageReceiptPrefixDigestPattern.MatchString(config.JobTemplateDigest) || digest.SHA256(config.JobTemplate) != config.JobTemplateDigest {
+		return VerifiedSubmissionStagePackage{}, errors.New("submission stage Job template digest differs from expected identity")
+	}
 	if config.InputConfigMap == config.LedgerCredentialSecret || config.InputConfigMap == config.AuthorityCredentialSecret {
 		return VerifiedSubmissionStagePackage{}, errors.New("submission stage input and credential object names must be distinct")
 	}
@@ -87,7 +92,8 @@ func BuildSubmissionStagePackage(config SubmissionStagePackageConfig) (VerifiedS
 	receipt := SubmissionStagePackageReceipt{
 		Format: SubmissionStagePackageFormat, State: "VERIFIED", StageID: config.Bundle.ExpectedStageID,
 		PackageDigest: digest.SHA256(packageRaw), InputConfigMapDigest: inputReceipt.ConfigMapDigest,
-		ReceiptPrefixDigest: inputReceipt.ReceiptPrefixDigest, JobEnvelopeDigest: digest.SHA256(jobRaw),
+		ReceiptPrefixDigest: inputReceipt.ReceiptPrefixDigest, JobTemplateDigest: config.JobTemplateDigest,
+		JobEnvelopeDigest:  digest.SHA256(jobRaw),
 		ObjectKinds:        []string{"ConfigMap", "Job", "NetworkPolicy"},
 		AuthorizationState: "VERIFIED", MutationAllowed: false,
 	}
