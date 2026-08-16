@@ -480,13 +480,33 @@ digesting them, rejects malformed or ambiguous list members, verifies exact
 object/owner/target selection, and discards raw transport errors and probe
 output after normalization.
 
-This remains an offline boundary: fake clients exercise the complete collector
-and evaluator path, while credential materialization, TLS/token HTTP adapters,
-Secret reads, cluster contact, polling, CLI/Job wiring, and mutation remain out
-of scope. A later adapter must bind the management reader to the management
-authority and the workload reader/probe to the already verified immutable
-target Cluster UID. The collector does not infer that authority from reusable
-names or API endpoints.
+At that checkpoint, fake clients exercised the complete collector and evaluator
+path, while credential materialization, TLS/token HTTP adapters, Secret reads,
+cluster contact, polling, CLI/Job wiring, and mutation remained out of scope.
+The collector itself does not infer authority from reusable names or API
+endpoints.
+
+The next adapter checkpoint establishes that authority boundary without making
+a live request. It materializes separate TLS-only, redirect-denying clients
+from distinct projected management and workload tokens. The management client
+accepts only the two HCP/HRP paths; the workload client accepts only the five
+runtime paths above. Equal endpoints, equal token contents, a management-plane
+identity mismatch, a runtime Cluster UID mismatch, and every non-allowlisted
+path fail before source data can be accepted. Raw transport failures are never
+returned to the evidence layer.
+
+The functional probe is also bound at the type boundary to exactly:
+
+```text
+cilium-health status --probe --output json
+```
+
+It carries the selected Pod name and UID plus the fixed `kube-system` namespace
+and `cilium-agent` container to a narrow Pod-exec transport. The concrete
+WebSocket/SPDY transport must still verify the Pod UID immediately before exec;
+that transport and any live cluster contact remain a later checkpoint. No
+shell, `kubectl`, arbitrary command arguments, mutation, polling, CLI/Job
+wiring, or status publication is introduced here.
 
 ## OK-141 compatibility evidence
 

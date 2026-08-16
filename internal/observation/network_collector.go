@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"sort"
 	"time"
 )
@@ -27,10 +26,11 @@ type FixedCiliumProbe interface {
 }
 
 type NetworkCollectorConfig struct {
-	Namespace string
-	Name      string
-	HCPName   string
-	Clock     func() time.Time
+	Namespace        string
+	Name             string
+	HCPName          string
+	TargetClusterUID string
+	Clock            func() time.Time
 }
 
 // NetworkSourceCollector performs one bounded source collection. It has no
@@ -49,6 +49,9 @@ func NewNetworkSourceCollector(management, workload NetworkRawGetter, probe Fixe
 	}
 	if !validDNSLabel(config.Namespace) || !validDNSLabel(config.Name) || !validDNSLabel(config.HCPName) {
 		return nil, errors.New("network collector object identity is invalid")
+	}
+	if !validUID(config.TargetClusterUID) {
+		return nil, errors.New("network collector target Cluster UID is invalid")
 	}
 	return &NetworkSourceCollector{management: management, workload: workload, probe: probe, config: config}, nil
 }
@@ -69,10 +72,11 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	if err := validatePolicy(policy, true); err != nil {
 		return NetworkSnapshot{}, err
 	}
+	if policy.TargetClusterUID != collector.config.TargetClusterUID {
+		return NetworkSnapshot{}, errors.New("network collector authority differs from the runtime-bound target Cluster")
+	}
 	namespace, name, hcpName := collector.config.Namespace, collector.config.Name, collector.config.HCPName
-	hcpPath := "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/" + namespace + "/helmchartproxies/" + hcpName
-	selector := "cluster.x-k8s.io/cluster-name=" + name + ",helmreleaseproxy.addons.cluster.x-k8s.io/helmchartproxy-name=" + hcpName
-	hrpPath := "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/" + namespace + "/helmreleaseproxies?labelSelector=" + url.QueryEscape(selector)
+	hcpPath, hrpPath := managementNetworkPaths(namespace, name, hcpName)
 
 	hcpObject, err := getNetworkObject(ctx, collector.management, hcpPath)
 	if err != nil {

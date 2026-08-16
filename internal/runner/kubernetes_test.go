@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
 func TestOpenKubernetesLedgerValidatesProjectedInputs(t *testing.T) {
@@ -119,6 +122,70 @@ func TestOpenKubernetesCAPILifecycleObserverBindsManagementAuthority(t *testing.
 	if _, err := OpenKubernetesCAPILifecycleObserver(config, "ok-mgmt", "INVALID", "disposable-ok141"); err == nil || strings.Contains(err.Error(), root) {
 		t.Fatalf("unsafe target identity accepted or disclosed a path: %v", err)
 	}
+}
+
+func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing.T) {
+	root := t.TempDir()
+	managementToken := filepath.Join(root, "management-token")
+	workloadToken := filepath.Join(root, "workload-token")
+	caPath := filepath.Join(root, "ca.crt")
+	for path, value := range map[string][]byte{
+		managementToken: []byte("short-lived-management-token"),
+		workloadToken:   []byte("short-lived-workload-token"),
+		caPath:          testCA(t),
+	} {
+		if err := os.WriteFile(path, value, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetUID := "cluster-uid-disposable-ok141"
+	base := KubernetesNetworkObserverConfig{
+		Management: KubernetesAuthorityConfig{
+			Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok-mgmt", TokenFile: managementToken, CAFile: caPath,
+		},
+		Workload: KubernetesAuthorityConfig{
+			Endpoint: "https://192.168.100.213:6443", AuthorityIdentity: targetUID, TokenFile: workloadToken, CAFile: caPath,
+		},
+		ExpectedManagementAuthority: "ok-mgmt", TargetClusterUID: targetUID,
+		Namespace: "disposable-ok141", Name: "disposable-ok141", HCPName: "disposable-ok141-cilium",
+		Clock:       func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) },
+		PodExecutor: runnerProbeExecutor{},
+	}
+	if _, err := OpenKubernetesNetworkSourceCollector(base); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, mutate := range map[string]func(*KubernetesNetworkObserverConfig){
+		"management authority": func(config *KubernetesNetworkObserverConfig) {
+			config.ExpectedManagementAuthority = "other"
+		},
+		"workload authority": func(config *KubernetesNetworkObserverConfig) {
+			config.Workload.AuthorityIdentity = "other-uid"
+		},
+		"shared endpoint": func(config *KubernetesNetworkObserverConfig) {
+			config.Workload.Endpoint = config.Management.Endpoint
+		},
+		"shared credential": func(config *KubernetesNetworkObserverConfig) {
+			config.Workload.TokenFile = config.Management.TokenFile
+		},
+		"missing executor": func(config *KubernetesNetworkObserverConfig) {
+			config.PodExecutor = nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := base
+			mutate(&candidate)
+			if _, err := OpenKubernetesNetworkSourceCollector(candidate); err == nil || strings.Contains(err.Error(), root) {
+				t.Fatalf("unsafe network authority configuration accepted or disclosed a path: %v", err)
+			}
+		})
+	}
+}
+
+type runnerProbeExecutor struct{}
+
+func (runnerProbeExecutor) Exec(context.Context, observation.CiliumProbeExecRequest) ([]byte, error) {
+	return []byte(`{"nodes":[]}`), nil
 }
 
 func testCA(t *testing.T) []byte {
