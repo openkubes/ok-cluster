@@ -815,6 +815,26 @@ The implementation has so far been exercised only against an in-memory HTTP
 transport. Opening credentials and invoking it against a live workload cluster
 remain later integration steps.
 
+## Workload-bound observability transport
+
+The fixture client is now composed with the fixed five-check interface behind
+one workload-bound transport. Its opener reads the bounded token and CA files,
+verifies the actual CA digest against the runtime authority binding and rejects
+any authority identity other than the submitted CAPI Cluster UID. Opening the
+transport performs no API request.
+
+Preparation retains its complete private create receipt, including a known
+partial prefix. Each capability check receives an isolated clone of the same
+fixture and can run only in the contract-defined order. Direct out-of-order
+calls fail before reaching the check adapter. Cleanup cannot accept caller
+identities: it uses only the internally retained receipt. A known created
+prefix is cleaned through the guarded client, zero-write preflight failure is a
+no-op, and an unknown POST outcome fails closed instead of guessing which
+object to delete.
+
+The concrete service checks are still injected typed implementations in this
+checkpoint; no live Kubernetes request or capability mutation was performed.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
