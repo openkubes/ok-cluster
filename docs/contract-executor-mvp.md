@@ -1144,6 +1144,28 @@ tested with fake mutators only: no concrete Kubernetes stage implementation,
 credential resolver, dispatcher, cluster contact or CLI/Job activation exists
 at this checkpoint.
 
+## Externally rendered Enablement projection
+
+The next submission stage begins with a separate offline verifier for exactly
+one `addons.cluster.x-k8s.io/v1alpha1` `HelmChartProxy`. The object remains an
+output of an authoritative external profile/renderer; the runner does not
+construct Helm values, choose a chart or translate Contract intent.
+
+The verifier binds the raw artifact digest from `stage.enablement`, the exact
+management authority and object identity, R, E, the execution fixture, the OCI
+manifest digest, chart-content digest and values digest. It also requires
+explicit Contract name/namespace carriers, an OCI repository, a fixed chart
+version, `Continuous` reconciliation and the bounded atomic/wait Helm options.
+YAML aliases, multiple objects, status, runtime metadata, mutable chart
+versions and non-OCI sources fail closed.
+
+The resulting `ok147-bounded-enablement-plan/v1` contains one exact canonical
+create candidate for the management plane and reports
+`mutationAllowed: false`. It does not submit the object, install CAAPH, contact
+Kubernetes or write a `HelmReleaseProxy`; the latter remains exclusively owned
+by CAAPH. Cursor/grant composition and live exact-create execution are later
+boundaries.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
