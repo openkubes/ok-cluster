@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
@@ -129,10 +130,11 @@ func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing
 	managementToken := filepath.Join(root, "management-token")
 	workloadToken := filepath.Join(root, "workload-token")
 	caPath := filepath.Join(root, "ca.crt")
+	ca := testCA(t)
 	for path, value := range map[string][]byte{
 		managementToken: []byte("short-lived-management-token"),
 		workloadToken:   []byte("short-lived-workload-token"),
-		caPath:          testCA(t),
+		caPath:          ca,
 	} {
 		if err := os.WriteFile(path, value, 0o600); err != nil {
 			t.Fatal(err)
@@ -144,7 +146,7 @@ func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing
 			Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok-mgmt", TokenFile: managementToken, CAFile: caPath,
 		},
 		Workload: KubernetesAuthorityConfig{
-			Endpoint: "https://192.168.100.213:6443", AuthorityIdentity: targetUID, TokenFile: workloadToken, CAFile: caPath,
+			Endpoint: "https://192.168.100.213:6443", AuthorityIdentity: targetUID, TokenFile: workloadToken, CAFile: caPath, CABundleDigest: digest.SHA256(ca),
 		},
 		ExpectedManagementAuthority: "ok-mgmt", TargetClusterUID: targetUID,
 		Namespace: "disposable-ok141", Name: "disposable-ok141", HCPName: "disposable-ok141-cilium",
@@ -166,6 +168,12 @@ func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing
 		},
 		"shared credential": func(config *KubernetesNetworkObserverConfig) {
 			config.Workload.TokenFile = config.Management.TokenFile
+		},
+		"missing workload CA binding": func(config *KubernetesNetworkObserverConfig) {
+			config.Workload.CABundleDigest = ""
+		},
+		"different workload CA binding": func(config *KubernetesNetworkObserverConfig) {
+			config.Workload.CABundleDigest = "sha256:" + strings.Repeat("9", 64)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

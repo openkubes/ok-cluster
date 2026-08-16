@@ -692,6 +692,35 @@ This checkpoint is library wiring only. It remains disconnected from the CLI
 and Job, performs no polling, retry, mutation or status publication, and made
 no live cluster contact.
 
+## Digest-bound resume observation inputs
+
+Two concrete file resolvers now implement the lazy runtime boundaries without
+pretending to produce first-run evidence.
+
+The workload resolver reads one maximum-64-KiB, non-symlink, strict-JSON
+private binding only after the observation policy carries the submitted CAPI
+Cluster UID. Its
+canonical digest binds R, the exact target UID, the
+`capi-cluster-uid/v1` identity scheme, the HTTPS workload endpoint and the API
+CA digest. The bearer token and CA paths remain separate execution inputs and
+are never part of the semantic record. The resolver verifies the actual CA
+bytes, and the Network adapter verifies them again when opening its client, so
+a changed CA cannot retain the runtime authority binding. The private endpoint
+means this binding is not public evidence.
+
+The Platform resolver loads one already produced, strict capability assertion
+only after runtime correlation. An independently supplied evidence digest is
+required, and the existing loader then binds the assertion to the current
+target UID, R, P, execution fixture, capability contract and executable. A
+capability file from another cluster incarnation or executable fails closed.
+
+Both constructors are side-effect free: files are read only when the required
+domain is observed. They enable a later executor invocation to resume bounded
+observation from durable correlation inputs. They deliberately do not create
+the workload credential, run the capability test, poll convergence, contact a
+cluster or mutate infrastructure. Producing those current single-run inputs
+remains an explicit subsequent runner boundary.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
