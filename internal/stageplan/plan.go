@@ -334,3 +334,24 @@ func (binding Binding) Stage(id string) (Stage, string, error) {
 	}
 	return Stage{}, "", fmt.Errorf("stage %q is not part of the verified execution plan", id)
 }
+
+// RequireInput rechecks that one exact immutable artifact identity is bound to
+// the selected verified stage. It does not interpret or load that artifact.
+func (binding Binding) RequireInput(stageID, name, expectedDigest string) error {
+	stage, _, err := binding.Stage(stageID)
+	if err != nil {
+		return err
+	}
+	if !namePattern.MatchString(name) || !digestPattern.MatchString(expectedDigest) {
+		return errors.New("required staged execution input identity is invalid")
+	}
+	for _, input := range stage.Inputs {
+		if input.Name == name {
+			if input.Digest != expectedDigest {
+				return errors.New("staged execution input digest differs from verified artifact")
+			}
+			return nil
+		}
+	}
+	return errors.New("staged execution plan does not bind the required artifact")
+}
