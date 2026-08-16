@@ -1194,6 +1194,27 @@ read, rejects symlinks and non-text input, and emits only artifact and ConfigMap
 digests. It remains an offline input package: no NetworkPolicy, Job, credential
 Secret or live launch exists at this checkpoint.
 
+The local binary can now activate the same typed boundary directly:
+
+```text
+ok cluster stage run enablement --execute
+  + exact plan and three-receipt prefix
+  + signed CreateEnablement grant and public key
+  + exact HCP artifact and independently expected name
+  + distinct short-lived ledger and management-writer credentials
+      -> durable single-use claim
+      -> at most one exact HCP create
+      -> immutable outcome and stage receipt
+```
+
+The command has a fixed ten-minute outer deadline. It derives the namespace,
+R, E, fixture and management authority from independently supplied plan
+expectations; the caller can choose neither another API kind nor a
+`HelmReleaseProxy`. Missing `--execute`, incomplete receipt or credential
+inputs, a malformed evaluation time or positional input fail before bundle
+execution. This CLI does not package or launch a Job and adds no retry,
+rollback or cleanup.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter

@@ -400,6 +400,18 @@ var executeSubmissionStage = func(ctx context.Context, bundleConfig runner.Submi
 	return bound.Run(ctx)
 }
 
+var executeEnablementStage = func(ctx context.Context, bundleConfig runner.EnablementStageBundleConfig, runtimeConfig runner.SubmissionStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+	bundle, err := runner.LoadEnablementStageBundle(bundleConfig)
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	bound, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	return bound.Run(ctx)
+}
+
 var executeLifecycleObservationStage = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.LifecycleObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
 	bundle, err := runner.LoadLifecycleObservationStageBundle(bundleConfig)
 	if err != nil {
@@ -463,6 +475,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "lifecycle" {
 		return runClusterStageObserveLifecycle(ctx, arguments[4:], stdout, stderr)
 	}
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "enablement" {
+		return runClusterStageRunEnablement(ctx, arguments[4:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" {
 		return runClusterStageRun(ctx, arguments[3:], stdout, stderr)
 	}
@@ -475,7 +490,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -998,6 +1013,78 @@ func runClusterStageRun(ctx context.Context, arguments []string, stdout, stderr 
 		},
 		Authority: runner.KubernetesAuthorityConfig{
 			Endpoint: *authorityAPIEndpoint, TokenFile: *authorityTokenFile, CAFile: *authorityCAFile,
+		},
+		Clock: func() time.Time { return time.Now().UTC() },
+	})
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return runErr
+}
+
+func runClusterStageRunEnablement(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run enablement", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
+	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
+	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
+	artifactPath := flags.String("enablement-artifact", "", "path to the exact externally rendered HelmChartProxy")
+	objectName := flags.String("helmchartproxy-name", "", "independently expected HelmChartProxy name")
+	execute := flags.Bool("execute", false, "claim and execute exactly the selected enablement stage")
+	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
+	ledgerTokenFile := flags.String("ledger-token-file", "", "path to the short-lived ledger token")
+	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the ledger Kubernetes API CA bundle")
+	managementAPIEndpoint := flags.String("management-api-endpoint", "", "TLS Kubernetes API endpoint for the management writer")
+	managementTokenFile := flags.String("management-token-file", "", "path to the short-lived management writer token")
+	managementCAFile := flags.String("management-ca-file", "", "path to the management Kubernetes API CA bundle")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("enablement mutation requires explicit --execute")
+	}
+	resume, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--grant", *grantPath}, {"--grant-key", *grantKeyPath}, {"--evaluation-time", *evaluationTime},
+		{"--enablement-artifact", *artifactPath}, {"--helmchartproxy-name", *objectName},
+		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
+		{"--management-api-endpoint", *managementAPIEndpoint}, {"--management-token-file", *managementTokenFile}, {"--management-ca-file", *managementCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	at, err := time.Parse(time.RFC3339, *evaluationTime)
+	if err != nil {
+		return fmt.Errorf("parse evaluation time: %w", err)
+	}
+	bundleConfig := runner.EnablementStageBundleConfig{
+		PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
+		GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at, ArtifactPath: *artifactPath,
+		ExpectedObject: projection.ResourceIdentity{
+			APIVersion: "addons.cluster.x-k8s.io/v1alpha1", Kind: "HelmChartProxy",
+			Namespace: resume.PlanExpected.ContractIdentity.Namespace, Name: *objectName,
+		},
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, stageRunTimeout)
+	defer cancel()
+	receipt, runErr := executeEnablementStage(boundedContext, bundleConfig, runner.SubmissionStageRuntimeConfig{
+		Ledger: runner.KubernetesLedgerConfig{Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile},
+		Authority: runner.KubernetesAuthorityConfig{
+			Endpoint: *managementAPIEndpoint, AuthorityIdentity: resume.PlanExpected.ManagementAuthority,
+			TokenFile: *managementTokenFile, CAFile: *managementCAFile,
 		},
 		Clock: func() time.Time { return time.Now().UTC() },
 	})

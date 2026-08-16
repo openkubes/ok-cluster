@@ -482,6 +482,65 @@ func TestStageRunFailsClosedBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestEnablementStageRunBindsExactHCPAndManagementRuntime(t *testing.T) {
+	previous := executeEnablementStage
+	defer func() { executeEnablementStage = previous }()
+	var calls int
+	executeEnablementStage = func(ctx context.Context, bundle runner.EnablementStageBundleConfig, runtime runner.SubmissionStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+		calls++
+		deadline, bounded := ctx.Deadline()
+		if !bounded || time.Until(deadline) > stageRunTimeout || time.Until(deadline) < stageRunTimeout-time.Minute {
+			t.Fatalf("enablement context is not bounded: %s %t", deadline, bounded)
+		}
+		if bundle.PlanPath != "/tmp/plan.json" || len(bundle.Receipts) != 3 || bundle.ArtifactPath != "/tmp/enablement.yaml" || bundle.ExpectedObject.Kind != "HelmChartProxy" || bundle.ExpectedObject.Name != "disposable-ok147-cilium" || bundle.ExpectedObject.Namespace != "disposable-ok147" {
+			t.Fatalf("enablement bundle differs: %#v", bundle)
+		}
+		if runtime.Ledger.Namespace != ledgerNamespace || runtime.Authority.AuthorityIdentity != "ok-mgmt" || runtime.Authority.TokenFile != "/tmp/management-token" || runtime.Clock == nil {
+			t.Fatalf("enablement runtime differs: %#v", runtime)
+		}
+		return execution.StagedOperationReceipt{Format: execution.StagedReceiptFormat, State: "COMPLETED_SUCCEEDED", StageID: "enablement", StageReceiptDigest: testSHA("8")}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(enablementStageRunArguments(), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 1 {
+		t.Fatalf("enablement runner calls = %d", calls)
+	}
+	var receipt execution.StagedOperationReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.StageID != "enablement" {
+		t.Fatalf("unexpected enablement receipt: %#v %v", receipt, err)
+	}
+}
+
+func TestEnablementStageRunFailsClosedBeforeExecution(t *testing.T) {
+	previous := executeEnablementStage
+	defer func() { executeEnablementStage = previous }()
+	calls := 0
+	executeEnablementStage = func(context.Context, runner.EnablementStageBundleConfig, runner.SubmissionStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+		calls++
+		return execution.StagedOperationReceipt{}, nil
+	}
+	valid := enablementStageRunArguments()
+	for name, arguments := range map[string][]string{
+		"missing execute":    removeArgument(valid, "--execute"),
+		"missing artifact":   removeArgumentWithValue(valid, "--enablement-artifact"),
+		"missing credential": removeArgumentWithValue(valid, "--management-token-file"),
+		"invalid time":       replaceArgument(valid, "--evaluation-time", "not-time"),
+		"positional":         append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe enablement run was accepted: %v %s", err, stdout.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("enablement runner reached %d times for invalid input", calls)
+	}
+}
+
 func TestSubmissionStageAuthorityIsDerivedFromVerifiedTopology(t *testing.T) {
 	expected := stageplan.Expected{InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt"}
 	for symbolic, want := range map[string]string{"infrastructure": "ok-infra", "management": "ok-mgmt"} {
@@ -899,6 +958,22 @@ func stageRunArguments() []string {
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
 		"--authority-api-endpoint", "https://192.0.2.11:6443", "--authority-token-file", "/tmp/authority-token", "--authority-ca-file", "/tmp/authority-ca",
+	)
+}
+
+func enablementStageRunArguments() []string {
+	resume := stageResumeArguments()
+	arguments := append([]string{"cluster", "stage", "run", "enablement"}, resume[3:]...)
+	return append(arguments,
+		"--receipt", "/tmp/provider.json@"+testSHA("1"),
+		"--receipt", "/tmp/lifecycle.json@"+testSHA("2"),
+		"--receipt", "/tmp/lifecycle-observation.json@"+testSHA("3"),
+		"--grant", "/tmp/enablement-grant.json", "--grant-key", "/tmp/enablement-grant.pub",
+		"--evaluation-time", "2026-08-16T21:00:00Z",
+		"--enablement-artifact", "/tmp/enablement.yaml", "--helmchartproxy-name", "disposable-ok147-cilium",
+		"--execute",
+		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
+		"--management-api-endpoint", "https://192.0.2.12:6443", "--management-token-file", "/tmp/management-token", "--management-ca-file", "/tmp/management-ca",
 	)
 }
 
