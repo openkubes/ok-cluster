@@ -892,6 +892,28 @@ claimed stage without a durable outcome remains indeterminate. Finalization is
 evidence bookkeeping only; it cannot invoke a stage implementation, create an
 authorization, retry a mutation or turn a failed/stopped receipt into success.
 
+## Fail-closed stage resume cursor
+
+The runner can now evaluate an explicit, gap-free prefix of verified receipts
+and select exactly one result: the next stage, completed plan, or permanently
+stopped plan. Every prefix item is reverified from its canonical bytes and
+independently retained digest against the same plan and direct predecessor.
+Receipt completion times must also be monotonic across the chain.
+
+```text
+no receipts                 -> NEXT provider-prerequisites
+successful prefix           -> NEXT exact following stage
+all twelve successful       -> COMPLETED
+FAILED or STOPPED receipt   -> STOPPED, no next stage
+gap / reorder / foreign R   -> verification error
+```
+
+For a `NEXT` result the cursor exposes only the exact stage identity,
+authority, operation, authorization requirement and direct predecessor receipt
+set. It contains no dispatcher, implementation registry, credential, endpoint
+or retry policy. Therefore it can guide a later local or Job runner without
+becoming a second desired-state source or allowing a terminal plan to resume.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

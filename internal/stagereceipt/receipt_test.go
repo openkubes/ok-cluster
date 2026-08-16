@@ -75,6 +75,18 @@ func TestReceiptEnforcesMutationBoundary(t *testing.T) {
 	}
 }
 
+func TestReceiptRejectsCompletionBeforePredecessor(t *testing.T) {
+	plan := receiptPlan(t)
+	at := time.Date(2026, 8, 16, 16, 0, 0, 0, time.UTC)
+	provider, err := New(plan, "provider-prerequisites", []Verified{}, "SUCCEEDED", "ATTEMPTED", receiptSHA("1"), receiptSHA("a"), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(plan, "cluster-lifecycle", []Verified{provider}, "SUCCEEDED", "ATTEMPTED", receiptSHA("2"), receiptSHA("b"), at.Add(-time.Nanosecond)); err == nil {
+		t.Fatal("stage receipt completed before its predecessor was accepted")
+	}
+}
+
 func TestReceiptVerificationFailsClosedOnTamperingAndSymlink(t *testing.T) {
 	plan := receiptPlan(t)
 	at := time.Date(2026, 8, 16, 16, 0, 0, 0, time.UTC)
