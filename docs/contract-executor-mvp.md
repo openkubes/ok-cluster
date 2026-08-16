@@ -1237,6 +1237,17 @@ package file without overwrite, and emits only the redaction-safe package
 receipt on stdout. It has no `--execute` flag and accepts no credential
 contents.
 
+`ok147-enablement-stage-credential-package/v1` adds the private credential
+boundary without contacting Kubernetes. It accepts two independently obtained,
+digest-bound and short-lived TokenRequest results for the ledger and management
+writer. Both must prove the verified `ok-mgmt` authority, use different Secret
+names and different token bytes, carry exact issuer/subject/audience/time
+claims, retain at least fifteen minutes, and expire within one hour. The two
+immutable Secret objects remain private inside the verified package; its public
+receipt contains only authority, expiry, CA/evidence/object digests and object
+names. Changing the previously verified Enablement package identity fails
+closed. No credential or Job is installed by this checkpoint.
+
 ## Typed Contract-to-CAPI submission stages
 
 The existing bounded exact-create submission primitive now has a typed adapter
