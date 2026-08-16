@@ -748,6 +748,29 @@ transient failure can create an implicit retry. This boundary does not yet
 implement the concrete Kubernetes observability capability test, polling or
 target mutation.
 
+## Fixed observability capability orchestration
+
+The typed first-run probe now has a closed orchestration layer for the five
+Observability Capability Contract guarantees. It accepts exactly these
+semantic operations: prepare the synthetic metrics fixture; verify metrics,
+dashboards, logs, alert delivery and autonomy; and clean up only the owned
+synthetic resources. There is no generic request, manifest, command, exec,
+HTTP, Kubernetes or extension method on this boundary.
+
+Each run receives a deterministic `ok147-...` identity derived from the exact
+runtime-bound probe request. The configured namespace, contract digest and
+executable digest must match before any transport method is called. The checks
+run once in fixed order under one bounded timeout and stop at the first false
+guarantee or operational error. Synthetic cleanup is attempted after every
+prepare attempt, including partial preparation, false capability and cancelled
+execution, under its own bounded timeout. Cleanup failure fails the probe
+closed and transport details are never returned.
+
+This is still an offline semantic checkpoint. The concrete Kubernetes
+transport, fixed synthetic objects, bounded service access and credential
+materialization remain separate follow-ups. In particular, the existing Bash
+contract test is not embedded or executed by the runner.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It
