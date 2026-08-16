@@ -2011,6 +2011,15 @@ audiences, authority/digest identities and exact Secret-object digests; it
 contains no token, CA, endpoint, raw target UID, subject or source path. This
 primitive performs no TokenRequest, Secret installation or Kubernetes call.
 
+The tokenless runtime prerequisite and seven-object launch plan now close the
+offline launch geometry. One global preflight barrier covers the reusable
+runtime ServiceAccount, immutable input, NetworkPolicy, all three private
+Secrets and finally the Job. Only the runtime may already exist if its exact
+digest matches; every stage-specific object must be globally all absent or all
+exact before a later launcher may create anything. The Job is always last.
+The launch plan carries only package, credential and runtime digests plus exact
+GET/POST metadata and remains `MutationAllowed=false`.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
