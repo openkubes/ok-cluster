@@ -46,9 +46,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   or rollback path. Its public opener additionally requires an exact,
   expiry-bound launch-candidate digest that binds destination, CA and installer
   credential evidence; preparing it remains non-mutating. Live invocation is
-  still a separate critical boundary. The runner image is digest-pinned,
-  multi-architecture, non-root, SBOM- and provenance-producing behind a
-  protected publisher.
+  still a separate critical boundary. A private launch-material builder now
+  correlates all package, credential, runtime and candidate inputs without
+  exposing their bytes or contacting Kubernetes. The runner image is
+  digest-pinned, multi-architecture, non-root, SBOM- and
+  provenance-producing behind a protected publisher.
 
 ---
 
