@@ -45,9 +45,10 @@ type SubmissionStagePackageReceipt struct {
 }
 
 type VerifiedSubmissionStagePackage struct {
-	raw      []byte
-	receipt  SubmissionStagePackageReceipt
-	verified bool
+	raw                   []byte
+	receipt               SubmissionStagePackageReceipt
+	installationAuthority string
+	verified              bool
 }
 
 // BuildSubmissionStagePackage composes one immutable input ConfigMap with one
@@ -97,7 +98,11 @@ func BuildSubmissionStagePackage(config SubmissionStagePackageConfig) (VerifiedS
 		ObjectKinds:        []string{"ConfigMap", "NetworkPolicy", "Job"},
 		AuthorizationState: "VERIFIED", MutationAllowed: false,
 	}
-	return VerifiedSubmissionStagePackage{raw: packageRaw, receipt: receipt, verified: true}, nil
+	return VerifiedSubmissionStagePackage{
+		raw: packageRaw, receipt: receipt,
+		installationAuthority: config.Bundle.PlanExpected.ManagementAuthority,
+		verified:              true,
+	}, nil
 }
 
 func (packaged VerifiedSubmissionStagePackage) Bytes() ([]byte, error) {
