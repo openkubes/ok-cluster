@@ -856,6 +856,23 @@ Platform collector's separately hashed Application gate invokes capability
 code only after Argo is current, ordinary pre-convergence polling also does not
 consume the single-use first-run capability source.
 
+## Bounded Kubernetes execution composition
+
+The runtime package now composes the durable ledger, the two exact-create
+authorities, the runtime-bound aggregate observer and bounded polling into the
+single `execution.Operation` boundary. Construction reads bounded credential
+files for the ledger and submission authorities but performs no Kubernetes
+request. Observer credentials remain lazy. Infrastructure and management must
+have different endpoints, identities and actual bearer-token values; the
+management observer must use exactly the same authority binding as management
+submission, and the GitOps observer must name its authority explicitly.
+
+The same injected clock drives source evidence, polling and durable execution
+completion. The resulting operation still has no renderer, policy decision,
+retry, rollback, status writer or controller loop. This is library wiring only:
+the dry-run CLI and Job do not activate it, and this checkpoint made no cluster
+contact or mutation.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It

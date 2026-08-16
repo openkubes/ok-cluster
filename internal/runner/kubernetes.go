@@ -114,16 +114,28 @@ func OpenKubernetesLedger(config KubernetesLedgerConfig) (*ledger.Ledger, error)
 // for one exact authority plane. Paths and credential contents are never
 // returned in errors or receipts.
 func OpenKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submission.KubernetesClient, error) {
+	client, _, err := openKubernetesSubmissionClient(config)
+	return client, err
+}
+
+// openKubernetesSubmissionClient also returns the bounded token so operation
+// composition can prove that the two write authorities do not share one
+// credential. The token never leaves this package or enters an error/receipt.
+func openKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submission.KubernetesClient, string, error) {
 	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.TokenFile == "" || config.CAFile == "" {
-		return nil, errors.New("Kubernetes authority endpoint, identity, token file, and CA file are required")
+		return nil, "", errors.New("Kubernetes authority endpoint, identity, token file, and CA file are required")
 	}
 	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return submission.NewKubernetesClient(submission.KubernetesClientConfig{
+	submitter, err := submission.NewKubernetesClient(submission.KubernetesClientConfig{
 		Endpoint: config.Endpoint, AuthorityIdentity: config.AuthorityIdentity, BearerToken: token, Client: client,
 	})
+	if err != nil {
+		return nil, "", err
+	}
+	return submitter, token, nil
 }
 
 // OpenKubernetesCAPILifecycleObserver materializes a bounded management-plane
