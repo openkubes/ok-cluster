@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,8 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
 func TestOpenKubernetesLedgerValidatesProjectedInputs(t *testing.T) {
@@ -148,8 +145,7 @@ func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing
 		},
 		ExpectedManagementAuthority: "ok-mgmt", TargetClusterUID: targetUID,
 		Namespace: "disposable-ok141", Name: "disposable-ok141", HCPName: "disposable-ok141-cilium",
-		Clock:       func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) },
-		PodExecutor: runnerProbeExecutor{},
+		Clock: func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) },
 	}
 	if _, err := OpenKubernetesNetworkSourceCollector(base); err != nil {
 		t.Fatal(err)
@@ -168,9 +164,6 @@ func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing
 		"shared credential": func(config *KubernetesNetworkObserverConfig) {
 			config.Workload.TokenFile = config.Management.TokenFile
 		},
-		"missing executor": func(config *KubernetesNetworkObserverConfig) {
-			config.PodExecutor = nil
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := base
@@ -180,12 +173,6 @@ func TestOpenKubernetesNetworkSourceCollectorBindsDistinctAuthorities(t *testing
 			}
 		})
 	}
-}
-
-type runnerProbeExecutor struct{}
-
-func (runnerProbeExecutor) Exec(context.Context, observation.CiliumProbeExecRequest) ([]byte, error) {
-	return []byte(`{"nodes":[]}`), nil
 }
 
 func testCA(t *testing.T) []byte {

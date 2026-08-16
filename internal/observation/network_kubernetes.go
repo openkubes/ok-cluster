@@ -122,6 +122,30 @@ type CiliumProbeExecRequest struct {
 	Command   [5]string
 }
 
+var fixedCiliumProbeCommand = [5]string{"cilium-health", "status", "--probe", "--output", "json"}
+
+// NewFixedCiliumProbeExecRequest is the single authoritative constructor for
+// the command transported by the runner. It never accepts command arguments.
+func NewFixedCiliumProbeExecRequest(podName, podUID string) (CiliumProbeExecRequest, error) {
+	request := CiliumProbeExecRequest{
+		Namespace: "kube-system", PodName: podName, PodUID: podUID, Container: "cilium-agent",
+		Command: fixedCiliumProbeCommand,
+	}
+	if err := ValidateFixedCiliumProbeExecRequest(request); err != nil {
+		return CiliumProbeExecRequest{}, err
+	}
+	return request, nil
+}
+
+// ValidateFixedCiliumProbeExecRequest prevents a low-level transport from
+// being reused as an arbitrary Pod command surface.
+func ValidateFixedCiliumProbeExecRequest(request CiliumProbeExecRequest) error {
+	if request.Namespace != "kube-system" || request.Container != "cilium-agent" || request.Command != fixedCiliumProbeCommand || !validDNSLabel(request.PodName) || !validUID(request.PodUID) {
+		return errors.New("Cilium probe exec request differs from the fixed boundary")
+	}
+	return nil
+}
+
 type CiliumProbePodExecutor interface {
 	Exec(context.Context, CiliumProbeExecRequest) ([]byte, error)
 }
@@ -140,13 +164,11 @@ func NewKubernetesFixedCiliumProbe(executor CiliumProbePodExecutor) (*Kubernetes
 }
 
 func (probe *KubernetesFixedCiliumProbe) Probe(ctx context.Context, podName, podUID string) ([]byte, error) {
-	if !validDNSLabel(podName) || !validUID(podUID) {
-		return nil, errors.New("fixed Cilium probe Pod identity is invalid")
+	request, err := NewFixedCiliumProbeExecRequest(podName, podUID)
+	if err != nil {
+		return nil, err
 	}
-	raw, err := probe.executor.Exec(ctx, CiliumProbeExecRequest{
-		Namespace: "kube-system", PodName: podName, PodUID: podUID, Container: "cilium-agent",
-		Command: [5]string{"cilium-health", "status", "--probe", "--output", "json"},
-	})
+	raw, err := probe.executor.Exec(ctx, request)
 	if err != nil {
 		return nil, errors.New("fixed Cilium Pod exec failed")
 	}

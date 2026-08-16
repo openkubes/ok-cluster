@@ -138,6 +138,35 @@ func TestKubernetesFixedCiliumProbeBindsExactCommand(t *testing.T) {
 	}
 }
 
+func TestFixedCiliumProbeExecRequestHasOneAuthoritativeShape(t *testing.T) {
+	request, err := NewFixedCiliumProbeExecRequest("cilium-abc12", "pod-uid-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Namespace != "kube-system" || request.PodName != "cilium-abc12" || request.PodUID != "pod-uid-1" || request.Container != "cilium-agent" || request.Command != [5]string{"cilium-health", "status", "--probe", "--output", "json"} {
+		t.Fatalf("fixed request differs from the authoritative shape: %#v", request)
+	}
+	if err := ValidateFixedCiliumProbeExecRequest(request); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, mutate := range map[string]func(*CiliumProbeExecRequest){
+		"namespace": func(candidate *CiliumProbeExecRequest) { candidate.Namespace = "default" },
+		"pod name":  func(candidate *CiliumProbeExecRequest) { candidate.PodName = "INVALID" },
+		"pod uid":   func(candidate *CiliumProbeExecRequest) { candidate.PodUID = "" },
+		"container": func(candidate *CiliumProbeExecRequest) { candidate.Container = "shell" },
+		"command":   func(candidate *CiliumProbeExecRequest) { candidate.Command[0] = "sh" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			mutate(&candidate)
+			if err := ValidateFixedCiliumProbeExecRequest(candidate); err == nil {
+				t.Fatal("non-authoritative Cilium exec request accepted")
+			}
+		})
+	}
+}
+
 func TestKubernetesFixedCiliumProbeFailsClosed(t *testing.T) {
 	if _, err := NewKubernetesFixedCiliumProbe(nil); err == nil {
 		t.Fatal("nil Pod executor accepted")
