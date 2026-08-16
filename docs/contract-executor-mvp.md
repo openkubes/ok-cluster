@@ -588,6 +588,36 @@ without making the profile a Kubernetes resource or introducing a reconciler.
 The loader is not yet wired to the CLI or Job, contains no built-in OK-141
 profile default, and performs no Kubernetes access or mutation.
 
+## Bounded Argo PlatformReady adapter
+
+The concrete Platform source now reads only the exact Argo CD Applications
+named by an immutable `ok147-platform-profile/v1`. Its Kubernetes transport is
+TLS-only, denies redirects, accepts no arbitrary path and derives an allowlist
+containing one namespaced GET per required Application. It has no discovery,
+list, watch, sync, mutation, retry, target-cluster or command-execution path.
+
+Each Application observation binds its UID, resource version, R, P, execution
+fixture, normalized semantic spec, immutable desired Git commit, applied
+revision, sync state and health state. The normalized spec includes source,
+project, destination and sync policy, while target registration is also checked
+against the profile. Membership is exact and canonicalized as a set, so input
+ordering does not create a different profile identity.
+
+Argo `Synced` and `Healthy` is intentionally not sufficient for
+`PlatformReady=True`. A separately verified, redaction-safe capability
+assertion must bind the same target UID, R, P, capability contract and
+executable identities; its self-independent evidence digest and bounded age
+are checked by the evaluator. The Argo adapter cannot manufacture that
+assertion or run its executable. Missing, stale or revision-mismatched proof
+therefore remains `Unknown`, while current health, identity or capability
+failures remain `False`.
+
+The runner-side opener binds the reader to one explicitly named GitOps
+authority (for the OK-141 topology, `ok-shared`) and a short-lived projected
+credential. The adapter is still not wired to the CLI or Job, no built-in
+OK-141 profile is selected, and this offline checkpoint made no cluster
+contact or infrastructure mutation.
+
 ## OK-141 compatibility evidence
 
 The verifier was run offline against the preserved Phase-R v5 projection. It

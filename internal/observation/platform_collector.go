@@ -1,0 +1,191 @@
+package observation
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"time"
+)
+
+// PlatformRawGetter exposes only the exact Application GETs selected when the
+// adapter is constructed.
+type PlatformRawGetter interface {
+	Get(context.Context, string) ([]byte, error)
+}
+
+// PlatformCapabilitySource returns one already verified, redaction-safe
+// capability assertion. It intentionally cannot accept a command or execute a
+// test from this Argo adapter.
+type PlatformCapabilitySource interface {
+	Capability(context.Context) (PlatformCapabilityState, error)
+}
+
+type PlatformCollectorConfig struct {
+	Profile PlatformProfile
+	Clock   func() time.Time
+}
+
+type PlatformSourceCollector struct {
+	argo       PlatformRawGetter
+	capability PlatformCapabilitySource
+	config     PlatformCollectorConfig
+}
+
+func NewPlatformSourceCollector(argo PlatformRawGetter, capability PlatformCapabilitySource, config PlatformCollectorConfig) (*PlatformSourceCollector, error) {
+	if argo == nil || capability == nil || config.Clock == nil {
+		return nil, errors.New("platform collector sources and clock are required")
+	}
+	if err := ValidatePlatformProfile(config.Profile); err != nil {
+		return nil, errors.New("platform collector profile is invalid")
+	}
+	return &PlatformSourceCollector{argo: argo, capability: capability, config: config}, nil
+}
+
+func (collector *PlatformSourceCollector) Observe(ctx context.Context, policy Policy) (Evidence, error) {
+	snapshot, err := collector.Collect(ctx, policy)
+	if err != nil {
+		return Evidence{}, err
+	}
+	return EvaluatePlatformSnapshot(policy, collector.config.Profile, snapshot)
+}
+
+// Collect performs exactly one GET per profiled Application plus one bounded
+// capability-source read. It has no list, discovery, watch, mutation, sync,
+// retry, repair, target-cluster access or arbitrary-command path.
+func (collector *PlatformSourceCollector) Collect(ctx context.Context, policy Policy) (PlatformSnapshot, error) {
+	if err := validatePolicy(policy, true); err != nil {
+		return PlatformSnapshot{}, err
+	}
+	if err := validatePlatformProfile(policy, collector.config.Profile); err != nil {
+		return PlatformSnapshot{}, err
+	}
+	applications := make([]PlatformApplicationState, 0, len(collector.config.Profile.RequiredApplications))
+	for _, expected := range collector.config.Profile.RequiredApplications {
+		path := platformApplicationPath(collector.config.Profile.ArgoNamespace, expected.Name)
+		object, err := getPlatformObject(ctx, collector.argo, path)
+		if err != nil {
+			return PlatformSnapshot{}, fmt.Errorf("collect exact Argo Application: %w", err)
+		}
+		application, err := normalizePlatformApplication(object, collector.config.Profile, expected)
+		if err != nil {
+			return PlatformSnapshot{}, err
+		}
+		applications = append(applications, application)
+	}
+	sortPlatformApplications(applications)
+	capability, err := collector.capability.Capability(ctx)
+	if err != nil {
+		return PlatformSnapshot{}, errors.New("collect bounded platform capability evidence")
+	}
+	return PlatformSnapshot{
+		Format: PlatformSnapshotFormat, ObservedAt: collector.config.Clock().UTC().Format(time.RFC3339Nano),
+		TargetClusterUID: collector.config.Profile.TargetClusterUID,
+		Applications:     applications, Capability: capability,
+	}, nil
+}
+
+func getPlatformObject(ctx context.Context, source PlatformRawGetter, path string) (map[string]any, error) {
+	raw, err := source.Get(ctx, path)
+	if err != nil {
+		return nil, errors.New("bounded platform source GET failed")
+	}
+	if len(raw) == 0 || len(raw) > maximumPlatformSourceBytes {
+		return nil, errors.New("platform source response size is invalid")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, errors.New("platform source returned invalid JSON object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("platform source returned trailing JSON")
+	}
+	return value, nil
+}
+
+func normalizePlatformApplication(object map[string]any, profile PlatformProfile, expected PlatformApplicationExpectation) (PlatformApplicationState, error) {
+	if text(object["apiVersion"]) != "argoproj.io/v1alpha1" || text(object["kind"]) != "Application" {
+		return PlatformApplicationState{}, errors.New("Argo Application API identity is invalid")
+	}
+	metadata, err := objectMap(object, "metadata")
+	if err != nil || text(metadata["namespace"]) != profile.ArgoNamespace || text(metadata["name"]) != expected.Name {
+		return PlatformApplicationState{}, errors.New("Argo Application object identity differs from exact target")
+	}
+	uid, resourceVersion := text(metadata["uid"]), text(metadata["resourceVersion"])
+	if !validUID(uid) || resourceVersion == "" {
+		return PlatformApplicationState{}, errors.New("Argo Application runtime identity is invalid")
+	}
+	annotations, _ := objectMap(metadata, "annotations")
+	spec, err := objectMap(object, "spec")
+	if err != nil {
+		return PlatformApplicationState{}, errors.New("Argo Application spec is missing")
+	}
+	normalizedSpec, desiredRevision, err := normalizedPlatformApplicationSpec(spec)
+	if err != nil {
+		return PlatformApplicationState{}, err
+	}
+	destination, _ := normalizedSpec["destination"].(map[string]any)
+	if text(destination["name"]) != profile.RegistrationName {
+		return PlatformApplicationState{}, errors.New("Argo Application destination differs from the bound registration")
+	}
+	specDigest, err := canonicalDigest(normalizedSpec)
+	if err != nil {
+		return PlatformApplicationState{}, errors.New("digest normalized Argo Application spec")
+	}
+	status, _ := objectMap(object, "status")
+	sync, _ := objectMap(status, "sync")
+	health, _ := objectMap(status, "health")
+	return PlatformApplicationState{
+		Name: expected.Name, UID: uid, ResourceVersion: resourceVersion,
+		IntentRevision:   text(annotations["openkubes.io/intent-revision"]),
+		PlatformRevision: text(annotations["openkubes.io/platform-revision"]),
+		ExecutionFixture: text(annotations["openkubes.io/execution-fixture"]),
+		SpecDigest:       specDigest, DesiredSourceRevision: desiredRevision,
+		AppliedSourceRevision: text(sync["revision"]), SyncStatus: text(sync["status"]), HealthStatus: text(health["status"]),
+	}, nil
+}
+
+func normalizedPlatformApplicationSpec(spec map[string]any) (map[string]any, string, error) {
+	source, err := objectMap(spec, "source")
+	if err != nil {
+		return nil, "", errors.New("Argo Application source is missing")
+	}
+	destination, err := objectMap(spec, "destination")
+	if err != nil {
+		return nil, "", errors.New("Argo Application destination is missing")
+	}
+	revision := text(source["targetRevision"])
+	if !validGitCommit(revision) || text(source["repoURL"]) == "" || text(source["path"]) == "" || text(spec["project"]) == "" || text(destination["name"]) == "" || text(destination["namespace"]) == "" {
+		return nil, "", errors.New("Argo Application semantic identity is incomplete or mutable")
+	}
+	// Keep all source and sync semantics, but only the stable target fields. The
+	// API may default unrelated destination fields; these cannot change P.
+	normalized := map[string]any{
+		"project":     spec["project"],
+		"source":      source,
+		"destination": map[string]any{"name": destination["name"], "namespace": destination["namespace"]},
+	}
+	if syncPolicy, exists := spec["syncPolicy"]; exists {
+		normalized["syncPolicy"] = syncPolicy
+	}
+	return normalized, revision, nil
+}
+
+func validGitCommit(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			if character < 'a' || character > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
