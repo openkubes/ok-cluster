@@ -72,7 +72,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   stage observe lifecycle --execute` is the first activation path: it accepts
   no grant or projection, requires an explicit receipt prefix and bounded
   polling window, reads only the exact CAPI Cluster and persists only its
-  immutable stage receipt. It is not yet packaged or launched as a Job.
+  immutable stage receipt. `ok cluster stage observe lifecycle package`
+  additionally creates a digest-bound immutable ConfigMap, NetworkPolicy and
+  non-retrying Job envelope offline; it does not install or launch them.
 
 ---
 

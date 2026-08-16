@@ -1017,8 +1017,37 @@ management API and persists evidence in the ledger. The context is bounded to
 the caller's poll timeout plus one minute of fixed completion overhead. Invalid
 timing or incomplete runtime input fails before credential opening; terminal
 `FAILED` and `STOPPED` receipts are still emitted while the process returns an
-error. This checkpoint does not package, launch or deploy an observation Job,
-and its tests make no Kubernetes request.
+error. The execution command does not implicitly package, launch or deploy an
+observation Job, and its tests make no Kubernetes request.
+
+## Lifecycle-observation Job package
+
+The same command is now represented by a separate offline Job envelope. Its
+input ConfigMap contains exactly four public files: the staged plan, canonical
+receipt-prefix manifest, provider receipt and lifecycle receipt. It contains no
+grant, trusted key, projection, authority map, credential or rendered resource.
+
+```text
+ok cluster stage observe lifecycle package
+      -> immutable public input ConfigMap
+      -> single-endpoint egress NetworkPolicy
+      -> backoffLimit: 0 lifecycle-observation Job
+```
+
+The Job mounts distinct externally materialized ledger-writer and read-only
+management-observer Secrets. Both capabilities are bound to the same exact
+management API IP and port, but token object names must differ. The Pod has no
+automounted ServiceAccount token, runs non-root with a read-only filesystem,
+drops all capabilities and cannot schedule on a control-plane node. Its active
+deadline is derived deterministically from the verified polling timeout plus
+one minute of receipt-completion overhead.
+
+The packager reverifies the complete plan/receipt chain before and after source
+capture, binds the template and each emitted component by SHA-256, writes only
+a new `0600` local file and reports `authorizationState: NOT_REQUIRED` with
+`mutationAllowed: false`. Packaging is not installation or execution. No Job,
+ConfigMap, NetworkPolicy or credential Secret is created by this checkpoint,
+and all tests remain offline.
 
 ## Cursor-to-grant binding
 
