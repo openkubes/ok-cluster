@@ -89,6 +89,25 @@ class RunnerImageTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "has no index.json"):
                 MODULE.inspect_oci_archive(path)
 
+    def test_semantic_sbom_digest_ignores_only_envelope_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first = Path(temporary) / "first.json"
+            second = Path(temporary) / "second.json"
+            document = {
+                "spdxVersion": "SPDX-2.3",
+                "documentNamespace": "urn:first",
+                "creationInfo": {"created": "2026-08-16T08:00:00Z", "creators": ["Tool: syft"]},
+                "packages": [{"name": "ok", "versionInfo": "1"}],
+            }
+            first.write_text(json.dumps(document))
+            document["documentNamespace"] = "urn:second"
+            document["creationInfo"]["created"] = "2026-08-16T09:00:00Z"
+            second.write_text(json.dumps(document))
+            self.assertEqual(MODULE.semantic_sbom_digest(first), MODULE.semantic_sbom_digest(second))
+            document["packages"][0]["versionInfo"] = "2"
+            second.write_text(json.dumps(document))
+            self.assertNotEqual(MODULE.semantic_sbom_digest(first), MODULE.semantic_sbom_digest(second))
+
 
 if __name__ == "__main__":
     unittest.main()
