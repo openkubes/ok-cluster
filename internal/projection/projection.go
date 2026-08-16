@@ -62,11 +62,24 @@ type Artifact struct {
 	Digest string `json:"digest"`
 }
 
+// ResourceIdentity is the exact Kubernetes identity authorized by the
+// renderer's authority map. It is deliberately excluded from CreateRequest
+// JSON because AuthorityMapDigest already binds the complete resource set.
+// Keeping it in memory lets bounded submitters validate projection documents
+// without creating a second renderer or trusting file names alone.
+type ResourceIdentity struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
+}
+
 // Plane is a verified authority domain, not a credential or Kubernetes context.
 type Plane struct {
-	Identity      string `json:"identity"`
-	Role          string `json:"role"`
-	ResourceCount int    `json:"resourceCount"`
+	Identity      string             `json:"identity"`
+	Role          string             `json:"role"`
+	ResourceCount int                `json:"resourceCount"`
+	Resources     []ResourceIdentity `json:"-"`
 }
 
 // Binding is the bounded proof returned after all referenced files and
@@ -133,6 +146,11 @@ func Verify(manifestPath, root, expectedRevision string, expectedIdentity contra
 			authorityRaw = artifactRaw
 		}
 	}
+	for _, required := range []string{"authority-map.json", "ok-infra-prerequisites.yaml", "ok-mgmt-lifecycle.yaml"} {
+		if _, ok := source.Artifacts[required]; !ok {
+			return Binding{}, fmt.Errorf("projection manifest does not bind %s", required)
+		}
+	}
 	if authorityRaw == nil {
 		return Binding{}, errors.New("projection manifest does not bind authority-map.json")
 	}
@@ -174,10 +192,23 @@ func Verify(manifestPath, root, expectedRevision string, expectedIdentity contra
 		AuthorityMapDigest:  digest.SHA256(authorityRaw),
 		IntentRevision:      expectedRevision,
 		ContractIdentity:    expectedIdentity,
-		InfrastructurePlane: Plane{Identity: authority.InfrastructurePlane.Identity, Role: authority.InfrastructurePlane.Role, ResourceCount: len(authority.InfrastructurePlane.Resources)},
-		ManagementPlane:     Plane{Identity: authority.ManagementPlane.Identity, Role: authority.ManagementPlane.Role, ResourceCount: len(authority.ManagementPlane.Resources)},
+		InfrastructurePlane: Plane{Identity: authority.InfrastructurePlane.Identity, Role: authority.InfrastructurePlane.Role, ResourceCount: len(authority.InfrastructurePlane.Resources), Resources: exportResources(authority.InfrastructurePlane.Resources)},
+		ManagementPlane:     Plane{Identity: authority.ManagementPlane.Identity, Role: authority.ManagementPlane.Role, ResourceCount: len(authority.ManagementPlane.Resources), Resources: exportResources(authority.ManagementPlane.Resources)},
 		Artifacts:           artifacts,
 	}, nil
+}
+
+func exportResources(resources []resource) []ResourceIdentity {
+	result := make([]ResourceIdentity, 0, len(resources))
+	for _, object := range resources {
+		result = append(result, ResourceIdentity{
+			APIVersion: object.APIVersion,
+			Kind:       object.Kind,
+			Name:       object.Name,
+			Namespace:  object.Namespace,
+		})
+	}
+	return result
 }
 
 func validateArtifactName(name string) error {
