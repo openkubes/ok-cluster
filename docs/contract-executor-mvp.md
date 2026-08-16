@@ -1288,6 +1288,15 @@ Post-verification changes to any retained component fail closed. At this
 checkpoint the material exposes no private bytes. Its `Open` boundary requires
 the exact candidate digest and reuses only retained verified components;
 opening validates the bounded local installer credential without API contact.
+The offline CLI boundary is:
+
+```text
+ok cluster stage run enablement launch prepare
+```
+
+It requires the complete package, private two-credential, tokenless-runtime
+and installer-candidate inputs and emits only the material and candidate
+receipts. It has no execute flag and cannot contact Kubernetes.
 
 `ok147-enablement-stage-launch-receipt/v1` is produced by a single-use bounded
 launcher that completes all six exact-name GETs before its first POST. It
@@ -1296,7 +1305,7 @@ objects matching exactly; every other partial state stops with zero writes.
 Creation is fixed to runtime, ConfigMap, NetworkPolicy, ledger Secret, writer
 Secret and Job. A failed create preserves the verified prefix and stops without
 retry. The launcher is currently exercised only through a fake Kubernetes API
-and is not exposed by the CLI.
+and launch execution is not exposed by the CLI.
 
 ## Typed Contract-to-CAPI submission stages
 
