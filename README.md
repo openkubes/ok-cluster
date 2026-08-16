@@ -103,8 +103,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   The material can open only its exact retained candidate. A single-use Enablement
   launcher now proves the six-GET global barrier and fixed six-POST create-only
   sequence against a fake API. `ok cluster stage run enablement launch prepare`
-  now emits the redaction-safe sealed-material and candidate receipts; launch
-  execution is not yet reachable from the CLI.
+  emits the redaction-safe sealed-material and candidate receipts. The separate
+  `... launch execute --execute` boundary requires that exact candidate digest
+  plus the bounded installer files before it can open the single-use launcher.
 
 ---
 

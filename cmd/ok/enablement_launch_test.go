@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/runner"
@@ -68,6 +70,63 @@ func TestEnablementLaunchPrepareBuildsOneNonMutatingCandidate(t *testing.T) {
 	}
 }
 
+func TestEnablementLaunchExecuteUsesExactBoundary(t *testing.T) {
+	previous := executeEnablementStageLaunch
+	defer func() { executeEnablementStageLaunch = previous }()
+	var calls int
+	var candidate string
+	executeEnablementStageLaunch = func(ctx context.Context, config runner.EnablementStageLaunchMaterialConfig, authority runner.KubernetesAuthorityConfig, expectedCandidateDigest string) (runner.EnablementStageLaunchReceipt, error) {
+		calls++
+		candidate = expectedCandidateDigest
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > stageLaunchTimeout {
+			t.Fatal("enablement launch context is not bounded")
+		}
+		if config.Package.RunID != "ok147-enablement-20260816-01" || authority.Endpoint != "https://192.0.2.12:6443" || authority.TokenFile != "/private/tmp/installer-token" {
+			t.Fatalf("execute boundary differs: %#v %#v", config, authority)
+		}
+		return runner.EnablementStageLaunchReceipt{
+			Format: runner.EnablementStageLaunchReceiptFormat, StageID: "enablement", Authority: "ok-mgmt",
+			State: "LAUNCHED", MutationState: "ATTEMPTED", Results: []runner.SubmissionStageLaunchResult{},
+		}, nil
+	}
+	root := t.TempDir()
+	template, runtimeManifest := filepath.Join(root, "enablement.yaml.tpl"), filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-enablement-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(enablementLaunchExecuteArguments(template, runtimeManifest), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 1 || candidate != testSHA("9") {
+		t.Fatalf("exact enablement candidate not used: calls=%d digest=%q", calls, candidate)
+	}
+	var receipt runner.EnablementStageLaunchReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "LAUNCHED" {
+		t.Fatalf("unexpected enablement launch receipt: %#v %v", receipt, err)
+	}
+
+	valid := enablementLaunchExecuteArguments(template, runtimeManifest)
+	for name, arguments := range map[string][]string{
+		"missing execute":         removeArgument(valid, "--execute"),
+		"missing candidate":       removeArgumentWithValue(valid, "--expected-candidate-digest"),
+		"malformed candidate":     replaceArgument(valid, "--expected-candidate-digest", "sha256:ABC"),
+		"missing installer token": removeArgumentWithValue(valid, "--installer-token-file"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			stdout.Reset()
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 || calls != before {
+				t.Fatal("unsafe enablement launch input reached executor")
+			}
+		})
+	}
+}
+
 func enablementLaunchPrepareArguments(template, runtimeManifest string) []string {
 	packaged := enablementStagePackageArguments(template, "/private/tmp/not-used-package")
 	packaged = removeArgumentWithValue(packaged, "--output")
@@ -92,5 +151,14 @@ func enablementLaunchPrepareArguments(template, runtimeManifest string) []string
 		"--installer-api-endpoint", "https://192.0.2.12:6443", "--installer-ca-digest", testSHA("2"),
 		"--installer-token-digest", testSHA("7"), "--installer-tokenrequest-evidence-digest", testSHA("8"),
 		"--prepared-at", "2026-08-16T12:01:00Z",
+	)
+}
+
+func enablementLaunchExecuteArguments(template, runtimeManifest string) []string {
+	arguments := enablementLaunchPrepareArguments(template, runtimeManifest)
+	arguments[5] = "execute"
+	return append(arguments,
+		"--execute", "--expected-candidate-digest", testSHA("9"),
+		"--installer-token-file", "/private/tmp/installer-token", "--installer-ca-file", "/private/tmp/installer-ca",
 	)
 }
