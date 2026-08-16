@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,10 +13,15 @@ import (
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/executor"
+	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/projection"
+	"github.com/openkubes/ok-cluster/internal/runner"
 )
 
-const version = "0.0.0-dev"
+const (
+	version         = "0.0.0-dev"
+	ledgerNamespace = "openkubes-execution-system"
+)
 
 type createPlan struct {
 	Format                  string                  `json:"format"`
@@ -30,6 +36,7 @@ type createPlan struct {
 	Request                 *executor.CreateRequest `json:"request,omitempty"`
 	RequestDigest           string                  `json:"requestDigest,omitempty"`
 	Authorization           *authorization.Receipt  `json:"authorization,omitempty"`
+	Ledger                  *ledger.Inspection      `json:"ledger,omitempty"`
 }
 
 func main() {
@@ -45,7 +52,7 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	if len(arguments) < 2 || arguments[0] != "cluster" || arguments[1] != "create" {
-		return errors.New("usage: ok cluster create --contract PATH --schema PATH --dry-run [--projection-manifest PATH] [--authorization PATH --authorization-key PATH --evaluation-time RFC3339]")
+		return errors.New("usage: ok cluster create --contract PATH --schema PATH --dry-run [--projection-manifest PATH] [--authorization PATH --authorization-key PATH --evaluation-time RFC3339] [--ledger-inspect --ledger-api-endpoint URL --ledger-token-file PATH --ledger-ca-file PATH]")
 	}
 	flags := flag.NewFlagSet("ok cluster create", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -57,6 +64,10 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 	authorizationPath := flags.String("authorization", "", "path to a signed create authorization JSON document")
 	authorizationKeyPath := flags.String("authorization-key", "", "path to the trusted base64-encoded raw Ed25519 public key")
 	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 authorization evaluation time")
+	ledgerInspect := flags.Bool("ledger-inspect", false, "read the exact durable grant state without claiming it")
+	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
+	ledgerTokenFile := flags.String("ledger-token-file", "", "path to a projected short-lived ledger ServiceAccount token")
+	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the projected Kubernetes API CA bundle")
 	if err := flags.Parse(arguments[2:]); err != nil {
 		return err
 	}
@@ -117,6 +128,7 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 		plan.RequestDigest = requestDigest
 	}
 	providedAuthorizationInputs := countNonEmpty(*authorizationPath, *authorizationKeyPath, *evaluationTime)
+	var verifiedGrant authorization.VerifiedGrant
 	if providedAuthorizationInputs != 0 {
 		if plan.Request == nil {
 			return errors.New("--authorization requires --projection-manifest")
@@ -140,9 +152,30 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		verifiedGrant = grant
 		receipt := grant.Receipt()
 		plan.AuthorizationState = "VERIFIED"
 		plan.Authorization = &receipt
+	}
+	providedLedgerInputs := countNonEmpty(*ledgerAPIEndpoint, *ledgerTokenFile, *ledgerCAFile)
+	if !*ledgerInspect && providedLedgerInputs != 0 {
+		return errors.New("Kubernetes ledger inputs require --ledger-inspect")
+	}
+	if *ledgerInspect {
+		if plan.Authorization == nil {
+			return errors.New("--ledger-inspect requires a verified authorization")
+		}
+		if providedLedgerInputs != 3 {
+			return errors.New("--ledger-api-endpoint, --ledger-token-file, and --ledger-ca-file must be provided together")
+		}
+		inspection, err := runner.InspectKubernetesLedger(context.Background(), verifiedGrant, runner.KubernetesLedgerConfig{
+			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
+		})
+		if err != nil {
+			return fmt.Errorf("inspect durable grant ledger: %w", err)
+		}
+		plan.Format = "ok147-create-plan/v3"
+		plan.Ledger = &inspection
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetEscapeHTML(false)

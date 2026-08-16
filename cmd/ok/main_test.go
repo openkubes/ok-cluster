@@ -64,8 +64,10 @@ func TestCreateRejectsIncompleteProjectionAndAuthorizationInputs(t *testing.T) {
 		"--dry-run",
 	}
 	for name, extra := range map[string][]string{
-		"projection root without manifest": {"--projection-root", "/tmp/projection"},
-		"authorization without projection": {"--authorization", "/tmp/grant.json", "--authorization-key", "/tmp/key", "--evaluation-time", "2026-08-16T10:00:00Z"},
+		"projection root without manifest":     {"--projection-root", "/tmp/projection"},
+		"authorization without projection":     {"--authorization", "/tmp/grant.json", "--authorization-key", "/tmp/key", "--evaluation-time", "2026-08-16T10:00:00Z"},
+		"ledger inspect without authorization": {"--ledger-inspect", "--ledger-api-endpoint", "https://10.43.0.1:443", "--ledger-token-file", "/tmp/token", "--ledger-ca-file", "/tmp/ca"},
+		"ledger inputs without inspect":        {"--ledger-api-endpoint", "https://10.43.0.1:443"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

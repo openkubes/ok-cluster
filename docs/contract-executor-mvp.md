@@ -182,11 +182,53 @@ that equality check on every create response and read. Likewise, RBAC cannot
 restrict `create` to one exact body. Signed request binding and strict receipt
 validation remain required application-level controls.
 
-The Service Account deliberately has no mutation authority over CAPI, provider,
-enablement, GitOps, or workload resources in this checkpoint. The manifest is
-not deployed, the Kubernetes store is not yet wired to a Job, and no cluster was
-contacted. Tests use an in-memory API transport and prove that a replacement
-executor observes the original claim and cannot reuse it.
+The ledger identities deliberately have no mutation authority over CAPI,
+provider, enablement, GitOps, or workload resources. The manifest is not
+deployed and no cluster was contacted. Tests use an in-memory API transport and
+prove that a replacement executor observes the original claim and cannot reuse
+it. The read-only Job integration is described next.
+
+## Read-only Job preflight envelope
+
+The fifth checkpoint wires the same `ok` binary to a short-lived `ok-mgmt` Job
+in read-only preflight mode. With an exact signed authorization already
+verified, `--ledger-inspect` reads only the deterministic claim/outcome names
+and emits `ok147-create-plan/v3` with the current restart decision:
+
+```bash
+ok cluster create --dry-run \
+  --contract /var/run/openkubes/input/contract.yaml \
+  --schema /var/run/openkubes/input/schema.json \
+  --projection-manifest /var/run/openkubes/input/projection-manifest.json \
+  --projection-root /var/run/openkubes/input \
+  --authorization /var/run/openkubes/input/authorization.json \
+  --authorization-key /var/run/openkubes/input/trusted-ed25519-public-key.base64 \
+  --evaluation-time 2026-08-16T10:00:00Z \
+  --ledger-inspect \
+  --ledger-api-endpoint https://10.43.0.1:443 \
+  --ledger-token-file /var/run/openkubes/kubernetes/token \
+  --ledger-ca-file /var/run/openkubes/kubernetes/ca.crt
+```
+
+The TLS adapter accepts bounded projected token and CA files, requires an exact
+HTTPS endpoint, disables proxies, compression and redirects, and does not
+include credential paths or contents in returned errors. The preflight uses a
+separate Service Account whose Role contains only `get` on ConfigMaps. It cannot
+create a ledger claim even though the later execution identity has
+`get`/`create`.
+
+[`deploy/contract-executor-job.yaml.tpl`](../deploy/contract-executor-job.yaml.tpl)
+defines one non-retrying Job and its NetworkPolicy. The Pod runs off the control
+plane, has explicit requests/limits, uses a read-only root filesystem, drops all
+capabilities, mounts a ten-minute projected token, and can egress only to one
+exact Kubernetes API IP on TCP 443. The image must be SHA-256 digest-bound.
+Typed Go materialization rejects mutable images, DNS API endpoints, broad CIDRs,
+shell-like names, invalid timestamps and unknown placeholders.
+
+This checkpoint still does **not** claim the grant, submit CAPI/provider
+resources, observe cluster convergence, or publish an outcome. The template is
+not applied and no image is built or published. It proves only that local mode
+and the future Job can use the same binary and read-only ledger boundary.
 
 ## OK-141 compatibility evidence
 

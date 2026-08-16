@@ -34,6 +34,37 @@ subjects:
     name: ok147-contract-executor
     namespace: openkubes-execution-system
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ok147-contract-executor-preflight
+  namespace: openkubes-execution-system
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ok147-ledger-reader
+  namespace: openkubes-execution-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ok147-ledger-reader
+  namespace: openkubes-execution-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ok147-ledger-reader
+subjects:
+  - kind: ServiceAccount
+    name: ok147-contract-executor-preflight
+    namespace: openkubes-execution-system
+---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
