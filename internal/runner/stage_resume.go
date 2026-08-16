@@ -29,26 +29,31 @@ func InspectStageResume(config StageResumeConfig) (stagecursor.Decision, error) 
 }
 
 func loadStageResume(config StageResumeConfig) (stageplan.Binding, stagecursor.Cursor, error) {
+	plan, cursor, _, err := loadStageResumeWithPrefix(config)
+	return plan, cursor, err
+}
+
+func loadStageResumeWithPrefix(config StageResumeConfig) (stageplan.Binding, stagecursor.Cursor, []stagereceipt.Verified, error) {
 	if config.Receipts == nil {
-		return stageplan.Binding{}, stagecursor.Cursor{}, errors.New("stage receipt prefix must be explicit")
+		return stageplan.Binding{}, stagecursor.Cursor{}, nil, errors.New("stage receipt prefix must be explicit")
 	}
 	plan, err := stageplan.Load(config.PlanPath, config.PlanExpected)
 	if err != nil {
-		return stageplan.Binding{}, stagecursor.Cursor{}, err
+		return stageplan.Binding{}, stagecursor.Cursor{}, nil, err
 	}
 	prefix := make([]stagereceipt.Verified, 0, len(config.Receipts))
 	predecessors := []stagereceipt.Verified{}
 	for _, source := range config.Receipts {
 		verified, err := stagereceipt.Load(source.Path, source.Digest, plan, predecessors)
 		if err != nil {
-			return stageplan.Binding{}, stagecursor.Cursor{}, err
+			return stageplan.Binding{}, stagecursor.Cursor{}, nil, err
 		}
 		prefix = append(prefix, verified)
 		predecessors = []stagereceipt.Verified{verified}
 	}
 	cursor, err := stagecursor.Evaluate(plan, prefix)
 	if err != nil {
-		return stageplan.Binding{}, stagecursor.Cursor{}, err
+		return stageplan.Binding{}, stagecursor.Cursor{}, nil, err
 	}
-	return plan, cursor, nil
+	return plan, cursor, prefix, nil
 }

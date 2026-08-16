@@ -182,53 +182,64 @@ func openKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expec
 // one for HCP/HRP reads on the management authority and one for runtime reads
 // on the immutable workload Cluster UID. It performs no API request itself.
 func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig) (*observation.NetworkSourceCollector, error) {
+	collector, _, _, err := openKubernetesNetworkSourceCollector(config)
+	return collector, err
+}
+
+// openKubernetesNetworkSourceCollector returns token values only to private
+// stage composition so it can prove that capabilities remain separate.
+func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig) (*observation.NetworkSourceCollector, string, string, error) {
 	if config.ExpectedManagementAuthority == "" || config.Management.AuthorityIdentity != config.ExpectedManagementAuthority {
-		return nil, errors.New("network observer management authority differs from the verified management plane")
+		return nil, "", "", errors.New("network observer management authority differs from the verified management plane")
 	}
 	if config.TargetClusterUID == "" || config.Workload.AuthorityIdentity != config.TargetClusterUID {
-		return nil, errors.New("network observer workload authority differs from the runtime-bound target Cluster")
+		return nil, "", "", errors.New("network observer workload authority differs from the runtime-bound target Cluster")
 	}
 	if config.Management.Endpoint == config.Workload.Endpoint {
-		return nil, errors.New("network observer management and workload endpoints must be distinct")
+		return nil, "", "", errors.New("network observer management and workload endpoints must be distinct")
 	}
 	managementToken, _, managementClient, err := openBoundedKubernetesMaterial(config.Management.TokenFile, config.Management.CAFile)
 	if err != nil {
-		return nil, errors.New("open bounded management network credential")
+		return nil, "", "", errors.New("open bounded management network credential")
 	}
 	workloadToken, workloadCA, workloadClient, err := openBoundedKubernetesMaterial(config.Workload.TokenFile, config.Workload.CAFile)
 	if err != nil {
-		return nil, errors.New("open bounded workload network credential")
+		return nil, "", "", errors.New("open bounded workload network credential")
 	}
 	if !platformInputDigestPattern.MatchString(config.Workload.CABundleDigest) || digest.SHA256(workloadCA) != config.Workload.CABundleDigest {
-		return nil, errors.New("workload network CA differs from the runtime-bound authority")
+		return nil, "", "", errors.New("workload network CA differs from the runtime-bound authority")
 	}
 	if len(managementToken) == len(workloadToken) && subtle.ConstantTimeCompare([]byte(managementToken), []byte(workloadToken)) == 1 {
-		return nil, errors.New("network observer management and workload credentials must be distinct")
+		return nil, "", "", errors.New("network observer management and workload credentials must be distinct")
 	}
 	management, err := observation.NewKubernetesManagementNetworkReader(observation.KubernetesNetworkReaderConfig{
 		Endpoint: config.Management.Endpoint, BearerToken: managementToken, Client: managementClient,
 	}, config.Namespace, config.Name, config.HCPName)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	workload, err := observation.NewKubernetesWorkloadNetworkReader(observation.KubernetesNetworkReaderConfig{
 		Endpoint: config.Workload.Endpoint, BearerToken: workloadToken, Client: workloadClient,
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	podExecutor, err := newKubernetesCiliumWebSocketExecutor(config.Workload.Endpoint, workloadToken, workloadCA, workloadClient)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	probe, err := observation.NewKubernetesFixedCiliumProbe(podExecutor)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
-	return observation.NewNetworkSourceCollector(management, workload, probe, observation.NetworkCollectorConfig{
+	collector, err := observation.NewNetworkSourceCollector(management, workload, probe, observation.NetworkCollectorConfig{
 		Namespace: config.Namespace, Name: config.Name, HCPName: config.HCPName,
 		TargetClusterUID: config.TargetClusterUID, Clock: config.Clock,
 	})
+	if err != nil {
+		return nil, "", "", err
+	}
+	return collector, managementToken, workloadToken, nil
 }
 
 // OpenKubernetesPlatformSourceCollector materializes one TLS client restricted

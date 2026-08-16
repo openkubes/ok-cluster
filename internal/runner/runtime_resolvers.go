@@ -69,32 +69,47 @@ func (resolver *WorkloadAuthorityFileResolver) ResolveWorkloadAuthority(ctx cont
 	if _, err := observation.PolicyDigest(policy); err != nil {
 		return KubernetesAuthorityConfig{}, errors.New("runtime-bound observation policy is invalid")
 	}
-	raw, err := readBoundedRegular(resolver.config.Path, maximumWorkloadBindingBytes)
+	binding, authority, err := loadWorkloadAuthorityFiles(resolver.config)
 	if err != nil {
-		return KubernetesAuthorityConfig{}, errors.New("read bounded workload authority binding")
+		return KubernetesAuthorityConfig{}, err
+	}
+	if binding.IntentRevision != policy.IntentRevision || binding.TargetClusterUID != policy.TargetClusterUID {
+		return KubernetesAuthorityConfig{}, errors.New("workload authority binding differs from runtime-bound observation policy")
+	}
+	return authority, nil
+}
+
+// loadWorkloadAuthorityFiles reads one strict private binding and its CA. It
+// does not read the bearer token or contact either API authority.
+func loadWorkloadAuthorityFiles(config WorkloadAuthorityFileResolverConfig) (WorkloadAuthorityBinding, KubernetesAuthorityConfig, error) {
+	if config.Path == "" || config.TokenFile == "" || config.CAFile == "" || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("workload authority file resolver binding is invalid")
+	}
+	raw, err := readBoundedRegular(config.Path, maximumWorkloadBindingBytes)
+	if err != nil {
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("read bounded workload authority binding")
 	}
 	var binding WorkloadAuthorityBinding
 	if err := jsonstrict.Decode(raw, &binding); err != nil {
-		return KubernetesAuthorityConfig{}, errors.New("decode strict workload authority binding")
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("decode strict workload authority binding")
 	}
 	bindingDigest, err := WorkloadAuthorityBindingDigest(binding)
 	if err != nil {
-		return KubernetesAuthorityConfig{}, errors.New("validate workload authority binding")
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("validate workload authority binding")
 	}
-	if bindingDigest != resolver.config.ExpectedBindingDigest || binding.IntentRevision != policy.IntentRevision || binding.TargetClusterUID != policy.TargetClusterUID {
-		return KubernetesAuthorityConfig{}, errors.New("workload authority binding differs from runtime-bound observation policy")
+	if bindingDigest != config.ExpectedBindingDigest {
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("workload authority binding differs from expected identity")
 	}
-	ca, err := readBoundedRegular(resolver.config.CAFile, maximumCABytes)
+	ca, err := readBoundedRegular(config.CAFile, maximumCABytes)
 	if err != nil {
-		return KubernetesAuthorityConfig{}, errors.New("read bounded workload API CA")
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("read bounded workload API CA")
 	}
 	if digest.SHA256(ca) != binding.CABundleDigest {
-		return KubernetesAuthorityConfig{}, errors.New("workload API CA differs from runtime binding")
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("workload API CA differs from runtime binding")
 	}
-	return KubernetesAuthorityConfig{
-		Endpoint: binding.Endpoint, AuthorityIdentity: policy.TargetClusterUID,
-		TokenFile: resolver.config.TokenFile, CAFile: resolver.config.CAFile,
-		CABundleDigest: binding.CABundleDigest,
+	return binding, KubernetesAuthorityConfig{
+		Endpoint: binding.Endpoint, AuthorityIdentity: binding.TargetClusterUID,
+		TokenFile: config.TokenFile, CAFile: config.CAFile, CABundleDigest: binding.CABundleDigest,
 	}, nil
 }
 
