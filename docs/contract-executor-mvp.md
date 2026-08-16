@@ -730,6 +730,45 @@ the workload credential, run the capability test, poll convergence, contact a
 cluster or mutate infrastructure. Producing those current single-run inputs
 remains an explicit subsequent runner boundary.
 
+## Digest-bound staged execution plan
+
+The first live OK-141 run proved that cluster creation is not one undivided
+submission followed by one observation. The desired state crosses explicit
+authority and evidence boundaries:
+
+```text
+provider prerequisites (ok-infra)
+  -> CAPI lifecycle (ok-mgmt)
+  -> lifecycle observation
+  -> Enablement submission (ok-mgmt)
+  -> NetworkReady observation (workload)
+  -> runtime binding
+  -> target access + short-lived credential (workload)
+  -> target registration + Applications (GitOps authority)
+  -> PlatformReady observation
+  -> aggregate evidence
+```
+
+The runner therefore verifies a strict twelve-stage
+`ok147-staged-execution-plan/v1` document before any future orchestration can
+use it. The plan binds `R`, `E`, `P`, `FixtureDigest`, the distinct
+infrastructure, management and GitOps authorities, exact stage dependencies,
+one immutable input set per stage and a separate operation name for every
+mutating stage. Its canonical digest identifies the complete experiment.
+
+The plan must remain `authorizationState: NO-GO`; it is never a grant. It
+contains no manifest content, credentials, endpoints, commands or rendering
+logic. Stage input digests can point only to artifacts produced by the
+authoritative Contract projection, Enablement, registration and Platform
+mechanisms. Consequently this boundary can detect a missing, reordered,
+foreign-authority or silently changed stage without becoming another
+Contract-to-CAPI/CAAPH/Argo compiler.
+
+This checkpoint verifies only the orchestration shape. The current bounded
+execution operation is still limited to its initial lifecycle submission and
+must not be activated as a complete happy-run command until separately
+authorized stage operations and receipts consume this plan.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
