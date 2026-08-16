@@ -996,6 +996,33 @@ cursor stage, predecessor receipts and evaluation time.
 This loader reads and verifies only. It does not consume the grant, construct a
 writer, inspect the ledger, contact Kubernetes or activate a CLI command.
 
+## Verified staged submission bundle
+
+The first two Contract-to-CAPI stages can now be assembled from one complete
+preclaim artifact chain shared by a future local CLI and ephemeral Job:
+
+```text
+verified staged plan + explicit canonical receipt prefix
+        -> verified NEXT cursor
+        -> exact projection artifact digest bound to the selected stage input
+        -> exact signed single-stage grant
+        -> one verified submission-stage bundle
+```
+
+An explicit empty receipt list is required for the first stage. A successful
+provider receipt advances the same loader to `cluster-lifecycle`; omitted,
+reordered, foreign or changed receipts fail closed. The selected plan input
+must carry the verified raw digest of `ok-infra-prerequisites.yaml` or
+`ok-mgmt-lifecycle.yaml`, so a valid plan and a valid projection cannot be
+combined when they describe different submission content.
+
+Opening the bundle reads independently supplied ledger and one-authority
+credentials, requires the two token contents to differ, and preconstructs the
+same typed operation for every environment. Opening performs no API request;
+only an explicit later `Run` can inspect or claim the ledger and invoke the
+single bound mutator. No CLI command, Job entry point, retry or live cluster
+access is introduced by this checkpoint.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the

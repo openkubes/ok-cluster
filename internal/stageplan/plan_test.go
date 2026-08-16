@@ -27,6 +27,26 @@ func TestVerifyAcceptsExactBoundedSequence(t *testing.T) {
 	}
 }
 
+func TestRequireInputBindsExactArtifactIdentity(t *testing.T) {
+	binding, err := Verify(planJSON(t, validDocument()), expected())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _, err := binding.Stage("provider-prerequisites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := binding.RequireInput(stage.ID, stage.Inputs[0].Name, stage.Inputs[0].Digest); err != nil {
+		t.Fatal(err)
+	}
+	if err := binding.RequireInput(stage.ID, stage.Inputs[0].Name, sha("f")); err == nil {
+		t.Fatal("different artifact digest was accepted")
+	}
+	if err := binding.RequireInput(stage.ID, "projection.other", stage.Inputs[0].Digest); err == nil {
+		t.Fatal("different artifact name was accepted")
+	}
+}
+
 func TestVerifyRejectsSequenceAuthorityAndGrantChanges(t *testing.T) {
 	tests := map[string]func(*document){
 		"missing stage":       func(plan *document) { plan.Stages = plan.Stages[:11] },
