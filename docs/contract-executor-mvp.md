@@ -1154,6 +1154,21 @@ output, writes the package with mode `0600`, and emits only the redaction-safe
 package receipt on stdout. The Job-template digest is required explicitly and
 is retained in that receipt.
 
+## Tokenless submission runtime identity
+
+[`deploy/contract-executor-stage-runtime.yaml`](../deploy/contract-executor-stage-runtime.yaml)
+defines the sole in-cluster identity referenced by the bounded submission Job:
+`ServiceAccount/ok147-contract-executor-runtime` in the existing execution
+namespace. It has `automountServiceAccountToken: false` and deliberately has no
+Role, RoleBinding, ClusterRole or ClusterRoleBinding.
+
+The Job therefore receives no implicit local API credential or Kubernetes
+permission from its Pod identity. Its ledger and selected-authority access can
+only come from the two separately named, externally materialized short-lived
+Secret mounts already bound by the Job envelope. Creating the ServiceAccount,
+credential Secrets or package objects remains an external authorized
+operation; this checkpoint only defines and tests the prerequisite manifest.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
