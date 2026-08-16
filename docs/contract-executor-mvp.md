@@ -927,6 +927,32 @@ The ledger still owns the final claim-time validity-window and single-use
 checks. This checkpoint adds no stage implementation, dispatcher, mutation,
 credential handling, cluster contact or CLI/Job activation.
 
+## One bounded mutating-stage operation
+
+The offline runner core can now compose the cursor and grant boundaries into
+one typed mutating-stage operation:
+
+```text
+verified cursor + exact verified grant + preconstructed typed mutator
+        -> immutable single-use claim
+        -> at most one mutator call
+        -> immutable outcome
+        -> immutable common stage receipt
+```
+
+The mutator is prebound to the exact plan, stage, operation, authority and
+Contract revision. It receives only verified identities; implementation input
+and credentials remain inside that preconstructed capability. It cannot choose
+another operation dynamically. A completed ledger outcome is finalized without
+calling the mutator again, while a claim without an outcome remains
+`CLAIMED_INDETERMINATE_STOP` and cannot be retried.
+
+Non-success results are persisted and close the receipt chain fail-closed. Raw
+mutator errors never enter the redaction-safe orchestration result. This core is
+tested with fake mutators only: no concrete Kubernetes stage implementation,
+credential resolver, dispatcher, cluster contact or CLI/Job activation exists
+at this checkpoint.
+
 ## Typed first-run Platform capability boundary
 
 First-run capability production now has a separate lazy resolver from the
