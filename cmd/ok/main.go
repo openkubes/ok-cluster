@@ -93,6 +93,19 @@ var materializeEnablementStagePackage = func(config runner.EnablementStagePackag
 	return raw, receipt, err
 }
 
+var materializeTargetAccessStagePackage = func(config runner.TargetAccessStagePackageConfig) ([]byte, runner.TargetAccessStagePackageReceipt, error) {
+	packaged, err := runner.BuildTargetAccessStagePackage(config)
+	if err != nil {
+		return nil, runner.TargetAccessStagePackageReceipt{}, err
+	}
+	raw, err := packaged.Bytes()
+	if err != nil {
+		return nil, runner.TargetAccessStagePackageReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	return raw, receipt, err
+}
+
 var prepareSubmissionStageLaunch = func(config runner.SubmissionStageLaunchMaterialConfig) (stageLaunchPreparation, error) {
 	material, err := runner.BuildSubmissionStageLaunchMaterial(config)
 	if err != nil {
@@ -646,6 +659,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	}
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "enablement" {
 		return runClusterStageRunEnablement(ctx, arguments[4:], stdout, stderr)
+	}
+	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "target-access" && arguments[4] == "package" {
+		return runClusterStageRunTargetAccessPackage(arguments[5:], stdout, stderr)
 	}
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "target-access" {
 		return runClusterStageRunTargetAccess(ctx, arguments[4:], stdout, stderr)
@@ -1783,16 +1799,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	if err != nil {
 		return fmt.Errorf("parse evaluation time: %w", err)
 	}
-	expectedObjects := []projection.ResourceIdentity{
-		{APIVersion: "v1", Kind: "Namespace", Name: *observabilityNamespace},
-		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "kube-system", Name: *managerServiceAccount},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: *clusterRole},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: *clusterRoleBinding},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: *observabilityNamespace, Name: *platformRole},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: *observabilityNamespace, Name: *platformRoleBinding},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "kube-system", Name: *kubeSystemRole},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "kube-system", Name: *kubeSystemRoleBinding},
-	}
+	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding)
 	bundleConfig := runner.TargetAccessStageBundleConfig{
 		PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
 		GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at,
