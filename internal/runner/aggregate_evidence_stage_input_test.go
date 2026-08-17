@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
 func TestAggregateEvidenceProfileFileBindsCanonicalIdentity(t *testing.T) {
@@ -69,9 +70,13 @@ func TestBuildAggregateEvidenceStageInputContainsOnlyPublicBoundInputs(t *testin
 	fixture := aggregateEvidenceBundleFixture(t)
 	root := t.TempDir()
 	profilePath := writeAggregateEvidenceProfile(t, root, fixture.Profile)
+	networkPath, networkDigest, platformPath, platformDigest := writeAggregateSourceProfiles(t, root, fixture)
 	input, err := BuildAggregateEvidenceStageInput(AggregateEvidenceStageInputConfig{
 		Bundle: fixture.StageResumeConfig, AggregateEvidenceProfilePath: profilePath,
-		ExpectedAggregateProfileDigest: fixture.ExpectedProfileDigest, ConfigMapName: "ok147-aggregate-evidence-input",
+		ExpectedAggregateProfileDigest: fixture.ExpectedProfileDigest,
+		NetworkProfilePath:             networkPath, ExpectedNetworkProfileDigest: networkDigest,
+		PlatformProfilePath: platformPath, ExpectedPlatformProfileDigest: platformDigest,
+		ConfigMapName: "ok147-aggregate-evidence-input",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +97,7 @@ func TestBuildAggregateEvidenceStageInputContainsOnlyPublicBoundInputs(t *testin
 		t.Fatalf("unexpected aggregate evidence input: %#v", object)
 	}
 	data := objectAt(t, object, "data")
-	wantKeys := append([]string{"aggregate-evidence-profile.json", "receipt-prefix.json", "staged-plan.json"}, aggregateEvidenceReceiptFiles...)
+	wantKeys := append([]string{"aggregate-evidence-profile.json", "network-profile.json", "platform-profile.json", "receipt-prefix.json", "staged-plan.json"}, aggregateEvidenceReceiptFiles...)
 	sort.Strings(wantKeys)
 	gotKeys := make([]string, 0, len(data))
 	for key := range data {
@@ -102,7 +107,7 @@ func TestBuildAggregateEvidenceStageInputContainsOnlyPublicBoundInputs(t *testin
 	if !reflect.DeepEqual(gotKeys, wantKeys) || data["token"] != nil || data["ca.crt"] != nil || data["runtime-binding.json"] != nil || data["capability-evidence.json"] != nil {
 		t.Fatalf("aggregate evidence public input boundary differs: %v", gotKeys)
 	}
-	if receipt.Format != AggregateEvidenceStageInputFormat || receipt.StageID != "aggregate-evidence" || receipt.ConfigMapDigest != digest.SHA256(raw) || receipt.AggregateProfileDigest != fixture.ExpectedProfileDigest || !reflect.DeepEqual(receipt.DataKeys, wantKeys) {
+	if receipt.Format != AggregateEvidenceStageInputFormat || receipt.StageID != "aggregate-evidence" || receipt.ConfigMapDigest != digest.SHA256(raw) || receipt.AggregateProfileDigest != fixture.ExpectedProfileDigest || receipt.NetworkProfileDigest != networkDigest || receipt.PlatformProfileDigest != platformDigest || !reflect.DeepEqual(receipt.DataKeys, wantKeys) {
 		t.Fatalf("unexpected aggregate evidence input receipt: %#v", receipt)
 	}
 	raw[0] = 'x'
@@ -116,15 +121,25 @@ func TestBuildAggregateEvidenceStageInputFailsClosed(t *testing.T) {
 	fixture := aggregateEvidenceBundleFixture(t)
 	root := t.TempDir()
 	profilePath := writeAggregateEvidenceProfile(t, root, fixture.Profile)
+	networkPath, networkDigest, platformPath, platformDigest := writeAggregateSourceProfiles(t, root, fixture)
 	valid := AggregateEvidenceStageInputConfig{
 		Bundle: fixture.StageResumeConfig, AggregateEvidenceProfilePath: profilePath,
-		ExpectedAggregateProfileDigest: fixture.ExpectedProfileDigest, ConfigMapName: "ok147-aggregate-evidence-input",
+		ExpectedAggregateProfileDigest: fixture.ExpectedProfileDigest,
+		NetworkProfilePath:             networkPath, ExpectedNetworkProfileDigest: networkDigest,
+		PlatformProfilePath: platformPath, ExpectedPlatformProfileDigest: platformDigest,
+		ConfigMapName: "ok147-aggregate-evidence-input",
 	}
 	for name, mutate := range map[string]func(*AggregateEvidenceStageInputConfig){
 		"missing receipt": func(config *AggregateEvidenceStageInputConfig) { config.Bundle.Receipts = config.Bundle.Receipts[:10] },
 		"invalid name":    func(config *AggregateEvidenceStageInputConfig) { config.ConfigMapName = "aggregate-evidence-input" },
 		"foreign digest": func(config *AggregateEvidenceStageInputConfig) {
 			config.ExpectedAggregateProfileDigest = runnerStageSHA("f")
+		},
+		"foreign network profile": func(config *AggregateEvidenceStageInputConfig) {
+			config.ExpectedNetworkProfileDigest = runnerStageSHA("f")
+		},
+		"foreign platform profile": func(config *AggregateEvidenceStageInputConfig) {
+			config.ExpectedPlatformProfileDigest = runnerStageSHA("f")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -153,4 +168,32 @@ func writeAggregateEvidenceProfile(t *testing.T, root string, profile AggregateE
 		t.Fatal(err)
 	}
 	return writeBundleFile(t, root, "aggregate-evidence-profile.json", raw)
+}
+
+func writeAggregateSourceProfiles(t *testing.T, root string, fixture AggregateEvidenceStageBundleConfig) (string, string, string, string) {
+	t.Helper()
+	bundle, err := LoadAggregateEvidenceStageBundle(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkProfile := runnerAggregateNetworkProfile(bundleExpected(bundle))
+	networkDigest, err := observation.NetworkProfileDigest(networkProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, platformProfile := runnerPlatformApplications(t, bundleExpected(bundle))
+	platformDigest, err := observation.PlatformProfileDigest(platformProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkRaw, err := json.Marshal(networkProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformRaw, err := json.Marshal(platformProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeBundleFile(t, root, "network-profile.json", networkRaw), networkDigest,
+		writeBundleFile(t, root, "platform-profile.json", platformRaw), platformDigest
 }
