@@ -50,6 +50,7 @@ type TargetAccessStagePackageReceipt struct {
 	TargetAccessDigest    string   `json:"targetAccessDigest"`
 	TargetIdentityDigest  string   `json:"targetIdentityDigest"`
 	WorkloadBindingDigest string   `json:"workloadBindingDigest"`
+	InstallationAuthority string   `json:"installationAuthority"`
 	JobTemplateDigest     string   `json:"jobTemplateDigest"`
 	JobEnvelopeDigest     string   `json:"jobEnvelopeDigest"`
 	ObjectKinds           []string `json:"objectKinds"`
@@ -58,12 +59,14 @@ type TargetAccessStagePackageReceipt struct {
 }
 
 type VerifiedTargetAccessStagePackage struct {
-	raw                []byte
-	receipt            TargetAccessStagePackageReceipt
-	ledgerCredential   string
-	workloadCredential string
-	workloadAuthority  string
-	verified           bool
+	raw                   []byte
+	receipt               TargetAccessStagePackageReceipt
+	ledgerCredential      string
+	workloadCredential    string
+	installationAuthority string
+	managementAuthority   string
+	workloadAuthority     string
+	verified              bool
 }
 
 // BuildTargetAccessStagePackage composes one immutable public ConfigMap and
@@ -142,12 +145,15 @@ func BuildTargetAccessStagePackage(config TargetAccessStagePackageConfig) (Verif
 		PackageDigest: digest.SHA256(packageRaw), InputConfigMapDigest: inputReceipt.ConfigMapDigest,
 		ReceiptPrefixDigest: inputReceipt.ReceiptPrefixDigest, TargetAccessDigest: inputReceipt.TargetAccessDigest,
 		TargetIdentityDigest: inputReceipt.TargetIdentityDigest, WorkloadBindingDigest: config.ExpectedWorkloadBindingDigest,
-		JobTemplateDigest: config.JobTemplateDigest, JobEnvelopeDigest: digest.SHA256(jobRaw),
+		InstallationAuthority: bundle.plan.Authorities.GitOps,
+		JobTemplateDigest:     config.JobTemplateDigest, JobEnvelopeDigest: digest.SHA256(jobRaw),
 		ObjectKinds: []string{"ConfigMap", "NetworkPolicy", "Job"}, AuthorizationState: "VERIFIED", MutationAllowed: false,
 	}
 	return VerifiedTargetAccessStagePackage{
 		raw: packageRaw, receipt: receipt, ledgerCredential: config.LedgerCredentialSecret,
-		workloadCredential: config.WorkloadCredentialSecret, workloadAuthority: workloadAuthority, verified: true,
+		workloadCredential:    config.WorkloadCredentialSecret,
+		installationAuthority: bundle.plan.Authorities.GitOps, managementAuthority: bundle.plan.Authorities.Management,
+		workloadAuthority: workloadAuthority, verified: true,
 	}, nil
 }
 
@@ -168,7 +174,7 @@ func (packaged VerifiedTargetAccessStagePackage) Receipt() (TargetAccessStagePac
 }
 
 func verifyTargetAccessStagePackage(packaged VerifiedTargetAccessStagePackage) error {
-	if !packaged.verified || packaged.receipt.Format != TargetAccessStagePackageFormat || packaged.receipt.State != "VERIFIED" || packaged.receipt.StageID != "target-access" || packaged.receipt.MutationAllowed || len(packaged.raw) == 0 || packaged.ledgerCredential == "" || packaged.workloadCredential == "" || packaged.ledgerCredential == packaged.workloadCredential || !stageReceiptPrefixDigestPattern.MatchString(packaged.workloadAuthority) {
+	if !packaged.verified || packaged.receipt.Format != TargetAccessStagePackageFormat || packaged.receipt.State != "VERIFIED" || packaged.receipt.StageID != "target-access" || packaged.receipt.MutationAllowed || len(packaged.raw) == 0 || packaged.ledgerCredential == "" || packaged.workloadCredential == "" || packaged.ledgerCredential == packaged.workloadCredential || packaged.installationAuthority == "" || packaged.managementAuthority == "" || packaged.installationAuthority == packaged.managementAuthority || packaged.receipt.InstallationAuthority != packaged.installationAuthority || !stageReceiptPrefixDigestPattern.MatchString(packaged.workloadAuthority) {
 		return errors.New("target-access stage package identity is incomplete")
 	}
 	if digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest || packaged.workloadAuthority != packaged.receipt.TargetIdentityDigest {

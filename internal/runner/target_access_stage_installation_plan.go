@@ -120,7 +120,7 @@ func PlanTargetAccessStageInstallation(packaged VerifiedTargetAccessStagePackage
 	}
 	return TargetAccessStageInstallationPlan{
 		Format: TargetAccessStageInstallationPlanFormat, State: "VERIFIED", StageID: receipt.StageID,
-		StagePackageDigest: receipt.PackageDigest, Authority: packaged.workloadAuthority,
+		StagePackageDigest: receipt.PackageDigest, Authority: packaged.installationAuthority,
 		Creates: creates, MutationAllowed: false,
 	}, nil
 }
