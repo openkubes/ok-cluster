@@ -246,22 +246,37 @@ func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 // to exact Argo Application GETs on the configured GitOps control plane. It
 // performs no API request itself and exposes no sync or mutation operation.
 func OpenKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConfig) (*observation.PlatformSourceCollector, error) {
+	collector, _, err := openKubernetesPlatformSourceCollector(config)
+	return collector, err
+}
+
+func openKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConfig) (*observation.PlatformSourceCollector, string, error) {
 	if config.ExpectedArgoAuthority == "" || config.Argo.AuthorityIdentity != config.ExpectedArgoAuthority {
-		return nil, errors.New("platform observer authority differs from the verified GitOps control plane")
+		return nil, "", errors.New("platform observer authority differs from the verified GitOps control plane")
 	}
-	token, client, err := openBoundedKubernetesHTTP(config.Argo.TokenFile, config.Argo.CAFile)
+	if !platformInputDigestPattern.MatchString(config.Argo.CABundleDigest) {
+		return nil, "", errors.New("platform observer CA identity is required")
+	}
+	token, ca, client, err := openBoundedKubernetesMaterial(config.Argo.TokenFile, config.Argo.CAFile)
 	if err != nil {
-		return nil, errors.New("open bounded GitOps observation credential")
+		return nil, "", errors.New("open bounded GitOps observation credential")
+	}
+	if digest.SHA256(ca) != config.Argo.CABundleDigest {
+		return nil, "", errors.New("platform observer CA differs from bound identity")
 	}
 	reader, err := observation.NewKubernetesPlatformReader(observation.KubernetesPlatformReaderConfig{
 		Endpoint: config.Argo.Endpoint, BearerToken: token, Client: client,
 	}, config.Profile)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return observation.NewPlatformSourceCollector(reader, config.Capability, observation.PlatformCollectorConfig{
+	collector, err := observation.NewPlatformSourceCollector(reader, config.Capability, observation.PlatformCollectorConfig{
 		Profile: config.Profile, TargetClusterUID: config.TargetClusterUID, Clock: config.Clock,
 	})
+	if err != nil {
+		return nil, "", err
+	}
+	return collector, token, nil
 }
 
 // OpenKubernetesObservabilityTransport binds the fixed capability lifecycle to

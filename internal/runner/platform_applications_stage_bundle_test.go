@@ -135,6 +135,7 @@ func platformApplicationsBundleFixture(t *testing.T) platformApplicationsBundleT
 	stages[7].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.target-credential", "digest": runnerStageSHA("4")}}
 	stages[8].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.target-registration", "digest": runnerStageSHA("5")}}
 	stages[9].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.platform-applications", "digest": artifactDigest}}
+	stages[10].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.platform-observation", "digest": profileDigest}}
 	planPath := writeBundleFile(t, root, "staged-plan.json", mustJSON(t, document))
 	plan, err := stageplan.Load(planPath, expectedPlan)
 	if err != nil {
