@@ -135,7 +135,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   credentials, and preconstructs exactly one eight-object create-only mutator.
   Opening performs no API request or grant claim; only the returned crash-safe
   staged operation can claim and submit. No CLI, Job package or DEV activation
-  exists for target access at this checkpoint.
+  exists for target access at this checkpoint. A separated TLS fake-API proof
+  now covers the complete claim-to-submit path: exactly eight ordered
+  `GET`/conditional-`POST` pairs, durable success replay without another write,
+  and a durably stopped partial prefix without retry.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
