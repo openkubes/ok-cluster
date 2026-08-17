@@ -130,6 +130,11 @@ func TestBuildRuntimeBindingStageCredentialPackageFailsClosed(t *testing.T) {
 }
 
 func runtimeBindingCredentialConfig(t *testing.T) (RuntimeBindingStageCredentialPackageConfig, [][]byte) {
+	config, _, tokens := runtimeBindingCredentialInputs(t)
+	return config, tokens
+}
+
+func runtimeBindingCredentialInputs(t *testing.T) (RuntimeBindingStageCredentialPackageConfig, RuntimeBindingStagePackageConfig, [][]byte) {
 	t.Helper()
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	issuedAt, expiresAt := now.Add(-time.Minute), now.Add(30*time.Minute)
@@ -194,5 +199,5 @@ func runtimeBindingCredentialConfig(t *testing.T) (RuntimeBindingStageCredential
 		LedgerWriter:      source("ok-mgmt", tokenPaths[0], subjects[0], "4", managementCAPath, tokens[0], managementCA),
 		PersistenceWriter: source("ok-mgmt", tokenPaths[1], subjects[1], "5", managementCAPath, tokens[1], managementCA),
 		WorkloadObserver:  source(digest.SHA256([]byte(binding.TargetClusterUID)), tokenPaths[2], subjects[2], "6", workloadCAPath, tokens[2], workloadCA),
-	}, tokens
+	}, packageConfig, tokens
 }

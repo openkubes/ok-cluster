@@ -2385,7 +2385,17 @@ minimum credential lifetime still available.
 The candidate contains endpoint, CA, plan, package, credential and runtime
 digests plus exact preparation and expiry times, but no endpoint, token,
 credential subject or object body. It remains `mutationAllowed: false`.
-Bounded installation and execution remain later checkpoints.
+
+`ok147-runtime-binding-stage-launch-material/v1` now reconstructs the complete
+private launch input from bounded local sources: stage package, three
+credentials, tokenless runtime and launch candidate. It re-verifies their
+shared identities and retains their private bytes internally while exposing
+only package, plan, candidate and validity digests. Changed private material or
+a mismatched candidate invalidates the whole aggregate.
+
+The material has no method that performs an API request and remains
+`mutationAllowed: false`. Opening an installer credential, bounded installation
+and execution remain later checkpoints.
 
 ## Bounded convergence observation polling
 
