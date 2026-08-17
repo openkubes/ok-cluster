@@ -80,7 +80,13 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   an expiry-bound installer candidate. Only `observe lifecycle launch execute`
   can open the installer credential and run the single-use six-object
   exact-create launcher; it requires the separately copied candidate digest
-  and explicit `--execute`. Stage 4 now has its first distinct path as well:
+  and explicit `--execute`. The NetworkReady observation follows the same
+  split boundary: `observe network launch prepare` correlates the immutable
+  package, three distinct Job credentials, runtime identity and expiring
+  installer candidate offline, while `observe network launch execute` alone
+  can open the installer authority and invoke the seven-object, Job-last
+  launcher. It also requires the exact candidate digest and explicit
+  `--execute`. Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
   `HelmChartProxy`; it neither renders Helm nor writes the controller-owned
