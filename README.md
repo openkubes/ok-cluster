@@ -96,7 +96,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   workload authority, and an exclusive private writer creates and verifies one
   `0600` binding file without overwrite or cleanup. These capabilities are now
   composed with the runner-owned crash-safe stage operation and immutable
-  ledger receipt; CLI/Job activation remains separate.
+  ledger receipt. `ok cluster stage bind runtime --execute` is the first local,
+  two-minute activation boundary and emits only its redaction-safe evidence;
+  Job activation and all target access remain separate.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered

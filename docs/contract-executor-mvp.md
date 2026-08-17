@@ -2182,9 +2182,23 @@ in the ledger. A source or persistence failure becomes a redaction-safe,
 terminal `STOPPED` receipt; a restart returns an existing receipt without
 re-reading or rewriting the workload binding.
 
-CLI/Job activation remains a separate checkpoint. Therefore the composition
-is not reachable from the product command surface yet, and target access
-remains unreachable.
+The first product activation is deliberately local and explicit:
+
+```text
+ok cluster stage bind runtime --execute ...
+```
+
+The command requires the exact five-receipt prefix, immutable plan identities,
+separate short-lived ledger and workload credentials, the digest-bound private
+workload-authority binding and one clean absolute output path. It has a fixed
+two-minute context and accepts no grant, projection, arbitrary API path, retry,
+overwrite or cleanup option. Output combines the immutable stage receipt with
+the redaction-safe binding evidence; endpoint, CA payload, tokens, local paths
+and raw runtime UIDs stay private.
+
+Ephemeral Job packaging and launch remain separate checkpoints. Target access
+is still unreachable: this command only captures the exact private authority
+material that a later target-access stage must consume.
 
 ## Bounded convergence observation polling
 

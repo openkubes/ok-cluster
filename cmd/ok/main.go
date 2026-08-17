@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -30,6 +31,7 @@ const (
 	stageRunTimeout                 = 10 * time.Minute
 	stageLaunchTimeout              = 5 * time.Minute
 	lifecycleObservationRunOverhead = time.Minute
+	runtimeBindingRunTimeout        = 2 * time.Minute
 )
 
 var (
@@ -256,6 +258,12 @@ type networkObservationLaunchPreparation struct {
 	Material        runner.NetworkObservationStageLaunchMaterialReceipt  `json:"material"`
 	Candidate       runner.NetworkObservationStageLaunchCandidateReceipt `json:"candidate"`
 	MutationAllowed bool                                                 `json:"mutationAllowed"`
+}
+
+type runtimeBindingExecution struct {
+	Format   string                                     `json:"format"`
+	Receipt  execution.BindingStageRunReceipt           `json:"receipt"`
+	Evidence *runner.RuntimeBindingStageEvidenceReceipt `json:"evidence,omitempty"`
 }
 
 type receiptFlags []string
@@ -510,6 +518,23 @@ var executeNetworkObservationStage = func(ctx context.Context, bundleConfig runn
 	return opened.Run(ctx)
 }
 
+var executeRuntimeBindingStage = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.RuntimeBindingStageRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+	bundle, err := runner.LoadRuntimeBindingStageBundle(bundleConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	opened, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	receipt, runErr := opened.Run(ctx)
+	evidence, evidenceErr := opened.EvidenceReceipt()
+	if evidenceErr == nil {
+		return receipt, &evidence, runErr
+	}
+	return receipt, nil, runErr
+}
+
 func submissionStageAuthority(decision stagecursor.Decision, expected stageplan.Expected) (string, error) {
 	switch decision.Authority {
 	case "infrastructure":
@@ -572,6 +597,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "network" {
 		return runClusterStageObserveNetwork(ctx, arguments[4:], stdout, stderr)
 	}
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "bind" && arguments[3] == "runtime" {
+		return runClusterStageBindRuntime(ctx, arguments[4:], stdout, stderr)
+	}
 	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "enablement" && arguments[4] == "package" {
 		return runClusterStageRunEnablementPackage(arguments[5:], stdout, stderr)
 	}
@@ -596,7 +624,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage bind runtime ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -909,6 +937,70 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 		encoder.SetEscapeHTML(false)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return runErr
+}
+
+func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage bind runtime", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	execute := flags.Bool("execute", false, "perform exactly the selected runtime binding and persist its receipts")
+	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable management ledger")
+	ledgerTokenFile := flags.String("ledger-token-file", "", "path to the short-lived ledger token")
+	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the ledger Kubernetes API CA bundle")
+	workloadBinding := flags.String("workload-binding", "", "path to the private workload-authority binding")
+	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected workload-authority binding digest")
+	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived read-only workload token")
+	workloadCAFile := flags.String("workload-ca-file", "", "path to the workload Kubernetes API CA bundle")
+	output := flags.String("output", "", "absent absolute path in a private directory for the runtime binding")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("runtime binding requires explicit --execute")
+	}
+	bundleConfig, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
+		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
+		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile}, {"--output", *output},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*workloadBindingDigest) {
+		return errors.New("workload binding digest must be a lowercase SHA-256 identity")
+	}
+	if !filepath.IsAbs(*output) || filepath.Clean(*output) != *output {
+		return errors.New("--output must be a clean absolute path")
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, runtimeBindingRunTimeout)
+	defer cancel()
+	receipt, evidence, runErr := executeRuntimeBindingStage(boundedContext, bundleConfig, runner.RuntimeBindingStageRuntimeConfig{
+		Ledger: runner.KubernetesLedgerConfig{
+			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
+		},
+		Workload: runner.WorkloadAuthorityFileResolverConfig{
+			Path: *workloadBinding, ExpectedBindingDigest: *workloadBindingDigest,
+			TokenFile: *workloadTokenFile, CAFile: *workloadCAFile,
+		},
+		OutputPath: *output, Clock: func() time.Time { return time.Now().UTC() },
+	})
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(runtimeBindingExecution{Format: "ok147-runtime-binding-execution/v1", Receipt: receipt, Evidence: evidence}); err != nil {
 			return err
 		}
 	}
