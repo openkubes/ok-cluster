@@ -131,6 +131,12 @@ func TestBuildNetworkObservationStageCredentialPackageFailsClosed(t *testing.T) 
 
 func networkObservationCredentialConfig(t *testing.T) (NetworkObservationStageCredentialPackageConfig, [][]byte) {
 	t.Helper()
+	config, _, tokens := networkObservationCredentialInputs(t)
+	return config, tokens
+}
+
+func networkObservationCredentialInputs(t *testing.T) (NetworkObservationStageCredentialPackageConfig, NetworkObservationStagePackageConfig, [][]byte) {
+	t.Helper()
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	issuedAt, expiresAt := now.Add(-time.Minute), now.Add(30*time.Minute)
 	audiences := []string{"https://kubernetes.default.svc"}
@@ -193,5 +199,5 @@ func networkObservationCredentialConfig(t *testing.T) (NetworkObservationStageCr
 		Ledger:             source("ok-mgmt", tokenPaths[0], subjects[0], "1", managementCAPath, tokens[0], managementCA),
 		ManagementObserver: source("ok-mgmt", tokenPaths[1], subjects[1], "2", managementCAPath, tokens[1], managementCA),
 		WorkloadObserver:   source(digest.SHA256([]byte(binding.TargetClusterUID)), tokenPaths[2], subjects[2], "3", workloadCAPath, tokens[2], workloadCA),
-	}, tokens
+	}, packageConfig, tokens
 }

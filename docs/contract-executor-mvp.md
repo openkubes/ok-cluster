@@ -2028,6 +2028,14 @@ private; the public candidate exposes only their digests and remains
 `MutationAllowed=false`. Candidate preparation reads no credential and makes
 no API request.
 
+The complete launch material now reconstructs and re-verifies the package,
+three private credentials, tokenless runtime and time-bounded candidate from
+their independently bound local sources. The resulting value retains all
+private bytes internally but exposes only a redaction-safe receipt and the
+candidate receipt. Any changed package, credential, runtime, candidate or
+cross-component digest invalidates the material. Construction remains offline
+and grants no launch authority.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
