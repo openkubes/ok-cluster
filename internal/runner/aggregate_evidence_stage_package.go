@@ -65,6 +65,7 @@ type VerifiedAggregateEvidenceStagePackage struct {
 	capabilitySecret     string
 	managementAuthority  string
 	workloadAuthority    string
+	workloadCABundle     string
 	gitOpsAuthority      string
 	runtimeDigest        string
 	capabilityDigest     string
@@ -168,8 +169,9 @@ func BuildAggregateEvidenceStagePackage(config AggregateEvidenceStagePackageConf
 		managementCredential: config.ManagementCredentialSecret, workloadCredential: config.WorkloadCredentialSecret,
 		argoCredential: config.ArgoCredentialSecret, runtimeSecret: config.RuntimeBindingSecret,
 		capabilitySecret: config.PlatformCapabilitySecret, managementAuthority: bundle.plan.Authorities.Management,
-		workloadAuthority: digest.SHA256([]byte(runtime.material.Target.CAPIClusterUID)), gitOpsAuthority: bundle.plan.Authorities.GitOps,
-		runtimeDigest: runtime.receipt.PrivateMaterialDigest, capabilityDigest: capability.EvidenceDigest(),
+		workloadAuthority: digest.SHA256([]byte(runtime.material.Target.CAPIClusterUID)), workloadCABundle: runtime.material.Target.WorkloadAPICADigest,
+		gitOpsAuthority: bundle.plan.Authorities.GitOps,
+		runtimeDigest:   runtime.receipt.PrivateMaterialDigest, capabilityDigest: capability.EvidenceDigest(),
 		verified: true,
 	}, nil
 }
@@ -192,7 +194,7 @@ func (packaged VerifiedAggregateEvidenceStagePackage) Receipt() (AggregateEviden
 
 func verifyAggregateEvidenceStagePackage(packaged VerifiedAggregateEvidenceStagePackage) error {
 	if !packaged.verified || packaged.receipt.Format != AggregateEvidenceStagePackageFormat || packaged.receipt.State != "VERIFIED" || packaged.receipt.StageID != "aggregate-evidence" || packaged.receipt.MutationAllowed || digest.SHA256(packaged.raw) != packaged.receipt.PackageDigest ||
-		packaged.ledgerCredential == "" || packaged.managementCredential == "" || packaged.workloadCredential == "" || packaged.argoCredential == "" || packaged.runtimeSecret == "" || packaged.capabilitySecret == "" || packaged.managementAuthority == "" || packaged.gitOpsAuthority == "" || !stageReceiptPrefixDigestPattern.MatchString(packaged.workloadAuthority) {
+		packaged.ledgerCredential == "" || packaged.managementCredential == "" || packaged.workloadCredential == "" || packaged.argoCredential == "" || packaged.runtimeSecret == "" || packaged.capabilitySecret == "" || packaged.managementAuthority == "" || packaged.gitOpsAuthority == "" || !stageReceiptPrefixDigestPattern.MatchString(packaged.workloadAuthority) || !stageReceiptPrefixDigestPattern.MatchString(packaged.workloadCABundle) {
 		return errors.New("aggregate evidence package identity is incomplete")
 	}
 	parts := bytes.SplitN(packaged.raw, []byte("\n---\n"), 2)
