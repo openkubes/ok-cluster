@@ -2119,6 +2119,37 @@ This checkpoint supplies only the execution composition: it does not yet read
 the workload-kubeconfig Secret, contact a cluster, create the private runtime
 binding file, activate a CLI/Job path or grant target access.
 
+The first concrete runtime-binding materializer now defines what that binder
+must retain. It accepts only the exact successful five-receipt prefix, the
+previously verified private workload-authority binding, the matching CA file
+and explicit results of the two bounded workload reads:
+
+```text
+cluster-lifecycle target UID digest
+        + NetworkReady receipt
+        + workload authority binding
+        + matching workload API CA
+        + kube-system UID
+        + local-path StorageClass UID/provisioner
+                         |
+                         v
+        canonical private runtime-binding material
+                         +
+        redaction-safe public material receipt
+```
+
+The private material binds the exact CAPI Cluster UID, target identity scheme,
+workload API endpoint, CA payload and digest, `kube-system` UID, `local-path`
+StorageClass UID and provisioner, R/E/P/Fixture and the lifecycle/network
+evidence digests. The public receipt replaces the endpoint, CA payload and raw
+UIDs with digests. A same-name replacement target, changed CA, incomplete
+prefix, missing namespace identity or unexpected provisioner fails closed.
+
+Materialization is deterministic and returns defensive copies. It performs no
+Kubernetes request and no file write. The bounded exact-GET source, exclusive
+private-file persistence and composition with `BindingStageOperation` remain
+separate later checkpoints; target access is still unreachable here.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
