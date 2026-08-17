@@ -2329,8 +2329,23 @@ pull Secrets, owner references or embedded RBAC. The receipt binds both the
 source manifest and normalized object digest to the runtime-binding package.
 
 This prerequisite remains non-mutating. It neither creates the ServiceAccount
-nor issues or mounts a token; credential packaging, installation planning and
-launch remain separate.
+nor issues or mounts a token.
+
+The three private runtime-binding credentials are now composed offline as one
+verified `ok147-runtime-binding-stage-credential-package/v1`. The package
+requires independently issued, short-lived and pairwise-distinct credentials
+for the management-side ledger writer, the management-side immutable Secret
+writer and the workload-side observer. Each token and CA must match its bound
+TokenRequest evidence and authority; the workload CA and raw CAPI Cluster UID
+must additionally match the private workload-authority binding already bound
+by the stage package.
+
+Only the workload observer Secret carries `binding.json`. The public receipt
+contains roles, authority identities, expiry, audiences and digests, but never
+tokens, CA bytes, subjects, API endpoints or source paths. The exact immutable
+Secret bytes remain private for a later installer boundary. Construction is
+still non-mutating: it neither requests a token nor contacts Kubernetes.
+Installation planning, bounded installation and launch remain separate.
 
 ## Bounded convergence observation polling
 

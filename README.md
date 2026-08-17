@@ -110,7 +110,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   mounts and only the exact management and workload API egress destinations;
   the ConfigMap and envelope are now correlated under one verified package
   digest. That package is also bound to the shared tokenless runtime
-  ServiceAccount, but remains uninstalled and unlaunched.
+  ServiceAccount. Three independently issued short-lived credentials are now
+  sealed offline into private immutable Secrets for ledger write, binding
+  persistence and workload observation; only the redacted credential receipt
+  is public. The package remains uninstalled and unlaunched.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
