@@ -2172,10 +2172,19 @@ failure remains `STOPPED_PARTIAL_OR_UNKNOWN`; the public persistence receipt
 contains only the material digest, size and mode and explicitly denies
 Kubernetes mutation.
 
-The source, materializer, writer and `BindingStageOperation` are not yet
-composed into one CLI/Job boundary. Therefore this checkpoint still performs
-no live request or file write in production, and target access remains
-unreachable.
+The verified stage bundle now composes that source, materializer and writer
+with `BindingStageOperation`. Opening the bundle re-verifies the five-receipt
+prefix, lifecycle target, private workload binding, distinct management-ledger
+and workload credentials, distinct API endpoints and safe output path without
+contacting either API. Running it performs the two workload GETs, creates and
+verifies the private file, then stores one immutable runner-owned stage receipt
+in the ledger. A source or persistence failure becomes a redaction-safe,
+terminal `STOPPED` receipt; a restart returns an existing receipt without
+re-reading or rewriting the workload binding.
+
+CLI/Job activation remains a separate checkpoint. Therefore the composition
+is not reachable from the product command surface yet, and target access
+remains unreachable.
 
 ## Bounded convergence observation polling
 

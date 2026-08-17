@@ -94,8 +94,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   prefix while exposing only digest identities publicly. A bounded source now
   performs only the exact `kube-system` and `local-path` GETs after proving the
   workload authority, and an exclusive private writer creates and verifies one
-  `0600` binding file without overwrite or cleanup. Composition with the stage
-  operation and CLI/Job activation remains separate.
+  `0600` binding file without overwrite or cleanup. These capabilities are now
+  composed with the runner-owned crash-safe stage operation and immutable
+  ledger receipt; CLI/Job activation remains separate.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered

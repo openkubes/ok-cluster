@@ -33,18 +33,25 @@ func OpenRuntimeBindingWriter(material VerifiedRuntimeBindingMaterial, path stri
 	if err := verifyRuntimeBindingMaterial(material); err != nil {
 		return nil, err
 	}
+	if err := validateRuntimeBindingOutputPath(path); err != nil {
+		return nil, err
+	}
+	return &RuntimeBindingWriter{material: material, path: path}, nil
+}
+
+func validateRuntimeBindingOutputPath(path string) error {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) == "." || filepath.Base(path) == string(filepath.Separator) {
-		return nil, errors.New("runtime binding output path is invalid")
+		return errors.New("runtime binding output path is invalid")
 	}
 	parent := filepath.Dir(path)
 	info, err := os.Lstat(parent)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("runtime binding output directory is not private")
+		return errors.New("runtime binding output directory is not private")
 	}
 	if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return nil, errors.New("runtime binding output must be absent")
+		return errors.New("runtime binding output must be absent")
 	}
-	return &RuntimeBindingWriter{material: material, path: path}, nil
+	return nil
 }
 
 // Write creates exactly one 0600 file with O_EXCL, syncs it, and re-verifies

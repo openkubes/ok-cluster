@@ -31,20 +31,32 @@ type KubernetesRuntimeBindingSource struct {
 // authority and fixes its request surface to the two runtime-binding GETs. It
 // reads credential files but performs no API request.
 func OpenKubernetesRuntimeBindingSource(authority KubernetesAuthorityConfig, binding WorkloadAuthorityBinding) (*KubernetesRuntimeBindingSource, error) {
+	source, _, err := openKubernetesRuntimeBindingSource(authority, binding)
+	return source, err
+}
+
+// openKubernetesRuntimeBindingSource also returns the bounded token so stage
+// composition can prove that workload reads and ledger writes use distinct
+// credentials. The token never leaves this package or enters evidence.
+func openKubernetesRuntimeBindingSource(authority KubernetesAuthorityConfig, binding WorkloadAuthorityBinding) (*KubernetesRuntimeBindingSource, string, error) {
 	if err := validateWorkloadAuthorityBinding(binding); err != nil {
-		return nil, errors.New("runtime binding workload authority is invalid")
+		return nil, "", errors.New("runtime binding workload authority is invalid")
 	}
 	if authority.Endpoint != binding.Endpoint || authority.AuthorityIdentity != binding.TargetClusterUID || authority.CABundleDigest != binding.CABundleDigest {
-		return nil, errors.New("runtime binding source differs from workload authority")
+		return nil, "", errors.New("runtime binding source differs from workload authority")
 	}
 	token, ca, client, err := openBoundedKubernetesMaterial(authority.TokenFile, authority.CAFile)
 	if err != nil {
-		return nil, errors.New("open bounded runtime binding credential")
+		return nil, "", errors.New("open bounded runtime binding credential")
 	}
 	if digest.SHA256(ca) != binding.CABundleDigest {
-		return nil, errors.New("runtime binding source CA differs from workload authority")
+		return nil, "", errors.New("runtime binding source CA differs from workload authority")
 	}
-	return newKubernetesRuntimeBindingSource(authority.Endpoint, token, client)
+	source, err := newKubernetesRuntimeBindingSource(authority.Endpoint, token, client)
+	if err != nil {
+		return nil, "", err
+	}
+	return source, token, nil
 }
 
 func newKubernetesRuntimeBindingSource(endpoint, token string, client *http.Client) (*KubernetesRuntimeBindingSource, error) {
