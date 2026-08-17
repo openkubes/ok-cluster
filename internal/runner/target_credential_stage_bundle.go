@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
 	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
@@ -82,6 +85,21 @@ type VerifiedTargetCredentialStageBundle struct {
 	policy   targetCredentialPolicyDocument
 	receipt  TargetCredentialStageBundleReceipt
 	verified bool
+}
+
+type TargetCredentialStageRuntimeConfig struct {
+	Ledger   KubernetesLedgerConfig
+	Workload WorkloadAuthorityFileResolverConfig
+	Clock    func() time.Time
+}
+
+type BoundTargetCredentialStage struct {
+	operation execution.StagedOperation
+	mutator   *TargetCredentialStageMutator
+	plan      stageplan.Binding
+	cursor    stagecursor.Cursor
+	grant     authorization.VerifiedStageGrant
+	verified  bool
 }
 
 // LoadTargetCredentialStageBundle proves that the credential request is for
@@ -208,6 +226,51 @@ func (bundle VerifiedTargetCredentialStageBundle) Receipt() (TargetCredentialSta
 		return TargetCredentialStageBundleReceipt{}, err
 	}
 	return bundle.receipt, nil
+}
+
+// Open binds the verified credential policy to the workload authority and
+// durable ledger without contacting either Kubernetes API.
+func (bundle VerifiedTargetCredentialStageBundle) Open(config TargetCredentialStageRuntimeConfig) (BoundTargetCredentialStage, error) {
+	if err := verifyTargetCredentialStageBundle(bundle); err != nil || config.Clock == nil {
+		return BoundTargetCredentialStage{}, errors.New("verified target-credential bundle and clock are required")
+	}
+	issuer, err := OpenTargetCredentialIssuer(bundle, TargetCredentialIssuerConfig{Workload: config.Workload, Clock: config.Clock})
+	if err != nil {
+		return BoundTargetCredentialStage{}, err
+	}
+	ledgerStore, ledgerToken, err := openKubernetesLedger(config.Ledger)
+	if err != nil {
+		return BoundTargetCredentialStage{}, errors.New("open target-credential stage ledger")
+	}
+	if len(ledgerToken) == len(issuer.authorityToken) && subtle.ConstantTimeCompare([]byte(ledgerToken), []byte(issuer.authorityToken)) == 1 {
+		return BoundTargetCredentialStage{}, errors.New("ledger and target-credential authority credentials must be distinct")
+	}
+	mutator, err := NewTargetCredentialStageMutator(bundle.plan, bundle.receipt, issuer)
+	if err != nil {
+		return BoundTargetCredentialStage{}, err
+	}
+	return BoundTargetCredentialStage{
+		operation: execution.StagedOperation{Ledger: ledgerStore, Mutator: mutator, Clock: config.Clock},
+		mutator:   mutator, plan: bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true,
+	}, nil
+}
+
+// Run durably completes Stage 8 and transfers the verified credential exactly
+// once to the immediately following in-process registration step. A replay can
+// recover the public receipt but deliberately cannot recreate private material.
+func (stage BoundTargetCredentialStage) Run(ctx context.Context) (execution.StagedOperationReceipt, VerifiedTargetCredentialMaterial, error) {
+	if !stage.verified || stage.mutator == nil {
+		return execution.StagedOperationReceipt{}, VerifiedTargetCredentialMaterial{}, errors.New("target-credential stage runtime was not produced by verification")
+	}
+	receipt, err := stage.operation.Run(ctx, stage.plan, stage.cursor, stage.grant)
+	if err != nil {
+		return receipt, VerifiedTargetCredentialMaterial{}, err
+	}
+	material, err := stage.mutator.TakeMaterial()
+	if err != nil {
+		return receipt, VerifiedTargetCredentialMaterial{}, errors.New("durable target-credential outcome has no in-memory credential; registration must stop")
+	}
+	return receipt, material, nil
 }
 
 func verifyTargetCredentialStageBundle(bundle VerifiedTargetCredentialStageBundle) error {
