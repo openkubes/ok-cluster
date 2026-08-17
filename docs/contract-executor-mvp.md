@@ -2420,8 +2420,32 @@ retry, update, patch, delete or cleanup path. Candidate expiry and credential
 remaining lifetime are checked locally before the first API request.
 
 This execution has been tested only against injected local fake Kubernetes
-clients. No DEV cluster was contacted and no public CLI launch command exists
-yet.
+clients. No DEV cluster was contacted. The public CLI preserves the same split
+boundary: `ok cluster stage bind runtime launch prepare` reconstructs the
+material and emits redacted receipts without API contact, while the matching
+`launch execute` command alone can open the installer credential and invoke
+the launcher after receiving the exact candidate digest and explicit
+`--execute`.
+
+## Target-access verified projection
+
+The first `target-access` boundary is again side-effect free. One externally
+rendered artifact is accepted only when its digest and exact eight-object
+identity list are independently supplied by the staged experiment. The plan
+binds `R`, `P`, `FixtureDigest` and the immutable workload target identity to a
+single workload authority plane.
+
+The allowlist fixes this order: Namespace, manager ServiceAccount,
+ClusterRole/ClusterRoleBinding, one namespaced Role/RoleBinding pair for the
+Platform namespace and one Role/RoleBinding pair for `kube-system`. Every
+binding must refer to the exact manager ServiceAccount and corresponding role.
+Wildcard permissions, non-resource URLs, user/group subjects, runtime metadata,
+status, aliases, symlinks, additional or reordered objects fail closed. The
+verified output is `ok147-bounded-target-access-plan/v1` with
+`mutationAllowed: false`.
+
+This verifier does not render RBAC, consume `CreateTargetAccess` authorization,
+read a credential or contact the workload API. Those remain later boundaries.
 
 ## Bounded convergence observation polling
 
