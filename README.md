@@ -122,6 +122,12 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   creates the Job last, and has no update, patch, delete, list, watch or retry
   path. The boundary is covered only by local and fake-API tests at this
   checkpoint; no DEV runtime-binding Job has been launched.
+  The next `target-access` stage now starts with a separate offline verifier
+  for one externally rendered eight-object workload RBAC set. It binds the
+  artifact to `R`, `P`, the execution fixture and immutable target identity,
+  fixes object order and REST routes, rejects wildcard/non-resource access,
+  foreign subjects and runtime metadata, and returns only a non-authorizing
+  plan. Grant consumption, credentials and target submission remain absent.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
