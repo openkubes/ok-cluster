@@ -2691,6 +2691,13 @@ unconsumed credential. It deliberately exposes no retry, rollback or cleanup
 method. This core still needs a concrete CLI and Job adapter before it is an
 executable end-to-end runner path.
 
+The accompanying receipt bridge can reload only the independently
+digest-bound, already durable public receipt selected by the current cursor.
+It writes canonical receipt bytes create-only as `0600` below an existing
+private directory, re-verifies the stored digest and returns the exact
+`StageReceiptSource` for the next bundle. Private credentials, endpoints and
+runtime identity never enter this bridge.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
