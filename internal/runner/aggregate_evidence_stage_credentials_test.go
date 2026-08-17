@@ -137,6 +137,11 @@ func TestBuildAggregateEvidenceStageCredentialPackageFailsClosed(t *testing.T) {
 
 func aggregateEvidenceCredentialConfig(t *testing.T) (AggregateEvidenceStageCredentialPackageConfig, [][]byte) {
 	t.Helper()
+	return aggregateEvidenceCredentialConfigForPackage(t, aggregateEvidenceStagePackageConfig(t))
+}
+
+func aggregateEvidenceCredentialConfigForPackage(t *testing.T, packageConfig AggregateEvidenceStagePackageConfig) (AggregateEvidenceStageCredentialPackageConfig, [][]byte) {
+	t.Helper()
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	issuedAt, expiresAt := now.Add(-time.Minute), now.Add(30*time.Minute)
 	audiences := []string{"https://kubernetes.default.svc"}
@@ -146,7 +151,6 @@ func aggregateEvidenceCredentialConfig(t *testing.T) (AggregateEvidenceStageCred
 	managementCAPath := writeBundleFile(t, root, "management-ca.crt", managementCA)
 	argoCAPath := writeBundleFile(t, root, "argo-ca.crt", argoCA)
 
-	packageConfig := aggregateEvidenceStagePackageConfig(t)
 	var runtime RuntimeBindingMaterial
 	runtimeRaw, err := os.ReadFile(packageConfig.RuntimeBindingMaterialPath)
 	if err != nil || jsonstrict.Decode(runtimeRaw, &runtime) != nil {
