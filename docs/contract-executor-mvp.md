@@ -2588,3 +2588,87 @@ ok-mgmt resources:         8
 
 This is compatibility evidence for the preserved OK-141 fixture, not a new
 authorization and not permission to recreate the disposable cluster.
+
+## Staged runner library closure
+
+The reusable Go implementation now models the complete bounded create path as
+twelve ordered stages. Every stage consumes an immutable input digest and the
+durable receipt of its direct predecessor:
+
+```text
+ 1  provider-prerequisites   Submission   ok-infra
+ 2  cluster-lifecycle       Submission   ok-mgmt
+ 3  lifecycle-observation   Observation  ok-mgmt
+ 4  enablement              Submission   ok-mgmt
+ 5  network-observation     Observation  workload
+ 6  runtime-binding         Binding      runner
+ 7  target-access           Submission   workload
+ 8  target-credential       Credential   workload
+ 9  target-registration     Submission   ok-shared
+10  platform-applications   Submission   ok-shared
+11  platform-observation    Observation  ok-shared
+12  aggregate-evidence      Evaluation   runner
+```
+
+Mutating stages require a signed, stage-specific, predecessor-bound grant.
+Observation, binding and final evaluation stages cannot carry a mutation
+operation or authorization grant. Durable stage receipts distinguish
+`ATTEMPTED` mutation from `NOT_APPLICABLE`, bind the exact plan and predecessor
+and prevent a replacement process from repeating a completed action.
+
+The final Stage-12 profile fixes the required condition order to
+`InfrastructureReady`, `ControlPlaneAvailable`, `NetworkReady` and
+`PlatformReady`. Its runtime policy adds the private CAPI Cluster UID only
+after lifecycle submission. One bounded source pass reads CAPI, Network and
+Platform authorities and evaluates `Ready=True|False|Unknown`; the resulting
+stage outcome is respectively `SUCCEEDED`, `FAILED` or fail-closed `STOPPED`.
+No normalized status is written back to Kubernetes.
+
+Local TLS integration tests prove the final operation performs exactly one
+CAPI read, one Network source pass, three exact Argo Application reads and one
+capability read. Once the Stage-12 receipt is durable, replay performs no
+additional authoritative-source access.
+
+## Target credential and GitOps stages
+
+The target credential stage verifies an exact, short-lived TokenRequest policy
+and keeps token material in memory only. The following target-registration
+stage binds the Argo registration Secret and AppProject to the immutable CAPI
+target identity and the selected project boundary. The registration launcher
+uses exact-name preflights and create-only submission; unexpected existing or
+partial state stops without retry.
+
+Platform application submission verifies exactly three externally rendered
+Applications and their immutable profile membership. Argo CD remains the sole
+owner of Platform convergence. The runner neither renders an alternative
+Platform graph nor invokes repair logic. Platform observation performs exact
+Application reads plus the separately bounded capability assertion and emits
+only normalized, revision-correlated evidence.
+
+The memory-only target credential intentionally creates a narrow process-crash
+boundary between successful credential issuance and durable registration. The
+runner must not solve that boundary by persisting the bearer token. A later
+orchestrator checkpoint must either execute those steps within one bounded
+process lifetime or obtain a fresh independently authorized credential after a
+pre-registration stop.
+
+## Current OK-147 implementation boundary
+
+The twelve-stage Go library and its durable replay semantics are complete and
+covered by unit, negative, local TLS integration and race tests. This is not
+yet the OK-147 Definition of Done:
+
+- the legacy `ok cluster create` command remains dry-run-only;
+- stages 8–12 are not yet exposed through one coherent local CLI and Job
+  orchestration path;
+- the previously published runner image predates this staged-library closure;
+- no ephemeral `ok-mgmt` Job has executed the complete current implementation;
+- the disposable-cluster create conformance and executor-termination failure
+  conformance have not yet been repeated through this MVP;
+- the final operator runbook, security boundary summary and ADR-030 amendment
+  proposal remain to be reviewed.
+
+These remaining items may compose the verified packages, but must not add a
+second Contract-to-CAPI compiler, persistent aggregate-status controller,
+long-running lifecycle reconciler, automatic retry after partial mutation or
+credential persistence.
