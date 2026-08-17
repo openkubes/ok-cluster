@@ -443,6 +443,104 @@ func TestStageObserveNetworkEmitsPersistedTerminalReceipt(t *testing.T) {
 	}
 }
 
+func TestStageBindRuntimeRequiresExplicitExecutionAndBindsRuntime(t *testing.T) {
+	previous := executeRuntimeBindingStage
+	defer func() { executeRuntimeBindingStage = previous }()
+	var capturedBundle runner.StageResumeConfig
+	var capturedRuntime runner.RuntimeBindingStageRuntimeConfig
+	var capturedContext context.Context
+	executeRuntimeBindingStage = func(ctx context.Context, bundle runner.StageResumeConfig, runtime runner.RuntimeBindingStageRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+		capturedContext, capturedBundle, capturedRuntime = ctx, bundle, runtime
+		evidence := &runner.RuntimeBindingStageEvidenceReceipt{
+			Format: runner.RuntimeBindingStageEvidenceFormat, State: "SUCCEEDED", PlanDigest: testSHA("9"), StageID: "runtime-binding",
+			KubernetesMutationAllowed: false,
+		}
+		return execution.BindingStageRunReceipt{
+			Format: execution.BindingStageReceiptFormat, State: "COMPLETED_SUCCEEDED",
+			PlanDigest: testSHA("9"), StageID: "runtime-binding", StageReceiptDigest: testSHA("8"),
+		}, evidence, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageBindRuntimeArguments(), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if capturedBundle.PlanPath != "/tmp/plan.json" || len(capturedBundle.Receipts) != 5 {
+		t.Fatalf("unexpected runtime binding bundle: %#v", capturedBundle)
+	}
+	if capturedRuntime.Ledger.Namespace != ledgerNamespace || capturedRuntime.Workload.ExpectedBindingDigest != testSHA("5") || capturedRuntime.OutputPath != "/private/tmp/ok147-runtime-binding.json" || capturedRuntime.Clock == nil {
+		t.Fatalf("unexpected runtime binding config: %#v", capturedRuntime)
+	}
+	deadline, bounded := capturedContext.Deadline()
+	remaining := time.Until(deadline)
+	if !bounded || remaining > runtimeBindingRunTimeout || remaining < runtimeBindingRunTimeout-time.Second {
+		t.Fatalf("runtime binding context is not bounded: %s %t", deadline, bounded)
+	}
+	var result runtimeBindingExecution
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != "ok147-runtime-binding-execution/v1" || result.Receipt.State != "COMPLETED_SUCCEEDED" || result.Evidence == nil || result.Evidence.State != "SUCCEEDED" {
+		t.Fatalf("unexpected runtime binding output: %#v", result)
+	}
+}
+
+func TestStageBindRuntimeFailsClosedBeforeExecution(t *testing.T) {
+	previous := executeRuntimeBindingStage
+	defer func() { executeRuntimeBindingStage = previous }()
+	calls := 0
+	executeRuntimeBindingStage = func(context.Context, runner.StageResumeConfig, runner.RuntimeBindingStageRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+		calls++
+		return execution.BindingStageRunReceipt{}, nil, nil
+	}
+	valid := stageBindRuntimeArguments()
+	for name, arguments := range map[string][]string{
+		"missing execute":          removeArgument(valid, "--execute"),
+		"missing ledger token":     removeArgumentWithValue(valid, "--ledger-token-file"),
+		"missing workload binding": removeArgumentWithValue(valid, "--workload-binding"),
+		"bad binding digest":       replaceArgument(valid, "--workload-binding-digest", "sha256:bad"),
+		"missing workload token":   removeArgumentWithValue(valid, "--workload-token-file"),
+		"relative output":          replaceArgument(valid, "--output", "runtime-binding.json"),
+		"unclean output":           replaceArgument(valid, "--output", "/private/tmp/../tmp/runtime-binding.json"),
+		"positional":               append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe runtime binding input was accepted: err=%v stdout=%s", err, stdout.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("runtime binding execution was reached %d times for invalid input", calls)
+	}
+}
+
+func TestStageBindRuntimeEmitsPersistedTerminalReceipt(t *testing.T) {
+	previous := executeRuntimeBindingStage
+	defer func() { executeRuntimeBindingStage = previous }()
+	executeRuntimeBindingStage = func(context.Context, runner.StageResumeConfig, runner.RuntimeBindingStageRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+		evidence := &runner.RuntimeBindingStageEvidenceReceipt{
+			Format: runner.RuntimeBindingStageEvidenceFormat, State: "STOPPED", PlanDigest: testSHA("9"), StageID: "runtime-binding",
+			FailureCategory: "SOURCE_STOPPED", KubernetesMutationAllowed: false,
+		}
+		return execution.BindingStageRunReceipt{
+			Format: execution.BindingStageReceiptFormat, State: "COMPLETED_STOPPED",
+			PlanDigest: testSHA("9"), StageID: "runtime-binding", StageReceiptDigest: testSHA("8"),
+		}, evidence, errors.New("bounded runtime binding stopped")
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageBindRuntimeArguments(), &stdout, &stderr); err == nil {
+		t.Fatal("terminal runtime binding returned success")
+	}
+	var result runtimeBindingExecution
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Receipt.State != "COMPLETED_STOPPED" || result.Receipt.StageReceiptDigest == "" || result.Evidence == nil || result.Evidence.FailureCategory != "SOURCE_STOPPED" {
+		t.Fatalf("persisted terminal runtime binding was lost: %#v", result)
+	}
+}
+
 func TestStageObserveLifecyclePackageWritesVerifiedOfflineArtifact(t *testing.T) {
 	previous := materializeLifecycleObservationStagePackage
 	defer func() { materializeLifecycleObservationStagePackage = previous }()
@@ -1376,6 +1474,23 @@ func stageObserveNetworkArguments() []string {
 		"--workload-token-file", "/tmp/workload-observer-token", "--workload-ca-file", "/tmp/workload-ca",
 		"--network-profile", "/tmp/network-profile.json", "--network-profile-digest", testSHA("5"),
 		"--poll-interval", "15s", "--poll-timeout", "5m",
+	)
+}
+
+func stageBindRuntimeArguments() []string {
+	arguments := stageResumeArguments()
+	arguments = append([]string{"cluster", "stage", "bind", "runtime"}, arguments[3:]...)
+	return append(arguments,
+		"--receipt", "/tmp/provider.json@"+testSHA("1"),
+		"--receipt", "/tmp/lifecycle.json@"+testSHA("2"),
+		"--receipt", "/tmp/lifecycle-observation.json@"+testSHA("3"),
+		"--receipt", "/tmp/enablement.json@"+testSHA("4"),
+		"--receipt", "/tmp/network-observation.json@"+testSHA("5"),
+		"--execute",
+		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
+		"--workload-binding", "/tmp/workload-binding.json", "--workload-binding-digest", testSHA("5"),
+		"--workload-token-file", "/tmp/workload-observer-token", "--workload-ca-file", "/tmp/workload-ca",
+		"--output", "/private/tmp/ok147-runtime-binding.json",
 	)
 }
 
