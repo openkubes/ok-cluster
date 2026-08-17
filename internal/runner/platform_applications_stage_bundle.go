@@ -1,12 +1,15 @@
 package runner
 
 import (
+	"context"
+	"crypto/subtle"
 	"errors"
 	"sort"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
@@ -50,6 +53,20 @@ type VerifiedPlatformApplicationsStageBundle struct {
 	profile    observation.PlatformProfile
 	receipt    PlatformApplicationsStageBundleReceipt
 	verified   bool
+}
+
+type PlatformApplicationsStageRuntimeConfig struct {
+	Ledger KubernetesLedgerConfig
+	GitOps KubernetesAuthorityConfig
+	Clock  func() time.Time
+}
+
+type BoundPlatformApplicationsStage struct {
+	operation execution.StagedOperation
+	plan      stageplan.Binding
+	cursor    stagecursor.Cursor
+	grant     authorization.VerifiedStageGrant
+	verified  bool
 }
 
 // LoadPlatformApplicationsStageBundle verifies the exact nine-stage
@@ -142,6 +159,41 @@ func (bundle VerifiedPlatformApplicationsStageBundle) Receipt() (PlatformApplica
 	receipt := bundle.receipt
 	receipt.ApplicationDigests = append([]string(nil), bundle.receipt.ApplicationDigests...)
 	return receipt, nil
+}
+
+// Open binds the verified offline bundle to its GitOps writer and durable
+// ledger. It opens bounded credential files but performs no API request and no
+// mutation.
+func (bundle VerifiedPlatformApplicationsStageBundle) Open(config PlatformApplicationsStageRuntimeConfig) (BoundPlatformApplicationsStage, error) {
+	if err := verifyPlatformApplicationsStageBundle(bundle); err != nil || config.Clock == nil {
+		return BoundPlatformApplicationsStage{}, errors.New("verified platform-applications bundle and clock are required")
+	}
+	launcher, err := OpenKubernetesPlatformApplicationsLauncher(PlatformApplicationsLauncherConfig{Authority: config.GitOps}, bundle)
+	if err != nil {
+		return BoundPlatformApplicationsStage{}, err
+	}
+	ledgerStore, ledgerToken, err := openKubernetesLedger(config.Ledger)
+	if err != nil {
+		return BoundPlatformApplicationsStage{}, errors.New("open platform-applications stage ledger")
+	}
+	if len(ledgerToken) == len(launcher.token) && subtle.ConstantTimeCompare([]byte(ledgerToken), []byte(launcher.token)) == 1 {
+		return BoundPlatformApplicationsStage{}, errors.New("ledger and platform-applications writer credentials must be distinct")
+	}
+	mutator, err := NewPlatformApplicationsStageMutator(bundle.plan, bundle, launcher)
+	if err != nil {
+		return BoundPlatformApplicationsStage{}, err
+	}
+	return BoundPlatformApplicationsStage{
+		operation: execution.StagedOperation{Ledger: ledgerStore, Mutator: mutator, Clock: config.Clock},
+		plan:      bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true,
+	}, nil
+}
+
+func (stage BoundPlatformApplicationsStage) Run(ctx context.Context) (execution.StagedOperationReceipt, error) {
+	if !stage.verified {
+		return execution.StagedOperationReceipt{}, errors.New("platform-applications stage runtime was not produced by verification")
+	}
+	return stage.operation.Run(ctx, stage.plan, stage.cursor, stage.grant)
 }
 
 func verifyPlatformApplicationsStageBundle(bundle VerifiedPlatformApplicationsStageBundle) error {
