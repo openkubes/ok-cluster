@@ -2054,6 +2054,36 @@ been verified as created. Any response or partial-state ambiguity stops with
 no retry, rollback or cleanup path, and public results retain only UID and
 resourceVersion digests.
 
+The same boundary is now exposed through two explicit CLI commands. Preparation
+reconstructs every private component, emits only redaction-safe material and
+candidate receipts and performs no Kubernetes request:
+
+```text
+ok cluster stage observe network launch prepare
+      -> verified seven-object material receipt
+      -> expiry-bound candidate receipt
+      -> mutationAllowed: false
+```
+
+Execution accepts the complete identical input set and additionally requires
+`--execute`, the separately copied candidate digest and bounded installer token
+and CA files:
+
+```text
+ok cluster stage observe network launch execute
+  + --execute
+  + --expected-candidate-digest sha256:...
+  + --installer-token-file PATH
+  + --installer-ca-file PATH
+```
+
+The command rebuilds the material before opening the installer authority and
+applies a five-minute outer deadline. Missing execution intent, a changed or
+malformed candidate, incomplete credential sources or missing installer files
+stop before the launcher is invoked. A stopped live launch still emits its
+redaction-safe receipt so partial or uncertain state remains visible without
+creating an implicit retry path.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before

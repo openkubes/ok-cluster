@@ -1182,6 +1182,109 @@ func TestLifecycleObservationLaunchExecuteUsesExactBoundary(t *testing.T) {
 	}
 }
 
+func TestNetworkObservationLaunchPrepareBuildsOneNonMutatingCandidate(t *testing.T) {
+	previous := prepareNetworkObservationStageLaunch
+	defer func() { prepareNetworkObservationStageLaunch = previous }()
+	var captured runner.NetworkObservationStageLaunchMaterialConfig
+	prepareNetworkObservationStageLaunch = func(config runner.NetworkObservationStageLaunchMaterialConfig) (networkObservationLaunchPreparation, error) {
+		captured = config
+		return networkObservationLaunchPreparation{
+			Format: "ok147-network-observation-stage-launch-preparation/v1", State: "PREPARED",
+			Material: runner.NetworkObservationStageLaunchMaterialReceipt{
+				Format: runner.NetworkObservationStageLaunchMaterialFormat, State: "VERIFIED", StageID: "network-observation",
+				Authority: "ok-mgmt", CandidateDigest: testSHA("1"), MutationAllowed: false,
+			},
+			Candidate: runner.NetworkObservationStageLaunchCandidateReceipt{
+				Format: runner.NetworkObservationStageLaunchCandidateFormat, State: "PREPARED", CandidateDigest: testSHA("1"), MutationAllowed: false,
+			},
+			MutationAllowed: false,
+		}, nil
+	}
+	root := t.TempDir()
+	template, runtimeManifest := filepath.Join(root, "network.yaml.tpl"), filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-network-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(networkObservationLaunchPrepareArguments(template, runtimeManifest), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Package.Input.Bundle.PlanExpected.ManagementAuthority != "ok-mgmt" || captured.Package.RunID != "ok147-network-observation-01" || captured.Package.PollInterval != 15*time.Second || captured.Package.PollTimeout != 5*time.Minute || string(captured.Package.JobTemplate) != "bounded-network-template" || string(captured.RuntimeManifest) != "bounded-runtime" {
+		t.Fatalf("network observation launch material differs: %#v", captured)
+	}
+	if captured.Ledger.AuthorityIdentity != "ok-mgmt" || captured.ManagementObserver.AuthorityIdentity != "ok-mgmt" || captured.WorkloadObserver.AuthorityIdentity != testSHA("b") || captured.Ledger.TokenFile == captured.ManagementObserver.TokenFile || captured.ManagementObserver.TokenFile == captured.WorkloadObserver.TokenFile {
+		t.Fatalf("network credential boundary differs: %#v %#v %#v", captured.Ledger, captured.ManagementObserver, captured.WorkloadObserver)
+	}
+	var preparation networkObservationLaunchPreparation
+	if err := json.Unmarshal(stdout.Bytes(), &preparation); err != nil {
+		t.Fatal(err)
+	}
+	if preparation.State != "PREPARED" || preparation.MutationAllowed || preparation.Material.MutationAllowed || preparation.Candidate.MutationAllowed {
+		t.Fatalf("unsafe network observation preparation: %#v", preparation)
+	}
+}
+
+func TestNetworkObservationLaunchExecuteUsesExactBoundary(t *testing.T) {
+	previous := executeNetworkObservationStageLaunch
+	defer func() { executeNetworkObservationStageLaunch = previous }()
+	var calls int
+	var candidate string
+	executeNetworkObservationStageLaunch = func(ctx context.Context, config runner.NetworkObservationStageLaunchMaterialConfig, authority runner.KubernetesAuthorityConfig, expectedCandidateDigest string) (runner.NetworkObservationStageLaunchReceipt, error) {
+		calls++
+		candidate = expectedCandidateDigest
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > stageLaunchTimeout {
+			t.Fatal("network observation launch context is not bounded")
+		}
+		if config.Package.RunID != "ok147-network-observation-01" || authority.Endpoint != "https://192.0.2.12:6443" || authority.TokenFile != "/private/tmp/installer-token" {
+			t.Fatalf("execute boundary differs: %#v %#v", config, authority)
+		}
+		return runner.NetworkObservationStageLaunchReceipt{
+			Format: runner.NetworkObservationStageLaunchReceiptFormat, StageID: "network-observation", Authority: "ok-mgmt",
+			State: "LAUNCHED", MutationState: "ATTEMPTED", Results: []runner.SubmissionStageLaunchResult{},
+		}, nil
+	}
+	root := t.TempDir()
+	template, runtimeManifest := filepath.Join(root, "network.yaml.tpl"), filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-network-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(networkObservationLaunchExecuteArguments(template, runtimeManifest), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 1 || candidate != testSHA("9") {
+		t.Fatalf("exact network candidate not used: calls=%d digest=%q", calls, candidate)
+	}
+	var receipt runner.NetworkObservationStageLaunchReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "LAUNCHED" {
+		t.Fatalf("unexpected network launch receipt: %#v %v", receipt, err)
+	}
+
+	valid := networkObservationLaunchExecuteArguments(template, runtimeManifest)
+	for name, arguments := range map[string][]string{
+		"missing execute":         removeArgument(valid, "--execute"),
+		"missing candidate":       removeArgumentWithValue(valid, "--expected-candidate-digest"),
+		"malformed candidate":     replaceArgument(valid, "--expected-candidate-digest", "sha256:ABC"),
+		"missing installer token": removeArgumentWithValue(valid, "--installer-token-file"),
+		"missing workload source": removeArgumentWithValue(valid, "--workload-observer-job-authority"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			stdout.Reset()
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 || calls != before {
+				t.Fatal("unsafe network launch input reached executor")
+			}
+		})
+	}
+}
+
 func stageInspectArguments() []string {
 	return []string{
 		"cluster", "stage", "inspect",
@@ -1397,6 +1500,43 @@ func lifecycleObservationLaunchPrepareArguments(template, runtimeManifest string
 
 func lifecycleObservationLaunchExecuteArguments(template, runtimeManifest string) []string {
 	arguments := lifecycleObservationLaunchPrepareArguments(template, runtimeManifest)
+	arguments[5] = "execute"
+	return append(arguments,
+		"--execute", "--expected-candidate-digest", testSHA("9"),
+		"--installer-token-file", "/private/tmp/installer-token", "--installer-ca-file", "/private/tmp/installer-ca",
+	)
+}
+
+func networkObservationLaunchPrepareArguments(template, runtimeManifest string) []string {
+	packaged := stageObserveNetworkPackageArguments(template, "/private/tmp/not-used-network-package")
+	packaged = removeArgumentWithValue(packaged, "--output")
+	arguments := append([]string{"cluster", "stage", "observe", "network", "launch", "prepare"}, packaged[5:]...)
+	arguments = append(arguments, "--credential-materialized-at", "2026-08-16T12:00:00Z")
+	for _, credential := range []struct{ prefix, authority, tokenFile, tokenDigest, caFile, caDigest, evidence, subject string }{
+		{"ledger-job", "ok-mgmt", "/private/tmp/ledger-network-token", testSHA("1"), "/private/tmp/ledger-network-ca", testSHA("2"), testSHA("3"), "system:serviceaccount:openkubes-execution-system:ok147-ledger-writer"},
+		{"management-observer-job", "ok-mgmt", "/private/tmp/management-network-token", testSHA("4"), "/private/tmp/management-network-ca", testSHA("2"), testSHA("5"), "system:serviceaccount:openkubes-execution-system:ok147-network-management-observer"},
+		{"workload-observer-job", testSHA("b"), "/private/tmp/workload-network-token", testSHA("6"), "/private/tmp/workload-network-ca", testSHA("7"), testSHA("8"), "system:serviceaccount:openkubes-execution-system:ok147-network-workload-observer"},
+	} {
+		arguments = append(arguments,
+			"--"+credential.prefix+"-authority", credential.authority,
+			"--"+credential.prefix+"-token-file", credential.tokenFile, "--"+credential.prefix+"-token-digest", credential.tokenDigest,
+			"--"+credential.prefix+"-ca-file", credential.caFile, "--"+credential.prefix+"-ca-digest", credential.caDigest,
+			"--"+credential.prefix+"-tokenrequest-evidence-digest", credential.evidence,
+			"--"+credential.prefix+"-issuer", "https://kubernetes.default.svc.cluster.local", "--"+credential.prefix+"-subject", credential.subject,
+			"--"+credential.prefix+"-audiences", "https://kubernetes.default.svc",
+			"--"+credential.prefix+"-issued-at", "2026-08-16T11:59:00Z", "--"+credential.prefix+"-expires-at", "2026-08-16T12:30:00Z",
+		)
+	}
+	return append(arguments,
+		"--runtime-manifest", runtimeManifest, "--runtime-manifest-digest", digest.SHA256([]byte("bounded-runtime")),
+		"--installer-api-endpoint", "https://192.0.2.12:6443", "--installer-ca-digest", testSHA("2"),
+		"--installer-token-digest", testSHA("7"), "--installer-tokenrequest-evidence-digest", testSHA("8"),
+		"--prepared-at", "2026-08-16T12:01:00Z",
+	)
+}
+
+func networkObservationLaunchExecuteArguments(template, runtimeManifest string) []string {
+	arguments := networkObservationLaunchPrepareArguments(template, runtimeManifest)
 	arguments[5] = "execute"
 	return append(arguments,
 		"--execute", "--expected-candidate-digest", testSHA("9"),
