@@ -47,6 +47,12 @@ type VerifiedAggregateEvidenceStageLaunchMaterial struct {
 	verified      bool
 }
 
+type AggregateEvidenceStageLaunchOpenConfig struct {
+	Authority               KubernetesAuthorityConfig
+	Clock                   func() time.Time
+	ExpectedCandidateDigest string
+}
+
 // BuildAggregateEvidenceStageLaunchMaterial reconstructs and re-verifies the
 // complete private Stage 12 launch input from bounded local sources. It makes
 // no Kubernetes API request and grants no launch authority.
@@ -108,6 +114,21 @@ func (material VerifiedAggregateEvidenceStageLaunchMaterial) CandidateReceipt() 
 		return AggregateEvidenceStageLaunchCandidateReceipt{}, err
 	}
 	return material.candidate.Receipt()
+}
+
+// Open requires the exact retained candidate and validates local installer
+// material without contacting Kubernetes.
+func (material VerifiedAggregateEvidenceStageLaunchMaterial) Open(config AggregateEvidenceStageLaunchOpenConfig) (*KubernetesAggregateEvidenceStageLauncher, error) {
+	if err := verifyAggregateEvidenceStageLaunchMaterial(material); err != nil {
+		return nil, err
+	}
+	if config.ExpectedCandidateDigest == "" || config.ExpectedCandidateDigest != material.receipt.CandidateDigest {
+		return nil, errors.New("aggregate evidence launch open requires the exact candidate digest")
+	}
+	return OpenKubernetesAggregateEvidenceStageLauncher(AggregateEvidenceStageLauncherConfig{
+		Authority: config.Authority, Clock: config.Clock, Candidate: material.candidate,
+		ExpectedCandidateDigest: config.ExpectedCandidateDigest,
+	}, material.packaged, material.credentials, material.privateInputs, material.runtime)
 }
 
 func verifyAggregateEvidenceStageLaunchMaterial(material VerifiedAggregateEvidenceStageLaunchMaterial) error {
