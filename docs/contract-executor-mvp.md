@@ -2044,6 +2044,16 @@ binding's semantic digest, target-UID digest and CA identity. Callers receive
 defensive copies only. No API is contacted and no installer credential is
 opened at this boundary.
 
+The bounded launcher now consumes only that sealed material. It is single-use,
+checks candidate lifetime and all three credential lifetimes locally, then
+performs all seven exact GET preflights before any mutation. It accepts only
+global absence, the exact reusable runtime alone, or an exact complete prior
+launch. A fresh launch uses create-only POSTs in the planned order and holds
+the Job until the runtime, public prerequisites and all three Secrets have
+been verified as created. Any response or partial-state ambiguity stops with
+no retry, rollback or cleanup path, and public results retain only UID and
+resourceVersion digests.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
