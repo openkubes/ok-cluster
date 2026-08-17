@@ -715,7 +715,7 @@ func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
 		return errors.New("positional arguments are not accepted")
 	}
 	if !*dryRun {
-		return errors.New("the OK-147 MVP currently requires --dry-run; submission is not implemented")
+		return errors.New("ok cluster create remains dry-run-only; mutating submission is available only through explicitly authorized ok cluster stage commands")
 	}
 	if *contractPath == "" || *schemaPath == "" {
 		return errors.New("--contract and --schema are required")

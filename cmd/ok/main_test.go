@@ -68,7 +68,7 @@ func TestCreateWithoutDryRunFailsClosed(t *testing.T) {
 		"--contract", fixturePath(t, "ok141-contract-v5.yaml"),
 		"--schema", fixturePath(t, "ok141-contract-v3.schema.json"),
 	}, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "requires --dry-run") {
+	if err == nil || !strings.Contains(err.Error(), "cluster create remains dry-run-only") || !strings.Contains(err.Error(), "explicitly authorized ok cluster stage commands") {
 		t.Fatalf("error = %v", err)
 	}
 	if stdout.Len() != 0 {
