@@ -2253,9 +2253,29 @@ operation stores the immutable ledger receipt. A later process can therefore
 verify an equivalent pre-existing Secret if it stopped between those two
 writes, without gaining an update or generic retry path.
 
-This remains library-only composition tested against local fake TLS APIs. The
-CLI still selects the exclusive local file, no Job package selects
-`OpenKubernetes`, and no live Kubernetes API was contacted.
+The CLI now exposes the composition through an explicit, mutually exclusive
+mode:
+
+```text
+ok cluster stage bind runtime --execute
+  --persistence-mode local-file
+  --output /private/absolute/path
+
+ok cluster stage bind runtime --execute
+  --persistence-mode immutable-secret
+  --persistence-token-file /bounded/persistence/token
+  --persistence-ca-file /bounded/persistence/ca.crt
+```
+
+`local-file` remains the compatibility default and rejects Kubernetes
+persistence credentials. `immutable-secret` rejects `--output`, reuses the
+exact ledger API destination, derives the management authority from the
+verified plan and emits outer execution format v2. Both modes retain the fixed
+two-minute context and explicit `--execute` requirement.
+
+The activation has been tested only through injected local execution paths and
+fake TLS APIs. It has not been invoked against a live Kubernetes API, and no
+Job package selects it yet.
 
 ## Bounded convergence observation polling
 
