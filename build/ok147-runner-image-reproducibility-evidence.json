@@ -1,0 +1,62 @@
+{
+  "format": "ok147-runner-image-reproducibility-evidence/v1",
+  "sourceRevision": "51ecd4e72c4105ab42cd461285f12d1cf5524712",
+  "version": "0.1.0-dev",
+  "created": "2026-08-16T08:27:25Z",
+  "buildCount": 2,
+  "tools": {
+    "buildx": {
+      "version": "v0.36.1",
+      "binaryDigest": "sha256:52a39ee4012d18f83373656712102ebda55656121dcdabbbb1ccfbd41b7debe8"
+    },
+    "syft": {
+      "version": "1.50.0"
+    }
+  },
+  "supplyChainContractDigest": "sha256:dafe84745eb684bc7c5db0b68c6c073d390b22b0fb5fe2b2996ea6ee73d1768e",
+  "platformManifestDigests": {
+    "linux/amd64": "sha256:61a9ff0061eb4950b0841a5ada4195ae8f2b43de4c824a0d47a503c83edff172",
+    "linux/arm64": "sha256:a21f2d234f64f5e8b963b56fe37b942fbe6518bc1edc3eb7666b396c0b11b7ce"
+  },
+  "sbomSemanticDigests": {
+    "linux/amd64": "sha256:93a8fe93c14371fac4c700c387055f3d81ed08cb9881555510006926ac9ed841",
+    "linux/arm64": "sha256:86783605fce5384025c87a73c3c8c65cb59e545c3324cf3aa22f835dd5eda5ac"
+  },
+  "claims": {
+    "exactPlatformSetVerified": true,
+    "platformImageManifestsReproduced": true,
+    "semanticSbomsReproduced": true,
+    "slsaProvenanceV1PresentPerPlatform": true,
+    "rawEnvelopeIdentitiesExpectedToVary": true,
+    "networkPublicationPerformed": false,
+    "clusterContactPerformed": false
+  },
+  "runs": [
+    {
+      "buildRecordDigest": "sha256:c348c62d417510a47b546037964a7469a247c05949dac8a5f625ddf51b730016",
+      "ociArchiveDigest": "sha256:9c431e2e16bf8f48639b45c9a278382f80f89def9cd65d5629e7ef6156521a56",
+      "ociIndexDigest": "sha256:0a53d812d80a9d42c07ab58b1634c169f5749ea1f1399fda64cd058b41c35502",
+      "provenanceManifestDigests": [
+        "sha256:0f8904788ea8b64676a75951c76af2b03b7dfce934640e7e8f5655861a7ae50e",
+        "sha256:9e69610d83beda2384ea43d301c602a3a23e48b489ece7d327d984a96841a730"
+      ],
+      "sbomDigests": {
+        "linux/amd64": "sha256:d34a71c2dd5bc63fbb04074dbc348c88e8dd451a5766417f02d1c40656dd59fe",
+        "linux/arm64": "sha256:0dfb17933e3be586fa2721eba4ab048ca20ad448b85a36bfb5d6f400ce1d8cdc"
+      }
+    },
+    {
+      "buildRecordDigest": "sha256:ffdc6454c9a426ace160bbcdaa2d543d8de8251b5ab39dd7fc277a47666e9d3b",
+      "ociArchiveDigest": "sha256:025e7ac48b9031388a6b3c127cb14d1633c0935ae919dd4f199b62b5b6907e2b",
+      "ociIndexDigest": "sha256:47b370f58f1ccf4d2b70ef93b101b0a615f78531c42ddc2005aab68d796ce5ab",
+      "provenanceManifestDigests": [
+        "sha256:2523612bab62190de240ed4c4fa2a9a89e00a9120ac92395df573eecd9fb6280",
+        "sha256:609606aa65f09a5af21a7ebafbe10900b117e72a39205783ad3e7aa060c17050"
+      ],
+      "sbomDigests": {
+        "linux/amd64": "sha256:405c6646e7d816f2d9b21bf65ecc282160c1e725389ea4ef121077b8c02f27ec",
+        "linux/arm64": "sha256:0c71a50e4efed8859d7264ce28ba2cc9a71cfceb5543c3f25471234de1ab865a"
+      }
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+apiVersion: test.openkubes.io/v1alpha3
+kind: ClusterIntentFixture
+metadata:
+  name: disposable-ok141
+  namespace: disposable-ok141
+spec:
+  kubernetesVersion: v1.36.2
+  infrastructure:
+    provider: kubevirt
+    profile:
+      name: ok-infra
+      identity: sha256:60fc84a67c33a41661c68ffadd646a13fd5ffd09f2a3d536f0eac1b909befc89
+      nodeSelector: ok-infra
+      cloneTargetStorageClass: ok-storage-block
+      replicaCount: 2
+      snapshotClass: ok-storage-block-snapshot
+    providerAccess:
+      mode: external-cluster-secret
+      managementPlane: ok-mgmt
+      providerPlane: ok-infra
+      secretRef:
+        apiVersion: v1
+        kind: Secret
+        name: external-infra-kubeconfig-disposable-ok141
+        namespace: disposable-ok141
+      targetNamespace: disposable-ok141
+    controlPlaneEndpoint:
+      mode: provider-allocated
+      serviceType: LoadBalancer
+      addressFamily: IPv4
+      allocationAuthority: CAPK+MetalLB
+  operatingSystem:
+    distribution: ok-linux
+    profile: kubevirt
+    version: v1.9.6
+    architecture: amd64
+    schematicID: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+    imageDigest: sha256:461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5
+    identity: sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d
+    goldenImage:
+      namespace: ok-images
+      claim: talos-v1-9-6-ce4c980550dd-461d72d30750-amd64
+      storageClass: ok-storage-block
+  topology:
+    controlPlane:
+      replicas: 1
+      machine: {cores: 2, memory: 4Gi, disk: 20Gi}
+    workers:
+      replicas: 1
+      machine: {cores: 2, memory: 4Gi, disk: 15Gi}
+  connectivity:
+    profile: datacenter-isolated-v1
+    podCIDR: 10.40.0.0/16
+    serviceCIDR: 10.100.0.0/20
+    forbiddenCIDRs: [192.168.100.0/24]
+  enablement:
+    profile: cilium-fixture-v2
+    revision: sha256:2a849d69e9c64344e907c1bce3bb1abf3d8f77217377081a5be055d62c213300
+  platform:
+    profile: minimal-observability-v4
+    revision: sha256:b0f25c639a45d895b889997f5ecc2325db45dd5d51b0684998c94d5e17bd47bf
+  conditions:
+    required: [InfrastructureReady, ControlPlaneAvailable, NetworkReady, PlatformReady]

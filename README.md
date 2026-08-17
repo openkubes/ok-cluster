@@ -26,6 +26,163 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Blue/Green upgrades** — rolling Kubernetes version upgrades with workload migration
 - **GitOps-ready** — all cluster state is declarative YAML, rendered from templates
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
+- **Bounded Contract Executor MVP** — one shared Go core for the local `ok` CLI
+  and short-lived `ok-mgmt` Jobs. `cluster create` remains non-mutating, while
+  the separately authorized `cluster stage run --execute` path supports only
+  the first two Contract-to-CAPI submission stages with a durable ledger,
+  exact split authorities and no retry. `cluster stage package` produces the
+  digest-bound immutable ConfigMap/Job/NetworkPolicy envelope offline; the
+  single-use Create-only installer can submit only that verified envelope
+  after a complete zero-write preflight. Its tokenless runtime identity and
+  two short-lived immutable credential Secrets are built as a separate
+  private, digest-bound package and have their own single-use exact-create
+  installer. TokenRequest issuance and live installation remain separately
+  managed prerequisites. The shared runtime ServiceAccount also has a bounded
+  exact-create-or-verify path and remains tokenless and RBAC-free. A unified
+  non-mutating launch plan binds all six objects behind one complete preflight
+  barrier and fixes their eventual create order without exposing object bodies
+  or credentials. A single-use composite launcher implements the same order,
+  verifies a complete exact duplicate as `ALREADY_LAUNCHED`, rejects every
+  mixed partial state, preserves a redaction-safe receipt and has no update,
+  delete, retry or rollback path. Its public opener additionally requires an
+  exact, expiry-bound launch-candidate digest that binds destination, CA and
+  installer credential evidence; preparing it remains non-mutating. Live
+  invocation is still a separate critical boundary. A private launch-material
+  builder now correlates all package, credential, runtime and candidate inputs
+  without exposing their bytes or contacting Kubernetes. `ok cluster stage launch
+  prepare` exposes only the redacted material/candidate receipts and rejects
+  execution. A separate `ok cluster stage launch execute` boundary requires the
+  exact prepared candidate, explicit `--execute`, bounded installer credentials
+  and a single-use global-preflight launcher. The runner image is digest-pinned,
+  multi-architecture, non-root, SBOM- and provenance-producing behind a
+  protected publisher. `ok cluster stage resume` independently re-verifies an
+  explicit canonical receipt prefix and reports only the next, completed or
+  stopped cursor state; it has no grant, credential, endpoint or execution
+  capability and can safely select the next read-only stage after a restart.
+  Successful Cluster-lifecycle submission also carries a SHA-256 binding of
+  the exact CAPI Cluster UID through the durable outcome and stage receipt;
+  the raw UID is not emitted in redaction-safe evidence. The next typed
+  `lifecycle-observation` operation derives its target only from that receipt,
+  performs bounded read-only CAPI polling and persists one immutable stage
+  receipt. A restarted process reuses the persisted receipt without observing
+  again; a same-name replacement Cluster fails the UID-digest boundary. A
+  verified lifecycle-observation bundle now retains the plan and receipt
+  cursor privately, opens distinct ledger and management-observer credentials
+  exactly once and exposes only the bounded stage `Run` method. `ok cluster
+  stage observe lifecycle --execute` is the first activation path: it accepts
+  no grant or projection, requires an explicit receipt prefix and bounded
+  polling window, reads only the exact CAPI Cluster and persists only its
+  immutable stage receipt. `ok cluster stage observe lifecycle package`
+  additionally creates a digest-bound immutable ConfigMap, NetworkPolicy and
+  non-retrying Job envelope offline; it does not install or launch them. The
+  matching `observe lifecycle launch prepare` command seals that package with
+  two distinct short-lived Job credentials, the tokenless runtime identity and
+  an expiry-bound installer candidate. Only `observe lifecycle launch execute`
+  can open the installer credential and run the single-use six-object
+  exact-create launcher; it requires the separately copied candidate digest
+  and explicit `--execute`. The NetworkReady observation follows the same
+  split boundary: `observe network launch prepare` correlates the immutable
+  package, three distinct Job credentials, runtime identity and expiring
+  installer candidate offline, while `observe network launch execute` alone
+  can open the installer authority and invoke the seven-object, Job-last
+  launcher. It also requires the exact candidate digest and explicit
+  `--execute`. The following `runtime-binding` stage now has a separate
+  crash-safe local operation as well: it accepts only the exact runner-owned
+  cursor, invokes one prebound binder and persists an immutable receipt before
+  any later target-access stage can open. Its offline materializer now binds
+  the private target endpoint, CA and raw runtime UIDs to the five-receipt
+  prefix while exposing only digest identities publicly. A bounded source now
+  performs only the exact `kube-system` and `local-path` GETs after proving the
+  workload authority, and an exclusive private writer creates and verifies one
+  `0600` binding file without overwrite or cleanup. These capabilities are now
+  composed with the runner-owned crash-safe stage operation and immutable
+  ledger receipt. `ok cluster stage bind runtime --execute` is the first local,
+  two-minute activation boundary and emits only its redaction-safe evidence;
+  Job activation and all target access remain separate. A Job-suitable store
+  candidate can create or verify one exact immutable runtime-binding Secret on
+  `ok-mgmt`; it has no update/delete/retry path. A distinct library opener now
+  composes that store with pairwise-separate ledger, persistence and workload
+  credentials. The CLI activates it only with explicit `--execute` plus
+  `--persistence-mode immutable-secret`; no Job package activates it yet. Its
+  offline immutable input ConfigMap now binds only the public plan and exact
+  five-receipt prefix, excluding all private authority and credential data. A
+  matching offline Job/NetworkPolicy envelope fixes three distinct credential
+  mounts and only the exact management and workload API egress destinations;
+  the ConfigMap and envelope are now correlated under one verified package
+  digest. That package is also bound to the shared tokenless runtime
+  ServiceAccount. Three independently issued short-lived credentials are now
+  sealed offline into private immutable Secrets for ledger write, binding
+  persistence and workload observation; only the redacted credential receipt
+  is public. `ok cluster stage bind runtime launch prepare` now reconstructs
+  those inputs and emits only the redacted material and candidate receipts
+  without API contact. `ok cluster stage bind runtime launch execute` is the
+  sole CLI path to the single-use, seven-object, create-only launcher; it
+  requires the separately copied candidate digest, bounded installer files and
+  explicit `--execute`. It completes all exact-name GETs before its first POST,
+  creates the Job last, and has no update, patch, delete, list, watch or retry
+  path. The boundary is covered only by local and fake-API tests at this
+  checkpoint; no DEV runtime-binding Job has been launched.
+  The next `target-access` stage now starts with a separate offline verifier
+  for one externally rendered eight-object workload RBAC set. It binds the
+  artifact to `R`, `P`, the execution fixture and immutable target identity,
+  fixes object order and REST routes, rejects wildcard/non-resource access,
+  foreign subjects and runtime metadata, and returns only a non-authorizing
+  plan. A runner-owned offline bundle now additionally requires the exact six
+  successful predecessor receipts, durable lifecycle target identity and a
+  signed `CreateTargetAccess` grant before exposing a redacted verified bundle
+  receipt. A typed runtime opener now correlates the private raw CAPI UID with
+  that public target digest, requires distinct ledger and short-lived workload
+  credentials, and preconstructs exactly one eight-object create-only mutator.
+  Opening performs no API request or grant claim; only the returned crash-safe
+  staged operation can claim and submit. The local
+  `ok cluster stage run target-access --execute` boundary now requires the
+  exact six-receipt prefix, signed grant, eight independently named object
+  identities, private runtime-binding digest and distinct ledger/workload
+  files before it can invoke that operation. A separated TLS fake-API proof
+  covers the complete claim-to-submit path: exactly eight ordered
+  `GET`/conditional-`POST` pairs, durable success replay without another write,
+  and a durably stopped partial prefix without retry. Its first Job-package
+  boundary is offline: one immutable ConfigMap binds the plan,
+  signed grant, exact six-receipt prefix and eight-object artifact while
+  excluding the private runtime binding, CA and both credentials. A hardened
+  NetworkPolicy and non-retrying Job bind only the exact management-ledger and
+  workload API endpoints. Two distinct short-lived immutable Secrets carry the
+  ledger and workload writer credentials; only the workload Secret carries the
+  runtime-bound target identity. The shared tokenless runtime, three public
+  objects and both private Secrets are sealed behind one six-object global
+  preflight. The Job is created last, a complete exact duplicate is
+  `ALREADY_LAUNCHED`, and every other partial state stops with zero writes.
+  `ok cluster stage run target-access package` emits only a new local `0600`
+  package, `... launch prepare` emits redacted material/candidate receipts, and
+  only `... launch execute --execute` can open the exact expiry-bound installer
+  candidate. These activation paths are covered by local and fake-API tests;
+  no DEV Target Access Job has been launched by the MVP.
+  Stage 4 now has its first distinct path as well:
+  `ok cluster stage run enablement --execute` binds the verified three-receipt
+  prefix and signed `CreateEnablement` grant to exactly one externally rendered
+  `HelmChartProxy`; it neither renders Helm nor writes the controller-owned
+  `HelmReleaseProxy`. A distinct offline package now composes the immutable
+  eight-key input ConfigMap with a tokenless, non-retrying Job and a deny-all
+  NetworkPolicy that permits only the exact management API endpoint. The
+  package is emitted locally with `ok cluster stage run enablement package`.
+  A private offline credential packager separately verifies two distinct,
+  short-lived management TokenRequest results for ledger and HCP writer roles;
+  its public receipt exposes neither tokens, CA data, subjects nor paths. The
+  shared tokenless runtime ServiceAccount is also bound offline to the exact
+  Enablement package and contains no RBAC or implicit Pod credential. A
+  read-only installation planner finally derives the fixed ConfigMap,
+  NetworkPolicy, Job GET/POST sequence without opening either credential. A
+  private launch planner correlates runtime, prerequisites, both Secrets and
+  the final Job behind one global six-object preflight barrier. A prepared,
+  expiry-bound candidate then binds that plan to one exact management API,
+  CA, installer-token identity and independent credential evidence. These
+  public and private inputs can now be sealed as one verified launch material.
+  The material can open only its exact retained candidate. A single-use Enablement
+  launcher now proves the six-GET global barrier and fixed six-POST create-only
+  sequence against a fake API. `ok cluster stage run enablement launch prepare`
+  emits the redaction-safe sealed-material and candidate receipts. The separate
+  `... launch execute --execute` boundary requires that exact candidate digest
+  plus the bounded installer files before it can open the single-use launcher.
 
 ---
 
@@ -423,6 +580,19 @@ make new CLUSTER=ok-ai TYPE=talos WORKERS=2
 make bootstrap CLUSTER=ok-ai
 ```
 
+### Opt-in trust for the shared internal registry
+
+Talos clusters that pull from `registry.ok-shared.internal` opt in explicitly:
+
+```bash
+make new CLUSTER=my-cluster TYPE=talos REGISTRY_TRUST=true
+make bootstrap CLUSTER=my-cluster
+```
+
+The CA and ingress address are resolved only at execution time; neither is
+stored in rendered files. Existing clusters use the review/dry-run/apply
+targets documented in [Talos registry trust](docs/registry-trust.md).
+
 For a complete disposable `ok-infra` meetup deployment with independent
 control-plane/worker sizing, timed warm provisioning, runtime verification,
 and Golden-Image-preserving cleanup, see the
@@ -512,12 +682,24 @@ network:
 
 nodeSelector: ""     # pin VMs to a specific host node (required for Talos PVC binding)
 
+# Optional: required when CAPK runs on a separate management cluster and the
+# KubeVirt runtime is external. The referenced Secret must already exist on
+# the management cluster; ok-cluster never renders credential contents.
+infraClusterSecretRef:
+  name: external-infra-kubeconfig-my-cluster
+  namespace: my-cluster
+
 upgrade:
   strategy: blue-green
   workloadMigration:
     stateless: gitops
     stateful: app-native
 ```
+
+If `infraClusterSecretRef` is absent, CAPK intentionally uses its management
+cluster as the KubeVirt infrastructure cluster. For a split `ok-mgmt` / external
+`ok-infra` topology, bind the per-cluster Secret explicitly; otherwise CAPK can
+create the control-plane LoadBalancer Service in the wrong authority domain.
 
 ### Auto-Allocation Pools
 

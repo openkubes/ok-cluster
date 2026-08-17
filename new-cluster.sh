@@ -43,6 +43,16 @@ fi
 NODE_SELECTOR="${NODE_SELECTOR:-${NODE:-}}"   # OK-82: NODE= accepted as alias
 SCHEDULING_PROFILE="${SCHEDULING_PROFILE:-}"
 START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
+REGISTRY_TRUST="${REGISTRY_TRUST:-false}"
+REGISTRY_HOST="${REGISTRY_HOST:-registry.ok-shared.internal}"
+REGISTRY_CA_SECRET_NAMESPACE="${REGISTRY_CA_SECRET_NAMESPACE:-cert-manager}"
+REGISTRY_CA_SECRET_NAME="${REGISTRY_CA_SECRET_NAME:-ok-shared-internal-ca}"
+REGISTRY_CA_SECRET_KEY="${REGISTRY_CA_SECRET_KEY:-ca.crt}"
+REGISTRY_SERVICE_NAMESPACE="${REGISTRY_SERVICE_NAMESPACE:-ok-shared}"
+REGISTRY_SERVICE_NAME="${REGISTRY_SERVICE_NAME:-ok-shared-ingress}"
+REGISTRY_TALOSCONFIG_SECRET_NAMESPACE="${REGISTRY_TALOSCONFIG_SECRET_NAMESPACE:-}"
+REGISTRY_TALOSCONFIG_SECRET_NAME="${REGISTRY_TALOSCONFIG_SECRET_NAME:-}"
+REGISTRY_TALOSCONFIG_SECRET_KEY="${REGISTRY_TALOSCONFIG_SECRET_KEY:-talosconfig}"
 if [[ "$TYPE" == "flatcar" ]]; then
   GOLDEN_IMAGE_STORAGE_CLASS="${GOLDEN_IMAGE_STORAGE_CLASS:-ok-storage-block}"
 else
@@ -52,6 +62,30 @@ fi
 if [[ -z "$CLUSTER" ]]; then
   echo "ERROR: CLUSTER is required."
   exit 1
+fi
+
+if [[ "$REGISTRY_TRUST" != "false" && "$REGISTRY_TRUST" != "true" ]]; then
+  echo "ERROR: REGISTRY_TRUST must be exactly true or false"
+  exit 1
+fi
+if [[ "$REGISTRY_TRUST" == "true" ]]; then
+  if [[ "$TYPE" != "talos" ]]; then
+    echo "ERROR: REGISTRY_TRUST=true is supported only for TYPE=talos"
+    exit 1
+  fi
+  if [[ "$REGISTRY_HOST" != "registry.ok-shared.internal" ]]; then
+    echo "ERROR: REGISTRY_HOST must be registry.ok-shared.internal"
+    exit 1
+  fi
+  REGISTRY_TALOSCONFIG_SECRET_NAMESPACE="${REGISTRY_TALOSCONFIG_SECRET_NAMESPACE:-${CLUSTER}}"
+  REGISTRY_TALOSCONFIG_SECRET_NAME="${REGISTRY_TALOSCONFIG_SECRET_NAME:-${CLUSTER}-talosconfig}"
+  for value in REGISTRY_CA_SECRET_NAMESPACE REGISTRY_CA_SECRET_NAME \
+    REGISTRY_SERVICE_NAMESPACE REGISTRY_SERVICE_NAME; do
+    if [[ -z "${!value}" ]]; then
+      echo "ERROR: ${value} is required when REGISTRY_TRUST=true"
+      exit 1
+    fi
+  done
 fi
 
 # The OK-136 Talos KubeVirt path uses reviewed provider profiles rather than a
@@ -201,6 +235,25 @@ $(if [[ "$TYPE" == "talos" ]]; then cat <<TALOSPROVIDERBLOCK
 providerProfile:
   name: ${SCHEDULING_PROFILE}
 TALOSPROVIDERBLOCK
+fi)
+$(if [[ "$TYPE" == "talos" && "$REGISTRY_TRUST" == "true" ]]; then cat <<REGISTRYTRUSTBLOCK
+
+# Opt-in registry trust. CA, resolved address and talosconfig are runtime-only.
+registryTrust:
+  enabled: true
+  host: ${REGISTRY_HOST}
+  caSecret:
+    namespace: ${REGISTRY_CA_SECRET_NAMESPACE}
+    name: ${REGISTRY_CA_SECRET_NAME}
+    key: ${REGISTRY_CA_SECRET_KEY}
+  address:
+    serviceNamespace: ${REGISTRY_SERVICE_NAMESPACE}
+    serviceName: ${REGISTRY_SERVICE_NAME}
+  talosconfigSecret:
+    namespace: ${REGISTRY_TALOSCONFIG_SECRET_NAMESPACE}
+    name: ${REGISTRY_TALOSCONFIG_SECRET_NAME}
+    key: ${REGISTRY_TALOSCONFIG_SECRET_KEY}
+REGISTRYTRUSTBLOCK
 fi)
 $(if [[ "$TYPE" == "flatcar" ]]; then cat <<FLATCARBLOCK
 

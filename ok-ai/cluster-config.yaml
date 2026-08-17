@@ -13,6 +13,20 @@ os:
   profile: kubevirt
   schematic_id: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
 type: talos
+registryTrust:
+  enabled: true
+  host: registry.ok-shared.internal
+  caSecret:
+    namespace: cert-manager
+    name: ok-shared-internal-ca
+    key: ca.crt
+  address:
+    serviceNamespace: ok-shared
+    serviceName: ok-shared-ingress
+  talosconfigSecret:
+    namespace: ok-ai
+    name: ok-ai-talosconfig
+    key: talosconfig
 upgrade:
   strategy: blue-green
   workloadMigration:
