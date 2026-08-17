@@ -103,7 +103,9 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   `ok-mgmt`; it has no update/delete/retry path. A distinct library opener now
   composes that store with pairwise-separate ledger, persistence and workload
   credentials. The CLI activates it only with explicit `--execute` plus
-  `--persistence-mode immutable-secret`; no Job package activates it yet.
+  `--persistence-mode immutable-secret`; no Job package activates it yet. Its
+  offline immutable input ConfigMap now binds only the public plan and exact
+  five-receipt prefix, excluding all private authority and credential data.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
