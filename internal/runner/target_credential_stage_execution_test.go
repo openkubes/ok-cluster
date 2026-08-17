@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,13 +34,31 @@ func TestTargetCredentialStageRunsOnceAndHandsOffMaterialOnce(t *testing.T) {
 	if requests.Load() != 0 || ledgerAPI.RequestCount() != 0 {
 		t.Fatal("opening target-credential stage contacted Kubernetes")
 	}
-	receipt, material, err := bound.Run(context.Background())
+	receipt, handoff, err := bound.RunHandoff(context.Background())
 	if err != nil || receipt.State != "COMPLETED_SUCCEEDED" || receipt.StageID != "target-credential" || receipt.StageReceiptDigest == "" || requests.Load() != 1 {
 		t.Fatalf("target-credential stage did not complete: %#v requests=%d err=%v", receipt, requests.Load(), err)
 	}
-	issued, err := material.Receipt()
+	stageRaw, err := handoff.StageReceiptBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageDigest, err := handoff.StageReceiptDigest()
+	if err != nil || stageDigest != receipt.StageReceiptDigest {
+		t.Fatalf("handoff receipt digest differs: %q %v", stageDigest, err)
+	}
+	issued, err := handoff.CredentialReceipt()
 	if err != nil || issued.State != "ISSUED" || issued.CredentialBytesInReceipt || issued.PolicyDigest != fixture.policyDigest {
 		t.Fatalf("in-memory handoff differs: %#v %v", issued, err)
+	}
+	material, err := handoff.takeCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stageRaw, material.token) || bytes.Contains(stageRaw, material.caBundle) || bytes.Contains(stageRaw, []byte(material.endpoint)) {
+		t.Fatal("public Stage-8 handoff receipt leaked private credential material")
+	}
+	if _, err := handoff.takeCredential(); err == nil {
+		t.Fatal("target credential handoff was consumed twice")
 	}
 	if replay, replayMaterial, err := bound.Run(context.Background()); err == nil || replay.State != "COMPLETED_SUCCEEDED" || requests.Load() != 1 {
 		t.Fatalf("durable replay recreated credential: %#v %#v requests=%d err=%v", replay, replayMaterial, requests.Load(), err)

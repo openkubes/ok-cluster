@@ -98,6 +98,7 @@ type BoundTargetCredentialStage struct {
 	mutator   *TargetCredentialStageMutator
 	plan      stageplan.Binding
 	cursor    stagecursor.Cursor
+	previous  []stagereceipt.Verified
 	grant     authorization.VerifiedStageGrant
 	verified  bool
 }
@@ -249,9 +250,14 @@ func (bundle VerifiedTargetCredentialStageBundle) Open(config TargetCredentialSt
 	if err != nil {
 		return BoundTargetCredentialStage{}, err
 	}
+	previous, err := bundle.cursor.Predecessors()
+	if err != nil {
+		return BoundTargetCredentialStage{}, err
+	}
 	return BoundTargetCredentialStage{
 		operation: execution.StagedOperation{Ledger: ledgerStore, Mutator: mutator, Clock: config.Clock},
-		mutator:   mutator, plan: bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true,
+		mutator:   mutator, plan: bundle.plan, cursor: bundle.cursor, previous: previous,
+		grant: bundle.grant, verified: true,
 	}, nil
 }
 
@@ -259,18 +265,40 @@ func (bundle VerifiedTargetCredentialStageBundle) Open(config TargetCredentialSt
 // once to the immediately following in-process registration step. A replay can
 // recover the public receipt but deliberately cannot recreate private material.
 func (stage BoundTargetCredentialStage) Run(ctx context.Context) (execution.StagedOperationReceipt, VerifiedTargetCredentialMaterial, error) {
-	if !stage.verified || stage.mutator == nil {
-		return execution.StagedOperationReceipt{}, VerifiedTargetCredentialMaterial{}, errors.New("target-credential stage runtime was not produced by verification")
-	}
-	receipt, err := stage.operation.Run(ctx, stage.plan, stage.cursor, stage.grant)
+	receipt, handoff, err := stage.RunHandoff(ctx)
 	if err != nil {
 		return receipt, VerifiedTargetCredentialMaterial{}, err
 	}
-	material, err := stage.mutator.TakeMaterial()
+	material, err := handoff.takeCredential()
 	if err != nil {
-		return receipt, VerifiedTargetCredentialMaterial{}, errors.New("durable target-credential outcome has no in-memory credential; registration must stop")
+		return receipt, VerifiedTargetCredentialMaterial{}, err
 	}
 	return receipt, material, nil
+}
+
+// RunHandoff additionally returns the canonical redaction-safe Stage-8 receipt
+// needed by a later authorizer while keeping credential bytes private.
+func (stage BoundTargetCredentialStage) RunHandoff(ctx context.Context) (execution.StagedOperationReceipt, *VerifiedTargetCredentialStageHandoff, error) {
+	if !stage.verified || stage.mutator == nil {
+		return execution.StagedOperationReceipt{}, nil, errors.New("target-credential stage runtime was not produced by verification")
+	}
+	receipt, err := stage.operation.Run(ctx, stage.plan, stage.cursor, stage.grant)
+	if err != nil {
+		return receipt, nil, err
+	}
+	verified, err := stage.operation.Ledger.LoadStageReceipt(ctx, stage.plan, "target-credential", receipt.StageReceiptDigest, stage.previous)
+	if err != nil {
+		return receipt, nil, errors.New("reload durable target-credential receipt for handoff")
+	}
+	material, err := stage.mutator.TakeMaterial()
+	if err != nil {
+		return receipt, nil, errors.New("durable target-credential outcome has no in-memory credential; registration must stop")
+	}
+	handoff, err := newVerifiedTargetCredentialStageHandoff(verified, material)
+	if err != nil {
+		return receipt, nil, err
+	}
+	return receipt, handoff, nil
 }
 
 func verifyTargetCredentialStageBundle(bundle VerifiedTargetCredentialStageBundle) error {
