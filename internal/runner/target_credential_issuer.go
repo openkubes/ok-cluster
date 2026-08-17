@@ -65,8 +65,17 @@ type VerifiedTargetCredentialMaterial struct {
 	endpoint       string
 	targetIdentity string
 	expiresAt      time.Time
+	privateDigest  string
 	receipt        TargetCredentialIssueReceipt
 	verified       bool
+}
+
+type targetCredentialPrivateBinding struct {
+	Token          []byte `json:"token"`
+	CABundle       []byte `json:"caBundle"`
+	Endpoint       string `json:"endpoint"`
+	TargetIdentity string `json:"targetIdentity"`
+	ExpiresAt      string `json:"expiresAt"`
 }
 
 type KubernetesTargetCredentialIssuer struct {
@@ -265,10 +274,15 @@ func (issuer *KubernetesTargetCredentialIssuer) verifyResponse(value targetCrede
 		IssuedAt: now.Format(time.RFC3339), ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 		LifetimeSeconds: int64(lifetime / time.Second), CredentialBytesInReceipt: false, MutationState: "ATTEMPTED",
 	}
-	return VerifiedTargetCredentialMaterial{
+	material := VerifiedTargetCredentialMaterial{
 		token: []byte(value.Status.Token), caBundle: append([]byte(nil), issuer.caBundle...), endpoint: issuer.endpoint.String(),
 		targetIdentity: issuer.targetIdentity, expiresAt: expiresAt.UTC(), receipt: receipt, verified: true,
-	}, nil
+	}
+	material.privateDigest, err = targetCredentialPrivateDigest(material)
+	if err != nil {
+		return VerifiedTargetCredentialMaterial{}, errors.New("bind private target-credential material")
+	}
+	return material, nil
 }
 
 func decodeTargetCredentialClaims(token string) (targetCredentialJWTClaims, error) {
@@ -290,8 +304,32 @@ func decodeTargetCredentialClaims(token string) (targetCredentialJWTClaims, erro
 }
 
 func (material VerifiedTargetCredentialMaterial) Receipt() (TargetCredentialIssueReceipt, error) {
-	if !material.verified || len(material.token) < 80 || len(material.caBundle) == 0 || material.endpoint == "" || !stageReceiptPrefixDigestPattern.MatchString(material.targetIdentity) || material.expiresAt.IsZero() || material.receipt.Format != TargetCredentialIssueReceiptFormat || material.receipt.State != "ISSUED" || material.receipt.CredentialBytesInReceipt {
+	privateDigest, err := targetCredentialPrivateDigest(material)
+	if err != nil || privateDigest != material.privateDigest || !stageReceiptPrefixDigestPattern.MatchString(material.privateDigest) ||
+		!material.verified || len(material.token) < 80 || len(material.caBundle) == 0 || material.endpoint == "" ||
+		!stageReceiptPrefixDigestPattern.MatchString(material.targetIdentity) || material.expiresAt.IsZero() ||
+		material.receipt.Format != TargetCredentialIssueReceiptFormat || material.receipt.State != "ISSUED" ||
+		material.receipt.StageID != "target-credential" || material.receipt.MutationState != "ATTEMPTED" ||
+		material.receipt.AudienceMode != "server-default" || material.receipt.CredentialBytesInReceipt ||
+		material.receipt.TargetIdentityDigest != material.targetIdentity || material.receipt.ExpiresAt != material.expiresAt.UTC().Format(time.RFC3339) {
 		return TargetCredentialIssueReceipt{}, errors.New("target-credential material was not produced by verification")
 	}
+	for _, value := range []string{material.receipt.PolicyDigest, material.receipt.TargetIdentityDigest, material.receipt.ServiceAccountIdentityDigest, material.receipt.RequestDigest} {
+		if !stageReceiptPrefixDigestPattern.MatchString(value) {
+			return TargetCredentialIssueReceipt{}, errors.New("target-credential receipt digest identity is invalid")
+		}
+	}
 	return material.receipt, nil
+}
+
+func targetCredentialPrivateDigest(material VerifiedTargetCredentialMaterial) (string, error) {
+	raw, err := json.Marshal(targetCredentialPrivateBinding{
+		Token: append([]byte(nil), material.token...), CABundle: append([]byte(nil), material.caBundle...),
+		Endpoint: material.endpoint, TargetIdentity: material.targetIdentity,
+		ExpiresAt: material.expiresAt.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return "", err
+	}
+	return digest.SHA256(raw), nil
 }

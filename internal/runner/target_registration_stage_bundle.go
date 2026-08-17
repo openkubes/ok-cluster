@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
+	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
@@ -140,6 +141,17 @@ func verifyTargetRegistrationStageBundle(bundle VerifiedTargetRegistrationStageB
 	}
 	if bundle.receipt.Authority == "" || bundle.projection.Authority != bundle.receipt.Authority || bundle.projection.TargetIdentityDigest != bundle.receipt.TargetIdentityDigest {
 		return errors.New("target-registration stage bundle identity changed after verification")
+	}
+	if bundle.projection.Format != submission.TargetRegistrationPlanFormat || bundle.projection.MutationAllowed ||
+		bundle.projection.ArtifactDigest != bundle.receipt.ArtifactDigest ||
+		bundle.projection.IntentRevision != bundle.plan.IntentRevision ||
+		bundle.projection.PlatformRevision != bundle.plan.PlatformRevision ||
+		bundle.projection.ExecutionFixture != bundle.plan.ExecutionFixture ||
+		bundle.projection.Project.Digest != bundle.receipt.ProjectDigest ||
+		bundle.projection.Registration.Digest != bundle.receipt.RegistrationTemplateDigest ||
+		digest.SHA256(bundle.projection.Project.Raw) != bundle.receipt.ProjectDigest ||
+		digest.SHA256(bundle.projection.Registration.Raw) != bundle.receipt.RegistrationTemplateDigest {
+		return errors.New("target-registration projection changed after verification")
 	}
 	return nil
 }
