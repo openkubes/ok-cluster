@@ -44,6 +44,12 @@ type VerifiedNetworkObservationStageLaunchMaterial struct {
 	verified    bool
 }
 
+type NetworkObservationStageLaunchOpenConfig struct {
+	Authority               KubernetesAuthorityConfig
+	Clock                   func() time.Time
+	ExpectedCandidateDigest string
+}
+
 // BuildNetworkObservationStageLaunchMaterial reconstructs and re-verifies the
 // complete private launch input from bounded local sources. It performs no API
 // request and grants no launch authority.
@@ -97,6 +103,21 @@ func (material VerifiedNetworkObservationStageLaunchMaterial) CandidateReceipt()
 		return NetworkObservationStageLaunchCandidateReceipt{}, err
 	}
 	return material.candidate.Receipt()
+}
+
+// Open requires the exact retained candidate and validates local installer
+// material without contacting Kubernetes.
+func (material VerifiedNetworkObservationStageLaunchMaterial) Open(config NetworkObservationStageLaunchOpenConfig) (*KubernetesNetworkObservationStageLauncher, error) {
+	if err := verifyNetworkObservationStageLaunchMaterial(material); err != nil {
+		return nil, err
+	}
+	if config.ExpectedCandidateDigest == "" || config.ExpectedCandidateDigest != material.receipt.CandidateDigest {
+		return nil, errors.New("network observation launch open requires the exact candidate digest")
+	}
+	return OpenKubernetesNetworkObservationStageLauncher(NetworkObservationStageLauncherConfig{
+		Authority: config.Authority, Clock: config.Clock, Candidate: material.candidate,
+		ExpectedCandidateDigest: config.ExpectedCandidateDigest,
+	}, material.packaged, material.credentials, material.runtime)
 }
 
 func verifyNetworkObservationStageLaunchMaterial(material VerifiedNetworkObservationStageLaunchMaterial) error {
