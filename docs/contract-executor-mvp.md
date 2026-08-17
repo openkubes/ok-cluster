@@ -2447,6 +2447,18 @@ verified output is `ok147-bounded-target-access-plan/v1` with
 This verifier does not render RBAC, consume `CreateTargetAccess` authorization,
 read a credential or contact the workload API. Those remain later boundaries.
 
+The runner now composes this projection into one verified preclaim bundle. It
+requires the complete six-receipt chain through successful runtime binding,
+reuses the raw-UID-free target digest carried by the lifecycle receipt, checks
+that the staged plan binds exactly one `stage.target-access` artifact and
+verifies an Ed25519 `CreateTargetAccess` grant against the runtime-binding
+predecessor. Its redacted `ok147-target-access-stage-bundle/v1` receipt exposes
+only plan, authorization, artifact, target and object digests and remains
+`mutationAllowed: false`.
+
+Bundle loading still does not claim the grant, open the durable ledger, read a
+workload credential or submit any of the eight objects.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before

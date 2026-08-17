@@ -127,7 +127,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   artifact to `R`, `P`, the execution fixture and immutable target identity,
   fixes object order and REST routes, rejects wildcard/non-resource access,
   foreign subjects and runtime metadata, and returns only a non-authorizing
-  plan. Grant consumption, credentials and target submission remain absent.
+  plan. A runner-owned offline bundle now additionally requires the exact six
+  successful predecessor receipts, durable lifecycle target identity and a
+  signed `CreateTargetAccess` grant before exposing a redacted verified bundle
+  receipt. Credentials, grant consumption and target submission remain absent.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
