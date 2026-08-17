@@ -2308,6 +2308,19 @@ This remains template rendering tested offline. The ConfigMap, NetworkPolicy,
 Job, runtime identity and credential Secrets are not yet assembled as one
 verified package, installed or launched, and no Kubernetes API was contacted.
 
+The public input and envelope are now also composed as one verified
+`ok147-runtime-binding-stage-package/v1`. Before emitting bytes, the builder
+reopens the private workload-authority binding and proves that its R, raw CAPI
+Cluster UID digest and API endpoint match the durable lifecycle receipt and
+the Job's exact workload destination. The private binding itself is never
+copied into package output.
+
+The package receipt binds the ConfigMap, receipt prefix, private binding
+identity, template, rendered envelope and final three-object byte stream. It
+remains `mutationAllowed: false`: package construction neither creates its
+objects nor authorizes a launcher. Runtime identity, credential packaging,
+installation planning and launch remain later checkpoints.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
