@@ -11,12 +11,16 @@ import (
 	"github.com/openkubes/ok-cluster/internal/digest"
 )
 
-const AggregateEvidenceStageInputFormat = "ok147-aggregate-evidence-stage-input/v1"
+const AggregateEvidenceStageInputFormat = "ok147-aggregate-evidence-stage-input/v2"
 
 type AggregateEvidenceStageInputConfig struct {
 	Bundle                         StageResumeConfig
 	AggregateEvidenceProfilePath   string
 	ExpectedAggregateProfileDigest string
+	NetworkProfilePath             string
+	ExpectedNetworkProfileDigest   string
+	PlatformProfilePath            string
+	ExpectedPlatformProfileDigest  string
 	ConfigMapName                  string
 }
 
@@ -28,6 +32,8 @@ type AggregateEvidenceStageInputReceipt struct {
 	ConfigMapDigest        string   `json:"configMapDigest"`
 	ReceiptPrefixDigest    string   `json:"receiptPrefixDigest"`
 	AggregateProfileDigest string   `json:"aggregateProfileDigest"`
+	NetworkProfileDigest   string   `json:"networkProfileDigest"`
+	PlatformProfileDigest  string   `json:"platformProfileDigest"`
 	DataKeys               []string `json:"dataKeys"`
 }
 
@@ -73,6 +79,26 @@ func BuildAggregateEvidenceStageInput(config AggregateEvidenceStageInputConfig) 
 	if err != nil {
 		return VerifiedAggregateEvidenceStageInput{}, errors.New("load public aggregate evidence profile")
 	}
+	networkProfile, err := LoadNetworkProfileFile(NetworkProfileFileConfig{
+		Path: config.NetworkProfilePath, ExpectedProfileDigest: config.ExpectedNetworkProfileDigest,
+		ExpectedIntentRevision: plan.IntentRevision, ExpectedEnablementRevision: plan.EnablementRevision,
+	})
+	if err != nil {
+		return VerifiedAggregateEvidenceStageInput{}, errors.New("load public aggregate network profile")
+	}
+	platformProfile, err := LoadPlatformProfileFile(PlatformProfileFileConfig{
+		Path: config.PlatformProfilePath, ExpectedProfileDigest: config.ExpectedPlatformProfileDigest,
+		ExpectedIntentRevision: plan.IntentRevision, ExpectedPlatformRevision: plan.PlatformRevision,
+		ExpectedExecutionFixture: plan.ExecutionFixture,
+	})
+	if err != nil {
+		return VerifiedAggregateEvidenceStageInput{}, errors.New("load public aggregate platform profile")
+	}
+	networkStage, _, networkStageErr := plan.Stage("network-observation")
+	platformStage, _, platformStageErr := plan.Stage("platform-observation")
+	if networkStageErr != nil || platformStageErr != nil || len(networkStage.Inputs) != 1 || networkStage.Inputs[0].Digest != networkProfile.Digest || len(platformStage.Inputs) != 1 || platformStage.Inputs[0].Digest != platformProfile.Digest {
+		return VerifiedAggregateEvidenceStageInput{}, errors.New("aggregate source profiles differ from verified stage plan")
+	}
 	if _, err := LoadAggregateEvidenceStageBundle(AggregateEvidenceStageBundleConfig{
 		StageResumeConfig: config.Bundle, Profile: profile.Profile, ExpectedProfileDigest: profile.Digest,
 	}); err != nil {
@@ -83,6 +109,8 @@ func BuildAggregateEvidenceStageInput(config AggregateEvidenceStageInputConfig) 
 	paths := map[string]string{
 		"staged-plan.json":                config.Bundle.PlanPath,
 		"aggregate-evidence-profile.json": config.AggregateEvidenceProfilePath,
+		"network-profile.json":            config.NetworkProfilePath,
+		"platform-profile.json":           config.PlatformProfilePath,
 	}
 	for index, file := range aggregateEvidenceReceiptFiles {
 		prefix.Receipts[index] = stageReceiptPrefixEntry{File: file, Digest: config.Bundle.Receipts[index].Digest}
@@ -116,6 +144,19 @@ func BuildAggregateEvidenceStageInput(config AggregateEvidenceStageInputConfig) 
 	}); err != nil {
 		return VerifiedAggregateEvidenceStageInput{}, errors.New("aggregate evidence profile changed during materialization")
 	}
+	if _, err := LoadNetworkProfileFile(NetworkProfileFileConfig{
+		Path: config.NetworkProfilePath, ExpectedProfileDigest: networkProfile.Digest,
+		ExpectedIntentRevision: plan.IntentRevision, ExpectedEnablementRevision: plan.EnablementRevision,
+	}); err != nil {
+		return VerifiedAggregateEvidenceStageInput{}, errors.New("aggregate network profile changed during materialization")
+	}
+	if _, err := LoadPlatformProfileFile(PlatformProfileFileConfig{
+		Path: config.PlatformProfilePath, ExpectedProfileDigest: platformProfile.Digest,
+		ExpectedIntentRevision: plan.IntentRevision, ExpectedPlatformRevision: plan.PlatformRevision,
+		ExpectedExecutionFixture: plan.ExecutionFixture,
+	}); err != nil {
+		return VerifiedAggregateEvidenceStageInput{}, errors.New("aggregate platform profile changed during materialization")
+	}
 
 	configMap := submissionStageInputConfigMap{
 		APIVersion: "v1", Kind: "ConfigMap",
@@ -128,6 +169,8 @@ func BuildAggregateEvidenceStageInput(config AggregateEvidenceStageInputConfig) 
 				"openkubes.io/input-format":             AggregateEvidenceStageInputFormat,
 				"openkubes.io/receipt-prefix-digest":    digest.SHA256(prefixRaw),
 				"openkubes.io/aggregate-profile-digest": profile.Digest,
+				"openkubes.io/network-profile-digest":   networkProfile.Digest,
+				"openkubes.io/platform-profile-digest":  platformProfile.Digest,
 			},
 		},
 		Immutable: true, Data: data,
@@ -149,7 +192,8 @@ func BuildAggregateEvidenceStageInput(config AggregateEvidenceStageInputConfig) 
 		receipt: AggregateEvidenceStageInputReceipt{
 			Format: AggregateEvidenceStageInputFormat, State: "VERIFIED", StageID: "aggregate-evidence",
 			ConfigMapName: config.ConfigMapName, ConfigMapDigest: digest.SHA256(raw),
-			ReceiptPrefixDigest: digest.SHA256(prefixRaw), AggregateProfileDigest: profile.Digest, DataKeys: dataKeys,
+			ReceiptPrefixDigest: digest.SHA256(prefixRaw), AggregateProfileDigest: profile.Digest,
+			NetworkProfileDigest: networkProfile.Digest, PlatformProfileDigest: platformProfile.Digest, DataKeys: dataKeys,
 		},
 		verified: true,
 	}, nil
