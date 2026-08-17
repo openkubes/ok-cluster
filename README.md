@@ -142,7 +142,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   exists for target access at this checkpoint. A separated TLS fake-API proof
   now covers the complete claim-to-submit path: exactly eight ordered
   `GET`/conditional-`POST` pairs, durable success replay without another write,
-  and a durably stopped partial prefix without retry.
+  and a durably stopped partial prefix without retry. Its first Job-package
+  building block is also offline: one immutable ConfigMap binds the plan,
+  signed grant, exact six-receipt prefix and eight-object artifact while
+  excluding the private runtime binding, CA and both credentials.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
