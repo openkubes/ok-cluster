@@ -49,14 +49,19 @@ type TargetRegistrationMaterialReceipt struct {
 // private to the runner package so only the immediately following bounded
 // launcher can consume it. Its Receipt method exposes only redacted bindings.
 type VerifiedTargetRegistrationMaterial struct {
-	project              []byte
-	registration         []byte
-	registrationDigest   string
-	receipt              TargetRegistrationMaterialReceipt
-	targetIdentityDigest string
-	authority            string
-	expiresAt            time.Time
-	verified             bool
+	project                []byte
+	projectCollection      string
+	projectPath            string
+	registration           []byte
+	registrationDigest     string
+	registrationCollection string
+	registrationPath       string
+	receipt                TargetRegistrationMaterialReceipt
+	targetIdentityDigest   string
+	authority              string
+	expiresAt              time.Time
+	materializedAt         time.Time
+	verified               bool
 }
 
 type targetRegistrationTLSConfig struct {
@@ -167,10 +172,14 @@ func BuildTargetRegistrationMaterial(config TargetRegistrationMaterializeConfig)
 		CredentialBytesInReceipt: false, MaterializedSecretDigestRetained: false, MutationAllowed: false,
 	}
 	return VerifiedTargetRegistrationMaterial{
-		project: append([]byte(nil), bundle.projection.Project.Raw...), registration: registrationRaw,
+		project:           append([]byte(nil), bundle.projection.Project.Raw...),
+		projectCollection: bundle.projection.Project.CollectionPath, projectPath: bundle.projection.Project.ObjectPath,
+		registration: registrationRaw, registrationCollection: bundle.projection.Registration.CollectionPath,
+		registrationPath:   bundle.projection.Registration.ObjectPath,
 		registrationDigest: digest.SHA256(registrationRaw), receipt: receipt,
 		targetIdentityDigest: bundle.receipt.TargetIdentityDigest, authority: bundle.receipt.Authority,
 		expiresAt: config.Credential.expiresAt, verified: true,
+		materializedAt: config.MaterializationTime,
 	}, nil
 }
 
@@ -201,8 +210,14 @@ func verifyTargetRegistrationMaterial(material VerifiedTargetRegistrationMateria
 		digest.SHA256(material.registration) != material.registrationDigest || material.registrationDigest == material.receipt.RegistrationTemplateDigest {
 		return errors.New("target-registration material changed after verification")
 	}
+	if err := verifyTargetRegistrationMaterialPath(material.project, "argoproj.io/v1alpha1", "AppProject", material.projectCollection, material.projectPath); err != nil {
+		return err
+	}
+	if err := verifyTargetRegistrationMaterialPath(material.registration, "v1", "Secret", material.registrationCollection, material.registrationPath); err != nil {
+		return err
+	}
 	expiresAt, err := time.Parse(time.RFC3339, material.receipt.ExpiresAt)
-	if err != nil || !expiresAt.Equal(material.expiresAt) {
+	if err != nil || !expiresAt.Equal(material.expiresAt) || material.materializedAt.IsZero() || material.materializedAt.Location() != time.UTC {
 		return errors.New("target-registration material expiration is invalid")
 	}
 	bindingRaw, err := canonicalTargetRegistrationValue(targetRegistrationSafeBinding{
@@ -213,6 +228,27 @@ func verifyTargetRegistrationMaterial(material VerifiedTargetRegistrationMateria
 	})
 	if err != nil || digest.SHA256(bindingRaw) != material.receipt.MaterializationBindingDigest {
 		return errors.New("target-registration material binding changed after verification")
+	}
+	return nil
+}
+
+func verifyTargetRegistrationMaterialPath(raw []byte, apiVersion, kind, collection, objectPath string) error {
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil || value["apiVersion"] != apiVersion || value["kind"] != kind {
+		return errors.New("target-registration material object identity is invalid")
+	}
+	metadata, _ := value["metadata"].(map[string]any)
+	namespace, namespaceOK := metadata["namespace"].(string)
+	name, nameOK := metadata["name"].(string)
+	if !namespaceOK || !nameOK || !runtimeInputUIDPattern.MatchString(namespace) || !runtimeInputUIDPattern.MatchString(name) {
+		return errors.New("target-registration material object metadata is invalid")
+	}
+	wantCollection := "/api/v1/namespaces/" + namespace + "/secrets"
+	if kind == "AppProject" {
+		wantCollection = "/apis/argoproj.io/v1alpha1/namespaces/" + namespace + "/appprojects"
+	}
+	if collection != wantCollection || objectPath != wantCollection+"/"+name {
+		return errors.New("target-registration material object path changed after verification")
 	}
 	return nil
 }
