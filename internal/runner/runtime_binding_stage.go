@@ -20,6 +20,8 @@ import (
 
 const RuntimeBindingStageEvidenceFormat = "ok147-runtime-binding-stage-evidence/v1"
 
+const RuntimeBindingStageKubernetesEvidenceFormat = "ok147-runtime-binding-stage-evidence/v2"
+
 type VerifiedRuntimeBindingStageBundle struct {
 	config   StageResumeConfig
 	plan     stageplan.Binding
@@ -35,15 +37,27 @@ type RuntimeBindingStageRuntimeConfig struct {
 	Clock      func() time.Time
 }
 
+// RuntimeBindingStageKubernetesRuntimeConfig selects the durable immutable
+// Secret persistence path. Its credential is distinct from both ledger and
+// workload credentials and carries no lifecycle authority.
+type RuntimeBindingStageKubernetesRuntimeConfig struct {
+	Ledger      KubernetesLedgerConfig
+	Workload    WorkloadAuthorityFileResolverConfig
+	Persistence KubernetesAuthorityConfig
+	Clock       func() time.Time
+}
+
 type RuntimeBindingStageEvidenceReceipt struct {
-	Format                    string                            `json:"format"`
-	State                     string                            `json:"state"`
-	PlanDigest                string                            `json:"planDigest"`
-	StageID                   string                            `json:"stageId"`
-	FailureCategory           string                            `json:"failureCategory,omitempty"`
-	Material                  *RuntimeBindingMaterialReceipt    `json:"material,omitempty"`
-	Persistence               *RuntimeBindingPersistenceReceipt `json:"persistence,omitempty"`
-	KubernetesMutationAllowed bool                              `json:"kubernetesMutationAllowed"`
+	Format                    string                                      `json:"format"`
+	State                     string                                      `json:"state"`
+	PlanDigest                string                                      `json:"planDigest"`
+	StageID                   string                                      `json:"stageId"`
+	FailureCategory           string                                      `json:"failureCategory,omitempty"`
+	Material                  *RuntimeBindingMaterialReceipt              `json:"material,omitempty"`
+	Persistence               *RuntimeBindingPersistenceReceipt           `json:"persistence,omitempty"`
+	KubernetesPersistence     *KubernetesRuntimeBindingPersistenceReceipt `json:"kubernetesPersistence,omitempty"`
+	KubernetesMutationAllowed bool                                        `json:"kubernetesMutationAllowed"`
+	LifecycleMutationAllowed  *bool                                       `json:"lifecycleMutationAllowed,omitempty"`
 }
 
 type OpenedRuntimeBindingStage struct {
@@ -90,21 +104,47 @@ func (bundle VerifiedRuntimeBindingStageBundle) Open(config RuntimeBindingStageR
 	if err := validateRuntimeBindingOutputPath(config.OutputPath); err != nil {
 		return OpenedRuntimeBindingStage{}, err
 	}
+	return bundle.open(config.Ledger, config.Workload, config.Clock, config.OutputPath, nil, "")
+}
+
+// OpenKubernetes binds the exact immutable Secret persistence capability. It
+// reads three bounded credentials but performs no API request.
+func (bundle VerifiedRuntimeBindingStageBundle) OpenKubernetes(config RuntimeBindingStageKubernetesRuntimeConfig) (OpenedRuntimeBindingStage, error) {
+	if !bundle.verified || config.Clock == nil {
+		return OpenedRuntimeBindingStage{}, errors.New("verified runtime binding bundle and clock are required")
+	}
+	if config.Ledger.Namespace != submissionStageInputNamespace || !sameRuntimeBindingEndpoint(config.Ledger.Endpoint, config.Persistence.Endpoint) {
+		return OpenedRuntimeBindingStage{}, errors.New("runtime binding persistence must share the exact management API and namespace")
+	}
+	name, err := runtimeBindingSecretName(bundle.plan.PlanDigest)
+	if err != nil {
+		return OpenedRuntimeBindingStage{}, err
+	}
+	store, persistenceToken, err := openKubernetesRuntimeBindingStore(
+		config.Persistence, bundle.plan.Authorities.Management, submissionStageInputNamespace, name,
+	)
+	if err != nil {
+		return OpenedRuntimeBindingStage{}, errors.New("open runtime binding Kubernetes persistence")
+	}
+	return bundle.open(config.Ledger, config.Workload, config.Clock, "", store, persistenceToken)
+}
+
+func (bundle VerifiedRuntimeBindingStageBundle) open(ledgerConfig KubernetesLedgerConfig, workloadConfig WorkloadAuthorityFileResolverConfig, clock func() time.Time, outputPath string, kubernetesStore *KubernetesRuntimeBindingStore, persistenceToken string) (OpenedRuntimeBindingStage, error) {
 	lifecycle, err := bundle.prefix[1].Receipt()
 	if err != nil {
 		return OpenedRuntimeBindingStage{}, errors.New("read durable runtime target correlation")
 	}
-	binding, authority, err := loadWorkloadAuthorityFiles(config.Workload)
+	binding, authority, err := loadWorkloadAuthorityFiles(workloadConfig)
 	if err != nil {
 		return OpenedRuntimeBindingStage{}, errors.New("open runtime binding workload authority")
 	}
 	if binding.IntentRevision != bundle.plan.IntentRevision || digest.SHA256([]byte(binding.TargetClusterUID)) != lifecycle.TargetClusterUIDDigest {
 		return OpenedRuntimeBindingStage{}, errors.New("runtime binding workload authority differs from durable lifecycle target")
 	}
-	if sameRuntimeBindingEndpoint(config.Ledger.Endpoint, binding.Endpoint) {
+	if sameRuntimeBindingEndpoint(ledgerConfig.Endpoint, binding.Endpoint) {
 		return OpenedRuntimeBindingStage{}, errors.New("ledger and runtime observation endpoints must be distinct")
 	}
-	store, ledgerToken, err := openKubernetesLedger(config.Ledger)
+	store, ledgerToken, err := openKubernetesLedger(ledgerConfig)
 	if err != nil {
 		return OpenedRuntimeBindingStage{}, errors.New("open runtime binding ledger")
 	}
@@ -112,8 +152,8 @@ func (bundle VerifiedRuntimeBindingStageBundle) Open(config RuntimeBindingStageR
 	if err != nil {
 		return OpenedRuntimeBindingStage{}, errors.New("open bounded runtime binding source")
 	}
-	if sameSecret(ledgerToken, workloadToken) {
-		return OpenedRuntimeBindingStage{}, errors.New("ledger and runtime observation credentials must be distinct")
+	if sameSecret(ledgerToken, workloadToken) || persistenceToken != "" && (sameSecret(persistenceToken, ledgerToken) || sameSecret(persistenceToken, workloadToken)) {
+		return OpenedRuntimeBindingStage{}, errors.New("runtime binding stage credentials must be pairwise distinct")
 	}
 	decision, _ := bundle.cursor.Decision()
 	binder := &runtimeBindingStageBinder{
@@ -121,8 +161,8 @@ func (bundle VerifiedRuntimeBindingStageBundle) Open(config RuntimeBindingStageR
 			PlanDigest: bundle.plan.PlanDigest, StageID: decision.StageID, StageDigest: decision.StageDigest,
 			Authority: decision.Authority, ContractRevision: bundle.plan.IntentRevision,
 		},
-		bundle: bundle.config, workload: config.Workload, outputPath: config.OutputPath,
-		source: source, clock: config.Clock,
+		bundle: bundle.config, workload: workloadConfig, outputPath: outputPath,
+		source: source, kubernetesStore: kubernetesStore, clock: clock,
 	}
 	return OpenedRuntimeBindingStage{
 		operation: execution.BindingStageOperation{Ledger: store, Binder: binder},
@@ -139,7 +179,7 @@ func (stage OpenedRuntimeBindingStage) Run(ctx context.Context) (execution.Bindi
 
 // EvidenceReceipt exposes only the redaction-safe receipt from a binding call
 // made by this opened stage. Private material and runtime identities remain in
-// the exclusive output file.
+// the selected private persistence implementation.
 func (stage OpenedRuntimeBindingStage) EvidenceReceipt() (RuntimeBindingStageEvidenceReceipt, error) {
 	if !stage.verified || stage.binder == nil {
 		return RuntimeBindingStageEvidenceReceipt{}, errors.New("runtime binding stage is not opened")
@@ -148,15 +188,16 @@ func (stage OpenedRuntimeBindingStage) EvidenceReceipt() (RuntimeBindingStageEvi
 }
 
 type runtimeBindingStageBinder struct {
-	mu          sync.Mutex
-	binding     execution.StageBinderBinding
-	bundle      StageResumeConfig
-	workload    WorkloadAuthorityFileResolverConfig
-	outputPath  string
-	source      *KubernetesRuntimeBindingSource
-	clock       func() time.Time
-	evidence    RuntimeBindingStageEvidenceReceipt
-	hasEvidence bool
+	mu              sync.Mutex
+	binding         execution.StageBinderBinding
+	bundle          StageResumeConfig
+	workload        WorkloadAuthorityFileResolverConfig
+	outputPath      string
+	source          *KubernetesRuntimeBindingSource
+	kubernetesStore *KubernetesRuntimeBindingStore
+	clock           func() time.Time
+	evidence        RuntimeBindingStageEvidenceReceipt
+	hasEvidence     bool
 }
 
 func (binder *runtimeBindingStageBinder) Binding() execution.StageBinderBinding {
@@ -173,7 +214,7 @@ func (binder *runtimeBindingStageBinder) Bind(ctx context.Context) (execution.St
 	}
 	observation, err := binder.source.Observe(ctx)
 	if err != nil {
-		return binder.stop("SOURCE_STOPPED", nil, nil, at)
+		return binder.stop("SOURCE_STOPPED", nil, nil, nil, at)
 	}
 	material, err := BuildRuntimeBindingMaterial(RuntimeBindingMaterialConfig{
 		Bundle: binder.bundle, WorkloadBindingPath: binder.workload.Path,
@@ -181,19 +222,31 @@ func (binder *runtimeBindingStageBinder) Bind(ctx context.Context) (execution.St
 		WorkloadCAFile:                binder.workload.CAFile, Observation: observation,
 	})
 	if err != nil {
-		return binder.stop("MATERIALIZATION_STOPPED", nil, nil, at)
+		return binder.stop("MATERIALIZATION_STOPPED", nil, nil, nil, at)
 	}
 	materialReceipt, err := material.Receipt()
 	if err != nil || materialReceipt.PlanDigest != binder.binding.PlanDigest {
-		return binder.stop("MATERIAL_VERIFICATION_STOPPED", nil, nil, at)
+		return binder.stop("MATERIAL_VERIFICATION_STOPPED", nil, nil, nil, at)
+	}
+	if binder.kubernetesStore != nil {
+		persistence, persistErr := binder.kubernetesStore.Store(ctx, material)
+		if persistErr != nil {
+			return binder.stop("PERSISTENCE_STOPPED", &materialReceipt, nil, &persistence, at)
+		}
+		evidence := RuntimeBindingStageEvidenceReceipt{
+			Format: RuntimeBindingStageKubernetesEvidenceFormat, State: "SUCCEEDED", PlanDigest: binder.binding.PlanDigest,
+			StageID: binder.binding.StageID, Material: &materialReceipt, KubernetesPersistence: &persistence,
+			KubernetesMutationAllowed: true, LifecycleMutationAllowed: runtimeBindingBool(false),
+		}
+		return binder.finish(evidence, "SUCCEEDED", at)
 	}
 	writer, err := OpenRuntimeBindingWriter(material, binder.outputPath)
 	if err != nil {
-		return binder.stop("WRITER_OPEN_STOPPED", &materialReceipt, nil, at)
+		return binder.stop("WRITER_OPEN_STOPPED", &materialReceipt, nil, nil, at)
 	}
 	persistence, writeErr := writer.Write()
 	if writeErr != nil {
-		return binder.stop("PERSISTENCE_STOPPED", &materialReceipt, &persistence, at)
+		return binder.stop("PERSISTENCE_STOPPED", &materialReceipt, &persistence, nil, at)
 	}
 	evidence := RuntimeBindingStageEvidenceReceipt{
 		Format: RuntimeBindingStageEvidenceFormat, State: "SUCCEEDED", PlanDigest: binder.binding.PlanDigest,
@@ -203,11 +256,18 @@ func (binder *runtimeBindingStageBinder) Bind(ctx context.Context) (execution.St
 	return binder.finish(evidence, "SUCCEEDED", at)
 }
 
-func (binder *runtimeBindingStageBinder) stop(category string, material *RuntimeBindingMaterialReceipt, persistence *RuntimeBindingPersistenceReceipt, at time.Time) (execution.StageBindingResult, error) {
+func (binder *runtimeBindingStageBinder) stop(category string, material *RuntimeBindingMaterialReceipt, persistence *RuntimeBindingPersistenceReceipt, kubernetesPersistence *KubernetesRuntimeBindingPersistenceReceipt, at time.Time) (execution.StageBindingResult, error) {
+	format, kubernetesMutationAllowed := RuntimeBindingStageEvidenceFormat, false
+	if binder.kubernetesStore != nil {
+		format, kubernetesMutationAllowed = RuntimeBindingStageKubernetesEvidenceFormat, true
+	}
 	evidence := RuntimeBindingStageEvidenceReceipt{
-		Format: RuntimeBindingStageEvidenceFormat, State: "STOPPED", PlanDigest: binder.binding.PlanDigest,
+		Format: format, State: "STOPPED", PlanDigest: binder.binding.PlanDigest,
 		StageID: binder.binding.StageID, FailureCategory: category, Material: material, Persistence: persistence,
-		KubernetesMutationAllowed: false,
+		KubernetesPersistence: kubernetesPersistence, KubernetesMutationAllowed: kubernetesMutationAllowed,
+	}
+	if binder.kubernetesStore != nil {
+		evidence.LifecycleMutationAllowed = runtimeBindingBool(false)
 	}
 	return binder.finish(evidence, "STOPPED", at)
 }
@@ -260,7 +320,24 @@ func cloneRuntimeBindingStageEvidence(evidence RuntimeBindingStageEvidenceReceip
 		value := *evidence.Persistence
 		clone.Persistence = &value
 	}
+	if evidence.KubernetesPersistence != nil {
+		value := *evidence.KubernetesPersistence
+		clone.KubernetesPersistence = &value
+	}
+	if evidence.LifecycleMutationAllowed != nil {
+		value := *evidence.LifecycleMutationAllowed
+		clone.LifecycleMutationAllowed = &value
+	}
 	return clone
+}
+
+func runtimeBindingBool(value bool) *bool { return &value }
+
+func runtimeBindingSecretName(planDigest string) (string, error) {
+	if !stageReceiptPrefixDigestPattern.MatchString(planDigest) {
+		return "", errors.New("runtime binding plan digest is invalid")
+	}
+	return "ok147-runtime-binding-" + strings.TrimPrefix(planDigest, "sha256:")[:24], nil
 }
 
 func sameRuntimeBindingEndpoint(first, second string) bool {

@@ -66,25 +66,33 @@ type runtimeBindingSecretObjectMeta struct {
 // exact immutable Secret identity. It reads bounded credentials but performs
 // no API request.
 func OpenKubernetesRuntimeBindingStore(authority KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*KubernetesRuntimeBindingStore, error) {
+	store, _, err := openKubernetesRuntimeBindingStore(authority, expectedAuthority, namespace, name)
+	return store, err
+}
+
+// openKubernetesRuntimeBindingStore additionally returns the bounded token so
+// stage composition can prove that ledger, persistence and workload roles use
+// distinct credentials. The token never enters a receipt or returned error.
+func openKubernetesRuntimeBindingStore(authority KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*KubernetesRuntimeBindingStore, string, error) {
 	if authority.AuthorityIdentity == "" || authority.AuthorityIdentity != expectedAuthority {
-		return nil, errors.New("runtime binding persistence authority differs from management")
+		return nil, "", errors.New("runtime binding persistence authority differs from management")
 	}
 	if namespace != submissionStageInputNamespace || !submissionStageInputNamePattern.MatchString(name) || len(name) > 63 || !strings.HasPrefix(name, "ok147-runtime-binding-") {
-		return nil, errors.New("runtime binding Secret identity is invalid")
+		return nil, "", errors.New("runtime binding Secret identity is invalid")
 	}
 	endpoint, err := url.Parse(authority.Endpoint)
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return nil, errors.New("runtime binding persistence endpoint is invalid")
+		return nil, "", errors.New("runtime binding persistence endpoint is invalid")
 	}
 	token, _, client, err := openBoundedKubernetesMaterial(authority.TokenFile, authority.CAFile)
 	if err != nil {
-		return nil, errors.New("open bounded runtime binding persistence credential")
+		return nil, "", errors.New("open bounded runtime binding persistence credential")
 	}
 	bounded := *client
 	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &KubernetesRuntimeBindingStore{
 		endpoint: endpoint, token: token, client: &bounded, namespace: namespace, name: name, authority: authority.AuthorityIdentity,
-	}, nil
+	}, token, nil
 }
 
 // Store performs one create-if-absent. A conflict is followed by exactly one

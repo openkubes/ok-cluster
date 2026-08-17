@@ -47,7 +47,7 @@ func TestRuntimeBindingStageComposesAndResumesWithoutRebinding(t *testing.T) {
 		t.Fatalf("runtime binding stage did not complete: %#v %v", receipt, err)
 	}
 	evidence, err := opened.EvidenceReceipt()
-	if err != nil || evidence.State != "SUCCEEDED" || evidence.Material == nil || evidence.Persistence == nil || evidence.Persistence.State != "WRITTEN_VERIFIED" || evidence.KubernetesMutationAllowed {
+	if err != nil || evidence.State != "SUCCEEDED" || evidence.Material == nil || evidence.Persistence == nil || evidence.Persistence.State != "WRITTEN_VERIFIED" || evidence.KubernetesPersistence != nil || evidence.KubernetesMutationAllowed || evidence.LifecycleMutationAllowed != nil {
 		t.Fatalf("runtime binding evidence differs: %#v %v", evidence, err)
 	}
 	public, _ := json.Marshal(evidence)
@@ -74,6 +74,51 @@ func TestRuntimeBindingStageComposesAndResumesWithoutRebinding(t *testing.T) {
 	}
 	if !reflect.DeepEqual(workloadAPI.Requests(), wantRequests) {
 		t.Fatal("persisted runtime binding stage rebound the workload")
+	}
+}
+
+func TestRuntimeBindingStageComposesImmutableKubernetesPersistence(t *testing.T) {
+	bundle, err := LoadRuntimeBindingStageBundle(runtimeBindingBundleConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	managementAPI := newRuntimeBindingLedgerAPI(t)
+	defer managementAPI.Close()
+	workloadAPI := newRuntimeBindingWorkloadAPI(t, false)
+	defer workloadAPI.Close()
+	local := runtimeBindingStageRuntime(t, bundle, managementAPI.Server, workloadAPI.Server, "ledger-token", "workload-token")
+	runtime := runtimeBindingStageKubernetesRuntime(t, local, "persistence-token")
+	opened, err := bundle.OpenKubernetes(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managementAPI.RequestCount() != 0 || workloadAPI.RequestCount() != 0 {
+		t.Fatal("opening Kubernetes-persisted runtime binding contacted an API")
+	}
+	receipt, err := opened.Run(context.Background())
+	if err != nil || receipt.State != "COMPLETED_SUCCEEDED" {
+		t.Fatalf("Kubernetes-persisted runtime binding did not complete: %#v %v", receipt, err)
+	}
+	evidence, err := opened.EvidenceReceipt()
+	if err != nil || evidence.Format != RuntimeBindingStageKubernetesEvidenceFormat || evidence.State != "SUCCEEDED" || evidence.Material == nil || evidence.Persistence != nil || evidence.KubernetesPersistence == nil || evidence.KubernetesPersistence.State != "CREATED_VERIFIED" || !evidence.KubernetesMutationAllowed || evidence.LifecycleMutationAllowed == nil || *evidence.LifecycleMutationAllowed {
+		t.Fatalf("Kubernetes persistence evidence differs: %#v %v", evidence, err)
+	}
+	secretName, err := runtimeBindingSecretName(evidence.PlanDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"POST /api/v1/namespaces/openkubes-execution-system/secrets"}
+	if !reflect.DeepEqual(managementAPI.SecretRequests(), want) {
+		t.Fatalf("runtime binding Secret requests differ: %v", managementAPI.SecretRequests())
+	}
+	if _, err := os.Lstat(local.OutputPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("Kubernetes persistence also created the local binding file")
+	}
+	public, _ := json.Marshal(evidence)
+	for _, forbidden := range []string{managementAPI.URL, workloadAPI.URL, "persistence-token", secretName, local.OutputPath} {
+		if strings.Contains(string(public), forbidden) {
+			t.Fatalf("Kubernetes persistence evidence exposed private value %q", forbidden)
+		}
 	}
 }
 
@@ -132,6 +177,30 @@ func TestRuntimeBindingStageOpenFailsClosedWithoutContact(t *testing.T) {
 	}
 	if _, err := (OpenedRuntimeBindingStage{}).Run(context.Background()); err == nil {
 		t.Fatal("unopened runtime binding stage could run")
+	}
+	runtime = runtimeBindingStageRuntime(t, bundle, ledgerAPI.Server, workloadAPI.Server, "ledger-token", "workload-token")
+	kubernetes := runtimeBindingStageKubernetesRuntime(t, runtime, "ledger-token")
+	if _, err := bundle.OpenKubernetes(kubernetes); err == nil {
+		t.Fatal("shared ledger and persistence credential was accepted")
+	}
+	if ledgerAPI.RequestCount() != 0 || workloadAPI.RequestCount() != 0 {
+		t.Fatal("failed Kubernetes persistence open contacted an API")
+	}
+}
+
+func runtimeBindingStageKubernetesRuntime(t *testing.T, local RuntimeBindingStageRuntimeConfig, token string) RuntimeBindingStageKubernetesRuntimeConfig {
+	t.Helper()
+	tokenPath := filepath.Join(filepath.Dir(local.OutputPath), "persistence-token")
+	if err := os.WriteFile(tokenPath, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return RuntimeBindingStageKubernetesRuntimeConfig{
+		Ledger: local.Ledger, Workload: local.Workload,
+		Persistence: KubernetesAuthorityConfig{
+			Endpoint: local.Ledger.Endpoint, AuthorityIdentity: "ok-mgmt",
+			TokenFile: tokenPath, CAFile: local.Ledger.CAFile,
+		},
+		Clock: local.Clock,
 	}
 }
 
@@ -242,9 +311,11 @@ func (api *runtimeBindingWorkloadAPI) RequestCount() int { return len(api.Reques
 
 type runtimeBindingLedgerAPI struct {
 	*httptest.Server
-	mu       sync.Mutex
-	objects  map[string]map[string]any
-	requests int
+	mu             sync.Mutex
+	objects        map[string]map[string]any
+	secret         map[string]any
+	requests       int
+	secretRequests []string
 }
 
 func newRuntimeBindingLedgerAPI(t *testing.T) *runtimeBindingLedgerAPI {
@@ -255,6 +326,23 @@ func newRuntimeBindingLedgerAPI(t *testing.T) *runtimeBindingLedgerAPI {
 		defer api.mu.Unlock()
 		api.requests++
 		response.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("Authorization") == "Bearer persistence-token" {
+			api.secretRequests = append(api.secretRequests, request.Method+" "+request.URL.RequestURI())
+			prefix := "/api/v1/namespaces/openkubes-execution-system/secrets"
+			if request.Method != http.MethodPost || request.URL.Path != prefix || api.secret != nil {
+				response.WriteHeader(http.StatusConflict)
+				return
+			}
+			if err := json.NewDecoder(request.Body).Decode(&api.secret); err != nil {
+				response.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			metadata := api.secret["metadata"].(map[string]any)
+			metadata["uid"], metadata["resourceVersion"] = "runtime-binding-secret-uid", "1"
+			response.WriteHeader(http.StatusCreated)
+			json.NewEncoder(response).Encode(api.secret)
+			return
+		}
 		if request.Header.Get("Authorization") != "Bearer ledger-token" {
 			response.WriteHeader(http.StatusUnauthorized)
 			return
@@ -297,4 +385,10 @@ func (api *runtimeBindingLedgerAPI) RequestCount() int {
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	return api.requests
+}
+
+func (api *runtimeBindingLedgerAPI) SecretRequests() []string {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return append([]string(nil), api.secretRequests...)
 }
