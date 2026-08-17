@@ -125,6 +125,15 @@ func platformApplicationsBundleFixture(t *testing.T) platformApplicationsBundleT
 	if err != nil {
 		t.Fatal(err)
 	}
+	aggregateProfile := AggregateEvidenceProfile{
+		Format: AggregateEvidenceProfileFormat, IntentRevision: expectedPlan.IntentRevision,
+		EnablementRevision: expectedPlan.EnablementRevision, PlatformRevision: expectedPlan.PlatformRevision,
+		ExecutionFixture: expectedPlan.ExecutionFixture, Required: append([]string(nil), aggregateEvidenceRequiredConditions...),
+	}
+	aggregateProfileDigest, err := AggregateEvidenceProfileDigest(aggregateProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
 	planRaw := submissionBundlePlan(t, expectedPlan, runnerStageSHA("1"), runnerStageSHA("2"))
 	var document map[string]any
 	if err := json.Unmarshal(planRaw, &document); err != nil {
@@ -136,6 +145,7 @@ func platformApplicationsBundleFixture(t *testing.T) platformApplicationsBundleT
 	stages[8].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.target-registration", "digest": runnerStageSHA("5")}}
 	stages[9].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.platform-applications", "digest": artifactDigest}}
 	stages[10].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.platform-observation", "digest": profileDigest}}
+	stages[11].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.aggregate-evidence", "digest": aggregateProfileDigest}}
 	planPath := writeBundleFile(t, root, "staged-plan.json", mustJSON(t, document))
 	plan, err := stageplan.Load(planPath, expectedPlan)
 	if err != nil {
