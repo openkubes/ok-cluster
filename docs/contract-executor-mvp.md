@@ -2235,6 +2235,28 @@ select exactly one persistence implementation and bind a separately scoped
 management credential; adding this store does not create an OpenKubes
 reconciler or grant lifecycle mutation authority.
 
+The following composition checkpoint now provides that exact selection in the
+runner library. The existing `Open` method remains file-only; a distinct
+`OpenKubernetes` method selects only the immutable Secret path. Its Secret name
+is derived from the verified plan digest rather than accepted from a caller.
+The Secret store must use the same exact management API and namespace as the
+ledger, while ledger writer, persistence writer and workload observer tokens
+must all differ. Opening reads those bounded credentials but performs no API
+request.
+
+The Kubernetes-persisted stage emits evidence format
+`ok147-runtime-binding-stage-evidence/v2`. It truthfully records that the exact
+persistence mutation was allowed while separately denying lifecycle mutation;
+the local file path retains the historical v1 evidence semantics. After a
+successful or byte-equivalent Secret result, the same crash-safe stage
+operation stores the immutable ledger receipt. A later process can therefore
+verify an equivalent pre-existing Secret if it stopped between those two
+writes, without gaining an update or generic retry path.
+
+This remains library-only composition tested against local fake TLS APIs. The
+CLI still selects the exclusive local file, no Job package selects
+`OpenKubernetes`, and no live Kubernetes API was contacted.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
