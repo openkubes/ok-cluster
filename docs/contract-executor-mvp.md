@@ -2363,8 +2363,18 @@ be either globally absent or part of a completely exact already-existing set.
 No create can be considered after a mixed or foreign preflight result.
 
 The launch plan contains only paths, identities and digests and remains
-`mutationAllowed: false`. Private Secret recovery, an expiry-bound launch
-candidate, bounded installation and execution remain later checkpoints.
+`mutationAllowed: false`.
+
+The corresponding private material boundary now reparses the three public
+objects and recovers the three retained immutable Secret bodies. It rechecks
+every planned object digest, Secret label, authority annotation, expiry, CA
+digest and data-key inventory. The two management-side Secrets must not carry
+a workload binding; the workload Secret must carry the exact binding and CA
+already correlated by the stage package. Any changed byte fails closed before
+material can reach an installer.
+
+No public API exposes these recovered bytes. An expiry-bound launch candidate,
+bounded installation and execution remain later checkpoints.
 
 ## Bounded convergence observation polling
 
