@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -112,8 +113,12 @@ func aggregateEvidenceStagePackageConfig(t *testing.T) AggregateEvidenceStagePac
 	}
 	runtime.material.Evidence.LifecycleEvidenceDigest = lifecycleReceipt.EvidenceDigest
 	runtime.material.Evidence.NetworkEvidenceDigest = networkReceipt.EvidenceDigest
+	workloadCA := testCA(t)
+	runtime.material.Target.WorkloadAPICAData = base64.StdEncoding.EncodeToString(workloadCA)
+	runtime.material.Target.WorkloadAPICADigest = digest.SHA256(workloadCA)
 	runtime.receipt.LifecycleEvidenceDigest = lifecycleReceipt.EvidenceDigest
 	runtime.receipt.NetworkEvidenceDigest = networkReceipt.EvidenceDigest
+	runtime.receipt.WorkloadAPICADigest = digest.SHA256(workloadCA)
 	runtime.raw, err = canonicalRuntimeBinding(runtime.material)
 	if err != nil {
 		t.Fatal(err)
