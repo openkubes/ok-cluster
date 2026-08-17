@@ -2146,9 +2146,36 @@ UIDs with digests. A same-name replacement target, changed CA, incomplete
 prefix, missing namespace identity or unexpected provisioner fails closed.
 
 Materialization is deterministic and returns defensive copies. It performs no
-Kubernetes request and no file write. The bounded exact-GET source, exclusive
-private-file persistence and composition with `BindingStageOperation` remain
-separate later checkpoints; target access is still unreachable here.
+Kubernetes request and no file write.
+
+The bounded workload source and private writer now implement those two side
+effects independently. The source proves that endpoint, target Cluster UID and
+CA digest still match the verified workload-authority binding before it opens
+one short-lived token. It then permits exactly these ordered requests:
+
+```text
+GET /api/v1/namespaces/kube-system
+GET /apis/storage.k8s.io/v1/storageclasses/local-path
+```
+
+There is no arbitrary path, list, watch, discovery or mutation. Responses are
+size bounded, duplicate-key rejecting and reduced to the Namespace UID plus
+StorageClass UID and exact `rancher.io/local-path` provisioner. Redirects,
+non-JSON responses, replacement identities and any request error stop without
+retry and expose no endpoint, token or raw response in the returned error.
+
+The writer accepts only verified private material and one absent absolute path
+inside an existing private, non-symlink directory. It creates exactly one
+`0600` file with `O_EXCL`, syncs, closes and digest-verifies the stored bytes.
+There is no overwrite, rename, retry, cleanup or delete path. A write-side
+failure remains `STOPPED_PARTIAL_OR_UNKNOWN`; the public persistence receipt
+contains only the material digest, size and mode and explicitly denies
+Kubernetes mutation.
+
+The source, materializer, writer and `BindingStageOperation` are not yet
+composed into one CLI/Job boundary. Therefore this checkpoint still performs
+no live request or file write in production, and target access remains
+unreachable.
 
 ## Bounded convergence observation polling
 
