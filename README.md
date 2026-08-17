@@ -109,7 +109,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   matching offline Job/NetworkPolicy envelope fixes three distinct credential
   mounts and only the exact management and workload API egress destinations;
   the ConfigMap and envelope are now correlated under one verified package
-  digest, but remain uninstalled and unlaunched.
+  digest. That package is also bound to the shared tokenless runtime
+  ServiceAccount, but remains uninstalled and unlaunched.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered

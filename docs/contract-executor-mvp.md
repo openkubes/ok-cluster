@@ -2321,6 +2321,17 @@ remains `mutationAllowed: false`: package construction neither creates its
 objects nor authorizes a launcher. Runtime identity, credential packaging,
 installation planning and launch remain later checkpoints.
 
+The shared tokenless runtime ServiceAccount is now bound offline to this exact
+package as `ok147-runtime-binding-stage-runtime-prerequisite/v1`. The verifier
+accepts only the existing `openkubes-execution-system/ok147-contract-executor-runtime`
+ServiceAccount shape: automount disabled, fixed labels, no annotations, image
+pull Secrets, owner references or embedded RBAC. The receipt binds both the
+source manifest and normalized object digest to the runtime-binding package.
+
+This prerequisite remains non-mutating. It neither creates the ServiceAccount
+nor issues or mounts a token; credential packaging, installation planning and
+launch remain separate.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
