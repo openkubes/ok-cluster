@@ -113,7 +113,15 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   ServiceAccount. Three independently issued short-lived credentials are now
   sealed offline into private immutable Secrets for ledger write, binding
   persistence and workload observation; only the redacted credential receipt
-  is public. The package remains uninstalled and unlaunched.
+  is public. `ok cluster stage bind runtime launch prepare` now reconstructs
+  those inputs and emits only the redacted material and candidate receipts
+  without API contact. `ok cluster stage bind runtime launch execute` is the
+  sole CLI path to the single-use, seven-object, create-only launcher; it
+  requires the separately copied candidate digest, bounded installer files and
+  explicit `--execute`. It completes all exact-name GETs before its first POST,
+  creates the Job last, and has no update, patch, delete, list, watch or retry
+  path. The boundary is covered only by local and fake-API tests at this
+  checkpoint; no DEV runtime-binding Job has been launched.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
