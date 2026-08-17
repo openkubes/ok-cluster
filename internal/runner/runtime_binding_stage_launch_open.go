@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
@@ -32,6 +33,8 @@ type RuntimeBindingStageLaunchOpenReceipt struct {
 // bounded installer credential and API client for a later single-use launcher.
 // It exposes only a redaction-safe receipt and performs no API request.
 type OpenedRuntimeBindingStageLaunch struct {
+	mu         sync.Mutex
+	used       bool
 	material   VerifiedRuntimeBindingStageLaunchMaterial
 	endpoint   *url.URL
 	token      string
@@ -111,6 +114,9 @@ func (opened *OpenedRuntimeBindingStageLaunch) Receipt() (RuntimeBindingStageLau
 	}
 	if err := verifyRuntimeBindingStageLaunchMaterial(opened.material); err != nil {
 		return RuntimeBindingStageLaunchOpenReceipt{}, err
+	}
+	if digest.SHA256([]byte(opened.endpoint.String())) != opened.material.candidate.receipt.AuthorityEndpointDigest || digest.SHA256([]byte(opened.token)) != opened.material.candidate.installerTokenDigest {
+		return RuntimeBindingStageLaunchOpenReceipt{}, errors.New("runtime binding opened destination or credential changed")
 	}
 	return opened.receipt, nil
 }

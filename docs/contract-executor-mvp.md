@@ -2405,7 +2405,23 @@ behavior on the retained client. Its public
 authority, candidate and validity identities.
 
 Opening performs no HTTP request and still grants no mutation authority. The
-single-use preflight/create execution remains a later checkpoint.
+opened material now exposes only one single-use `Launch` operation. It performs
+all seven exact-name GETs before the first possible POST. A completely exact
+existing set returns `ALREADY_LAUNCHED`; the shared exact runtime alone may
+preexist; every other mixed, foreign or unexpected response stops with zero
+writes.
+
+After a globally absent preflight, the create-only order is ServiceAccount,
+ConfigMap, NetworkPolicy, the three immutable Secrets and finally Job. Every
+response must contain the exact submitted fields and a bounded UID and resource
+version. A failure after the first POST returns
+`STOPPED_PARTIAL_OR_UNKNOWN`, preserves the successful prefix and offers no
+retry, update, patch, delete or cleanup path. Candidate expiry and credential
+remaining lifetime are checked locally before the first API request.
+
+This execution has been tested only against injected local fake Kubernetes
+clients. No DEV cluster was contacted and no public CLI launch command exists
+yet.
 
 ## Bounded convergence observation polling
 
