@@ -81,6 +81,8 @@ func targetRegistrationBundleFixture(t *testing.T) targetRegistrationBundleTestF
 		RequestedAudiences: []string{}, ExpirationSeconds: 10800, CredentialUse: "argocd-target-registration", Retention: "memory-only",
 	}
 	policyRaw, _ := json.Marshal(policy)
+	credentialEvidence := targetRegistrationCredentialReceipt(at, policy)
+	credentialEvidenceRaw, _ := canonicalTargetRegistrationValue(credentialEvidence)
 	registration := runnerTargetRegistrationYAML(expectedPlan)
 	artifactDigest := digest.SHA256(registration)
 	planRaw := submissionBundlePlan(t, expectedPlan, runnerStageSHA("1"), runnerStageSHA("2"))
@@ -108,7 +110,7 @@ func targetRegistrationBundleFixture(t *testing.T) targetRegistrationBundleTestF
 		{"network-observation", "NOT_APPLICABLE", "", runnerStageSHA("9")},
 		{"runtime-binding", "NOT_APPLICABLE", "", runnerStageSHA("0")},
 		{"target-access", "ATTEMPTED", runnerStageSHA("e"), runnerStageSHA("f")},
-		{"target-credential", "ATTEMPTED", runnerStageSHA("8"), runnerStageSHA("a")},
+		{"target-credential", "ATTEMPTED", runnerStageSHA("8"), digest.SHA256(credentialEvidenceRaw)},
 	}
 	for index, result := range results {
 		var receipt stagereceipt.Verified
@@ -138,6 +140,17 @@ func targetRegistrationBundleFixture(t *testing.T) targetRegistrationBundleTestF
 			ArtifactPath: writeBundleFile(t, root, "target-registration.yaml", registration), Expected: expectedRegistration,
 		},
 		plan: plan, artifactDigest: artifactDigest,
+	}
+}
+
+func targetRegistrationCredentialReceipt(at time.Time, policy targetCredentialPolicyDocument) TargetCredentialIssueReceipt {
+	issuedAt := at.Add(time.Minute).UTC()
+	return TargetCredentialIssueReceipt{
+		Format: TargetCredentialIssueReceiptFormat, State: "ISSUED", StageID: "target-credential",
+		PolicyDigest: runnerStageSHA("3"), TargetIdentityDigest: policy.TargetIdentityDigest,
+		ServiceAccountIdentityDigest: runnerStageSHA("4"), RequestDigest: runnerStageSHA("5"), AudienceMode: "server-default",
+		IssuedAt: issuedAt.Format(time.RFC3339), ExpiresAt: issuedAt.Add(2 * time.Hour).Format(time.RFC3339), LifetimeSeconds: 7200,
+		CredentialBytesInReceipt: false, MutationState: "ATTEMPTED",
 	}
 }
 
