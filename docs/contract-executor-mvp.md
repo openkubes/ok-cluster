@@ -2200,6 +2200,41 @@ Ephemeral Job packaging and launch remain separate checkpoints. Target access
 is still unreachable: this command only captures the exact private authority
 material that a later target-access stage must consume.
 
+### Immutable Kubernetes runtime-binding store
+
+The first Job-suitable persistence candidate stores the same verified private
+runtime-binding material in one exact immutable `Secret` on `ok-mgmt`. This
+avoids both an `emptyDir`, which would lose the binding when the Job is
+recreated, and a new PVC/storage lifecycle owned by the runner.
+
+The store is bound before execution to the verified management authority,
+namespace `openkubes-execution-system` and one DNS-safe name prefixed with
+`ok147-runtime-binding-`. It permits only this sequence:
+
+```text
+POST exact Secret collection
+        |
+        +-- 201 -> verify exact immutable object and server identity
+        |
+        `-- 409 -> one exact GET-by-name
+                    `-- accept only byte-equivalent existing object
+```
+
+The Secret is `immutable: true`, contains exactly one data key and carries
+only the fixed runner labels plus content and plan digests. A conflicting
+object, uncertain response or altered metadata stops fail-closed. The client
+has no update, patch, delete, list, watch, discovery, redirect or retry path,
+and its public receipt contains only digests and categorical state—not the
+Secret identity, endpoint, token, CA, runtime UIDs or private material.
+
+This checkpoint is deliberately only a typed store capability. It is tested
+against a local fake TLS API and is not yet composed with the runtime-binding
+stage, packaged in a Job or invoked against a live cluster. The existing local
+exclusive-file path remains unchanged. A later composition checkpoint must
+select exactly one persistence implementation and bind a separately scoped
+management credential; adding this store does not create an OpenKubes
+reconciler or grant lifecycle mutation authority.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
