@@ -32,13 +32,14 @@ func TestRenderAggregateEvidenceStageJobTemplateBindsExactEnvelope(t *testing.T)
 		t.Fatalf("unexpected aggregate evidence command: %v", args)
 	}
 	for flag, want := range map[string]string{
-		"--receipt-prefix-digest":    values.ReceiptPrefixDigest,
-		"--aggregate-profile-digest": values.AggregateProfileDigest,
-		"--network-profile-digest":   values.NetworkProfileDigest,
-		"--platform-profile-digest":  values.PlatformProfileDigest,
-		"--runtime-binding":          "/var/run/openkubes/runtime/runtime-binding.json",
-		"--runtime-binding-receipt":  "/var/run/openkubes/runtime/runtime-binding-receipt.json",
-		"--platform-capability":      "/var/run/openkubes/capability/platform-capability.json",
+		"--receipt-prefix-digest":      values.ReceiptPrefixDigest,
+		"--aggregate-profile-digest":   values.AggregateProfileDigest,
+		"--network-profile-digest":     values.NetworkProfileDigest,
+		"--platform-profile-digest":    values.PlatformProfileDigest,
+		"--platform-capability-digest": values.PlatformCapabilityDigest,
+		"--runtime-binding":            "/var/run/openkubes/runtime/runtime-binding.json",
+		"--runtime-binding-receipt":    "/var/run/openkubes/runtime/runtime-binding-receipt.json",
+		"--platform-capability":        "/var/run/openkubes/capability/platform-capability.json",
 	} {
 		if got := argumentValue(args, flag); got != want {
 			t.Fatalf("%s=%q, want %q", flag, got, want)
@@ -107,6 +108,7 @@ func validAggregateEvidenceStageJobValues() AggregateEvidenceStageJobValues {
 		WorkloadAPIURL: "https://192.0.2.20:6443", WorkloadAPICIDR: "192.0.2.20/32", WorkloadCredentialSecret: "ok147-workload-aggregate",
 		ArgoAPIURL: "https://192.0.2.30:6443", ArgoAPICIDR: "192.0.2.30/32", ArgoCredentialSecret: "ok147-argo-aggregate",
 		RuntimeBindingSecret: "ok147-runtime-binding-run-01", PlatformCapabilitySecret: "ok147-platform-capability-01",
+		PlatformCapabilityDigest: bundleSHA("f"),
 	}
 }
 

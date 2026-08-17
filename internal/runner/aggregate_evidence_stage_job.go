@@ -32,6 +32,7 @@ type AggregateEvidenceStageJobValues struct {
 	ArgoCredentialSecret       string
 	RuntimeBindingSecret       string
 	PlatformCapabilitySecret   string
+	PlatformCapabilityDigest   string
 }
 
 // RenderAggregateEvidenceStageJobTemplate binds the final one-pass evaluator
@@ -63,7 +64,7 @@ func RenderAggregateEvidenceStageJobTemplate(template []byte, values AggregateEv
 	if !regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}$`).MatchString(values.ImageDigest) {
 		return nil, errors.New("aggregate evidence Job image is not digest-bound")
 	}
-	for _, value := range []string{values.ReceiptPrefixDigest, values.AggregateProfileDigest, values.NetworkProfileDigest, values.PlatformProfileDigest} {
+	for _, value := range []string{values.ReceiptPrefixDigest, values.AggregateProfileDigest, values.NetworkProfileDigest, values.PlatformProfileDigest, values.PlatformCapabilityDigest} {
 		if !stageReceiptPrefixDigestPattern.MatchString(value) {
 			return nil, errors.New("aggregate evidence Job semantic digest is invalid")
 		}
@@ -112,6 +113,7 @@ func RenderAggregateEvidenceStageJobTemplate(template []byte, values AggregateEv
 		"${OK147_ARGO_API_PORT}": argoPort, "${OK147_ARGO_CREDENTIAL_SECRET}": values.ArgoCredentialSecret,
 		"${OK147_RUNTIME_BINDING_SECRET}":     values.RuntimeBindingSecret,
 		"${OK147_PLATFORM_CAPABILITY_SECRET}": values.PlatformCapabilitySecret,
+		"${OK147_PLATFORM_CAPABILITY_DIGEST}": values.PlatformCapabilityDigest,
 	}
 	result := string(template)
 	for placeholder, value := range replacements {

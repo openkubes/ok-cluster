@@ -161,6 +161,7 @@ func BuildAggregateEvidenceStagePackage(config AggregateEvidenceStagePackageConf
 		WorkloadAPIURL: config.WorkloadAPIURL, WorkloadAPICIDR: config.WorkloadAPICIDR, WorkloadCredentialSecret: config.WorkloadCredentialSecret,
 		ArgoAPIURL: config.ArgoAPIURL, ArgoAPICIDR: config.ArgoAPICIDR, ArgoCredentialSecret: config.ArgoCredentialSecret,
 		RuntimeBindingSecret: config.RuntimeBindingSecret, PlatformCapabilitySecret: config.PlatformCapabilitySecret,
+		PlatformCapabilityDigest: config.ExpectedPlatformCapabilityDigest,
 	})
 	if err != nil {
 		return VerifiedAggregateEvidenceStagePackage{}, err

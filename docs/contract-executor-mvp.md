@@ -2647,6 +2647,19 @@ The durable runtime-binding Secret must already exist and is never created or
 replaced by this launcher. Existing mixed state and any failed create stop
 without update, patch, apply, delete, retry or rollback.
 
+The launched Job now has the matching direct executable boundary:
+
+```text
+ok cluster stage evaluate aggregate --execute ...
+```
+
+It requires the exact eleven-receipt prefix, all three immutable source
+profiles, the verified private runtime binding and the separately digest-bound
+Platform capability assertion. The workload identity and endpoint come from
+the runtime binding rather than an independent CLI identity. The mounted Argo
+CA is re-hashed before any API contact. The command performs no submission or
+status write and emits only the durable Stage-12 evaluation receipt.
+
 ## Target credential and GitOps stages
 
 The target credential stage verifies an exact, short-lived TokenRequest policy
@@ -2674,8 +2687,8 @@ pre-registration stop.
 
 The twelve-stage Go library and its durable replay semantics are complete and
 covered by unit, negative, local TLS integration and race tests. The standalone
-Stage-12 launch boundary is also exposed through the local CLI. This is not yet
-the OK-147 Definition of Done:
+Stage-12 launch boundary and the direct command executed by its Job are exposed
+through the local CLI. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
 - stages 8–11 are not yet composed with Stage 12 through one coherent local
