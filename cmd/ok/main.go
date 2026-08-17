@@ -660,6 +660,12 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "enablement" {
 		return runClusterStageRunEnablement(ctx, arguments[4:], stdout, stderr)
 	}
+	if len(arguments) >= 6 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "target-access" && arguments[4] == "launch" && arguments[5] == "prepare" {
+		return runClusterStageRunTargetAccessLaunchPrepare(arguments[6:], stdout, stderr)
+	}
+	if len(arguments) >= 6 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "target-access" && arguments[4] == "launch" && arguments[5] == "execute" {
+		return runClusterStageRunTargetAccessLaunchExecute(ctx, arguments[6:], stdout, stderr)
+	}
 	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "target-access" && arguments[4] == "package" {
 		return runClusterStageRunTargetAccessPackage(arguments[5:], stdout, stderr)
 	}
