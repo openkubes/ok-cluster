@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -23,11 +24,58 @@ func TestLoadTargetAccessStageBundleBindsPrefixGrantArtifactAndTarget(t *testing
 		t.Fatalf("unexpected target-access decision: %#v %v", decision, err)
 	}
 	receipt, err := bundle.Receipt()
-	if err != nil || receipt.Format != TargetAccessStageBundleReceiptFormat || receipt.State != "VERIFIED" || receipt.PlanDigest != fixture.plan.PlanDigest || receipt.TargetIdentityDigest != runnerStageSHA("8") || receipt.AuthorizationDigest == "" || len(receipt.ObjectDigests) != 8 || receipt.MutationAllowed {
+	if err != nil || receipt.Format != TargetAccessStageBundleReceiptFormat || receipt.State != "VERIFIED" || receipt.PlanDigest != fixture.plan.PlanDigest || receipt.TargetIdentityDigest != digest.SHA256([]byte(targetAccessRuntimeUID)) || receipt.AuthorizationDigest == "" || len(receipt.ObjectDigests) != 8 || receipt.MutationAllowed {
 		t.Fatalf("unexpected target-access bundle receipt: %#v %v", receipt, err)
 	}
-	if bundle.projection.Workload.Identity != runnerStageSHA("8") || len(bundle.projection.Workload.Objects) != 8 {
+	if bundle.projection.Workload.Identity != digest.SHA256([]byte(targetAccessRuntimeUID)) || len(bundle.projection.Workload.Objects) != 8 {
 		t.Fatalf("target-access projection differs: %#v", bundle.projection)
+	}
+}
+
+func TestTargetAccessStageBundleOpensRuntimeBoundWorkloadAuthority(t *testing.T) {
+	fixture := targetAccessBundleFixture(t)
+	bundle, err := LoadTargetAccessStageBundle(fixture.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := targetAccessRuntime(t, fixture.plan)
+	bound, err := bundle.Open(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bound.verified || bound.operation.Ledger == nil || bound.operation.Mutator == nil || bound.operation.Clock == nil || bound.operation.Mutator.Binding().StageID != "target-access" {
+		t.Fatalf("incomplete target-access stage runtime: %#v", bound)
+	}
+
+	foreign := targetAccessRuntime(t, fixture.plan)
+	binding, err := loadWorkloadAuthorityBinding(foreign.Workload.Path, foreign.Workload.ExpectedBindingDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.TargetClusterUID = "foreign-runtime-uid"
+	raw, _ := json.Marshal(binding)
+	if err := os.WriteFile(foreign.Workload.Path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	foreign.Workload.ExpectedBindingDigest, _ = WorkloadAuthorityBindingDigest(binding)
+	if _, err := bundle.Open(foreign); err == nil {
+		t.Fatal("foreign runtime target was accepted")
+	}
+
+	aliased := targetAccessRuntime(t, fixture.plan)
+	ledgerToken, _ := os.ReadFile(aliased.Ledger.TokenFile)
+	if err := os.WriteFile(aliased.Workload.TokenFile, ledgerToken, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bundle.Open(aliased); err == nil {
+		t.Fatal("shared ledger and workload credential was accepted")
+	}
+
+	if _, err := (VerifiedTargetAccessStageBundle{}).Open(TargetAccessStageRuntimeConfig{}); err == nil {
+		t.Fatal("unverified target-access bundle opened a runtime")
+	}
+	if _, err := (BoundTargetAccessStage{}).Run(context.Background()); err == nil {
+		t.Fatal("unverified target-access runtime executed")
 	}
 }
 
@@ -75,6 +123,8 @@ type targetAccessBundleTestFixture struct {
 	plan   stageplan.Binding
 }
 
+const targetAccessRuntimeUID = "cluster-runtime-uid-147"
+
 func targetAccessBundleFixture(t *testing.T) targetAccessBundleTestFixture {
 	t.Helper()
 	root := t.TempDir()
@@ -113,7 +163,7 @@ func targetAccessBundleFixture(t *testing.T) targetAccessBundleTestFixture {
 	for index, result := range results {
 		var receipt stagereceipt.Verified
 		if result.id == "cluster-lifecycle" {
-			receipt, err = stagereceipt.NewWithTargetClusterUIDDigest(plan, result.id, predecessors, "SUCCEEDED", result.mutation, result.operation, result.evidence, runnerStageSHA("8"), at.Add(time.Duration(index-6)*time.Minute))
+			receipt, err = stagereceipt.NewWithTargetClusterUIDDigest(plan, result.id, predecessors, "SUCCEEDED", result.mutation, result.operation, result.evidence, digest.SHA256([]byte(targetAccessRuntimeUID)), at.Add(time.Duration(index-6)*time.Minute))
 		} else {
 			receipt, err = stagereceipt.New(plan, result.id, predecessors, "SUCCEEDED", result.mutation, result.operation, result.evidence, at.Add(time.Duration(index-6)*time.Minute))
 		}
@@ -131,6 +181,35 @@ func targetAccessBundleFixture(t *testing.T) targetAccessBundleTestFixture {
 			ArtifactPath: writeBundleFile(t, root, "target-access.yaml", artifact), ExpectedObjects: runnerTargetAccessIdentities(),
 		},
 		plan: plan,
+	}
+}
+
+func targetAccessRuntime(t *testing.T, plan stageplan.Binding) TargetAccessStageRuntimeConfig {
+	t.Helper()
+	root := t.TempDir()
+	ca := testCA(t)
+	caPath := writeBundleFile(t, root, "workload-ca.crt", ca)
+	binding := WorkloadAuthorityBinding{
+		Format: WorkloadAuthorityBindingFormat, IntentRevision: plan.IntentRevision,
+		TargetClusterUID: targetAccessRuntimeUID, TargetIdentityScheme: "capi-cluster-uid/v1",
+		Endpoint: "https://192.0.2.147:6443", CABundleDigest: digest.SHA256(ca),
+	}
+	bindingRaw, _ := json.Marshal(binding)
+	bindingPath := writeBundleFile(t, root, "runtime-binding.json", bindingRaw)
+	bindingDigest, err := WorkloadAuthorityBindingDigest(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return TargetAccessStageRuntimeConfig{
+		Ledger: KubernetesLedgerConfig{
+			Endpoint: "https://192.0.2.12:6443", Namespace: "openkubes-execution-system",
+			TokenFile: writeBundleFile(t, root, "ledger-token", []byte("target-access-ledger-token")), CAFile: caPath,
+		},
+		Workload: WorkloadAuthorityFileResolverConfig{
+			Path: bindingPath, ExpectedBindingDigest: bindingDigest,
+			TokenFile: writeBundleFile(t, root, "workload-token", []byte("target-access-workload-token")), CAFile: caPath,
+		},
+		Clock: func() time.Time { return time.Date(2026, 8, 17, 15, 0, 0, 0, time.UTC) },
 	}
 }
 

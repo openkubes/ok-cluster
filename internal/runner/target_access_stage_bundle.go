@@ -1,10 +1,12 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
+	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
@@ -48,6 +50,22 @@ type VerifiedTargetAccessStageBundle struct {
 	projection submission.TargetAccessPlan
 	receipt    TargetAccessStageBundleReceipt
 	verified   bool
+}
+
+// TargetAccessStageRuntimeConfig keeps the ledger credential separate from
+// the private workload runtime binding and short-lived workload token.
+type TargetAccessStageRuntimeConfig struct {
+	Ledger   KubernetesLedgerConfig
+	Workload WorkloadAuthorityFileResolverConfig
+	Clock    func() time.Time
+}
+
+type BoundTargetAccessStage struct {
+	operation execution.StagedOperation
+	plan      stageplan.Binding
+	cursor    stagecursor.Cursor
+	grant     authorization.VerifiedStageGrant
+	verified  bool
 }
 
 // LoadTargetAccessStageBundle verifies every immutable input needed before a
@@ -132,4 +150,26 @@ func (bundle VerifiedTargetAccessStageBundle) Receipt() (TargetAccessStageBundle
 	receipt := bundle.receipt
 	receipt.ObjectDigests = append([]string(nil), bundle.receipt.ObjectDigests...)
 	return receipt, nil
+}
+
+// Open binds the verified public bundle to private runtime credentials but
+// does not inspect the ledger, claim the grant or contact the workload API.
+func (bundle VerifiedTargetAccessStageBundle) Open(config TargetAccessStageRuntimeConfig) (BoundTargetAccessStage, error) {
+	if !bundle.verified {
+		return BoundTargetAccessStage{}, errors.New("target-access stage bundle was not produced by verification")
+	}
+	operation, err := OpenKubernetesTargetAccessStageOperation(KubernetesTargetAccessStageOperationConfig{
+		Ledger: config.Ledger, Workload: config.Workload, Plan: bundle.plan, Projection: bundle.projection, Clock: config.Clock,
+	})
+	if err != nil {
+		return BoundTargetAccessStage{}, err
+	}
+	return BoundTargetAccessStage{operation: operation, plan: bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true}, nil
+}
+
+func (stage BoundTargetAccessStage) Run(ctx context.Context) (execution.StagedOperationReceipt, error) {
+	if !stage.verified {
+		return execution.StagedOperationReceipt{}, errors.New("target-access stage runtime was not produced by verification")
+	}
+	return stage.operation.Run(ctx, stage.plan, stage.cursor, stage.grant)
 }

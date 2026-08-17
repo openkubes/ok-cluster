@@ -92,6 +92,24 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 	})
 }
 
+func TestKubernetesClientAcceptsOnlyNamedOrDigestAuthority(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusNotFound, nil, nil), nil
+	})}
+	if _, err := NewKubernetesClient(KubernetesClientConfig{
+		Endpoint: "http://127.0.0.1:12345", BearerToken: "short-lived-test-token",
+		AuthorityIdentity: strings.Repeat("a", 64), Client: client,
+	}); err == nil {
+		t.Fatal("untyped long authority identity was accepted")
+	}
+	if _, err := NewKubernetesClient(KubernetesClientConfig{
+		Endpoint: "http://127.0.0.1:12345", BearerToken: "short-lived-test-token",
+		AuthorityIdentity: "sha256:" + strings.Repeat("a", 64), Client: client,
+	}); err != nil {
+		t.Fatalf("redacted digest authority was rejected: %v", err)
+	}
+}
+
 func TestExecutorPreservesAuthorityOrderAndPartialReceipt(t *testing.T) {
 	root, binding := validProjection(t)
 	plan, err := Load(root, binding)

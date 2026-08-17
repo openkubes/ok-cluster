@@ -91,7 +91,7 @@ func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, erro
 	if config.BearerToken == "" || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") {
 		return nil, errors.New("submission Kubernetes bearer token is invalid")
 	}
-	if !validName(config.AuthorityIdentity, 63) || strings.Contains(config.AuthorityIdentity, ".") {
+	if (!validName(config.AuthorityIdentity, 63) || strings.Contains(config.AuthorityIdentity, ".")) && !immutableDigestPattern.MatchString(config.AuthorityIdentity) {
 		return nil, errors.New("submission authority identity is invalid")
 	}
 	if config.Client == nil {
