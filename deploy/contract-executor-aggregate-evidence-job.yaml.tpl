@@ -131,6 +131,8 @@ spec:
             - /var/run/openkubes/runtime/runtime-binding-receipt.json
             - --platform-capability
             - /var/run/openkubes/capability/platform-capability.json
+            - --platform-capability-digest
+            - "${OK147_PLATFORM_CAPABILITY_DIGEST}"
           resources:
             requests: {cpu: 50m, memory: 64Mi, ephemeral-storage: 16Mi}
             limits: {cpu: 250m, memory: 128Mi, ephemeral-storage: 32Mi}
