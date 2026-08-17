@@ -129,6 +129,11 @@ func TestBuildTargetAccessStageCredentialPackageFailsClosed(t *testing.T) {
 }
 
 func targetAccessCredentialConfig(t *testing.T) (TargetAccessStageCredentialPackageConfig, [][]byte) {
+	config, _, tokens := targetAccessCredentialInputs(t)
+	return config, tokens
+}
+
+func targetAccessCredentialInputs(t *testing.T) (TargetAccessStageCredentialPackageConfig, TargetAccessStagePackageConfig, [][]byte) {
 	t.Helper()
 	now := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
 	issuedAt, expiresAt := now.Add(-time.Minute), now.Add(30*time.Minute)
@@ -187,5 +192,5 @@ func targetAccessCredentialConfig(t *testing.T) (TargetAccessStageCredentialPack
 		Package: packaged, MaterializationTime: now, WorkloadBindingPath: packageConfig.WorkloadBindingPath,
 		LedgerWriter:   source("ok-mgmt", tokenPaths[0], subjects[0], "1", managementCAPath, tokens[0], managementCA),
 		WorkloadWriter: source(digest.SHA256([]byte(binding.TargetClusterUID)), tokenPaths[1], subjects[1], "2", workloadCAPath, tokens[1], workloadCA),
-	}, tokens
+	}, packageConfig, tokens
 }
