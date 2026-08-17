@@ -2354,8 +2354,17 @@ Secret references, then fixes the create order to ConfigMap, NetworkPolicy and
 Job. The plan contains only object identities, paths and digests; it contains
 neither credentials nor object bodies and grants no mutation authority.
 
-Private Secret recovery, the combined seven-object launch plan, bounded
-installation and launch remain separate.
+The complete tokenless prerequisite set is now correlated by
+`ok147-runtime-binding-stage-launch-plan/v1`: shared ServiceAccount, immutable
+input ConfigMap, NetworkPolicy, three immutable credential Secrets and the Job.
+All seven exact GET preflights belong to one global barrier. The shared runtime
+may already exist only when its exact digest matches; every other object must
+be either globally absent or part of a completely exact already-existing set.
+No create can be considered after a mixed or foreign preflight result.
+
+The launch plan contains only paths, identities and digests and remains
+`mutationAllowed: false`. Private Secret recovery, an expiry-bound launch
+candidate, bounded installation and execution remain later checkpoints.
 
 ## Bounded convergence observation polling
 
