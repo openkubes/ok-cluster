@@ -2459,6 +2459,56 @@ only plan, authorization, artifact, target and object digests and remains
 Bundle loading still does not claim the grant, open the durable ledger, read a
 workload credential or submit any of the eight objects.
 
+## Target-access Job launch boundary
+
+The verified Target Access bundle can now be materialized as one immutable
+ConfigMap plus a deny-all NetworkPolicy and non-retrying Job. The package binds
+the exact six-receipt predecessor chain, signed `CreateTargetAccess` grant,
+eight-object workload artifact, private runtime-binding digest, immutable
+target identity, runner image and the distinct ledger/workload API endpoints.
+The private runtime binding, CA bundles and credentials are never embedded in
+the ConfigMap or exposed by its receipt.
+
+Two independently evidenced, short-lived Job credentials are reconstructed as
+immutable Secrets. The management-side ledger writer carries only token and CA
+data. The workload writer additionally carries the exact private workload
+binding, whose target UID digest, endpoint and CA must still match the package.
+The two tokens must be distinct from each other and from the installer token.
+Only redaction-safe object, authority, expiry and package digests are public.
+
+The shared tokenless ServiceAccount, public ConfigMap and NetworkPolicy, both
+private Secrets and final Job form one six-object launch plan. All six exact
+GETs complete before the first POST. The exact shared runtime alone may
+preexist, or the complete exact set may be returned as `ALREADY_LAUNCHED`.
+Every other existing or mixed state stops with zero writes. After global
+absence, the create order is ServiceAccount, ConfigMap, NetworkPolicy, ledger
+Secret, workload Secret and Job. A failed create preserves the resulting
+partial prefix and exposes no retry, update, patch, apply, delete or cleanup
+path.
+
+An expiry-bound candidate binds that plan to one exact `ok-shared` API
+endpoint, CA and independently evidenced installer-token digest. The sealed
+launch material retains all private bytes but exposes only correlated receipts.
+Opening requires the separately copied candidate digest and validates the
+bounded installer files without API contact. The opened launcher is
+single-use.
+
+The CLI preserves all three boundaries:
+
+```text
+ok cluster stage run target-access package
+        -> new local 0600 package only
+
+ok cluster stage run target-access launch prepare
+        -> redacted material and candidate receipts only
+
+ok cluster stage run target-access launch execute --execute
+        -> exact candidate + bounded installer files + single-use launch
+```
+
+The implementation is covered by offline, fake-API and race tests. This
+checkpoint did not contact a DEV cluster or launch a Target Access Job.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before

@@ -138,14 +138,25 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   `ok cluster stage run target-access --execute` boundary now requires the
   exact six-receipt prefix, signed grant, eight independently named object
   identities, private runtime-binding digest and distinct ledger/workload
-  files before it can invoke that operation. No Job package or DEV activation
-  exists for target access at this checkpoint. A separated TLS fake-API proof
-  now covers the complete claim-to-submit path: exactly eight ordered
+  files before it can invoke that operation. A separated TLS fake-API proof
+  covers the complete claim-to-submit path: exactly eight ordered
   `GET`/conditional-`POST` pairs, durable success replay without another write,
   and a durably stopped partial prefix without retry. Its first Job-package
-  building block is also offline: one immutable ConfigMap binds the plan,
+  boundary is offline: one immutable ConfigMap binds the plan,
   signed grant, exact six-receipt prefix and eight-object artifact while
-  excluding the private runtime binding, CA and both credentials.
+  excluding the private runtime binding, CA and both credentials. A hardened
+  NetworkPolicy and non-retrying Job bind only the exact management-ledger and
+  workload API endpoints. Two distinct short-lived immutable Secrets carry the
+  ledger and workload writer credentials; only the workload Secret carries the
+  runtime-bound target identity. The shared tokenless runtime, three public
+  objects and both private Secrets are sealed behind one six-object global
+  preflight. The Job is created last, a complete exact duplicate is
+  `ALREADY_LAUNCHED`, and every other partial state stops with zero writes.
+  `ok cluster stage run target-access package` emits only a new local `0600`
+  package, `... launch prepare` emits redacted material/candidate receipts, and
+  only `... launch execute --execute` can open the exact expiry-bound installer
+  candidate. These activation paths are covered by local and fake-API tests;
+  no DEV Target Access Job has been launched by the MVP.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
