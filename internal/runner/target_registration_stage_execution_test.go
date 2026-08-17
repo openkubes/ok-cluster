@@ -94,6 +94,73 @@ func TestTargetRegistrationStageRejectsSharedLedgerAndWriterCredentialBeforeAPI(
 	}
 }
 
+func TestTargetRegistrationStageLoadsAndRunsFromCredentialHandoff(t *testing.T) {
+	fixture := targetRegistrationMaterialFixture(t)
+	handoff, err := newVerifiedTargetCredentialStageHandoff(
+		fixture.bundle.plan, fixture.bundle.prefix[:7], fixture.bundle.prefix[7], fixture.credential,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := LoadTargetRegistrationStageBundleFromHandoff(TargetRegistrationStageHandoffConfig{
+		Handoff: handoff, GrantPath: fixture.bundleConfig.GrantPath, GrantPublicKeyPath: fixture.bundleConfig.GrantPublicKeyPath,
+		EvaluationTime: fixture.bundleConfig.EvaluationTime, ArtifactPath: fixture.bundleConfig.ArtifactPath, Expected: fixture.bundleConfig.Expected,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := bundle.Receipt()
+	if err != nil || public.CredentialMaterialPresent || public.MutationAllowed {
+		t.Fatalf("handoff-loaded bundle exposed credential: %#v %v", public, err)
+	}
+	ledgerAPI := newRuntimeBindingLedgerAPI(t)
+	defer ledgerAPI.Close()
+	gitopsAPI := newTargetRegistrationExecutionAPI(t, 0)
+	defer gitopsAPI.Close()
+	base := targetRegistrationExecutionRuntime(t, fixture, ledgerAPI.Server, gitopsAPI.Server)
+	bound, err := bundle.OpenHandoff(TargetRegistrationStageHandoffRuntimeConfig{
+		Ledger: base.Ledger, GitOps: base.GitOps, Runtime: base.Runtime,
+		MaterializationTime: base.MaterializationTime, Clock: base.Clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledgerAPI.RequestCount() != 0 || gitopsAPI.RequestCount() != 0 {
+		t.Fatal("opening handoff-loaded target registration contacted Kubernetes")
+	}
+	receipt, err := bound.Run(context.Background())
+	if err != nil || receipt.State != "COMPLETED_SUCCEEDED" || receipt.StageID != "target-registration" || gitopsAPI.RequestCount() != 4 {
+		t.Fatalf("handoff-loaded target registration did not complete: %#v requests=%v err=%v", receipt, gitopsAPI.Requests(), err)
+	}
+	if _, err := bundle.OpenHandoff(TargetRegistrationStageHandoffRuntimeConfig{}); err == nil {
+		t.Fatal("memory-only target credential was consumed twice")
+	}
+}
+
+func TestTargetRegistrationHandoffRejectsForeignOrConsumedContext(t *testing.T) {
+	fixture := targetRegistrationMaterialFixture(t)
+	if _, err := newVerifiedTargetCredentialStageHandoff(
+		fixture.bundle.plan, fixture.bundle.prefix[:6], fixture.bundle.prefix[7], fixture.credential,
+	); err == nil {
+		t.Fatal("incomplete predecessor prefix produced a target-credential handoff")
+	}
+	handoff, err := newVerifiedTargetCredentialStageHandoff(
+		fixture.bundle.plan, fixture.bundle.prefix[:7], fixture.bundle.prefix[7], fixture.credential,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handoff.takeCredential(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadTargetRegistrationStageBundleFromHandoff(TargetRegistrationStageHandoffConfig{
+		Handoff: handoff, GrantPath: fixture.bundleConfig.GrantPath, GrantPublicKeyPath: fixture.bundleConfig.GrantPublicKeyPath,
+		EvaluationTime: fixture.bundleConfig.EvaluationTime, ArtifactPath: fixture.bundleConfig.ArtifactPath, Expected: fixture.bundleConfig.Expected,
+	}); err == nil {
+		t.Fatal("consumed target credential handoff loaded target registration")
+	}
+}
+
 func targetRegistrationExecutionRuntime(t *testing.T, fixture targetRegistrationMaterialTestFixture, ledgerServer, gitopsServer *httptest.Server) TargetRegistrationStageRuntimeConfig {
 	t.Helper()
 	root := t.TempDir()
