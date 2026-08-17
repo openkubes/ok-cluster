@@ -86,7 +86,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   installer candidate offline, while `observe network launch execute` alone
   can open the installer authority and invoke the seven-object, Job-last
   launcher. It also requires the exact candidate digest and explicit
-  `--execute`. Stage 4 now has its first distinct path as well:
+  `--execute`. The following `runtime-binding` stage now has a separate
+  crash-safe local operation as well: it accepts only the exact runner-owned
+  cursor, invokes one prebound binder and persists an immutable receipt before
+  any later target-access stage can open. This primitive still has no concrete
+  Secret reader, cluster client or CLI activation. Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
   `HelmChartProxy`; it neither renders Helm nor writes the controller-owned
