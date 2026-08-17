@@ -125,6 +125,11 @@ func platformApplicationsBundleFixture(t *testing.T) platformApplicationsBundleT
 	if err != nil {
 		t.Fatal(err)
 	}
+	networkProfile := runnerAggregateNetworkProfile(expectedPlan)
+	networkProfileDigest, err := observation.NetworkProfileDigest(networkProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
 	aggregateProfile := AggregateEvidenceProfile{
 		Format: AggregateEvidenceProfileFormat, IntentRevision: expectedPlan.IntentRevision,
 		EnablementRevision: expectedPlan.EnablementRevision, PlatformRevision: expectedPlan.PlatformRevision,
@@ -144,6 +149,7 @@ func platformApplicationsBundleFixture(t *testing.T) platformApplicationsBundleT
 	stages[7].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.target-credential", "digest": runnerStageSHA("4")}}
 	stages[8].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.target-registration", "digest": runnerStageSHA("5")}}
 	stages[9].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.platform-applications", "digest": artifactDigest}}
+	stages[4].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.network-observation", "digest": networkProfileDigest}}
 	stages[10].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.platform-observation", "digest": profileDigest}}
 	stages[11].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.aggregate-evidence", "digest": aggregateProfileDigest}}
 	planPath := writeBundleFile(t, root, "staged-plan.json", mustJSON(t, document))
@@ -237,4 +243,17 @@ func runnerPlatformApplications(t *testing.T, expected stageplan.Expected) ([]by
 		CapabilityContractDigest: runnerStageSHA("7"), CapabilityExecutableDigest: runnerStageSHA("8"), MaximumCapabilityAgeSeconds: 900,
 	}
 	return []byte(strings.Join([]string{string(documents[0]), string(documents[1]), string(documents[2])}, "\n---\n")), profile
+}
+
+func runnerAggregateNetworkProfile(expected stageplan.Expected) observation.NetworkProfile {
+	return observation.NetworkProfile{
+		Format: observation.NetworkProfileFormat, IntentRevision: expected.IntentRevision, EnablementRevision: expected.EnablementRevision,
+		ExpectedNodeCount: 2, ExpectedHCPSpecDigest: runnerStageSHA("4"), ExpectedHRPSpecDigest: runnerStageSHA("5"),
+		ExpectedImages: observation.NetworkImages{
+			CiliumAgent:    "example.invalid/cilium@sha256:" + strings.Repeat("1", 64),
+			CiliumEnvoy:    "example.invalid/envoy@sha256:" + strings.Repeat("2", 64),
+			CiliumOperator: "example.invalid/operator@sha256:" + strings.Repeat("3", 64),
+		},
+		MinimumProbeFreshnessSeconds: 60, MaximumProbeIntervalSeconds: 60, CacheExposureSeconds: 30,
+	}
 }
