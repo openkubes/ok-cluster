@@ -12,7 +12,7 @@
 
 .PHONY: help preflight install upgrade uninstall status validate logs \
         token-show connect-info connect-openwebui fix-openwebui-ollama \
-        verify-mcp-consumer verify-mcp-live
+        prepare-diagnostics-consumer verify-mcp-consumer verify-mcp-live
 .DEFAULT_GOAL := help
 
 CLUSTER     ?= ok-ai
@@ -41,6 +41,7 @@ help:
 	@echo "  make connect-openwebui     # step 5: auto-register in Open WebUI (env seed)"
 	@echo "  make connect-info          # step 5 alt: values for manual Admin-UI entry"
 	@echo "  make verify-mcp-consumer   # render the chart and verify the MCP-only boundary"
+	@echo "  make prepare-diagnostics-consumer # label namespace for adapter ingress"
 	@echo "  make verify-mcp-live       # verify no token/kubectl and inspect MCP registration"
 	@echo ""
 	@echo "  make upgrade | logs | token-show | fix-openwebui-ollama | uninstall"
@@ -79,7 +80,12 @@ $(TOKEN_FILE):
 	@umask 077 && openssl rand -hex 24 > $(TOKEN_FILE)
 	@echo "Generated new gateway token -> $(TOKEN_FILE) (gitignored)"
 
-install: $(TOKEN_FILE)
+prepare-diagnostics-consumer:
+	@$(KUBECTL) create namespace $(NS) --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	@$(KUBECTL) label namespace $(NS) \
+		openkubes.io/diagnostics-consumer=true --overwrite
+
+install: $(TOKEN_FILE) prepare-diagnostics-consumer
 	helm upgrade --install $(RELEASE) $(CHART) \
 		--kubeconfig $(KUBECONFIG) \
 		--namespace $(NS) --create-namespace \

@@ -34,6 +34,7 @@ make validate            # 4: in-cluster /v1 contract test
 make connect-openwebui   # 5: auto-register in Open WebUI (seeds fresh instances;
                          #    manually configured instances keep their UI config)
 make verify-mcp-consumer # static: no consumer RBAC/token/client, three MCP tools
+make prepare-diagnostics-consumer # label namespace for adapter ingress
 make verify-mcp-live     # deployed pod: no token/kubectl, show MCP registration
 ```
 
@@ -48,6 +49,22 @@ OpenClaw image without kubectl, denies Exec, and allowlists only the three
 ADR-021 diagnostics functions. Jira/GitHub/docs handoff uses separately
 configured workflow tools and contains summaries plus evidence references, not
 raw evidence or credentials.
+
+The adapter NetworkPolicy admits this deployment only when the workload
+namespace carries `openkubes.io/diagnostics-consumer=true`. The `install` target
+applies it automatically; before the Crossplane claim reconciles, run
+`make prepare-diagnostics-consumer` against `ok-ai`.
+
+## Release order (OK-94)
+
+1. Merge the reusable chart and adapter-ingress changes in `openkubes`.
+2. Publish chart `0.2.0` to `ghcr.io/openkubes/charts`.
+3. Run `make prepare-diagnostics-consumer` here.
+4. Roll out the adapter NetworkPolicy.
+5. Merge this provider-value PR, allow Crossplane to reconcile, and run
+   `make verify-mcp-live`.
+
+Merging this claim before chart `0.2.0` is published is not supported.
 
 ## Troubleshooting: "Unauthorized" / model missing in Open WebUI
 
