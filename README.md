@@ -134,7 +134,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   that public target digest, requires distinct ledger and short-lived workload
   credentials, and preconstructs exactly one eight-object create-only mutator.
   Opening performs no API request or grant claim; only the returned crash-safe
-  staged operation can claim and submit. No CLI, Job package or DEV activation
+  staged operation can claim and submit. The local
+  `ok cluster stage run target-access --execute` boundary now requires the
+  exact six-receipt prefix, signed grant, eight independently named object
+  identities, private runtime-binding digest and distinct ledger/workload
+  files before it can invoke that operation. No Job package or DEV activation
   exists for target access at this checkpoint. A separated TLS fake-API proof
   now covers the complete claim-to-submit path: exactly eight ordered
   `GET`/conditional-`POST` pairs, durable success replay without another write,

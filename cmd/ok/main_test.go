@@ -884,6 +884,74 @@ func TestEnablementStageRunFailsClosedBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestTargetAccessStageRunBindsExactArtifactAndWorkloadRuntime(t *testing.T) {
+	previous := executeTargetAccessStage
+	defer func() { executeTargetAccessStage = previous }()
+	var calls int
+	executeTargetAccessStage = func(ctx context.Context, bundle runner.TargetAccessStageBundleConfig, runtime runner.TargetAccessStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+		calls++
+		deadline, bounded := ctx.Deadline()
+		if !bounded || time.Until(deadline) > stageRunTimeout || time.Until(deadline) < stageRunTimeout-time.Minute {
+			t.Fatalf("target-access context is not bounded: %s %t", deadline, bounded)
+		}
+		if bundle.PlanPath != "/tmp/plan.json" || len(bundle.Receipts) != 6 || bundle.ArtifactPath != "/tmp/target-access.yaml" || len(bundle.ExpectedObjects) != 8 {
+			t.Fatalf("target-access bundle differs: %#v", bundle)
+		}
+		wantKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding"}
+		for index, object := range bundle.ExpectedObjects {
+			if object.Kind != wantKinds[index] {
+				t.Fatalf("target-access identity %d differs: %#v", index, object)
+			}
+		}
+		if bundle.ExpectedObjects[0].Name != "ok-observability" || bundle.ExpectedObjects[1].Namespace != "kube-system" || bundle.ExpectedObjects[4].Namespace != "ok-observability" || runtime.Ledger.Namespace != ledgerNamespace || runtime.Workload.Path != "/private/tmp/runtime-binding.json" || runtime.Workload.ExpectedBindingDigest != testSHA("5") || runtime.Workload.TokenFile != "/private/tmp/workload-token" || runtime.Clock == nil {
+			t.Fatalf("target-access runtime differs: %#v %#v", bundle.ExpectedObjects, runtime)
+		}
+		return execution.StagedOperationReceipt{Format: execution.StagedReceiptFormat, State: "COMPLETED_SUCCEEDED", StageID: "target-access", StageReceiptDigest: testSHA("8")}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(targetAccessStageRunArguments(), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 1 {
+		t.Fatalf("target-access runner calls = %d", calls)
+	}
+	var receipt execution.StagedOperationReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.StageID != "target-access" {
+		t.Fatalf("unexpected target-access receipt: %#v %v", receipt, err)
+	}
+}
+
+func TestTargetAccessStageRunFailsClosedBeforeExecution(t *testing.T) {
+	previous := executeTargetAccessStage
+	defer func() { executeTargetAccessStage = previous }()
+	calls := 0
+	executeTargetAccessStage = func(context.Context, runner.TargetAccessStageBundleConfig, runner.TargetAccessStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+		calls++
+		return execution.StagedOperationReceipt{}, nil
+	}
+	valid := targetAccessStageRunArguments()
+	for name, arguments := range map[string][]string{
+		"missing execute":         removeArgument(valid, "--execute"),
+		"missing artifact":        removeArgumentWithValue(valid, "--target-access-artifact"),
+		"missing identity":        removeArgumentWithValue(valid, "--cluster-rolebinding"),
+		"missing runtime binding": removeArgumentWithValue(valid, "--workload-binding"),
+		"missing binding digest":  removeArgumentWithValue(valid, "--workload-binding-digest"),
+		"missing credential":      removeArgumentWithValue(valid, "--workload-token-file"),
+		"invalid time":            replaceArgument(valid, "--evaluation-time", "not-time"),
+		"positional":              append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe target-access run was accepted: %v %s", err, stdout.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("target-access runner reached %d times for invalid input", calls)
+	}
+}
+
 func TestEnablementStagePackageWritesVerifiedOfflineArtifact(t *testing.T) {
 	previous := materializeEnablementStagePackage
 	defer func() { materializeEnablementStagePackage = previous }()
@@ -1495,6 +1563,29 @@ func enablementStageRunArguments() []string {
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
 		"--management-api-endpoint", "https://192.0.2.12:6443", "--management-token-file", "/tmp/management-token", "--management-ca-file", "/tmp/management-ca",
+	)
+}
+
+func targetAccessStageRunArguments() []string {
+	resume := stageResumeArguments()
+	arguments := append([]string{"cluster", "stage", "run", "target-access"}, resume[3:]...)
+	return append(arguments,
+		"--receipt", "/tmp/provider.json@"+testSHA("1"),
+		"--receipt", "/tmp/lifecycle.json@"+testSHA("2"),
+		"--receipt", "/tmp/lifecycle-observation.json@"+testSHA("3"),
+		"--receipt", "/tmp/enablement.json@"+testSHA("4"),
+		"--receipt", "/tmp/network-observation.json@"+testSHA("5"),
+		"--receipt", "/tmp/runtime-binding.json@"+testSHA("6"),
+		"--grant", "/tmp/target-access-grant.json", "--grant-key", "/tmp/target-access-grant.pub",
+		"--evaluation-time", "2026-08-17T14:00:00Z", "--target-access-artifact", "/tmp/target-access.yaml",
+		"--observability-namespace", "ok-observability", "--manager-serviceaccount", "ok147-argocd-manager",
+		"--cluster-role", "ok147-argocd-platform-cluster", "--cluster-rolebinding", "ok147-argocd-platform-cluster",
+		"--platform-role", "ok147-argocd-platform", "--platform-rolebinding", "ok147-argocd-platform",
+		"--kube-system-role", "ok147-argocd-kube-system", "--kube-system-rolebinding", "ok147-argocd-kube-system",
+		"--execute",
+		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/private/tmp/ledger-token", "--ledger-ca-file", "/private/tmp/ledger-ca",
+		"--workload-binding", "/private/tmp/runtime-binding.json", "--workload-binding-digest", testSHA("5"),
+		"--workload-token-file", "/private/tmp/workload-token", "--workload-ca-file", "/private/tmp/workload-ca",
 	)
 }
 

@@ -492,6 +492,18 @@ var executeEnablementStage = func(ctx context.Context, bundleConfig runner.Enabl
 	return bound.Run(ctx)
 }
 
+var executeTargetAccessStage = func(ctx context.Context, bundleConfig runner.TargetAccessStageBundleConfig, runtimeConfig runner.TargetAccessStageRuntimeConfig) (execution.StagedOperationReceipt, error) {
+	bundle, err := runner.LoadTargetAccessStageBundle(bundleConfig)
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	bound, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.StagedOperationReceipt{}, err
+	}
+	return bound.Run(ctx)
+}
+
 var executeLifecycleObservationStage = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.LifecycleObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
 	bundle, err := runner.LoadLifecycleObservationStageBundle(bundleConfig)
 	if err != nil {
@@ -635,6 +647,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "enablement" {
 		return runClusterStageRunEnablement(ctx, arguments[4:], stdout, stderr)
 	}
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "target-access" {
+		return runClusterStageRunTargetAccess(ctx, arguments[4:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" {
 		return runClusterStageRun(ctx, arguments[3:], stdout, stderr)
 	}
@@ -647,7 +662,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -1699,6 +1714,99 @@ func runClusterStageRunEnablement(ctx context.Context, arguments []string, stdou
 		Authority: runner.KubernetesAuthorityConfig{
 			Endpoint: *managementAPIEndpoint, AuthorityIdentity: resume.PlanExpected.ManagementAuthority,
 			TokenFile: *managementTokenFile, CAFile: *managementCAFile,
+		},
+		Clock: func() time.Time { return time.Now().UTC() },
+	})
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return runErr
+}
+
+func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run target-access", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
+	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
+	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
+	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered eight-object target-access set")
+	observabilityNamespace := flags.String("observability-namespace", "", "independently expected observability namespace")
+	managerServiceAccount := flags.String("manager-serviceaccount", "", "independently expected kube-system manager ServiceAccount")
+	clusterRole := flags.String("cluster-role", "", "independently expected cluster role")
+	clusterRoleBinding := flags.String("cluster-rolebinding", "", "independently expected cluster role binding")
+	platformRole := flags.String("platform-role", "", "independently expected observability namespace role")
+	platformRoleBinding := flags.String("platform-rolebinding", "", "independently expected observability namespace role binding")
+	kubeSystemRole := flags.String("kube-system-role", "", "independently expected kube-system role")
+	kubeSystemRoleBinding := flags.String("kube-system-rolebinding", "", "independently expected kube-system role binding")
+	execute := flags.Bool("execute", false, "claim and execute exactly the selected target-access stage")
+	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
+	ledgerTokenFile := flags.String("ledger-token-file", "", "path to the short-lived ledger token")
+	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the ledger Kubernetes API CA bundle")
+	workloadBinding := flags.String("workload-binding", "", "path to the private runtime-bound workload authority record")
+	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected digest of the private workload authority record")
+	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived workload writer token")
+	workloadCAFile := flags.String("workload-ca-file", "", "path to the runtime-bound workload Kubernetes API CA bundle")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("target-access mutation requires explicit --execute")
+	}
+	resume, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--grant", *grantPath}, {"--grant-key", *grantKeyPath}, {"--evaluation-time", *evaluationTime}, {"--target-access-artifact", *artifactPath},
+		{"--observability-namespace", *observabilityNamespace}, {"--manager-serviceaccount", *managerServiceAccount},
+		{"--cluster-role", *clusterRole}, {"--cluster-rolebinding", *clusterRoleBinding},
+		{"--platform-role", *platformRole}, {"--platform-rolebinding", *platformRoleBinding},
+		{"--kube-system-role", *kubeSystemRole}, {"--kube-system-rolebinding", *kubeSystemRoleBinding},
+		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
+		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
+		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	at, err := time.Parse(time.RFC3339, *evaluationTime)
+	if err != nil {
+		return fmt.Errorf("parse evaluation time: %w", err)
+	}
+	expectedObjects := []projection.ResourceIdentity{
+		{APIVersion: "v1", Kind: "Namespace", Name: *observabilityNamespace},
+		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "kube-system", Name: *managerServiceAccount},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: *clusterRole},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: *clusterRoleBinding},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: *observabilityNamespace, Name: *platformRole},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: *observabilityNamespace, Name: *platformRoleBinding},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "kube-system", Name: *kubeSystemRole},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "kube-system", Name: *kubeSystemRoleBinding},
+	}
+	bundleConfig := runner.TargetAccessStageBundleConfig{
+		PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
+		GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at,
+		ArtifactPath: *artifactPath, ExpectedObjects: expectedObjects,
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, stageRunTimeout)
+	defer cancel()
+	receipt, runErr := executeTargetAccessStage(boundedContext, bundleConfig, runner.TargetAccessStageRuntimeConfig{
+		Ledger: runner.KubernetesLedgerConfig{
+			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
+		},
+		Workload: runner.WorkloadAuthorityFileResolverConfig{
+			Path: *workloadBinding, ExpectedBindingDigest: *workloadBindingDigest,
+			TokenFile: *workloadTokenFile, CAFile: *workloadCAFile,
 		},
 		Clock: func() time.Time { return time.Now().UTC() },
 	})
