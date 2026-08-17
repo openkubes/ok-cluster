@@ -18,7 +18,7 @@ func TestPlanTargetAccessStageInstallationProducesExactSafeOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	receipt, _ := packaged.Receipt()
-	if plan.Format != TargetAccessStageInstallationPlanFormat || plan.State != "VERIFIED" || plan.StageID != "target-access" || plan.StagePackageDigest != receipt.PackageDigest || plan.Authority != receipt.TargetIdentityDigest || plan.MutationAllowed {
+	if plan.Format != TargetAccessStageInstallationPlanFormat || plan.State != "VERIFIED" || plan.StageID != "target-access" || plan.StagePackageDigest != receipt.PackageDigest || plan.Authority != "ok-shared" || plan.MutationAllowed {
 		t.Fatalf("unexpected target-access installation plan: %#v", plan)
 	}
 	wantKinds := []string{"ConfigMap", "NetworkPolicy", "Job"}
@@ -56,7 +56,7 @@ func TestPlanTargetAccessStageInstallationFailsClosed(t *testing.T) {
 			packaged.receipt.ObjectKinds = []string{"ConfigMap", "Job", "NetworkPolicy"}
 		},
 		"foreign authority": func(packaged *VerifiedTargetAccessStagePackage) {
-			packaged.workloadAuthority = bundleSHA("1")
+			packaged.installationAuthority = "ok-mgmt"
 		},
 		"changed runtime": func(packaged *VerifiedTargetAccessStagePackage) {
 			packaged.raw = bytes.Replace(packaged.raw, []byte("ok147-contract-executor-runtime"), []byte("ok147-foreign-runtime"), 1)

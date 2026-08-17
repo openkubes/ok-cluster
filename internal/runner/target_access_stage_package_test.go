@@ -29,7 +29,7 @@ func TestBuildTargetAccessStagePackageCorrelatesPublicAndPrivateInputs(t *testin
 	if bytes.Contains(raw, []byte(`"targetClusterUid"`)) || bytes.Contains(raw, []byte(`"caBundleDigest"`)) || bytes.Contains(raw, []byte("target-access-workload-token")) {
 		t.Fatal("private workload authority was copied into target-access package")
 	}
-	if receipt.Format != TargetAccessStagePackageFormat || receipt.State != "VERIFIED" || receipt.StageID != "target-access" || receipt.PackageDigest != digest.SHA256(raw) || receipt.AuthorizationState != "VERIFIED" || receipt.MutationAllowed || receipt.WorkloadBindingDigest != config.ExpectedWorkloadBindingDigest {
+	if receipt.Format != TargetAccessStagePackageFormat || receipt.State != "VERIFIED" || receipt.StageID != "target-access" || receipt.PackageDigest != digest.SHA256(raw) || receipt.AuthorizationState != "VERIFIED" || receipt.MutationAllowed || receipt.WorkloadBindingDigest != config.ExpectedWorkloadBindingDigest || receipt.InstallationAuthority != "ok-shared" {
 		t.Fatalf("unexpected target-access package receipt: %#v", receipt)
 	}
 	parts := bytes.SplitN(raw, []byte("\n---\n"), 2)
