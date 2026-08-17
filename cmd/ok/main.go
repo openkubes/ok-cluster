@@ -535,6 +535,23 @@ var executeRuntimeBindingStage = func(ctx context.Context, bundleConfig runner.S
 	return receipt, nil, runErr
 }
 
+var executeKubernetesRuntimeBindingStage = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.RuntimeBindingStageKubernetesRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+	bundle, err := runner.LoadRuntimeBindingStageBundle(bundleConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	opened, err := bundle.OpenKubernetes(runtimeConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	receipt, runErr := opened.Run(ctx)
+	evidence, evidenceErr := opened.EvidenceReceipt()
+	if evidenceErr == nil {
+		return receipt, &evidence, runErr
+	}
+	return receipt, nil, runErr
+}
+
 func submissionStageAuthority(decision stagecursor.Decision, expected stageplan.Expected) (string, error) {
 	switch decision.Authority {
 	case "infrastructure":
@@ -955,6 +972,9 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected workload-authority binding digest")
 	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived read-only workload token")
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the workload Kubernetes API CA bundle")
+	persistenceMode := flags.String("persistence-mode", "local-file", "exact persistence mode: local-file or immutable-secret")
+	persistenceTokenFile := flags.String("persistence-token-file", "", "path to the distinct short-lived runtime-binding Secret writer token")
+	persistenceCAFile := flags.String("persistence-ca-file", "", "path to the runtime-binding Secret writer Kubernetes API CA bundle")
 	output := flags.String("output", "", "absent absolute path in a private directory for the runtime binding")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -972,7 +992,7 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	for _, input := range []struct{ name, value string }{
 		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
 		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
-		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile}, {"--output", *output},
+		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile},
 	} {
 		if input.value == "" {
 			return fmt.Errorf("%s is required", input.name)
@@ -981,26 +1001,56 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	if !sha256DigestPattern.MatchString(*workloadBindingDigest) {
 		return errors.New("workload binding digest must be a lowercase SHA-256 identity")
 	}
-	if !filepath.IsAbs(*output) || filepath.Clean(*output) != *output {
-		return errors.New("--output must be a clean absolute path")
+	switch *persistenceMode {
+	case "local-file":
+		if *persistenceTokenFile != "" || *persistenceCAFile != "" {
+			return errors.New("local-file persistence cannot accept Kubernetes persistence credentials")
+		}
+		if *output == "" || !filepath.IsAbs(*output) || filepath.Clean(*output) != *output {
+			return errors.New("--output must be a clean absolute path for local-file persistence")
+		}
+	case "immutable-secret":
+		if *output != "" {
+			return errors.New("immutable-secret persistence cannot accept --output")
+		}
+		if *persistenceTokenFile == "" || *persistenceCAFile == "" {
+			return errors.New("immutable-secret persistence requires token and CA files")
+		}
+	default:
+		return errors.New("unsupported runtime binding persistence mode")
 	}
 	boundedContext, cancel := context.WithTimeout(ctx, runtimeBindingRunTimeout)
 	defer cancel()
-	receipt, evidence, runErr := executeRuntimeBindingStage(boundedContext, bundleConfig, runner.RuntimeBindingStageRuntimeConfig{
-		Ledger: runner.KubernetesLedgerConfig{
-			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
-		},
-		Workload: runner.WorkloadAuthorityFileResolverConfig{
-			Path: *workloadBinding, ExpectedBindingDigest: *workloadBindingDigest,
-			TokenFile: *workloadTokenFile, CAFile: *workloadCAFile,
-		},
-		OutputPath: *output, Clock: func() time.Time { return time.Now().UTC() },
-	})
+	ledgerConfig := runner.KubernetesLedgerConfig{Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile}
+	workloadConfig := runner.WorkloadAuthorityFileResolverConfig{
+		Path: *workloadBinding, ExpectedBindingDigest: *workloadBindingDigest,
+		TokenFile: *workloadTokenFile, CAFile: *workloadCAFile,
+	}
+	var receipt execution.BindingStageRunReceipt
+	var evidence *runner.RuntimeBindingStageEvidenceReceipt
+	var runErr error
+	outputFormat := "ok147-runtime-binding-execution/v1"
+	if *persistenceMode == "immutable-secret" {
+		outputFormat = "ok147-runtime-binding-execution/v2"
+		receipt, evidence, runErr = executeKubernetesRuntimeBindingStage(boundedContext, bundleConfig, runner.RuntimeBindingStageKubernetesRuntimeConfig{
+			Ledger: ledgerConfig, Workload: workloadConfig,
+			Persistence: runner.KubernetesAuthorityConfig{
+				Endpoint: *ledgerAPIEndpoint, AuthorityIdentity: bundleConfig.PlanExpected.ManagementAuthority,
+				TokenFile: *persistenceTokenFile, CAFile: *persistenceCAFile,
+			},
+			Clock: func() time.Time { return time.Now().UTC() },
+		})
+	} else {
+		receipt, evidence, runErr = executeRuntimeBindingStage(boundedContext, bundleConfig, runner.RuntimeBindingStageRuntimeConfig{
+			Ledger: ledgerConfig, Workload: workloadConfig, OutputPath: *output,
+			Clock: func() time.Time { return time.Now().UTC() },
+		})
+	}
 	if receipt.Format != "" {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetEscapeHTML(false)
 		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(runtimeBindingExecution{Format: "ok147-runtime-binding-execution/v1", Receipt: receipt, Evidence: evidence}); err != nil {
+		if err := encoder.Encode(runtimeBindingExecution{Format: outputFormat, Receipt: receipt, Evidence: evidence}); err != nil {
 			return err
 		}
 	}

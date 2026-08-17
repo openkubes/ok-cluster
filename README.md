@@ -102,7 +102,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   candidate can create or verify one exact immutable runtime-binding Secret on
   `ok-mgmt`; it has no update/delete/retry path. A distinct library opener now
   composes that store with pairwise-separate ledger, persistence and workload
-  credentials, but neither the CLI nor a Job package activates it yet.
+  credentials. The CLI activates it only with explicit `--execute` plus
+  `--persistence-mode immutable-secret`; no Job package activates it yet.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered

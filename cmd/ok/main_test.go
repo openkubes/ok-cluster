@@ -484,6 +484,47 @@ func TestStageBindRuntimeRequiresExplicitExecutionAndBindsRuntime(t *testing.T) 
 	}
 }
 
+func TestStageBindRuntimeSelectsImmutableSecretPersistence(t *testing.T) {
+	previousLocal := executeRuntimeBindingStage
+	previousKubernetes := executeKubernetesRuntimeBindingStage
+	defer func() {
+		executeRuntimeBindingStage = previousLocal
+		executeKubernetesRuntimeBindingStage = previousKubernetes
+	}()
+	localCalls := 0
+	executeRuntimeBindingStage = func(context.Context, runner.StageResumeConfig, runner.RuntimeBindingStageRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+		localCalls++
+		return execution.BindingStageRunReceipt{}, nil, nil
+	}
+	var captured runner.RuntimeBindingStageKubernetesRuntimeConfig
+	executeKubernetesRuntimeBindingStage = func(_ context.Context, _ runner.StageResumeConfig, runtime runner.RuntimeBindingStageKubernetesRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+		captured = runtime
+		denied := false
+		evidence := &runner.RuntimeBindingStageEvidenceReceipt{
+			Format: runner.RuntimeBindingStageKubernetesEvidenceFormat, State: "SUCCEEDED", PlanDigest: testSHA("9"), StageID: "runtime-binding",
+			KubernetesMutationAllowed: true, LifecycleMutationAllowed: &denied,
+		}
+		return execution.BindingStageRunReceipt{
+			Format: execution.BindingStageReceiptFormat, State: "COMPLETED_SUCCEEDED",
+			PlanDigest: testSHA("9"), StageID: "runtime-binding", StageReceiptDigest: testSHA("8"),
+		}, evidence, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(stageBindRuntimeKubernetesArguments(), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if localCalls != 0 || captured.Persistence.AuthorityIdentity != "ok-mgmt" || captured.Persistence.Endpoint != captured.Ledger.Endpoint || captured.Persistence.TokenFile != "/tmp/persistence-token" || captured.Persistence.CAFile != "/tmp/persistence-ca" || captured.Clock == nil {
+		t.Fatalf("immutable Secret persistence config differs: local=%d config=%#v", localCalls, captured)
+	}
+	var result runtimeBindingExecution
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != "ok147-runtime-binding-execution/v2" || result.Evidence == nil || result.Evidence.Format != runner.RuntimeBindingStageKubernetesEvidenceFormat || !result.Evidence.KubernetesMutationAllowed || result.Evidence.LifecycleMutationAllowed == nil || *result.Evidence.LifecycleMutationAllowed {
+		t.Fatalf("immutable Secret execution output differs: %#v", result)
+	}
+}
+
 func TestStageBindRuntimeFailsClosedBeforeExecution(t *testing.T) {
 	previous := executeRuntimeBindingStage
 	defer func() { executeRuntimeBindingStage = previous }()
@@ -512,6 +553,33 @@ func TestStageBindRuntimeFailsClosedBeforeExecution(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("runtime binding execution was reached %d times for invalid input", calls)
+	}
+}
+
+func TestStageBindRuntimeImmutableSecretFailsClosedBeforeExecution(t *testing.T) {
+	previous := executeKubernetesRuntimeBindingStage
+	defer func() { executeKubernetesRuntimeBindingStage = previous }()
+	calls := 0
+	executeKubernetesRuntimeBindingStage = func(context.Context, runner.StageResumeConfig, runner.RuntimeBindingStageKubernetesRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+		calls++
+		return execution.BindingStageRunReceipt{}, nil, nil
+	}
+	valid := stageBindRuntimeKubernetesArguments()
+	for name, arguments := range map[string][]string{
+		"missing persistence token": removeArgumentWithValue(valid, "--persistence-token-file"),
+		"missing persistence CA":    removeArgumentWithValue(valid, "--persistence-ca-file"),
+		"ambiguous output":          append(append([]string{}, valid...), "--output", "/private/tmp/runtime-binding.json"),
+		"unknown mode":              replaceArgument(valid, "--persistence-mode", "other"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe immutable Secret input was accepted: err=%v stdout=%s", err, stdout.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("Kubernetes runtime binding execution was reached %d times for invalid input", calls)
 	}
 }
 
@@ -1491,6 +1559,15 @@ func stageBindRuntimeArguments() []string {
 		"--workload-binding", "/tmp/workload-binding.json", "--workload-binding-digest", testSHA("5"),
 		"--workload-token-file", "/tmp/workload-observer-token", "--workload-ca-file", "/tmp/workload-ca",
 		"--output", "/private/tmp/ok147-runtime-binding.json",
+	)
+}
+
+func stageBindRuntimeKubernetesArguments() []string {
+	arguments := removeArgumentWithValue(stageBindRuntimeArguments(), "--output")
+	return append(arguments,
+		"--persistence-mode", "immutable-secret",
+		"--persistence-token-file", "/tmp/persistence-token",
+		"--persistence-ca-file", "/tmp/persistence-ca",
 	)
 }
 
