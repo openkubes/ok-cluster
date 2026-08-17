@@ -1,11 +1,14 @@
 package runner
 
 import (
+	"context"
+	"crypto/subtle"
 	"errors"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
@@ -48,6 +51,23 @@ type VerifiedTargetRegistrationStageBundle struct {
 	projection submission.TargetRegistrationPlan
 	receipt    TargetRegistrationStageBundleReceipt
 	verified   bool
+}
+
+type TargetRegistrationStageRuntimeConfig struct {
+	Ledger              KubernetesLedgerConfig
+	GitOps              KubernetesAuthorityConfig
+	Runtime             VerifiedRuntimeBindingMaterial
+	Credential          VerifiedTargetCredentialMaterial
+	MaterializationTime time.Time
+	Clock               func() time.Time
+}
+
+type BoundTargetRegistrationStage struct {
+	operation execution.StagedOperation
+	plan      stageplan.Binding
+	cursor    stagecursor.Cursor
+	grant     authorization.VerifiedStageGrant
+	verified  bool
 }
 
 // LoadTargetRegistrationStageBundle verifies the eight-stage predecessor
@@ -125,6 +145,47 @@ func (bundle VerifiedTargetRegistrationStageBundle) Receipt() (TargetRegistratio
 		return TargetRegistrationStageBundleReceipt{}, err
 	}
 	return bundle.receipt, nil
+}
+
+// Open binds the verified offline bundle to its private runtime, target
+// credential, GitOps writer and durable ledger. It reads bounded credential
+// files but performs no API request and no mutation.
+func (bundle VerifiedTargetRegistrationStageBundle) Open(config TargetRegistrationStageRuntimeConfig) (BoundTargetRegistrationStage, error) {
+	if err := verifyTargetRegistrationStageBundle(bundle); err != nil || config.Clock == nil {
+		return BoundTargetRegistrationStage{}, errors.New("verified target-registration bundle and clock are required")
+	}
+	material, err := BuildTargetRegistrationMaterial(TargetRegistrationMaterializeConfig{
+		Bundle: bundle, Runtime: config.Runtime, Credential: config.Credential, MaterializationTime: config.MaterializationTime,
+	})
+	if err != nil {
+		return BoundTargetRegistrationStage{}, err
+	}
+	launcher, err := OpenKubernetesTargetRegistrationLauncher(TargetRegistrationLauncherConfig{Authority: config.GitOps, Clock: config.Clock}, material)
+	if err != nil {
+		return BoundTargetRegistrationStage{}, err
+	}
+	ledgerStore, ledgerToken, err := openKubernetesLedger(config.Ledger)
+	if err != nil {
+		return BoundTargetRegistrationStage{}, errors.New("open target-registration stage ledger")
+	}
+	if len(ledgerToken) == len(launcher.token) && subtle.ConstantTimeCompare([]byte(ledgerToken), []byte(launcher.token)) == 1 {
+		return BoundTargetRegistrationStage{}, errors.New("ledger and target-registration writer credentials must be distinct")
+	}
+	mutator, err := NewTargetRegistrationStageMutator(bundle.plan, material, launcher)
+	if err != nil {
+		return BoundTargetRegistrationStage{}, err
+	}
+	return BoundTargetRegistrationStage{
+		operation: execution.StagedOperation{Ledger: ledgerStore, Mutator: mutator, Clock: config.Clock},
+		plan:      bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true,
+	}, nil
+}
+
+func (stage BoundTargetRegistrationStage) Run(ctx context.Context) (execution.StagedOperationReceipt, error) {
+	if !stage.verified {
+		return execution.StagedOperationReceipt{}, errors.New("target-registration stage runtime was not produced by verification")
+	}
+	return stage.operation.Run(ctx, stage.plan, stage.cursor, stage.grant)
 }
 
 func verifyTargetRegistrationStageBundle(bundle VerifiedTargetRegistrationStageBundle) error {

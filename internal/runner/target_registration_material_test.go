@@ -90,6 +90,9 @@ func TestBuildTargetRegistrationMaterialFailsClosed(t *testing.T) {
 		"credential target mismatch": func(f *targetRegistrationMaterialTestFixture) {
 			f.config.Credential.targetIdentity = runnerStageSHA("8")
 		},
+		"credential evidence mismatch": func(f *targetRegistrationMaterialTestFixture) {
+			f.config.Credential.receipt.RequestDigest = runnerStageSHA("6")
+		},
 		"credential endpoint mismatch": func(f *targetRegistrationMaterialTestFixture) {
 			f.config.Credential.endpoint = "https://192.0.2.148:6443"
 		},
@@ -156,13 +159,7 @@ func targetRegistrationMaterialFixture(t *testing.T) targetRegistrationMaterialT
 		token: token, caBundle: ca, endpoint: runtime.material.Target.WorkloadAPIEndpoint,
 		targetIdentity: bundle.receipt.TargetIdentityDigest, expiresAt: now.Add(2 * time.Hour), verified: true,
 	}
-	credential.receipt = TargetCredentialIssueReceipt{
-		Format: TargetCredentialIssueReceiptFormat, State: "ISSUED", StageID: "target-credential",
-		PolicyDigest: runnerStageSHA("3"), TargetIdentityDigest: bundle.receipt.TargetIdentityDigest,
-		ServiceAccountIdentityDigest: runnerStageSHA("4"), RequestDigest: runnerStageSHA("5"), AudienceMode: "server-default",
-		IssuedAt: now.Format(time.RFC3339), ExpiresAt: credential.expiresAt.Format(time.RFC3339), LifetimeSeconds: 7200,
-		CredentialBytesInReceipt: false, MutationState: "ATTEMPTED",
-	}
+	credential.receipt = targetRegistrationCredentialReceipt(now.Add(-time.Minute), targetCredentialPolicyDocument{TargetIdentityDigest: bundle.receipt.TargetIdentityDigest})
 	credential.privateDigest, err = targetCredentialPrivateDigest(credential)
 	if err != nil {
 		t.Fatal(err)
