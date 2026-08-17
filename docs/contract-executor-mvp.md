@@ -2036,6 +2036,14 @@ candidate receipt. Any changed package, credential, runtime, candidate or
 cross-component digest invalidates the material. Construction remains offline
 and grants no launch authority.
 
+Before HTTP execution, a private installation-material boundary re-decodes the
+three public YAML objects and all three Secret objects and proves that their
+canonical bodies still match the launch-plan digests. It additionally enforces
+that only the workload credential contains `binding.json` and rechecks that
+binding's semantic digest, target-UID digest and CA identity. Callers receive
+defensive copies only. No API is contacted and no installer credential is
+opened at this boundary.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
