@@ -2683,6 +2683,14 @@ orchestrator checkpoint must either execute those steps within one bounded
 process lifetime or obtain a fresh independently authorized credential after a
 pre-registration stop.
 
+The in-process post-runtime orchestrator now fixes the Stage 8-12 call order
+and passes the one-use credential handoff only from Stage 8 to Stage 9. It
+validates every redaction-safe run receipt against one Plan digest, stops at
+the first error or malformed receipt, invokes no later stage and discards an
+unconsumed credential. It deliberately exposes no retry, rollback or cleanup
+method. This core still needs a concrete CLI and Job adapter before it is an
+executable end-to-end runner path.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
