@@ -2,10 +2,12 @@
 
 The implementation started with a shared, side-effect-free core for local CLI
 and in-cluster Job execution. The current boundary retains non-mutating
-Contract planning and adds exactly two separately authorized Contract-to-CAPI
-submission stages, a durable ledger, bounded observation components and an
-offline ConfigMap/Job/NetworkPolicy packager. It is still an MVP rather than a
-general lifecycle runner or controller.
+Contract planning and now models the complete twelve-stage bounded execution
+path, including separately authorized mutations, a durable ledger, bounded
+observation and evaluation components and offline Kubernetes workload
+packaging. Individual stages have explicit CLI and Job launch boundaries, but
+the complete path is not yet composed into one end-to-end runner invocation.
+It is still an MVP rather than a general lifecycle runner or controller.
 
 ```text
 versioned contract + test schema
@@ -2629,6 +2631,22 @@ CAPI read, one Network source pass, three exact Argo Application reads and one
 capability read. Once the Stage-12 receipt is durable, replay performs no
 additional authoritative-source access.
 
+Stage 12 also has an explicit local launch surface:
+
+```text
+ok cluster stage run aggregate-evidence launch prepare
+ok cluster stage run aggregate-evidence launch execute --execute ...
+```
+
+`prepare` is local and non-mutating. It binds the verified Stage-12 package,
+the durable runtime binding, four pairwise-distinct short-lived credentials and
+their earliest safe expiry into one launch candidate. `execute` accepts only
+the exact candidate digest, performs all ten exact-name absence checks before
+the first write and then creates exactly nine fixed-order Kubernetes objects.
+The durable runtime-binding Secret must already exist and is never created or
+replaced by this launcher. Existing mixed state and any failed create stop
+without update, patch, apply, delete, retry or rollback.
+
 ## Target credential and GitOps stages
 
 The target credential stage verifies an exact, short-lived TokenRequest policy
@@ -2655,12 +2673,15 @@ pre-registration stop.
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
-covered by unit, negative, local TLS integration and race tests. This is not
-yet the OK-147 Definition of Done:
+covered by unit, negative, local TLS integration and race tests. The standalone
+Stage-12 launch boundary is also exposed through the local CLI. This is not yet
+the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- stages 8–12 are not yet exposed through one coherent local CLI and Job
-  orchestration path;
+- stages 8–11 are not yet composed with Stage 12 through one coherent local
+  CLI and Job orchestration path;
+- the standalone Stage-12 launcher has not yet been executed as part of the
+  complete predecessor-bound stage chain;
 - the previously published runner image predates this staged-library closure;
 - no ephemeral `ok-mgmt` Job has executed the complete current implementation;
 - the disposable-cluster create conformance and executor-termination failure
