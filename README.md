@@ -105,7 +105,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   credentials. The CLI activates it only with explicit `--execute` plus
   `--persistence-mode immutable-secret`; no Job package activates it yet. Its
   offline immutable input ConfigMap now binds only the public plan and exact
-  five-receipt prefix, excluding all private authority and credential data.
+  five-receipt prefix, excluding all private authority and credential data. A
+  matching offline Job/NetworkPolicy envelope fixes three distinct credential
+  mounts and only the exact management and workload API egress destinations;
+  it is not yet packaged, installed or launched.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered

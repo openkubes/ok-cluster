@@ -2290,6 +2290,24 @@ Those values must arrive only through separately scoped Secret mounts in the
 future Job envelope. This checkpoint does not yet render that Job or its
 NetworkPolicy and performs no Kubernetes request.
 
+The matching offline envelope now renders exactly one `NetworkPolicy` and one
+non-retrying `Job`. The tokenless Pod mounts the immutable input ConfigMap plus
+three distinct externally materialized Secrets: ledger writer, runtime-binding
+Secret writer and workload observer. The workload Secret alone also carries
+the previously verified private workload-authority binding. No implicit
+ServiceAccount token is mounted.
+
+The NetworkPolicy permits egress only to the exact management API address used
+by both ledger and persistence, and to the distinct exact workload API
+address. The Job invokes only `bind runtime --execute --persistence-mode
+immutable-secret`, has a three-minute hard deadline, fixed resources, a
+read-only root filesystem and no retry. It accepts neither a local output path
+nor grant, projection, renderer or generic Kubernetes input.
+
+This remains template rendering tested offline. The ConfigMap, NetworkPolicy,
+Job, runtime identity and credential Secrets are not yet assembled as one
+verified package, installed or launched, and no Kubernetes API was contacted.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
