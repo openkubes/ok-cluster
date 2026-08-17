@@ -162,7 +162,7 @@ func normalizePlatformApplication(object map[string]any, profile PlatformProfile
 	if err != nil {
 		return PlatformApplicationState{}, errors.New("Argo Application spec is missing")
 	}
-	normalizedSpec, desiredRevision, err := normalizedPlatformApplicationSpec(spec)
+	normalizedSpec, _, err := normalizedPlatformApplicationSpec(spec)
 	if err != nil {
 		return PlatformApplicationState{}, err
 	}
@@ -170,9 +170,9 @@ func normalizePlatformApplication(object map[string]any, profile PlatformProfile
 	if text(destination["name"]) != profile.RegistrationName {
 		return PlatformApplicationState{}, errors.New("Argo Application destination differs from the bound registration")
 	}
-	specDigest, err := canonicalDigest(normalizedSpec)
+	specDigest, desiredRevision, err := PlatformApplicationSpecIdentity(spec)
 	if err != nil {
-		return PlatformApplicationState{}, errors.New("digest normalized Argo Application spec")
+		return PlatformApplicationState{}, err
 	}
 	status, _ := objectMap(object, "status")
 	sync, _ := objectMap(status, "sync")
@@ -210,7 +210,25 @@ func normalizedPlatformApplicationSpec(spec map[string]any) (map[string]any, str
 	if syncPolicy, exists := spec["syncPolicy"]; exists {
 		normalized["syncPolicy"] = syncPolicy
 	}
+	if ignoreDifferences, exists := spec["ignoreDifferences"]; exists {
+		normalized["ignoreDifferences"] = ignoreDifferences
+	}
 	return normalized, revision, nil
+}
+
+// PlatformApplicationSpecIdentity is the shared semantic identity used by
+// both the externally rendered Application verifier and the later read-only
+// Argo observer. It prevents a second, drifting definition of applied P.
+func PlatformApplicationSpecIdentity(spec map[string]any) (string, string, error) {
+	normalized, revision, err := normalizedPlatformApplicationSpec(spec)
+	if err != nil {
+		return "", "", err
+	}
+	specDigest, err := canonicalDigest(normalized)
+	if err != nil {
+		return "", "", errors.New("digest normalized Argo Application spec")
+	}
+	return specDigest, revision, nil
 }
 
 func validGitCommit(value string) bool {
