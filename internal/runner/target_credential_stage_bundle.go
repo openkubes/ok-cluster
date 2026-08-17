@@ -98,6 +98,7 @@ type BoundTargetCredentialStage struct {
 	mutator   *TargetCredentialStageMutator
 	plan      stageplan.Binding
 	cursor    stagecursor.Cursor
+	prefix    []stagereceipt.Verified
 	previous  []stagereceipt.Verified
 	grant     authorization.VerifiedStageGrant
 	verified  bool
@@ -256,7 +257,7 @@ func (bundle VerifiedTargetCredentialStageBundle) Open(config TargetCredentialSt
 	}
 	return BoundTargetCredentialStage{
 		operation: execution.StagedOperation{Ledger: ledgerStore, Mutator: mutator, Clock: config.Clock},
-		mutator:   mutator, plan: bundle.plan, cursor: bundle.cursor, previous: previous,
+		mutator:   mutator, plan: bundle.plan, cursor: bundle.cursor, prefix: bundle.prefix, previous: previous,
 		grant: bundle.grant, verified: true,
 	}, nil
 }
@@ -294,7 +295,7 @@ func (stage BoundTargetCredentialStage) RunHandoff(ctx context.Context) (executi
 	if err != nil {
 		return receipt, nil, errors.New("durable target-credential outcome has no in-memory credential; registration must stop")
 	}
-	handoff, err := newVerifiedTargetCredentialStageHandoff(verified, material)
+	handoff, err := newVerifiedTargetCredentialStageHandoff(stage.plan, stage.prefix, verified, material)
 	if err != nil {
 		return receipt, nil, err
 	}

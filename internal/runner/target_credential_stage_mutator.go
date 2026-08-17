@@ -81,7 +81,7 @@ func (mutator *TargetCredentialStageMutator) Mutate(ctx context.Context, request
 	if err != nil || receipt.PolicyDigest != mutator.bundle.PolicyDigest || receipt.TargetIdentityDigest != mutator.bundle.TargetIdentityDigest || receipt.ServiceAccountIdentityDigest != mutator.bundle.ServiceAccountIdentityDigest {
 		return execution.StageMutationResult{}, errors.New("issued target credential differs from verified stage")
 	}
-	evidence, err := json.Marshal(receipt)
+	evidence, err := canonicalTargetRegistrationValue(receipt)
 	if err != nil {
 		return execution.StageMutationResult{}, errors.New("derive bounded target-credential evidence")
 	}

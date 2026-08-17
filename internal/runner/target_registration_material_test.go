@@ -123,10 +123,11 @@ func TestBuildTargetRegistrationMaterialFailsClosed(t *testing.T) {
 }
 
 type targetRegistrationMaterialTestFixture struct {
-	bundle     VerifiedTargetRegistrationStageBundle
-	runtime    VerifiedRuntimeBindingMaterial
-	credential VerifiedTargetCredentialMaterial
-	config     TargetRegistrationMaterializeConfig
+	bundle       VerifiedTargetRegistrationStageBundle
+	bundleConfig TargetRegistrationStageBundleConfig
+	runtime      VerifiedRuntimeBindingMaterial
+	credential   VerifiedTargetCredentialMaterial
+	config       TargetRegistrationMaterializeConfig
 }
 
 func targetRegistrationMaterialFixture(t *testing.T) targetRegistrationMaterialTestFixture {
@@ -165,7 +166,7 @@ func targetRegistrationMaterialFixture(t *testing.T) targetRegistrationMaterialT
 		t.Fatal(err)
 	}
 	config := TargetRegistrationMaterializeConfig{Bundle: bundle, Runtime: runtime, Credential: credential, MaterializationTime: now}
-	return targetRegistrationMaterialTestFixture{bundle: bundle, runtime: runtime, credential: credential, config: config}
+	return targetRegistrationMaterialTestFixture{bundle: bundle, bundleConfig: bundleFixture.config, runtime: runtime, credential: credential, config: config}
 }
 
 func refreshTargetRegistrationRuntime(t *testing.T, runtime *VerifiedRuntimeBindingMaterial) {

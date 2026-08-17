@@ -28,6 +28,15 @@ type TargetRegistrationStageBundleConfig struct {
 	Expected           submission.TargetRegistrationExpected
 }
 
+type TargetRegistrationStageHandoffConfig struct {
+	Handoff            *VerifiedTargetCredentialStageHandoff
+	GrantPath          string
+	GrantPublicKeyPath string
+	EvaluationTime     time.Time
+	ArtifactPath       string
+	Expected           submission.TargetRegistrationExpected
+}
+
 type TargetRegistrationStageBundleReceipt struct {
 	Format                     string `json:"format"`
 	State                      string `json:"state"`
@@ -50,6 +59,7 @@ type VerifiedTargetRegistrationStageBundle struct {
 	grant      authorization.VerifiedStageGrant
 	projection submission.TargetRegistrationPlan
 	receipt    TargetRegistrationStageBundleReceipt
+	handoff    *VerifiedTargetCredentialStageHandoff
 	verified   bool
 }
 
@@ -58,6 +68,14 @@ type TargetRegistrationStageRuntimeConfig struct {
 	GitOps              KubernetesAuthorityConfig
 	Runtime             VerifiedRuntimeBindingMaterial
 	Credential          VerifiedTargetCredentialMaterial
+	MaterializationTime time.Time
+	Clock               func() time.Time
+}
+
+type TargetRegistrationStageHandoffRuntimeConfig struct {
+	Ledger              KubernetesLedgerConfig
+	GitOps              KubernetesAuthorityConfig
+	Runtime             VerifiedRuntimeBindingMaterial
 	MaterializationTime time.Time
 	Clock               func() time.Time
 }
@@ -83,6 +101,43 @@ func LoadTargetRegistrationStageBundle(config TargetRegistrationStageBundleConfi
 	if err != nil {
 		return VerifiedTargetRegistrationStageBundle{}, err
 	}
+	return loadTargetRegistrationStageBundle(plan, cursor, prefix, targetRegistrationStageLoadConfig{
+		GrantPath: config.GrantPath, GrantPublicKeyPath: config.GrantPublicKeyPath, EvaluationTime: config.EvaluationTime,
+		ArtifactPath: config.ArtifactPath, Expected: config.Expected,
+	})
+}
+
+// LoadTargetRegistrationStageBundleFromHandoff consumes no credential. It
+// verifies a newly available Stage-9 grant against the exact durable Stage-8
+// receipt retained by the same process.
+func LoadTargetRegistrationStageBundleFromHandoff(config TargetRegistrationStageHandoffConfig) (VerifiedTargetRegistrationStageBundle, error) {
+	if config.Handoff == nil || config.EvaluationTime.IsZero() {
+		return VerifiedTargetRegistrationStageBundle{}, errors.New("target-registration handoff and authorization evaluation time are required")
+	}
+	plan, cursor, prefix, err := config.Handoff.registrationContext()
+	if err != nil {
+		return VerifiedTargetRegistrationStageBundle{}, err
+	}
+	bundle, err := loadTargetRegistrationStageBundle(plan, cursor, prefix, targetRegistrationStageLoadConfig{
+		GrantPath: config.GrantPath, GrantPublicKeyPath: config.GrantPublicKeyPath, EvaluationTime: config.EvaluationTime,
+		ArtifactPath: config.ArtifactPath, Expected: config.Expected,
+	})
+	if err != nil {
+		return VerifiedTargetRegistrationStageBundle{}, err
+	}
+	bundle.handoff = config.Handoff
+	return bundle, nil
+}
+
+type targetRegistrationStageLoadConfig struct {
+	GrantPath          string
+	GrantPublicKeyPath string
+	EvaluationTime     time.Time
+	ArtifactPath       string
+	Expected           submission.TargetRegistrationExpected
+}
+
+func loadTargetRegistrationStageBundle(plan stageplan.Binding, cursor stagecursor.Cursor, prefix []stagereceipt.Verified, config targetRegistrationStageLoadConfig) (VerifiedTargetRegistrationStageBundle, error) {
 	decision, err := cursor.Decision()
 	if err != nil || decision.State != "NEXT" || decision.StageID != "target-registration" || decision.Kind != "Submission" || decision.Authority != "gitops" || !decision.RequiresAuthorization || decision.Operation != "RegisterTarget" {
 		return VerifiedTargetRegistrationStageBundle{}, errors.New("verified prefix does not select target registration")
@@ -179,6 +234,22 @@ func (bundle VerifiedTargetRegistrationStageBundle) Open(config TargetRegistrati
 		operation: execution.StagedOperation{Ledger: ledgerStore, Mutator: mutator, Clock: config.Clock},
 		plan:      bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true,
 	}, nil
+}
+
+// OpenHandoff consumes the memory-only credential exactly once and binds it to
+// the already verified Stage-9 projection, writer and durable ledger.
+func (bundle VerifiedTargetRegistrationStageBundle) OpenHandoff(config TargetRegistrationStageHandoffRuntimeConfig) (BoundTargetRegistrationStage, error) {
+	if err := verifyTargetRegistrationStageBundle(bundle); err != nil || bundle.handoff == nil || config.Clock == nil || config.MaterializationTime.IsZero() {
+		return BoundTargetRegistrationStage{}, errors.New("target-registration bundle was not loaded from an in-process handoff")
+	}
+	credential, err := bundle.handoff.takeCredential()
+	if err != nil {
+		return BoundTargetRegistrationStage{}, err
+	}
+	return bundle.Open(TargetRegistrationStageRuntimeConfig{
+		Ledger: config.Ledger, GitOps: config.GitOps, Runtime: config.Runtime, Credential: credential,
+		MaterializationTime: config.MaterializationTime, Clock: config.Clock,
+	})
 }
 
 func (stage BoundTargetRegistrationStage) Run(ctx context.Context) (execution.StagedOperationReceipt, error) {
