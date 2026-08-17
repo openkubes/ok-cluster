@@ -193,19 +193,20 @@ func TestOpenKubernetesPlatformSourceCollectorBindsGitOpsAuthority(t *testing.T)
 	if err := os.WriteFile(tokenPath, []byte("short-lived-platform-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(caPath, testCA(t), 0o600); err != nil {
+	ca := testCA(t)
+	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digest := func(character string) string { return "sha256:" + strings.Repeat(character, 64) }
+	digestOf := func(character string) string { return "sha256:" + strings.Repeat(character, 64) }
 	profile := observation.PlatformProfile{
-		Format: observation.PlatformProfileFormat, IntentRevision: digest("a"), PlatformRevision: digest("b"), ExecutionFixture: digest("c"),
+		Format: observation.PlatformProfileFormat, IntentRevision: digestOf("a"), PlatformRevision: digestOf("b"), ExecutionFixture: digestOf("c"),
 		TargetIdentityScheme: "capi-cluster-uid/v1", ArgoNamespace: "argocd", RegistrationName: "disposable-ok141",
-		RequiredApplications:     []observation.PlatformApplicationExpectation{{Name: "disposable-ok141-observability-core", SpecDigest: digest("d")}},
-		CapabilityContractDigest: digest("e"), CapabilityExecutableDigest: digest("f"), MaximumCapabilityAgeSeconds: 3600,
+		RequiredApplications:     []observation.PlatformApplicationExpectation{{Name: "disposable-ok141-observability-core", SpecDigest: digestOf("d")}},
+		CapabilityContractDigest: digestOf("e"), CapabilityExecutableDigest: digestOf("f"), MaximumCapabilityAgeSeconds: 3600,
 	}
 	config := KubernetesPlatformObserverConfig{
 		Argo: KubernetesAuthorityConfig{
-			Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok-shared", TokenFile: tokenPath, CAFile: caPath,
+			Endpoint: "https://10.43.0.1:443", AuthorityIdentity: "ok-shared", TokenFile: tokenPath, CAFile: caPath, CABundleDigest: digest.SHA256(ca),
 		},
 		ExpectedArgoAuthority: "ok-shared", Profile: profile, Capability: inertPlatformCapabilitySource{}, TargetClusterUID: "cluster-uid-disposable-ok141", Clock: time.Now,
 	}
