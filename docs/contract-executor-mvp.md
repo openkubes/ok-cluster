@@ -2394,8 +2394,18 @@ only package, plan, candidate and validity digests. Changed private material or
 a mismatched candidate invalidates the whole aggregate.
 
 The material has no method that performs an API request and remains
-`mutationAllowed: false`. Opening an installer credential, bounded installation
-and execution remain later checkpoints.
+`mutationAllowed: false`.
+
+The first private open boundary now validates one exact candidate digest,
+management authority, normalized API endpoint, CA and installer-token digest.
+It also rejects an installer token reused as any of the three Job credentials,
+rechecks all public and private install material and fixes redirect and timeout
+behavior on the retained client. Its public
+`ok147-runtime-binding-stage-launch-open-receipt/v1` exposes only stage,
+authority, candidate and validity identities.
+
+Opening performs no HTTP request and still grants no mutation authority. The
+single-use preflight/create execution remains a later checkpoint.
 
 ## Bounded convergence observation polling
 
