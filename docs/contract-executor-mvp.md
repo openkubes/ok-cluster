@@ -2373,8 +2373,19 @@ a workload binding; the workload Secret must carry the exact binding and CA
 already correlated by the stage package. Any changed byte fails closed before
 material can reach an installer.
 
-No public API exposes these recovered bytes. An expiry-bound launch candidate,
-bounded installation and execution remain later checkpoints.
+No public API exposes these recovered bytes.
+
+The redaction-safe `ok147-runtime-binding-stage-launch-candidate/v1` now binds
+the seven-object launch plan to one normalized management API destination, CA
+identity and independently evidenced installer-token identity. It never reads
+the installer token. Its validity ends fifteen minutes before the first of the
+three Job credentials expires, so a later launcher cannot begin without the
+minimum credential lifetime still available.
+
+The candidate contains endpoint, CA, plan, package, credential and runtime
+digests plus exact preparation and expiry times, but no endpoint, token,
+credential subject or object body. It remains `mutationAllowed: false`.
+Bounded installation and execution remain later checkpoints.
 
 ## Bounded convergence observation polling
 
