@@ -21,6 +21,7 @@ const (
 	KubernetesRuntimeBindingPersistenceReceiptFormat = "ok147-kubernetes-runtime-binding-persistence-receipt/v1"
 	maximumRuntimeBindingSecretResponse              = 1024 * 1024
 	runtimeBindingSecretDataKey                      = "runtime-binding.json"
+	runtimeBindingReceiptSecretDataKey               = "runtime-binding-receipt.json"
 )
 
 type KubernetesRuntimeBindingPersistenceReceipt struct {
@@ -124,6 +125,10 @@ func (store *KubernetesRuntimeBindingStore) Store(ctx context.Context, material 
 	receipt.PrivateMaterialDigest = digest.SHA256(raw)
 	receipt.ObjectIdentityDigest = digest.SHA256([]byte(store.namespace + "/" + store.name))
 	receipt.AuthorityIdentityDigest = digest.SHA256([]byte(store.authority))
+	materialReceiptRaw, err := json.Marshal(materialReceipt)
+	if err != nil {
+		return receipt, errors.New("encode runtime binding material receipt")
+	}
 	secret := runtimeBindingSecret{
 		APIVersion: "v1", Kind: "Secret",
 		Metadata: runtimeBindingSecretObjectMeta{
@@ -135,7 +140,9 @@ func (store *KubernetesRuntimeBindingStore) Store(ctx context.Context, material 
 				"openkubes.io/content-digest": receipt.PrivateMaterialDigest, "openkubes.io/plan-digest": materialReceipt.PlanDigest,
 			},
 		},
-		Immutable: true, Type: "Opaque", Data: map[string][]byte{runtimeBindingSecretDataKey: raw},
+		Immutable: true, Type: "Opaque", Data: map[string][]byte{
+			runtimeBindingSecretDataKey: raw, runtimeBindingReceiptSecretDataKey: materialReceiptRaw,
+		},
 	}
 	body, err := json.Marshal(secret)
 	if err != nil {
@@ -220,7 +227,7 @@ func verifyRuntimeBindingSecret(raw []byte, expected runtimeBindingSecret, requi
 	if requireServerIdentity && (!runtimeInputUIDPattern.MatchString(observed.Metadata.UID) || !runtimeInputUIDPattern.MatchString(observed.Metadata.ResourceVersion)) {
 		return errors.New("runtime binding Secret lacks server identity")
 	}
-	if len(observed.Data) != 1 || !bytes.Equal(observed.Data[runtimeBindingSecretDataKey], expected.Data[runtimeBindingSecretDataKey]) {
+	if len(observed.Data) != 2 || !bytes.Equal(observed.Data[runtimeBindingSecretDataKey], expected.Data[runtimeBindingSecretDataKey]) || !bytes.Equal(observed.Data[runtimeBindingReceiptSecretDataKey], expected.Data[runtimeBindingReceiptSecretDataKey]) {
 		return errors.New("runtime binding Secret payload differs")
 	}
 	if !equalRuntimeBindingStringMap(observed.Metadata.Labels, expected.Metadata.Labels) || !equalRuntimeBindingStringMap(observed.Metadata.Annotations, expected.Metadata.Annotations) {
