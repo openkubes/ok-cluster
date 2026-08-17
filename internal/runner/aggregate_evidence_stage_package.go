@@ -2,9 +2,12 @@ package runner
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/jsonstrict"
+	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
 const AggregateEvidenceStagePackageFormat = "ok147-aggregate-evidence-stage-package/v1"
@@ -69,6 +72,9 @@ type VerifiedAggregateEvidenceStagePackage struct {
 	gitOpsAuthority      string
 	runtimeDigest        string
 	capabilityDigest     string
+	runtimeMaterialRaw   []byte
+	runtimeReceiptRaw    []byte
+	capabilityRaw        []byte
 	verified             bool
 }
 
@@ -137,6 +143,14 @@ func BuildAggregateEvidenceStagePackage(config AggregateEvidenceStagePackageConf
 	if err != nil {
 		return VerifiedAggregateEvidenceStagePackage{}, errors.New("verify private aggregate platform capability")
 	}
+	capabilityRaw, err := readBoundedRegular(config.PlatformCapabilityPath, maximumPlatformCapabilityBytes)
+	if err != nil {
+		return VerifiedAggregateEvidenceStagePackage{}, errors.New("read private aggregate platform capability")
+	}
+	runtimeReceiptRaw, err := json.Marshal(runtime.receipt)
+	if err != nil {
+		return VerifiedAggregateEvidenceStagePackage{}, errors.New("encode private aggregate runtime receipt")
+	}
 	jobRaw, err := RenderAggregateEvidenceStageJobTemplate(config.JobTemplate, AggregateEvidenceStageJobValues{
 		RunID: config.RunID, ImageDigest: config.ImageDigest, Expected: config.Input.Bundle.PlanExpected,
 		InputConfigMap: config.Input.ConfigMapName, ReceiptPrefixDigest: inputReceipt.ReceiptPrefixDigest,
@@ -172,7 +186,9 @@ func BuildAggregateEvidenceStagePackage(config AggregateEvidenceStagePackageConf
 		workloadAuthority: digest.SHA256([]byte(runtime.material.Target.CAPIClusterUID)), workloadCABundle: runtime.material.Target.WorkloadAPICADigest,
 		gitOpsAuthority: bundle.plan.Authorities.GitOps,
 		runtimeDigest:   runtime.receipt.PrivateMaterialDigest, capabilityDigest: capability.EvidenceDigest(),
-		verified: true,
+		runtimeMaterialRaw: append([]byte(nil), runtime.raw...), runtimeReceiptRaw: runtimeReceiptRaw,
+		capabilityRaw: append([]byte(nil), capabilityRaw...),
+		verified:      true,
 	}, nil
 }
 
@@ -199,8 +215,16 @@ func verifyAggregateEvidenceStagePackage(packaged VerifiedAggregateEvidenceStage
 	}
 	parts := bytes.SplitN(packaged.raw, []byte("\n---\n"), 2)
 	if len(parts) != 2 || digest.SHA256(parts[0]) != packaged.receipt.InputConfigMapDigest || digest.SHA256(parts[1]) != packaged.receipt.JobEnvelopeDigest ||
-		packaged.runtimeDigest != packaged.receipt.RuntimeBindingDigest || packaged.capabilityDigest != packaged.receipt.PlatformCapabilityDigest {
+		packaged.runtimeDigest != packaged.receipt.RuntimeBindingDigest || packaged.capabilityDigest != packaged.receipt.PlatformCapabilityDigest || digest.SHA256(packaged.runtimeMaterialRaw) != packaged.runtimeDigest {
 		return errors.New("aggregate evidence package component identity changed")
+	}
+	var runtimeReceipt RuntimeBindingMaterialReceipt
+	if jsonstrict.Decode(packaged.runtimeReceiptRaw, &runtimeReceipt) != nil || runtimeReceipt.PrivateMaterialDigest != packaged.runtimeDigest || runtimeReceipt.WorkloadAPICADigest != packaged.workloadCABundle {
+		return errors.New("aggregate evidence private runtime receipt changed")
+	}
+	var capability observation.PlatformCapabilityState
+	if jsonstrict.Decode(packaged.capabilityRaw, &capability) != nil || observation.ValidatePlatformCapabilityState(capability) != nil || capability.EvidenceDigest != packaged.capabilityDigest || digest.SHA256([]byte(capability.TargetClusterUID)) != packaged.workloadAuthority {
+		return errors.New("aggregate evidence private capability changed")
 	}
 	for _, value := range []string{
 		packaged.receipt.ReceiptPrefixDigest, packaged.receipt.AggregateProfileDigest, packaged.receipt.NetworkProfileDigest,
