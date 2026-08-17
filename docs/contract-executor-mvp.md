@@ -2345,7 +2345,17 @@ contains roles, authority identities, expiry, audiences and digests, but never
 tokens, CA bytes, subjects, API endpoints or source paths. The exact immutable
 Secret bytes remain private for a later installer boundary. Construction is
 still non-mutating: it neither requests a token nor contacts Kubernetes.
-Installation planning, bounded installation and launch remain separate.
+
+The public side of that boundary now also has a verified
+`ok147-runtime-binding-stage-installation-plan/v1`. It reparses the package,
+rechecks the ConfigMap and Job-envelope digests, verifies the tokenless runtime
+identity, exact input mount, management authority and all three credential
+Secret references, then fixes the create order to ConfigMap, NetworkPolicy and
+Job. The plan contains only object identities, paths and digests; it contains
+neither credentials nor object bodies and grants no mutation authority.
+
+Private Secret recovery, the combined seven-object launch plan, bounded
+installation and launch remain separate.
 
 ## Bounded convergence observation polling
 
