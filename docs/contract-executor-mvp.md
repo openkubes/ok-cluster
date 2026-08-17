@@ -2277,6 +2277,19 @@ The activation has been tested only through injected local execution paths and
 fake TLS APIs. It has not been invoked against a live Kubernetes API, and no
 Job package selects it yet.
 
+The first offline Job-packaging component now materializes one immutable
+`ok147-runtime-binding-stage-input/v1` ConfigMap. Its data is closed to the
+verified staged plan, an ordered five-receipt prefix manifest and the exact
+provider, lifecycle, lifecycle-observation, enablement and network-observation
+receipts. The ConfigMap is rebuilt against the verified bundle after reading
+all files, so a changed input fails before package output is accepted.
+
+The input deliberately has no slot for the private workload-authority binding,
+endpoint, CA, credential, runtime UID or resulting runtime-binding material.
+Those values must arrive only through separately scoped Secret mounts in the
+future Job envelope. This checkpoint does not yet render that Job or its
+NetworkPolicy and performs no Kubernetes request.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
