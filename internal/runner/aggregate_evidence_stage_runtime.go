@@ -12,9 +12,10 @@ import (
 )
 
 type AggregateEvidenceStageRuntimeConfig struct {
-	Ledger   KubernetesLedgerConfig
-	Observer KubernetesAggregateObserverConfig
-	Runtime  VerifiedRuntimeBindingMaterial
+	Ledger       KubernetesLedgerConfig
+	Observer     KubernetesAggregateObserverConfig
+	Runtime      VerifiedRuntimeBindingMaterial
+	openObserver func(KubernetesAggregateObserverConfig) (*KubernetesAggregateObserver, error)
 }
 
 type OpenedAggregateEvidenceStage struct {
@@ -71,7 +72,11 @@ func (bundle VerifiedAggregateEvidenceStageBundle) Open(config AggregateEvidence
 	if sameSecret(ledgerToken, managementToken) || sameSecret(ledgerToken, argoToken) || sameSecret(managementToken, argoToken) {
 		return OpenedAggregateEvidenceStage{}, errors.New("aggregate evidence credentials must be pairwise distinct")
 	}
-	aggregate, err := OpenKubernetesAggregateObserver(config.Observer)
+	openObserver := config.openObserver
+	if openObserver == nil {
+		openObserver = OpenKubernetesAggregateObserver
+	}
+	aggregate, err := openObserver(config.Observer)
 	if err != nil {
 		return OpenedAggregateEvidenceStage{}, errors.New("open bounded Kubernetes aggregate observer")
 	}
