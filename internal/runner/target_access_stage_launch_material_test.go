@@ -3,6 +3,8 @@ package runner
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -49,6 +51,45 @@ func TestBuildTargetAccessStageLaunchMaterialSealsPrivateComponents(t *testing.T
 	changed.credentials.objects[1].raw = append(changed.credentials.objects[1].raw, '\n')
 	if _, err := changed.Receipt(); err == nil {
 		t.Fatal("changed private workload credential accepted")
+	}
+}
+
+func TestTargetAccessStageLaunchMaterialOpenRetainsExactComponents(t *testing.T) {
+	config, _ := targetAccessStageLaunchMaterialConfig(t)
+	installerToken := []byte("installer-token-v1")
+	ca := testCA(t)
+	config.Candidate.CABundleDigest = digest.SHA256(ca)
+	config.Candidate.InstallerTokenDigest = digest.SHA256(installerToken)
+	material, err := BuildTargetAccessStageLaunchMaterial(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := material.Receipt()
+	root := t.TempDir()
+	tokenPath, caPath := filepath.Join(root, "installer-token"), filepath.Join(root, "ca.crt")
+	if err := os.WriteFile(tokenPath, installerToken, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	open := TargetAccessStageLaunchOpenConfig{
+		Authority: KubernetesAuthorityConfig{
+			Endpoint: config.Candidate.AuthorityEndpoint, AuthorityIdentity: "ok-shared",
+			TokenFile: tokenPath, CAFile: caPath, CABundleDigest: config.Candidate.CABundleDigest,
+		},
+		Clock: func() time.Time { return config.Candidate.PreparedAt }, ExpectedCandidateDigest: receipt.CandidateDigest,
+	}
+	launcher, err := material.Open(open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launcher.plan.TargetAccessPackageDigest != receipt.TargetAccessPackageDigest || launcher.plan.CredentialPackageDigest != receipt.CredentialPackageDigest || launcher.plan.RuntimeManifestDigest != receipt.RuntimeManifestDigest {
+		t.Fatal("opened target-access launcher differs from sealed material")
+	}
+	open.ExpectedCandidateDigest = digest.SHA256([]byte("foreign"))
+	if _, err := material.Open(open); err == nil {
+		t.Fatal("foreign candidate digest opened target-access launch material")
 	}
 }
 

@@ -43,6 +43,12 @@ type VerifiedTargetAccessStageLaunchMaterial struct {
 	verified    bool
 }
 
+type TargetAccessStageLaunchOpenConfig struct {
+	Authority               KubernetesAuthorityConfig
+	Clock                   func() time.Time
+	ExpectedCandidateDigest string
+}
+
 // BuildTargetAccessStageLaunchMaterial reconstructs and re-verifies the
 // complete private launch input from bounded local sources. It performs no API
 // request and grants no launch authority.
@@ -96,6 +102,21 @@ func (material VerifiedTargetAccessStageLaunchMaterial) CandidateReceipt() (Targ
 		return TargetAccessStageLaunchCandidateReceipt{}, err
 	}
 	return material.candidate.Receipt()
+}
+
+// Open requires the exact retained candidate and validates local installer
+// material without contacting Kubernetes.
+func (material VerifiedTargetAccessStageLaunchMaterial) Open(config TargetAccessStageLaunchOpenConfig) (*KubernetesTargetAccessStageLauncher, error) {
+	if err := verifyTargetAccessStageLaunchMaterial(material); err != nil {
+		return nil, err
+	}
+	if config.ExpectedCandidateDigest == "" || config.ExpectedCandidateDigest != material.receipt.CandidateDigest {
+		return nil, errors.New("target-access launch open requires the exact candidate digest")
+	}
+	return OpenKubernetesTargetAccessStageLauncher(TargetAccessStageLauncherConfig{
+		Authority: config.Authority, Clock: config.Clock, Candidate: material.candidate,
+		ExpectedCandidateDigest: config.ExpectedCandidateDigest,
+	}, material.packaged, material.credentials, material.runtime)
 }
 
 func verifyTargetAccessStageLaunchMaterial(material VerifiedTargetAccessStageLaunchMaterial) error {
