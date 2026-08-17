@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/runner"
@@ -66,6 +68,118 @@ func TestTargetAccessStagePackageWritesVerifiedOfflineArtifact(t *testing.T) {
 	}
 }
 
+func TestTargetAccessLaunchPrepareBuildsOneNonMutatingCandidate(t *testing.T) {
+	previous := prepareTargetAccessStageLaunch
+	defer func() { prepareTargetAccessStageLaunch = previous }()
+	var captured runner.TargetAccessStageLaunchMaterialConfig
+	prepareTargetAccessStageLaunch = func(config runner.TargetAccessStageLaunchMaterialConfig) (targetAccessLaunchPreparation, error) {
+		captured = config
+		return targetAccessLaunchPreparation{
+			Format: "ok147-target-access-stage-launch-preparation/v1", State: "PREPARED",
+			Material: runner.TargetAccessStageLaunchMaterialReceipt{
+				Format: runner.TargetAccessStageLaunchMaterialFormat, State: "VERIFIED", StageID: "target-access",
+				Authority: "ok-shared", CandidateDigest: testSHA("1"), MutationAllowed: false,
+			},
+			Candidate: runner.TargetAccessStageLaunchCandidateReceipt{
+				Format: runner.TargetAccessStageLaunchCandidateFormat, State: "PREPARED", CandidateDigest: testSHA("1"), MutationAllowed: false,
+			},
+			MutationAllowed: false,
+		}, nil
+	}
+	root := t.TempDir()
+	template, runtimeManifest := filepath.Join(root, "target-access.yaml.tpl"), filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-target-access-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(targetAccessLaunchPrepareArguments(template, runtimeManifest), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Package.Bundle.PlanExpected.GitOpsAuthority != "ok-shared" || len(captured.Package.Bundle.ExpectedObjects) != 8 || captured.Package.RunID != "ok147-target-access-20260817-01" {
+		t.Fatalf("target-access package identity differs: %#v", captured.Package)
+	}
+	if string(captured.Package.JobTemplate) != "bounded-target-access-template" || string(captured.RuntimeManifest) != "bounded-runtime" {
+		t.Fatalf("target-access private templates differ: %q %q", captured.Package.JobTemplate, captured.RuntimeManifest)
+	}
+	if captured.LedgerWriter.AuthorityIdentity != "ok-mgmt" || captured.WorkloadWriter.AuthorityIdentity != testSHA("f") || captured.LedgerWriter.TokenFile == captured.WorkloadWriter.TokenFile || captured.Candidate.AuthorityEndpoint != "https://192.0.2.14:6443" {
+		t.Fatalf("target-access credential boundary differs: %#v %#v %#v", captured.LedgerWriter, captured.WorkloadWriter, captured.Candidate)
+	}
+	var preparation targetAccessLaunchPreparation
+	if err := json.Unmarshal(stdout.Bytes(), &preparation); err != nil {
+		t.Fatal(err)
+	}
+	if preparation.State != "PREPARED" || preparation.MutationAllowed || preparation.Material.MutationAllowed || preparation.Candidate.MutationAllowed {
+		t.Fatalf("unsafe target-access launch preparation: %#v", preparation)
+	}
+
+	invalid := removeArgumentWithValue(targetAccessLaunchPrepareArguments(template, runtimeManifest), "--workload-writer-job-token-file")
+	stdout.Reset()
+	if err := run(invalid, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+		t.Fatal("incomplete private target-access material reached preparation")
+	}
+}
+
+func TestTargetAccessLaunchExecuteUsesExactBoundary(t *testing.T) {
+	previous := executeTargetAccessStageLaunch
+	defer func() { executeTargetAccessStageLaunch = previous }()
+	var calls int
+	var candidate string
+	executeTargetAccessStageLaunch = func(ctx context.Context, config runner.TargetAccessStageLaunchMaterialConfig, authority runner.KubernetesAuthorityConfig, expectedCandidateDigest string) (runner.TargetAccessStageLaunchReceipt, error) {
+		calls++
+		candidate = expectedCandidateDigest
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > stageLaunchTimeout {
+			t.Fatal("target-access launch context is not bounded")
+		}
+		if config.Package.RunID != "ok147-target-access-20260817-01" || authority.Endpoint != "https://192.0.2.14:6443" || authority.TokenFile != "/private/tmp/installer-token" {
+			t.Fatalf("execute boundary differs: %#v %#v", config, authority)
+		}
+		return runner.TargetAccessStageLaunchReceipt{
+			Format: runner.TargetAccessStageLaunchReceiptFormat, StageID: "target-access", Authority: "ok-shared",
+			State: "LAUNCHED", MutationState: "ATTEMPTED", Results: []runner.SubmissionStageLaunchResult{},
+		}, nil
+	}
+	root := t.TempDir()
+	template, runtimeManifest := filepath.Join(root, "target-access.yaml.tpl"), filepath.Join(root, "runtime.yaml")
+	if err := os.WriteFile(template, []byte("bounded-target-access-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimeManifest, []byte("bounded-runtime"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(targetAccessLaunchExecuteArguments(template, runtimeManifest), &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 1 || candidate != testSHA("9") {
+		t.Fatalf("exact target-access candidate not used: calls=%d digest=%q", calls, candidate)
+	}
+	var receipt runner.TargetAccessStageLaunchReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "LAUNCHED" {
+		t.Fatalf("unexpected target-access launch receipt: %#v %v", receipt, err)
+	}
+
+	valid := targetAccessLaunchExecuteArguments(template, runtimeManifest)
+	for name, arguments := range map[string][]string{
+		"missing execute":         removeArgument(valid, "--execute"),
+		"missing candidate":       removeArgumentWithValue(valid, "--expected-candidate-digest"),
+		"malformed candidate":     replaceArgument(valid, "--expected-candidate-digest", "sha256:ABC"),
+		"missing installer token": removeArgumentWithValue(valid, "--installer-token-file"),
+		"missing workload source": removeArgumentWithValue(valid, "--workload-writer-job-authority"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			stdout.Reset()
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 || calls != before {
+				t.Fatal("unsafe target-access launch input reached executor")
+			}
+		})
+	}
+}
+
 func TestTargetAccessStagePackageRejectsIncompleteInputs(t *testing.T) {
 	root := t.TempDir()
 	template := filepath.Join(root, "target-access-job.yaml.tpl")
@@ -107,5 +221,41 @@ func targetAccessStagePackageArguments(template, output string) []string {
 		"--image", "ghcr.io/openkubes/ok-cluster@"+testSHA("a"), "--input-configmap", "ok147-target-access-input",
 		"--ledger-api-url", "https://192.0.2.12:6443", "--ledger-api-cidr", "192.0.2.12/32", "--ledger-credential-secret", "ok147-ledger-target-access",
 		"--workload-api-url", "https://192.0.2.13:6443", "--workload-api-cidr", "192.0.2.13/32", "--workload-credential-secret", "ok147-workload-target-access",
+	)
+}
+
+func targetAccessLaunchPrepareArguments(template, runtimeManifest string) []string {
+	packaged := targetAccessStagePackageArguments(template, "/private/tmp/not-used-package")
+	packaged = removeArgumentWithValue(packaged, "--output")
+	arguments := append([]string{"cluster", "stage", "run", "target-access", "launch", "prepare"}, packaged[5:]...)
+	arguments = append(arguments, "--credential-materialized-at", "2026-08-17T14:00:00Z")
+	for _, credential := range []struct{ prefix, authority, tokenFile, tokenDigest, caFile, caDigest, evidence, subject string }{
+		{"ledger-job", "ok-mgmt", "/private/tmp/ledger-target-token", testSHA("1"), "/private/tmp/ledger-target-ca", testSHA("2"), testSHA("3"), "system:serviceaccount:openkubes-execution-system:ok147-ledger-writer"},
+		{"workload-writer-job", testSHA("f"), "/private/tmp/workload-writer-token", testSHA("4"), "/private/tmp/workload-writer-ca", testSHA("5"), testSHA("6"), "system:serviceaccount:kube-system:ok147-argocd-manager"},
+	} {
+		arguments = append(arguments,
+			"--"+credential.prefix+"-authority", credential.authority,
+			"--"+credential.prefix+"-token-file", credential.tokenFile, "--"+credential.prefix+"-token-digest", credential.tokenDigest,
+			"--"+credential.prefix+"-ca-file", credential.caFile, "--"+credential.prefix+"-ca-digest", credential.caDigest,
+			"--"+credential.prefix+"-tokenrequest-evidence-digest", credential.evidence,
+			"--"+credential.prefix+"-issuer", "https://kubernetes.default.svc.cluster.local", "--"+credential.prefix+"-subject", credential.subject,
+			"--"+credential.prefix+"-audiences", "https://kubernetes.default.svc",
+			"--"+credential.prefix+"-issued-at", "2026-08-17T13:59:00Z", "--"+credential.prefix+"-expires-at", "2026-08-17T14:30:00Z",
+		)
+	}
+	return append(arguments,
+		"--runtime-manifest", runtimeManifest, "--runtime-manifest-digest", digest.SHA256([]byte("bounded-runtime")),
+		"--installer-api-endpoint", "https://192.0.2.14:6443", "--installer-ca-digest", testSHA("7"),
+		"--installer-token-digest", testSHA("8"), "--installer-tokenrequest-evidence-digest", testSHA("a"),
+		"--prepared-at", "2026-08-17T14:01:00Z",
+	)
+}
+
+func targetAccessLaunchExecuteArguments(template, runtimeManifest string) []string {
+	arguments := targetAccessLaunchPrepareArguments(template, runtimeManifest)
+	arguments[5] = "execute"
+	return append(arguments,
+		"--execute", "--expected-candidate-digest", testSHA("9"),
+		"--installer-token-file", "/private/tmp/installer-token", "--installer-ca-file", "/private/tmp/installer-ca",
 	)
 }
