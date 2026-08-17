@@ -2084,6 +2084,41 @@ stop before the launcher is invoked. A stopped live launch still emits its
 redaction-safe receipt so partial or uncertain state remains visible without
 creating an implicit retry path.
 
+## Crash-safe runtime-binding operation
+
+The stage immediately after successful NetworkReady observation now has a
+dedicated non-mutating execution primitive. `BindingStageOperation` accepts
+only a verified cursor selecting `runtime-binding` with runner authority and a
+preconstructed binder whose plan, stage, authority and R identities match that
+decision exactly:
+
+```text
+successful network-observation receipt
+                 |
+                 v
+       exact runtime-binding cursor
+                 |
+                 v
+     one prebound local binder call
+                 |
+                 v
+ immutable runtime-binding stage receipt
+```
+
+The binder's future private artifact, credentials and source reads remain
+encapsulated behind its single `Bind` method. Public orchestration retains only
+the result state, evidence digest, completion time and final receipt digest.
+Raw operational errors are never returned. A failed or stopped result is
+persisted as terminal evidence and cannot be replaced by success.
+
+Before invoking the binder, the operation inspects the deterministic receipt
+slot. A verified existing receipt is returned without rebinding, closing the
+process-termination window after receipt persistence. Observation, submission,
+credential and evaluation cursors are rejected before the binder is called.
+This checkpoint supplies only the execution composition: it does not yet read
+the workload-kubeconfig Secret, contact a cluster, create the private runtime
+binding file, activate a CLI/Job path or grant target access.
+
 ## Bounded convergence observation polling
 
 The aggregate observer can now be wrapped by a bounded polling observer before
