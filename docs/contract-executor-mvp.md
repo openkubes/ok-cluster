@@ -2731,6 +2731,18 @@ cursor. A missing grant, failed stage, malformed receipt, unsafe destination
 or cancelled context stops the suffix without retry, rollback or cleanup. The
 adapter itself still has no CLI or Job activation surface.
 
+The private post-runtime execution manifest now provides the local activation
+boundary for that adapter. One strict `0600` JSON document binds the verified
+Plan and seven-receipt prefix, Stage-8 grant and policy, predecessor-bound TLS
+authority, runtime binding, exact registration and Application projections,
+Network/Platform/Aggregate profiles, one shared capability assertion, isolated
+runtime credentials and private receipt destinations. Loading derives target
+identity from durable lifecycle evidence and rejects identity, profile,
+artifact or capability divergence before opening the execution suffix. Its
+redaction-safe receipt exposes only semantic digests and explicitly grants no
+mutation. The manifest loader still is not a CLI command or Kubernetes Job;
+those activation surfaces remain separate checkpoints.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
@@ -2739,8 +2751,8 @@ Stage-12 launch boundary and the direct command executed by its Job are exposed
 through the local CLI. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- the Stage 8-12 execution adapter is not yet exposed through one coherent
-  local CLI and Job orchestration path;
+- the Stage 8-12 execution adapter has one coherent private manifest loader but
+  is not yet exposed through a local CLI and Job orchestration path;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the previously published runner image predates this staged-library closure;
