@@ -2698,6 +2698,18 @@ private directory, re-verifies the stored digest and returns the exact
 `StageReceiptSource` for the next bundle. Private credentials, endpoints and
 runtime identity never enter this bridge.
 
+The post-runtime authorization resolver closes the next authority boundary.
+After a predecessor receipt is durable, it derives one canonical,
+redaction-safe request from the verified cursor, including the exact Plan,
+stage, operation, authority and predecessor receipt digest. An external
+authority resolves that request to one signed grant source; the runner reloads
+and verifies the grant before exposing it to the selected stage bundle. The
+request digest changes with its predecessor, so Stage 9 and Stage 10 grants
+cannot be safely precomputed from an earlier receipt prefix. The resolver does
+not sign, persist or widen a grant and performs no ledger or Kubernetes
+request. This keeps the future in-process adapter from becoming its own policy
+authority.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
