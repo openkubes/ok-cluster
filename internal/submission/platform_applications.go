@@ -194,7 +194,7 @@ func validatePlatformApplication(value map[string]any, expected PlatformApplicat
 	annotations, ok := metadata["annotations"].(map[string]any)
 	wantAnnotations := map[string]string{
 		"openkubes.io/intent-revision": expected.IntentRevision, "openkubes.io/platform-revision": expected.PlatformRevision,
-		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": expected.TargetIdentityDigest,
+		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": RuntimeTargetIdentityDigestPlaceholder,
 	}
 	if !ok || len(annotations) != len(wantAnnotations) {
 		return Object{}, "", errors.New("platform Application annotations differ from exact revision carriers")
@@ -204,6 +204,9 @@ func validatePlatformApplication(value map[string]any, expected PlatformApplicat
 			return Object{}, "", errors.New("platform Application revision carrier differs")
 		}
 	}
+	// The plan binds this static template. The concrete CAPI UID digest is
+	// inserted only after the lifecycle receipt has established it.
+	annotations["openkubes.io/target-identity-digest"] = expected.TargetIdentityDigest
 	spec, ok := value["spec"].(map[string]any)
 	if !ok || text(spec["project"]) != expected.ProjectName {
 		return Object{}, "", errors.New("platform Application project differs")

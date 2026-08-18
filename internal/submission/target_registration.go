@@ -25,6 +25,11 @@ const (
 	RegistrationExpirationPlaceholder  = "RUNTIME-TOKEN-EXPIRATION-REQUIRED"
 	RegistrationEndpointPlaceholder    = "RUNTIME-HTTPS-ENDPOINT-REQUIRED"
 	RegistrationConfigPlaceholder      = "RUNTIME-IN-MEMORY-MATERIALIZATION-ONLY"
+	// RuntimeTargetIdentityDigestPlaceholder keeps the pre-runtime projection
+	// independent of the CAPI Cluster UID, which Kubernetes assigns only after
+	// the lifecycle stage. The verified lifecycle receipt supplies the concrete
+	// digest before any target-registration object can be submitted.
+	RuntimeTargetIdentityDigestPlaceholder = "RUNTIME-TARGET-IDENTITY-DIGEST-REQUIRED"
 )
 
 type TargetRegistrationExpected struct {
@@ -270,7 +275,7 @@ func validateTargetRegistrationAnnotations(metadata map[string]any, expected Tar
 		"openkubes.io/intent-revision":        expected.IntentRevision,
 		"openkubes.io/platform-revision":      expected.PlatformRevision,
 		"openkubes.io/execution-fixture":      expected.ExecutionFixture,
-		"openkubes.io/target-identity-digest": expected.TargetIdentityDigest,
+		"openkubes.io/target-identity-digest": RuntimeTargetIdentityDigestPlaceholder,
 	}
 	if runtime {
 		want["openkubes.io/capi-cluster-uid"] = RegistrationCAPIUIDPlaceholder
@@ -286,6 +291,10 @@ func validateTargetRegistrationAnnotations(metadata map[string]any, expected Tar
 			return errors.New("registration annotation differs from verified identity")
 		}
 	}
+	// Materialize only the lifecycle-derived identity carrier. All other
+	// runtime Secret fields retain their explicit placeholders until the
+	// credential-bearing in-memory materialization step.
+	annotations["openkubes.io/target-identity-digest"] = expected.TargetIdentityDigest
 	return nil
 }
 

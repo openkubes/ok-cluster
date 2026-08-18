@@ -157,7 +157,7 @@ func targetRegistrationCredentialReceipt(at time.Time, policy targetCredentialPo
 func runnerTargetRegistrationYAML(expected stageplan.Expected) []byte {
 	annotations := map[string]any{
 		"openkubes.io/intent-revision": expected.IntentRevision, "openkubes.io/platform-revision": expected.PlatformRevision,
-		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": digest.SHA256([]byte(targetAccessRuntimeUID)),
+		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": submission.RuntimeTargetIdentityDigestPlaceholder,
 	}
 	project := map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "AppProject",
