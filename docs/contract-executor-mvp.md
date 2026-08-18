@@ -2671,6 +2671,16 @@ target identity and the selected project boundary. The registration launcher
 uses exact-name preflights and create-only submission; unexpected existing or
 partial state stops without retry.
 
+The staged plan binds pre-runtime templates for target registration and the
+three Platform Applications. Those templates must carry the literal
+`RUNTIME-TARGET-IDENTITY-DIGEST-REQUIRED` placeholder; a prefilled digest is
+rejected. After lifecycle submission, the loader takes the target digest only
+from the verified `cluster-lifecycle` receipt, substitutes that one carrier in
+memory and records the resulting concrete object digests. This avoids a
+causality cycle in which the plan would otherwise have to hash the
+Kubernetes-assigned CAPI Cluster UID before Stage 1. It also prevents a caller
+from predicting or selecting a different runtime target identity.
+
 Platform application submission verifies exactly three externally rendered
 Applications and their immutable profile membership. Argo CD remains the sole
 owner of Platform convergence. The runner neither renders an alternative

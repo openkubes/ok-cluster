@@ -33,6 +33,23 @@ func TestLoadPlatformApplicationsBindsExactProfileSet(t *testing.T) {
 	}
 }
 
+func TestPlatformApplicationsTemplateIsIndependentOfRuntimeTargetIdentity(t *testing.T) {
+	fixture := platformApplicationsFixture(t)
+	first, err := LoadPlatformApplications(fixture.path, fixture.expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondExpected := fixture.expected
+	secondExpected.TargetIdentityDigest = platformApplicationsSHA("9")
+	second, err := LoadPlatformApplications(fixture.path, secondExpected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ArtifactDigest != second.ArtifactDigest || first.Applications[0].Digest == second.Applications[0].Digest {
+		t.Fatal("static platform Applications template did not materialize a distinct runtime target identity")
+	}
+}
+
 func TestPlatformApplicationSpecIdentityIncludesIgnoreDifferences(t *testing.T) {
 	fixture := platformApplicationsFixture(t)
 	spec := fixture.documents[0]["spec"].(map[string]any)
@@ -61,6 +78,9 @@ func TestLoadPlatformApplicationsFailsClosed(t *testing.T) {
 		},
 		"wrong revision carrier": func(f *platformApplicationsTestFixture) {
 			f.documents[0]["metadata"].(map[string]any)["annotations"].(map[string]any)["openkubes.io/platform-revision"] = platformApplicationsSHA("f")
+		},
+		"runtime target digest prefilled": func(f *platformApplicationsTestFixture) {
+			f.documents[0]["metadata"].(map[string]any)["annotations"].(map[string]any)["openkubes.io/target-identity-digest"] = f.expected.TargetIdentityDigest
 		},
 		"unprofiled semantic change": func(f *platformApplicationsTestFixture) {
 			f.documents[0]["spec"].(map[string]any)["syncPolicy"] = map[string]any{"automated": map[string]any{"enabled": true, "prune": false, "selfHeal": true, "allowEmpty": false}}
@@ -116,7 +136,7 @@ func platformApplicationsFixture(t *testing.T) platformApplicationsTestFixture {
 				"name": name, "namespace": "argocd",
 				"annotations": map[string]any{
 					"openkubes.io/intent-revision": intent, "openkubes.io/platform-revision": platform,
-					"openkubes.io/execution-fixture": execution, "openkubes.io/target-identity-digest": target,
+					"openkubes.io/execution-fixture": execution, "openkubes.io/target-identity-digest": RuntimeTargetIdentityDigestPlaceholder,
 				},
 			},
 			"spec": spec,

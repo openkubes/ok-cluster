@@ -29,6 +29,24 @@ func TestLoadTargetRegistrationBindsProjectAndCredentialFreeTemplate(t *testing.
 	}
 }
 
+func TestTargetRegistrationTemplateIsIndependentOfRuntimeTargetIdentity(t *testing.T) {
+	raw, firstExpected := targetRegistrationFixture(t)
+	path := writeTargetRegistrationFixture(t, raw)
+	first, err := LoadTargetRegistration(path, firstExpected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondExpected := firstExpected
+	secondExpected.TargetIdentityDigest = targetRegistrationSHA("e")
+	second, err := LoadTargetRegistration(path, secondExpected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ArtifactDigest != second.ArtifactDigest || first.Project.Digest == second.Project.Digest || first.Registration.Digest == second.Registration.Digest {
+		t.Fatal("static target-registration template did not materialize distinct runtime target identities")
+	}
+}
+
 func TestLoadTargetRegistrationFailsClosed(t *testing.T) {
 	t.Run("changed artifact", func(t *testing.T) {
 		raw, expected := targetRegistrationFixture(t)
@@ -56,6 +74,9 @@ func TestLoadTargetRegistrationFailsClosed(t *testing.T) {
 		},
 		"runtime UID prefilled": func(values []map[string]any) {
 			values[1]["metadata"].(map[string]any)["annotations"].(map[string]any)["openkubes.io/capi-cluster-uid"] = "raw-uid"
+		},
+		"runtime target digest prefilled": func(values []map[string]any) {
+			values[0]["metadata"].(map[string]any)["annotations"].(map[string]any)["openkubes.io/target-identity-digest"] = targetRegistrationSHA("d")
 		},
 		"extra object": func(values []map[string]any) {
 			values = append(values, map[string]any{"apiVersion": "v1", "kind": "ConfigMap"})
@@ -90,7 +111,7 @@ func targetRegistrationFixture(t *testing.T) ([]byte, TargetRegistrationExpected
 	}
 	baseAnnotations := map[string]any{
 		"openkubes.io/intent-revision": expected.IntentRevision, "openkubes.io/platform-revision": expected.PlatformRevision,
-		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": expected.TargetIdentityDigest,
+		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": RuntimeTargetIdentityDigestPlaceholder,
 	}
 	project := map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "AppProject",

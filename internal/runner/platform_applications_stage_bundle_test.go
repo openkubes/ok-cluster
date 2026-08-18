@@ -207,7 +207,7 @@ func runnerPlatformApplications(t *testing.T, expected stageplan.Expected) ([]by
 	paths := []string{"profiles/minimal-observability/alerting", "profiles/minimal-observability/core", "profiles/minimal-observability/dashboards"}
 	annotations := map[string]any{
 		"openkubes.io/intent-revision": expected.IntentRevision, "openkubes.io/platform-revision": expected.PlatformRevision,
-		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": digest.SHA256([]byte(targetAccessRuntimeUID)),
+		"openkubes.io/execution-fixture": expected.ExecutionFixture, "openkubes.io/target-identity-digest": submission.RuntimeTargetIdentityDigestPlaceholder,
 	}
 	documents := make([][]byte, 0, len(names))
 	expectations := make([]observation.PlatformApplicationExpectation, 0, len(names))
