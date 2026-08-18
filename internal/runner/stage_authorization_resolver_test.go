@@ -66,6 +66,35 @@ func TestStageAuthorizationResolverBindsExactCurrentCursor(t *testing.T) {
 	}
 }
 
+func TestStageAuthorizationResolverPreservesExplicitEmptyFirstStagePredecessors(t *testing.T) {
+	fixture := submissionBundleFixture(t, false, "")
+	resume := StageResumeConfig{
+		PlanPath: fixture.config.PlanPath, PlanExpected: fixture.config.PlanExpected,
+		Receipts: []StageReceiptSource{},
+	}
+	resolved, err := ResolveStageAuthorization(context.Background(), resume, StageAuthorizationResolverFunc(
+		func(_ context.Context, request StageAuthorizationRequest) (StageAuthorizationSource, error) {
+			if request.StageID != "provider-prerequisites" || request.Predecessors == nil || len(request.Predecessors) != 0 {
+				t.Fatalf("first-stage predecessors are not an explicit empty set: %#v", request.Predecessors)
+			}
+			if _, err := request.Bytes(); err != nil {
+				t.Fatalf("first-stage request is not serializable: %v", err)
+			}
+			return StageAuthorizationSource{
+				GrantPath: fixture.config.GrantPath, PublicKeyPath: fixture.config.GrantPublicKeyPath,
+				EvaluationTime: fixture.config.EvaluationTime,
+			}, nil
+		},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := resolved.Receipt()
+	if err != nil || receipt.StageID != "provider-prerequisites" {
+		t.Fatalf("unexpected first-stage authorization receipt: %#v %v", receipt, err)
+	}
+}
+
 func TestStageAuthorizationResolverRejectsWrongGrantAndReadOnlyCursor(t *testing.T) {
 	fixture := targetCredentialBundleFixture(t)
 	resume := StageResumeConfig{PlanPath: fixture.config.PlanPath, PlanExpected: fixture.config.PlanExpected, Receipts: fixture.config.Receipts}
