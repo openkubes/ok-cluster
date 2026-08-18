@@ -2771,6 +2771,23 @@ NetworkPolicy and Job envelope offline. Construction and installation of the
 immutable activation Secret and launch of the resulting Job remain separate
 checkpoints.
 
+The private activation package builder now closes the first of those two
+checkpoints. It reopens the complete local post-runtime manifest, requires one
+coherent Ledger source and one coherent GitOps source, verifies the Workload,
+GitOps and management credential/CA bindings, and rewrites every accepted path
+to the fixed in-Pod workspace. The seven predecessor receipts receive fixed
+names and a newly bound prefix digest; the rewritten semantic manifest
+therefore receives its own digest without changing R, E, P or the execution
+fixture.
+
+The builder emits exactly one immutable opaque Secret followed by the already
+verified NetworkPolicy and Job. The Secret's 34 private files and canonical
+index are individually digest-bound. The CLI writes this credential-bearing
+package create-only as `0600` and emits only a redaction-safe package receipt
+containing component digests. Source and rewritten manifest identities are
+both retained. Package construction remains offline and grants no installation
+or launch authority.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
@@ -2780,8 +2797,9 @@ through the local CLI. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
 - the Stage 8-12 execution adapter and private manifest are exposed through one
-  local prepare/execute CLI and a bounded ephemeral Job envelope, but its
-  immutable activation Secret package and launch path are not yet complete;
+  local prepare/execute CLI, a bounded ephemeral Job envelope and one private
+  immutable activation package, but its installation/launch path is not yet
+  complete;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the previously published runner image predates this staged-library closure;
