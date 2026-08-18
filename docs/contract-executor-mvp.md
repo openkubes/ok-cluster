@@ -5,9 +5,11 @@ and in-cluster Job execution. The current boundary retains non-mutating
 Contract planning and now models the complete twelve-stage bounded execution
 path, including separately authorized mutations, a durable ledger, bounded
 observation and evaluation components and offline Kubernetes workload
-packaging. Individual stages have explicit CLI and Job launch boundaries, but
-the complete path is not yet composed into one end-to-end runner invocation.
-It is still an MVP rather than a general lifecycle runner or controller.
+packaging. The complete path is now composed into one local post-runtime
+execution suffix and one bounded ephemeral Job activation path. That Job path
+is fully exercised offline and against fake APIs, but has not yet been run on
+the DEV management plane. It is still an MVP rather than a general lifecycle
+runner or controller.
 
 ```text
 versioned contract + test schema
@@ -2688,8 +2690,8 @@ and passes the one-use credential handoff only from Stage 8 to Stage 9. It
 validates every redaction-safe run receipt against one Plan digest, stops at
 the first error or malformed receipt, invokes no later stage and discards an
 unconsumed credential. It deliberately exposes no retry, rollback or cleanup
-method. This core still needs a concrete CLI and Job adapter before it is an
-executable end-to-end runner path.
+method. The later activation checkpoints provide its concrete CLI and Job
+adapters without changing this orchestrator's ownership.
 
 The accompanying receipt bridge can reload only the independently
 digest-bound, already durable public receipt selected by the current cursor.
@@ -2729,7 +2731,8 @@ Application, observation and aggregate operations. Canonical Stage 8-11
 receipts are persisted create-only as private `0600` files for the next
 cursor. A missing grant, failed stage, malformed receipt, unsafe destination
 or cancelled context stops the suffix without retry, rollback or cleanup. The
-adapter itself still has no CLI or Job activation surface.
+adapter itself does not own a CLI or Job activation surface; the later
+activation layer composes it without widening this library boundary.
 
 The private post-runtime execution manifest now provides the local activation
 boundary for that adapter. One strict `0600` JSON document binds the verified
@@ -2751,7 +2754,8 @@ digest plus an explicit `--execute` flag, and runs the Stage 8-12 suffix once
 inside a fixed three-hour context. A stopped execution still emits its bounded
 composite receipt before the command returns the failure. Neither operation
 adds automatic retry, rollback or cleanup. This closes the local activation
-surface; an ephemeral Kubernetes Job remains a separate checkpoint.
+surface; the following checkpoints bind the same operation to an ephemeral
+Kubernetes Job.
 
 The first ephemeral post-runtime Job envelope binds that same command to one
 immutable activation Secret, one canonical bundle-index digest and one
@@ -2766,10 +2770,10 @@ projection.
 The Job has no automounted ServiceAccount token, no retry and a deadline around
 the CLI's three-hour bound. Its deny-all NetworkPolicy permits only four exact
 IP/port destinations: management/ledger, workload, Argo and the external
-authorization authority. This checkpoint renders and tests the materializer,
-NetworkPolicy and Job envelope offline. Construction and installation of the
-immutable activation Secret and launch of the resulting Job remain separate
-checkpoints.
+authorization authority. The materializer, NetworkPolicy and Job envelope are
+rendered and tested offline. The following package and launcher checkpoints
+construct and install the immutable activation Secret and launch the resulting
+Job.
 
 The private activation package builder now closes the first of those two
 checkpoints. It reopens the complete local post-runtime manifest, requires one
@@ -2788,18 +2792,48 @@ containing component digests. Source and rewritten manifest identities are
 both retained. Package construction remains offline and grants no installation
 or launch authority.
 
+The final activation boundary derives an exact credential-free installation
+plan from that private package. It permits only this order:
+
+```text
+GET Secret, NetworkPolicy, Job by exact name
+        ↓ all three absent
+POST Secret
+POST NetworkPolicy
+POST Job
+```
+
+All three GETs complete before the first write. Any existing object or failed
+preflight stops with zero writes. After the first POST, a failed or uncertain
+result is preserved as `STOPPED_PARTIAL_OR_UNKNOWN`; the launcher is consumed
+and exposes no retry, update, patch, apply, delete, rollback or cleanup path.
+Created UIDs and resourceVersions are represented only by digests in its
+public receipt.
+
+The CLI keeps preparation and mutation separate:
+
+```text
+ok cluster stage run post-runtime launch prepare ...
+ok cluster stage run post-runtime launch execute --execute ...
+```
+
+`prepare` rebuilds and verifies the complete private package and emits only
+its redaction-safe receipt and exact installation plan. `execute` rebuilds the
+same package, requires its separately copied package digest, binds the
+installer to the package's `ok-mgmt` authority and checks that identity before
+opening the installer credential. It then invokes the single-use three-create
+launcher in a bounded context. This completes the offline and fake-API
+activation implementation; it does not itself prove a live DEV Job run.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
-covered by unit, negative, local TLS integration and race tests. The standalone
-Stage-12 launch boundary and the direct command executed by its Job are exposed
-through the local CLI. This is not yet the OK-147 Definition of Done:
+covered by unit, negative, local TLS integration and race tests. The complete
+Stage 8-12 suffix now has a local prepare/execute command, a bounded ephemeral
+Job, a deterministic private activation package, an exact installation plan
+and a single-use CLI launcher. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- the Stage 8-12 execution adapter and private manifest are exposed through one
-  local prepare/execute CLI, a bounded ephemeral Job envelope and one private
-  immutable activation package, but its installation/launch path is not yet
-  complete;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the previously published runner image predates this staged-library closure;
@@ -2808,6 +2842,12 @@ through the local CLI. This is not yet the OK-147 Definition of Done:
   conformance have not yet been repeated through this MVP;
 - the final operator runbook, security boundary summary and ADR-030 amendment
   proposal remain to be reviewed.
+
+The remaining work is execution evidence and operational closure, not another
+runner component. A live checkpoint must publish the current image, construct
+fresh short-lived private inputs, run the exact `prepare` / `execute` boundary
+on `ok-mgmt`, preserve a stopped partial state without automatic retry, and
+separately repeat disposable-cluster and executor-termination conformance.
 
 These remaining items may compose the verified packages, but must not add a
 second Contract-to-CAPI compiler, persistent aggregate-status controller,

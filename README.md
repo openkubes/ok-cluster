@@ -28,9 +28,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
 - **Bounded Contract Executor MVP** — one shared Go core for the local `ok` CLI
   and short-lived `ok-mgmt` Jobs. `cluster create` remains non-mutating, while
-  the separately authorized `cluster stage run --execute` path supports only
-  the first two Contract-to-CAPI submission stages with a durable ledger,
-  exact split authorities and no retry. `cluster stage package` produces the
+  the staged runner models twelve predecessor-bound submission, observation,
+  binding, credential and evaluation stages with a durable ledger, exact
+  split authorities and no retry. The initial `cluster stage run --execute`
+  path remains the separately authorized two-stage Contract-to-CAPI boundary.
+  `cluster stage package` produces the
   digest-bound immutable ConfigMap/Job/NetworkPolicy envelope offline; the
   single-use Create-only installer can submit only that verified envelope
   after a complete zero-write preflight. Its tokenless runtime identity and
@@ -183,6 +185,16 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   emits the redaction-safe sealed-material and candidate receipts. The separate
   `... launch execute --execute` boundary requires that exact candidate digest
   plus the bounded installer files before it can open the single-use launcher.
+  The complete Stage 8-12 suffix is also available through a local
+  `post-runtime prepare`/`execute` pair and a bounded ephemeral Job. A private
+  immutable 34-file activation Secret, exact NetworkPolicy and non-retrying
+  Job are correlated under one package digest. `post-runtime launch prepare`
+  emits only their redacted package receipt and exact create plan;
+  `post-runtime launch execute --execute` requires that package digest and a
+  bounded `ok-mgmt` installer credential, completes three exact-name GETs
+  before any write, then can create only Secret, NetworkPolicy and Job in that
+  order. This complete Job path is tested offline and against fake APIs but is
+  not yet live-proven on DEV.
 
 ---
 
