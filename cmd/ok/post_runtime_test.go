@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/runner"
 )
@@ -135,6 +136,112 @@ func TestPostRuntimePackageWritesPrivateBytesAndEmitsOnlyReceipt(t *testing.T) {
 	before := calls
 	if err := run(append(arguments, "extra"), &bytes.Buffer{}, &bytes.Buffer{}); err == nil || calls != before {
 		t.Fatal("positional package argument reached private builder")
+	}
+}
+
+func TestPostRuntimeActivationLaunchPrepareIsOfflineAndEmitsExactPlan(t *testing.T) {
+	previous := preparePostRuntimeActivationLaunch
+	defer func() { preparePostRuntimeActivationLaunch = previous }()
+	calls := 0
+	preparePostRuntimeActivationLaunch = func(config runner.PostRuntimeExecutionActivationPackageConfig) (postRuntimeActivationLaunchPreparation, error) {
+		calls++
+		assertPostRuntimeActivationCLIConfig(t, config)
+		return postRuntimeActivationLaunchPreparation{
+			Format: "ok147-post-runtime-activation-launch-preparation/v1", State: "PREPARED",
+			Package: runner.PostRuntimeExecutionActivationPackageReceipt{PackageDigest: testSHA("2"), ManagementAuthority: "ok-mgmt"},
+			Plan: runner.PostRuntimeExecutionActivationInstallationPlan{
+				Format: runner.PostRuntimeExecutionActivationInstallationPlanFormat, State: "VERIFIED", Authority: "ok-mgmt", MutationAllowed: false,
+			},
+		}, nil
+	}
+	arguments := postRuntimeActivationCLIArguments(t, "prepare")
+	var stdout bytes.Buffer
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt postRuntimeActivationLaunchPreparation
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || calls != 1 || receipt.State != "PREPARED" ||
+		receipt.Package.PackageDigest != testSHA("2") || receipt.Plan.Authority != "ok-mgmt" || receipt.MutationAllowed {
+		t.Fatalf("unexpected post-runtime launch preparation: calls=%d receipt=%#v err=%v", calls, receipt, err)
+	}
+	if strings.Contains(strings.ToLower(stdout.String()), "token-file") {
+		t.Fatalf("launch preparation exposed credential path: %s", stdout.String())
+	}
+}
+
+func TestPostRuntimeActivationLaunchExecuteRequiresExactDigestAndExplicitMutation(t *testing.T) {
+	previous := executePostRuntimeActivationLaunch
+	defer func() { executePostRuntimeActivationLaunch = previous }()
+	calls := 0
+	executePostRuntimeActivationLaunch = func(ctx context.Context, config runner.PostRuntimeExecutionActivationPackageConfig, authority runner.KubernetesAuthorityConfig, expected string) (runner.PostRuntimeExecutionActivationLaunchReceipt, error) {
+		calls++
+		assertPostRuntimeActivationCLIConfig(t, config)
+		deadline, bounded := ctx.Deadline()
+		if !bounded || time.Until(deadline) <= 0 || time.Until(deadline) > stageLaunchTimeout || expected != testSHA("2") ||
+			authority.Endpoint != "https://192.0.2.10:6443" || authority.CABundleDigest != testSHA("4") ||
+			authority.TokenFile != "/private/tmp/installer-token" || authority.CAFile != "/private/tmp/installer-ca" {
+			t.Fatalf("unexpected bounded launch inputs: authority=%#v expected=%q", authority, expected)
+		}
+		return runner.PostRuntimeExecutionActivationLaunchReceipt{
+			Format: runner.PostRuntimeExecutionActivationLaunchReceiptFormat, State: "ACTIVATED", PackageDigest: expected,
+		}, nil
+	}
+	arguments := append(postRuntimeActivationCLIArguments(t, "execute"),
+		"--expected-package-digest", testSHA("2"), "--installer-api-endpoint", "https://192.0.2.10:6443",
+		"--installer-ca-digest", testSHA("4"), "--installer-token-file", "/private/tmp/installer-token",
+		"--installer-ca-file", "/private/tmp/installer-ca", "--execute")
+	var stdout bytes.Buffer
+	if err := runContext(context.Background(), arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || !strings.Contains(stdout.String(), `"state": "ACTIVATED"`) || strings.Contains(stdout.String(), "installer-token") {
+		t.Fatalf("post-runtime activation was not exactly executed: calls=%d output=%s", calls, stdout.String())
+	}
+
+	for name, remove := range map[string]string{"no execute": "--execute", "no digest": testSHA("2"), "positional": ""} {
+		t.Run(name, func(t *testing.T) {
+			candidate := append([]string(nil), arguments...)
+			if remove == "" {
+				candidate = append(candidate, "extra")
+			} else {
+				for index, value := range candidate {
+					if value == remove {
+						candidate = append(candidate[:index], candidate[index+1:]...)
+						break
+					}
+				}
+			}
+			before := calls
+			if err := runContext(context.Background(), candidate, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || calls != before {
+				t.Fatalf("unsafe activation reached runner: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func postRuntimeActivationCLIArguments(t *testing.T, action string) []string {
+	t.Helper()
+	templatePath := filepath.Join(t.TempDir(), "post-runtime-job.tpl")
+	if err := os.WriteFile(templatePath, []byte("job-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return []string{
+		"cluster", "stage", "run", "post-runtime", "launch", action,
+		"--manifest", "/private/tmp/manifest.json", "--activation-secret", "ok147-activation",
+		"--job-template", templatePath, "--job-template-digest", testSHA("1"),
+		"--run-id", "ok147-run-01", "--image", "ghcr.io/openkubes/ok-cluster@" + testSHA("3"),
+		"--management-api-cidr", "192.0.2.1/32", "--workload-api-cidr", "192.0.2.2/32",
+		"--argo-api-cidr", "192.0.2.3/32", "--authorization-api-cidr", "192.0.2.4/32",
+	}
+}
+
+func assertPostRuntimeActivationCLIConfig(t *testing.T, config runner.PostRuntimeExecutionActivationPackageConfig) {
+	t.Helper()
+	if config.ManifestPath != "/private/tmp/manifest.json" || config.ActivationSecret != "ok147-activation" ||
+		config.RunID != "ok147-run-01" || string(config.JobTemplate) != "job-template" || config.JobTemplateDigest != testSHA("1") ||
+		config.ManagementAPICIDR != "192.0.2.1/32" || config.WorkloadAPICIDR != "192.0.2.2/32" ||
+		config.ArgoAPICIDR != "192.0.2.3/32" || config.AuthorizationAPICIDR != "192.0.2.4/32" {
+		t.Fatalf("unexpected post-runtime activation config: %#v", config)
 	}
 }
 

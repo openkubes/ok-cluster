@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"time"
 
@@ -26,6 +27,44 @@ var openPostRuntimeExecutor = func(path string) (postRuntimeExecutor, runner.Pos
 
 var materializePostRuntimeBundle = runner.MaterializePostRuntimeExecutionBundle
 
+var preparePostRuntimeActivationLaunch = func(config runner.PostRuntimeExecutionActivationPackageConfig) (postRuntimeActivationLaunchPreparation, error) {
+	packaged, err := runner.BuildPostRuntimeExecutionActivationPackage(config)
+	if err != nil {
+		return postRuntimeActivationLaunchPreparation{}, err
+	}
+	packageReceipt, err := packaged.Receipt()
+	if err != nil {
+		return postRuntimeActivationLaunchPreparation{}, err
+	}
+	plan, err := runner.PlanPostRuntimeExecutionActivationInstallation(packaged)
+	if err != nil {
+		return postRuntimeActivationLaunchPreparation{}, err
+	}
+	return postRuntimeActivationLaunchPreparation{
+		Format: "ok147-post-runtime-activation-launch-preparation/v1", State: "PREPARED",
+		Package: packageReceipt, Plan: plan, MutationAllowed: false,
+	}, nil
+}
+
+var executePostRuntimeActivationLaunch = func(ctx context.Context, config runner.PostRuntimeExecutionActivationPackageConfig, authority runner.KubernetesAuthorityConfig, expectedPackageDigest string) (runner.PostRuntimeExecutionActivationLaunchReceipt, error) {
+	packaged, err := runner.BuildPostRuntimeExecutionActivationPackage(config)
+	if err != nil {
+		return runner.PostRuntimeExecutionActivationLaunchReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	if err != nil {
+		return runner.PostRuntimeExecutionActivationLaunchReceipt{}, err
+	}
+	authority.AuthorityIdentity = receipt.ManagementAuthority
+	launcher, err := runner.OpenKubernetesPostRuntimeExecutionActivationLauncher(runner.PostRuntimeExecutionActivationLauncherConfig{
+		Authority: authority, ExpectedPackageDigest: expectedPackageDigest,
+	}, packaged)
+	if err != nil {
+		return runner.PostRuntimeExecutionActivationLaunchReceipt{}, err
+	}
+	return launcher.Launch(ctx)
+}
+
 var materializePostRuntimeActivationPackage = func(config runner.PostRuntimeExecutionActivationPackageConfig) ([]byte, runner.PostRuntimeExecutionActivationPackageReceipt, error) {
 	packaged, err := runner.BuildPostRuntimeExecutionActivationPackage(config)
 	if err != nil {
@@ -46,43 +85,81 @@ type postRuntimeCLIReceipt struct {
 	Execution *runner.PostRuntimeExecutionReceipt        `json:"execution,omitempty"`
 }
 
+type postRuntimeActivationLaunchPreparation struct {
+	Format          string                                                `json:"format"`
+	State           string                                                `json:"state"`
+	Package         runner.PostRuntimeExecutionActivationPackageReceipt   `json:"package"`
+	Plan            runner.PostRuntimeExecutionActivationInstallationPlan `json:"plan"`
+	MutationAllowed bool                                                  `json:"mutationAllowed"`
+}
+
+type postRuntimeActivationPackageFlags struct {
+	manifest, activationSecret, jobTemplate, jobTemplateDigest *string
+	runID, imageDigest                                         *string
+	managementCIDR, workloadCIDR, argoCIDR, authorizationCIDR  *string
+}
+
+func addPostRuntimeActivationPackageFlags(flags *flag.FlagSet) *postRuntimeActivationPackageFlags {
+	values := &postRuntimeActivationPackageFlags{}
+	values.manifest = flags.String("manifest", "", "path to the verified local post-runtime manifest")
+	values.activationSecret = flags.String("activation-secret", "", "immutable private activation Secret name")
+	values.jobTemplate = flags.String("job-template", "", "path to the bounded post-runtime Job template")
+	values.jobTemplateDigest = flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	values.runID = flags.String("run-id", "", "bounded OK-147 post-runtime Job identity")
+	values.imageDigest = flags.String("image", "", "digest-pinned ok image")
+	values.managementCIDR = flags.String("management-api-cidr", "", "single-address management API CIDR")
+	values.workloadCIDR = flags.String("workload-api-cidr", "", "single-address workload API CIDR")
+	values.argoCIDR = flags.String("argo-api-cidr", "", "single-address Argo API CIDR")
+	values.authorizationCIDR = flags.String("authorization-api-cidr", "", "single-address authorization API CIDR")
+	return values
+}
+
+func (values *postRuntimeActivationPackageFlags) config() (runner.PostRuntimeExecutionActivationPackageConfig, error) {
+	for _, input := range []struct{ name, value string }{
+		{"--manifest", *values.manifest}, {"--activation-secret", *values.activationSecret},
+		{"--job-template", *values.jobTemplate}, {"--job-template-digest", *values.jobTemplateDigest},
+		{"--run-id", *values.runID}, {"--image", *values.imageDigest}, {"--management-api-cidr", *values.managementCIDR},
+		{"--workload-api-cidr", *values.workloadCIDR}, {"--argo-api-cidr", *values.argoCIDR},
+		{"--authorization-api-cidr", *values.authorizationCIDR},
+	} {
+		if input.value == "" {
+			return runner.PostRuntimeExecutionActivationPackageConfig{}, fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*values.jobTemplateDigest) {
+		return runner.PostRuntimeExecutionActivationPackageConfig{}, errors.New("--job-template-digest must be a lowercase SHA-256 identity")
+	}
+	template, err := readBoundedLocalFile(*values.jobTemplate, 1024*1024)
+	if err != nil {
+		return runner.PostRuntimeExecutionActivationPackageConfig{}, errors.New("read bounded post-runtime Job template")
+	}
+	return runner.PostRuntimeExecutionActivationPackageConfig{
+		ManifestPath: *values.manifest, ActivationSecret: *values.activationSecret, JobTemplate: template,
+		JobTemplateDigest: *values.jobTemplateDigest, RunID: *values.runID, ImageDigest: *values.imageDigest,
+		ManagementAPICIDR: *values.managementCIDR, WorkloadAPICIDR: *values.workloadCIDR,
+		ArgoAPICIDR: *values.argoCIDR, AuthorizationAPICIDR: *values.authorizationCIDR,
+	}, nil
+}
+
 func runClusterStageRunPostRuntimePackage(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster stage run post-runtime package", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	manifest := flags.String("manifest", "", "path to the verified local post-runtime manifest")
-	activationSecret := flags.String("activation-secret", "", "immutable private activation Secret name")
-	jobTemplate := flags.String("job-template", "", "path to the bounded post-runtime Job template")
-	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	packageFlags := addPostRuntimeActivationPackageFlags(flags)
 	output := flags.String("output", "", "new private 0600 activation package file")
-	runID := flags.String("run-id", "", "bounded OK-147 post-runtime Job identity")
-	imageDigest := flags.String("image", "", "digest-pinned ok image")
-	managementCIDR := flags.String("management-api-cidr", "", "single-address management API CIDR")
-	workloadCIDR := flags.String("workload-api-cidr", "", "single-address workload API CIDR")
-	argoCIDR := flags.String("argo-api-cidr", "", "single-address Argo API CIDR")
-	authorizationCIDR := flags.String("authorization-api-cidr", "", "single-address authorization API CIDR")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("positional arguments are not accepted")
 	}
-	for _, value := range []string{*manifest, *activationSecret, *jobTemplate, *jobTemplateDigest, *output, *runID, *imageDigest, *managementCIDR, *workloadCIDR, *argoCIDR, *authorizationCIDR} {
-		if value == "" {
-			return errors.New("all post-runtime package flags are required")
-		}
+	if *output == "" {
+		return errors.New("--output is required")
 	}
-	if !sha256DigestPattern.MatchString(*jobTemplateDigest) {
-		return errors.New("--job-template-digest must be a lowercase SHA-256 identity")
-	}
-	template, err := readBoundedLocalFile(*jobTemplate, 1024*1024)
+	config, err := packageFlags.config()
 	if err != nil {
-		return errors.New("read bounded post-runtime Job template")
+		return err
 	}
-	raw, receipt, err := materializePostRuntimeActivationPackage(runner.PostRuntimeExecutionActivationPackageConfig{
-		ManifestPath: *manifest, ActivationSecret: *activationSecret, JobTemplate: template, JobTemplateDigest: *jobTemplateDigest,
-		RunID: *runID, ImageDigest: *imageDigest, ManagementAPICIDR: *managementCIDR, WorkloadAPICIDR: *workloadCIDR,
-		ArgoAPICIDR: *argoCIDR, AuthorizationAPICIDR: *authorizationCIDR,
-	})
+	raw, receipt, err := materializePostRuntimeActivationPackage(config)
 	if err != nil {
 		return err
 	}
@@ -124,6 +201,80 @@ func runClusterStageRunPostRuntimeMaterialize(arguments []string, stdout, stderr
 		return outputErr
 	}
 	return err
+}
+
+func runClusterStageRunPostRuntimeLaunchPrepare(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run post-runtime launch prepare", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	packageFlags := addPostRuntimeActivationPackageFlags(flags)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	config, err := packageFlags.config()
+	if err != nil {
+		return err
+	}
+	preparation, err := preparePostRuntimeActivationLaunch(config)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(preparation)
+}
+
+func runClusterStageRunPostRuntimeLaunchExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run post-runtime launch execute", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	packageFlags := addPostRuntimeActivationPackageFlags(flags)
+	expectedPackageDigest := flags.String("expected-package-digest", "", "exact private package digest emitted by launch prepare")
+	installerEndpoint := flags.String("installer-api-endpoint", "", "exact management Kubernetes HTTPS IP endpoint")
+	installerCADigest := flags.String("installer-ca-digest", "", "expected management installer CA digest")
+	installerTokenFile := flags.String("installer-token-file", "", "bounded management installer token file")
+	installerCAFile := flags.String("installer-ca-file", "", "bounded management installer CA file")
+	execute := flags.Bool("execute", false, "perform the exact single-use three-create post-runtime activation")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("post-runtime activation mutation requires explicit --execute")
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--expected-package-digest", *expectedPackageDigest}, {"--installer-api-endpoint", *installerEndpoint},
+		{"--installer-ca-digest", *installerCADigest}, {"--installer-token-file", *installerTokenFile}, {"--installer-ca-file", *installerCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*expectedPackageDigest) || !sha256DigestPattern.MatchString(*installerCADigest) {
+		return errors.New("post-runtime launch digests must be lowercase SHA-256 identities")
+	}
+	config, err := packageFlags.config()
+	if err != nil {
+		return err
+	}
+	bounded, cancel := context.WithTimeout(ctx, stageLaunchTimeout)
+	defer cancel()
+	receipt, launchErr := executePostRuntimeActivationLaunch(bounded, config, runner.KubernetesAuthorityConfig{
+		Endpoint: *installerEndpoint, TokenFile: *installerTokenFile, CAFile: *installerCAFile, CABundleDigest: *installerCADigest,
+	}, *expectedPackageDigest)
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return launchErr
 }
 
 func runClusterStageRunPostRuntimePrepare(arguments []string, stdout, stderr io.Writer) error {
