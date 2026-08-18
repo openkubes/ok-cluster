@@ -2710,6 +2710,17 @@ not sign, persist or widen a grant and performs no ledger or Kubernetes
 request. This keeps the future in-process adapter from becoming its own policy
 authority.
 
+The concrete post-runtime execution adapter now composes those boundaries into
+one single-use Stage 8-12 library path. It starts from the exact seven-receipt
+cursor, reuses one verified runtime binding, executes the memory-only
+credential handoff, resolves Stage 9 and Stage 10 authorization only after the
+current predecessor receipt is durable, and opens the existing registration,
+Application, observation and aggregate operations. Canonical Stage 8-11
+receipts are persisted create-only as private `0600` files for the next
+cursor. A missing grant, failed stage, malformed receipt, unsafe destination
+or cancelled context stops the suffix without retry, rollback or cleanup. The
+adapter itself still has no CLI or Job activation surface.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
@@ -2718,8 +2729,8 @@ Stage-12 launch boundary and the direct command executed by its Job are exposed
 through the local CLI. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- stages 8–11 are not yet composed with Stage 12 through one coherent local
-  CLI and Job orchestration path;
+- the Stage 8-12 execution adapter is not yet exposed through one coherent
+  local CLI and Job orchestration path;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the previously published runner image predates this staged-library closure;
