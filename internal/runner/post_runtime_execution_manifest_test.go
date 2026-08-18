@@ -22,6 +22,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 func TestOpenPostRuntimeExecutionManifestBindsExactPrivateActivation(t *testing.T) {
@@ -126,7 +127,7 @@ func postRuntimeManifestFixture(t *testing.T) (string, postRuntimeExecutionFacto
 	}
 	targetAccess := runnerTargetAccessYAML()
 	policy := targetCredentialPolicyDocument{
-		Format: TargetCredentialPolicyFormat, TargetIdentityDigest: digest.SHA256([]byte(targetAccessRuntimeUID)),
+		Format: TargetCredentialPolicyFormat, TargetIdentityDigest: submission.RuntimeTargetIdentityDigestPlaceholder,
 		ServiceAccount:     targetCredentialServiceAccount{Namespace: "kube-system", Name: "ok147-argocd-manager"},
 		RequestedAudiences: []string{}, ExpirationSeconds: 10800, CredentialUse: "argocd-target-registration",
 		Retention: "memory-only", NativeRotation: false, ProductionSuitable: false,
