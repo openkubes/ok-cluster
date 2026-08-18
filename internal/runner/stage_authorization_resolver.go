@@ -233,7 +233,7 @@ func newStageAuthorizationRequest(plan stageplan.Binding, decision stagecursor.D
 		PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
 		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest,
 		Operation: stage.GrantOperation, Authority: stage.Authority,
-		Predecessors: append([]stagecursor.Predecessor(nil), decision.Predecessors...), MaxUses: 1,
+		Predecessors: append([]stagecursor.Predecessor{}, decision.Predecessors...), MaxUses: 1,
 	}
 	request.RequestDigest, err = stageAuthorizationRequestDigest(request)
 	if err != nil {
@@ -243,7 +243,7 @@ func newStageAuthorizationRequest(plan stageplan.Binding, decision stagecursor.D
 }
 
 func cloneStageAuthorizationRequest(request StageAuthorizationRequest) StageAuthorizationRequest {
-	request.Predecessors = append([]stagecursor.Predecessor(nil), request.Predecessors...)
+	request.Predecessors = append([]stagecursor.Predecessor{}, request.Predecessors...)
 	return request
 }
 
@@ -277,7 +277,7 @@ func stageAuthorizationRequestDigest(request StageAuthorizationRequest) (string,
 		EnablementRevision: request.EnablementRevision, PlatformRevision: request.PlatformRevision,
 		ExecutionFixture: request.ExecutionFixture, StageID: request.StageID, StageOrder: request.StageOrder,
 		StageDigest: request.StageDigest, Operation: request.Operation, Authority: request.Authority,
-		Predecessors: append([]stagecursor.Predecessor(nil), request.Predecessors...), MaxUses: request.MaxUses,
+		Predecessors: append([]stagecursor.Predecessor{}, request.Predecessors...), MaxUses: request.MaxUses,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
