@@ -2840,8 +2840,10 @@ and a single-use CLI launcher. This is not yet the OK-147 Definition of Done:
 - no ephemeral `ok-mgmt` Job has executed the complete current implementation;
 - the disposable-cluster create conformance and executor-termination failure
   conformance have not yet been repeated through this MVP;
-- the final operator runbook, security boundary summary and ADR-030 amendment
-  proposal remain to be reviewed.
+- the final [operator runbook](ok147-operator-runbook.md),
+  [security boundary summary](ok147-security-boundary.md) and
+  [ADR-030 amendment proposal](ok147-adr-030-amendment-proposal.md) are defined
+  and remain to be reviewed with the live evidence.
 
 The remaining work is execution evidence and operational closure, not another
 runner component. A live checkpoint must publish the current image, construct

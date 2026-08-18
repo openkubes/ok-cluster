@@ -1,0 +1,118 @@
+# OK-147 bounded runner operator runbook
+
+This runbook describes the first live execution of the bounded OK-147 runner.
+It is an operational checklist, not standing authorization. Every live run must
+bind one reviewed source revision, one immutable runner image, one activation
+package digest and one separately approved execution window.
+
+## Scope
+
+The runner performs one already-authorized `CreateCluster` transition and the
+bounded post-runtime suffix. It is neither a long-running operator nor a
+lifecycle source of truth. CAPI/CAPK, the selected Enablement mechanism and
+GitOps remain the owners of convergence.
+
+The live activation installs exactly three objects on `ok-mgmt`, in this order:
+
+```text
+immutable activation Secret
+        -> deny-by-default NetworkPolicy
+        -> non-retrying Job
+```
+
+The launcher first reads all three exact names. Any existing object or failed
+read stops before the first write. Once a write has been attempted, an error or
+uncertain response is preserved as `STOPPED_PARTIAL_OR_UNKNOWN`; do not retry,
+update, patch, apply, delete or clean up under the same authorization.
+
+## Required inputs
+
+Before preparation, record and independently review:
+
+- the exact source commit and published runner image digest;
+- the image publication receipt, provenance attestation and pullback result;
+- the private activation manifest and all seven predecessor receipts;
+- the exact R, E, P, execution-fixture, Plan and target-identity digests;
+- one current signed authorization for every externally authorized stage;
+- short-lived, isolated credentials for the ledger, management, workload,
+  GitOps and authorization endpoints;
+- the four exact `/32` egress destinations and ports;
+- the activation namespace, Secret, NetworkPolicy and Job names;
+- independent observers, stop authority, recovery authority and evidence
+  destination; and
+- the tested recovery procedure for the DEV environment.
+
+Secrets, tokens, Kubeconfigs, private keys, endpoints and private local paths
+must never be copied into public receipts, logs, commits or pull requests.
+
+## Preflight
+
+1. Verify that the source commit, image digest, attestation and publication
+   receipt all describe the same build.
+2. Re-run the complete test suite and the offline activation-package tests.
+3. Verify every private input is a regular `0600` file below an existing private
+   directory and that every credential is current and narrowly scoped.
+4. Run `post-runtime launch prepare` without installer credentials. Retain only
+   its redaction-safe package receipt and exact three-object installation plan.
+5. Compare the prepared package digest with the independently reviewed digest.
+6. Verify by exact-name reads that the activation Secret, NetworkPolicy and Job
+   are all absent. A missing observer or ambiguous result is a failed preflight.
+7. Confirm that no unrelated lifecycle change or failure injection is active.
+
+Preparation must not contact a cluster or consume the execution authorization.
+
+## Single-use launch
+
+Only after the preflight and explicit run authorization may the operator invoke
+`post-runtime launch execute --execute` with:
+
+- the exact expected package digest copied from the reviewed preparation;
+- the bound `ok-mgmt` installer endpoint and CA digest;
+- short-lived installer token and CA files; and
+- the same immutable private activation inputs used during preparation.
+
+The command rebuilds the package, verifies its identity before opening the
+installer credential, repeats the complete absence preflight and performs at
+most the three ordered creates. Preserve its public receipt even when it stops.
+
+## Observation and completion
+
+Observe only the exact activation Job and the already-bound lifecycle,
+Enablement and GitOps sources. Completion is not the Job exit code. A successful
+outcome requires:
+
+- the immutable ledger claim and current operation receipts;
+- CAPI/provider observations correlated with R and current generations;
+- Enablement convergence correlated with E and current NetworkReady evidence;
+- GitOps desired/applied revision and capability evidence correlated with P;
+- the bounded aggregate evaluator result; and
+- one independently verifiable, redacted evidence bundle digest.
+
+`Ready=True` is valid only when every profile-required source is current and
+correlated. Missing, stale, conflicting or historical evidence yields
+`Unknown` or `False` and never triggers repair by the evaluator.
+
+## Stop conditions
+
+Stop immediately and preserve state when any of the following occurs:
+
+- an expected-absent object already exists;
+- a digest, identity, authority, generation or revision differs;
+- any create has an error or uncertain outcome;
+- credentials, endpoints or private material appear in public output;
+- an independent observer becomes unavailable;
+- a second failure domain appears; or
+- recovery would require force deletion, finalizer manipulation or an
+  unreviewed mutation.
+
+No automatic retry, rollback or cleanup is part of this run. Cleanup, deletion,
+failure injection and executor-termination conformance require their own
+preflight, digest and authorization.
+
+## Closure record
+
+The final redacted record must bind the source commit, image digest, activation
+package digest, Plan, R/E/P, target identity, grants, stage receipts, source
+observations, aggregate result and evidence-bundle digest. It must also state
+whether the run completed, stopped before mutation or preserved partial/unknown
+state.
