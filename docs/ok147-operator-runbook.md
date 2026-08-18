@@ -30,7 +30,8 @@ update, patch, apply, delete or clean up under the same authorization.
 Before preparation, record and independently review:
 
 - the exact source commit and published runner image digest;
-- the image publication receipt, provenance attestation and pullback result;
+- the [image publication receipt](ok147-runner-publication-receipt.json),
+  provenance attestation and pullback result;
 - the private activation manifest and all seven predecessor receipts;
 - the exact R, E, P, execution-fixture, Plan and target-identity digests;
 - one current signed authorization for every externally authorized stage;
