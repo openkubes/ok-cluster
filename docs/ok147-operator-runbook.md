@@ -43,6 +43,11 @@ Before preparation, record and independently review:
   destination; and
 - the tested recovery procedure for the DEV environment.
 
+The first live run starts from the clean baseline recorded in the
+[disposable-ok141 cleanup closure](ok147-disposable-ok141-cleanup-evidence.md).
+Historical OK-141 credentials, receipts and runtime identities must not be
+reused.
+
 Secrets, tokens, Kubeconfigs, private keys, endpoints and private local paths
 must never be copied into public receipts, logs, commits or pull requests.
 
