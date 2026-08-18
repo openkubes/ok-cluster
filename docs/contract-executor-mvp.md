@@ -2710,6 +2710,16 @@ not sign, persist or widen a grant and performs no ledger or Kubernetes
 request. This keeps the future in-process adapter from becoming its own policy
 authority.
 
+The concrete HTTP resolver posts that canonical request exactly once to the
+bound TLS authority endpoint, rejects redirects and unexpected media types,
+and stores the signed response create-only as a private `0600` file. The
+existing verifier then binds that grant independently to the current cursor
+and pinned public key. A failed request, invalid response or invalid grant is
+preserved as a stopped single-use attempt; the resolver exposes no automatic
+retry or overwrite path. This client is not the policy authority or grant
+issuer: deployment and operation of that external authority remain outside
+this checkpoint.
+
 The concrete post-runtime execution adapter now composes those boundaries into
 one single-use Stage 8-12 library path. It starts from the exact seven-receipt
 cursor, reuses one verified runtime binding, executes the memory-only
