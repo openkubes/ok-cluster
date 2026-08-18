@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -84,6 +86,55 @@ func TestPostRuntimeMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
 				t.Fatalf("unsafe materialization reached runner: calls=%d err=%v", calls, err)
 			}
 		})
+	}
+}
+
+func TestPostRuntimePackageWritesPrivateBytesAndEmitsOnlyReceipt(t *testing.T) {
+	previous := materializePostRuntimeActivationPackage
+	defer func() { materializePostRuntimeActivationPackage = previous }()
+	root := t.TempDir()
+	templatePath := filepath.Join(root, "job.tpl")
+	if err := os.WriteFile(templatePath, []byte("job-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(root, "private-package.yaml")
+	calls := 0
+	materializePostRuntimeActivationPackage = func(config runner.PostRuntimeExecutionActivationPackageConfig) ([]byte, runner.PostRuntimeExecutionActivationPackageReceipt, error) {
+		calls++
+		if config.ManifestPath != "/private/tmp/manifest.json" || config.ActivationSecret != "ok147-activation" || config.RunID != "ok147-run-01" ||
+			string(config.JobTemplate) != "job-template" || config.JobTemplateDigest != testSHA("1") || config.ManagementAPICIDR != "192.0.2.1/32" {
+			t.Fatalf("unexpected package config: %#v", config)
+		}
+		return []byte("private-package"), runner.PostRuntimeExecutionActivationPackageReceipt{
+			Format: runner.PostRuntimeExecutionActivationPackageFormat, State: "VERIFIED", PackageDigest: testSHA("2"), MutationAllowed: false,
+		}, nil
+	}
+	arguments := []string{
+		"cluster", "stage", "run", "post-runtime", "package",
+		"--manifest", "/private/tmp/manifest.json", "--activation-secret", "ok147-activation",
+		"--job-template", templatePath, "--job-template-digest", testSHA("1"), "--output", outputPath,
+		"--run-id", "ok147-run-01", "--image", "ghcr.io/openkubes/ok-cluster@" + testSHA("3"),
+		"--management-api-cidr", "192.0.2.1/32", "--workload-api-cidr", "192.0.2.2/32",
+		"--argo-api-cidr", "192.0.2.3/32", "--authorization-api-cidr", "192.0.2.4/32",
+	}
+	var stdout bytes.Buffer
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(outputPath)
+	if err != nil || string(stored) != "private-package" {
+		t.Fatalf("private package was not written exactly: %q %v", stored, err)
+	}
+	info, err := os.Lstat(outputPath)
+	if err != nil || info.Mode().Perm() != 0o600 || calls != 1 {
+		t.Fatalf("private package metadata or call count differs: %#v %v calls=%d", info, err, calls)
+	}
+	if strings.Contains(stdout.String(), "private-package") || !strings.Contains(stdout.String(), `"state": "VERIFIED"`) {
+		t.Fatalf("public package output is unsafe: %s", stdout.String())
+	}
+	before := calls
+	if err := run(append(arguments, "extra"), &bytes.Buffer{}, &bytes.Buffer{}); err == nil || calls != before {
+		t.Fatal("positional package argument reached private builder")
 	}
 }
 

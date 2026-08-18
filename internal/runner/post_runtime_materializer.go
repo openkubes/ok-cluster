@@ -20,7 +20,7 @@ const (
 	PostRuntimeExecutionBundleReceiptFormat  = "ok147-post-runtime-execution-bundle-receipt/v1"
 	postRuntimeExecutionBundleIndexName      = "bundle-index.json"
 	postRuntimeExecutionManifestRelativePath = "activation/post-runtime-manifest.json"
-	maximumPostRuntimeExecutionBundleBytes   = 900 * 1024
+	maximumPostRuntimeExecutionBundleBytes   = 700 * 1024
 	maximumPostRuntimeExecutionBundleFiles   = 40
 )
 
