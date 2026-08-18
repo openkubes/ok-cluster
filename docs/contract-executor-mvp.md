@@ -2836,7 +2836,10 @@ and a single-use CLI launcher. This is not yet the OK-147 Definition of Done:
 - the legacy `ok cluster create` command remains dry-run-only;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
-- the previously published runner image predates this staged-library closure;
+- the current staged-library source is published as the immutable multi-platform
+  image recorded by the verified
+  [publication receipt](ok147-runner-publication-receipt.json), including SLSA
+  provenance, SPDX SBOMs and digest pullback;
 - no ephemeral `ok-mgmt` Job has executed the complete current implementation;
 - the disposable-cluster create conformance and executor-termination failure
   conformance have not yet been repeated through this MVP;
