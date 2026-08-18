@@ -2740,8 +2740,18 @@ runtime credentials and private receipt destinations. Loading derives target
 identity from durable lifecycle evidence and rejects identity, profile,
 artifact or capability divergence before opening the execution suffix. Its
 redaction-safe receipt exposes only semantic digests and explicitly grants no
-mutation. The manifest loader still is not a CLI command or Kubernetes Job;
-those activation surfaces remain separate checkpoints.
+mutation. Loading remains verification-only; every activation surface must
+bind that verified identity separately.
+
+The local post-runtime CLI now keeps verification and mutation as two explicit
+operations. `post-runtime prepare` opens and verifies the private manifest and
+emits its redaction-safe semantic digest without executing any stage.
+`post-runtime execute` reopens the manifest, requires that exact prepared
+digest plus an explicit `--execute` flag, and runs the Stage 8-12 suffix once
+inside a fixed three-hour context. A stopped execution still emits its bounded
+composite receipt before the command returns the failure. Neither operation
+adds automatic retry, rollback or cleanup. This closes the local activation
+surface; an ephemeral Kubernetes Job remains a separate checkpoint.
 
 ## Current OK-147 implementation boundary
 
@@ -2751,8 +2761,9 @@ Stage-12 launch boundary and the direct command executed by its Job are exposed
 through the local CLI. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- the Stage 8-12 execution adapter has one coherent private manifest loader but
-  is not yet exposed through a local CLI and Job orchestration path;
+- the Stage 8-12 execution adapter and private manifest are exposed through one
+  local prepare/execute CLI, but not yet through an ephemeral Job orchestration
+  path;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the previously published runner image predates this staged-library closure;

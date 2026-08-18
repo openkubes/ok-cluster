@@ -681,6 +681,12 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "platform-applications" {
 		return runClusterStageRunPlatformApplications(ctx, arguments[4:], stdout, stderr)
 	}
+	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "post-runtime" && arguments[4] == "prepare" {
+		return runClusterStageRunPostRuntimePrepare(arguments[5:], stdout, stderr)
+	}
+	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "post-runtime" && arguments[4] == "execute" {
+		return runClusterStageRunPostRuntimeExecute(ctx, arguments[5:], stdout, stderr)
+	}
 	if len(arguments) >= 6 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "aggregate-evidence" && arguments[4] == "launch" && arguments[5] == "prepare" {
 		return runClusterStageRunAggregateEvidenceLaunchPrepare(arguments[6:], stdout, stderr)
 	}
@@ -699,7 +705,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
