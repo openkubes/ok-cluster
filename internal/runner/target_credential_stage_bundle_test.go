@@ -10,6 +10,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 func TestLoadTargetCredentialStageBundleBindsPrefixPolicyGrantAndAccessIdentity(t *testing.T) {
@@ -25,6 +26,9 @@ func TestLoadTargetCredentialStageBundleBindsPrefixPolicyGrantAndAccessIdentity(
 	receipt, err := bundle.Receipt()
 	if err != nil || receipt.Format != TargetCredentialStageBundleReceiptFormat || receipt.State != "VERIFIED" || receipt.PlanDigest != fixture.plan.PlanDigest || receipt.PolicyDigest != fixture.policyDigest || receipt.TargetAccessArtifactDigest != fixture.accessDigest || receipt.TargetIdentityDigest != digest.SHA256([]byte(targetAccessRuntimeUID)) || receipt.AuthorizationDigest == "" || receipt.ServiceAccountIdentityDigest == "" || receipt.AudienceMode != "server-default" || receipt.ExpirationSeconds != 10800 || receipt.CredentialRetention != "memory-only" || receipt.NativeRotationClaimed || receipt.ProductionSuitableClaimed || receipt.MutationAllowed {
 		t.Fatalf("unexpected target-credential receipt: %#v %v", receipt, err)
+	}
+	if bundle.policy.TargetIdentityDigest != receipt.TargetIdentityDigest {
+		t.Fatal("verified lifecycle target was not materialized into the private in-memory policy")
 	}
 }
 
@@ -64,7 +68,7 @@ func TestValidateTargetCredentialPolicyFailsClosed(t *testing.T) {
 	serviceAccount := projection.ResourceIdentity{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "kube-system", Name: "ok147-argocd-manager"}
 	valid := func() targetCredentialPolicyDocument {
 		return targetCredentialPolicyDocument{
-			Format: TargetCredentialPolicyFormat, TargetIdentityDigest: target,
+			Format: TargetCredentialPolicyFormat, TargetIdentityDigest: submission.RuntimeTargetIdentityDigestPlaceholder,
 			ServiceAccount:     targetCredentialServiceAccount{Namespace: serviceAccount.Namespace, Name: serviceAccount.Name},
 			RequestedAudiences: []string{}, ExpirationSeconds: 10800,
 			CredentialUse: "argocd-target-registration", Retention: "memory-only",
@@ -74,7 +78,7 @@ func TestValidateTargetCredentialPolicyFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	policyTests := map[string]func(*targetCredentialPolicyDocument){
-		"foreign target":          func(p *targetCredentialPolicyDocument) { p.TargetIdentityDigest = runnerStageSHA("f") },
+		"prefilled target":        func(p *targetCredentialPolicyDocument) { p.TargetIdentityDigest = target },
 		"foreign service account": func(p *targetCredentialPolicyDocument) { p.ServiceAccount.Name = "foreign-manager" },
 		"guessed audience":        func(p *targetCredentialPolicyDocument) { p.RequestedAudiences = []string{"https://guessed.invalid"} },
 		"long lifetime":           func(p *targetCredentialPolicyDocument) { p.ExpirationSeconds++ },
@@ -112,7 +116,7 @@ func targetCredentialBundleFixture(t *testing.T) targetCredentialBundleTestFixtu
 	access := runnerTargetAccessYAML()
 	accessDigest := digest.SHA256(access)
 	policy := targetCredentialPolicyDocument{
-		Format: TargetCredentialPolicyFormat, TargetIdentityDigest: digest.SHA256([]byte(targetAccessRuntimeUID)),
+		Format: TargetCredentialPolicyFormat, TargetIdentityDigest: submission.RuntimeTargetIdentityDigestPlaceholder,
 		ServiceAccount:     targetCredentialServiceAccount{Namespace: "kube-system", Name: "ok147-argocd-manager"},
 		RequestedAudiences: []string{}, ExpirationSeconds: 10800, CredentialUse: "argocd-target-registration",
 		Retention: "memory-only", NativeRotation: false, ProductionSuitable: false,

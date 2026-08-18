@@ -168,6 +168,11 @@ func LoadTargetCredentialStageBundle(config TargetCredentialStageBundleConfig) (
 	if err := validateTargetCredentialPolicy(policy, lifecycle.TargetClusterUIDDigest, serviceAccount); err != nil {
 		return VerifiedTargetCredentialStageBundle{}, err
 	}
+	// The public pre-runtime policy is digest-bound before Kubernetes assigns
+	// the CAPI Cluster UID. Materialize only that lifecycle-derived identity in
+	// memory after both the policy digest and receipt prefix have been verified.
+	// This keeps Stage 8 deterministic without weakening target correlation.
+	policy.TargetIdentityDigest = lifecycle.TargetClusterUIDDigest
 	directPredecessors, err := cursor.Predecessors()
 	if err != nil {
 		return VerifiedTargetCredentialStageBundle{}, err
@@ -195,8 +200,8 @@ func LoadTargetCredentialStageBundle(config TargetCredentialStageBundleConfig) (
 }
 
 func validateTargetCredentialPolicy(policy targetCredentialPolicyDocument, targetIdentity string, serviceAccount projection.ResourceIdentity) error {
-	if policy.Format != TargetCredentialPolicyFormat || policy.TargetIdentityDigest != targetIdentity {
-		return errors.New("target-credential policy target identity differs from verified workload")
+	if policy.Format != TargetCredentialPolicyFormat || !stageReceiptPrefixDigestPattern.MatchString(targetIdentity) || policy.TargetIdentityDigest != submission.RuntimeTargetIdentityDigestPlaceholder {
+		return errors.New("target-credential policy target identity placeholder or verified workload identity is invalid")
 	}
 	if policy.ServiceAccount.Namespace != serviceAccount.Namespace || policy.ServiceAccount.Name != serviceAccount.Name || serviceAccount.APIVersion != "v1" || serviceAccount.Kind != "ServiceAccount" {
 		return errors.New("target-credential ServiceAccount differs from target-access artifact")
