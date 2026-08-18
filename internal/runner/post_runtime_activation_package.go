@@ -53,15 +53,19 @@ type PostRuntimeExecutionActivationPackageReceipt struct {
 	ManifestDigest       string   `json:"manifestDigest"`
 	JobTemplateDigest    string   `json:"jobTemplateDigest"`
 	JobEnvelopeDigest    string   `json:"jobEnvelopeDigest"`
+	ManagementAuthority  string   `json:"managementAuthority"`
+	PlanDigest           string   `json:"planDigest"`
+	TargetIdentityDigest string   `json:"targetIdentityDigest"`
 	PrivateFileCount     int      `json:"privateFileCount"`
 	ObjectKinds          []string `json:"objectKinds"`
 	MutationAllowed      bool     `json:"mutationAllowed"`
 }
 
 type VerifiedPostRuntimeExecutionActivationPackage struct {
-	raw      []byte
-	receipt  PostRuntimeExecutionActivationPackageReceipt
-	verified bool
+	raw                 []byte
+	receipt             PostRuntimeExecutionActivationPackageReceipt
+	managementAuthority string
+	verified            bool
 }
 
 type postRuntimeActivationSecret struct {
@@ -172,9 +176,13 @@ func BuildPostRuntimeExecutionActivationPackage(config PostRuntimeExecutionActiv
 		ActivationSecret: config.ActivationSecret, SecretObjectDigest: digest.SHA256(secretRaw), BundleDigest: bundleDigest,
 		SourceManifestDigest: sourceReceipt.ManifestDigest,
 		ManifestDigest:       manifestDigest, JobTemplateDigest: config.JobTemplateDigest, JobEnvelopeDigest: digest.SHA256(jobRaw),
-		PrivateFileCount: len(postRuntimeExecutionBundleFiles), ObjectKinds: []string{"Secret", "NetworkPolicy", "Job"}, MutationAllowed: false,
+		ManagementAuthority: document.Plan.Expected.ManagementAuthority, PlanDigest: sourceReceipt.PlanDigest,
+		TargetIdentityDigest: sourceReceipt.TargetIdentityDigest,
+		PrivateFileCount:     len(postRuntimeExecutionBundleFiles), ObjectKinds: []string{"Secret", "NetworkPolicy", "Job"}, MutationAllowed: false,
 	}
-	return VerifiedPostRuntimeExecutionActivationPackage{raw: packageRaw, receipt: receipt, verified: true}, nil
+	return VerifiedPostRuntimeExecutionActivationPackage{
+		raw: packageRaw, receipt: receipt, managementAuthority: document.Plan.Expected.ManagementAuthority, verified: true,
+	}, nil
 }
 
 // PrivateBytes returns the credential-bearing installation package. Callers
@@ -201,6 +209,8 @@ func verifyPostRuntimeExecutionActivationPackage(packaged VerifiedPostRuntimeExe
 		!stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.BundleDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.ManifestDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.SourceManifestDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.SecretObjectDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.JobEnvelopeDigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.PlanDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.TargetIdentityDigest) ||
+		packaged.receipt.ManagementAuthority == "" || packaged.receipt.ManagementAuthority != packaged.managementAuthority ||
 		packaged.receipt.PrivateFileCount != len(postRuntimeExecutionBundleFiles) {
 		return errors.New("post-runtime activation package identity is incomplete")
 	}
