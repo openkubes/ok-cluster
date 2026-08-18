@@ -1,0 +1,166 @@
+package runner
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/openkubes/ok-cluster/internal/authorization"
+	"github.com/openkubes/ok-cluster/internal/digest"
+)
+
+func TestStageAuthorizationHTTPResolverRequestsAndPersistsExactGrant(t *testing.T) {
+	fixture := targetCredentialBundleFixture(t)
+	resume := StageResumeConfig{PlanPath: fixture.config.PlanPath, PlanExpected: fixture.config.PlanExpected, Receipts: fixture.config.Receipts}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		if httpRequest.Method != http.MethodPost || httpRequest.URL.Path != "/v1/stage-authorizations" ||
+			httpRequest.Header.Get("Authorization") != "Bearer authority-token" ||
+			httpRequest.Header.Get("Content-Type") != "application/vnd.openkubes.stage-authorization-request+json" ||
+			httpRequest.Header.Get("Accept") != "application/vnd.openkubes.stage-authorization+json" {
+			response.WriteHeader(http.StatusForbidden)
+			return
+		}
+		var request StageAuthorizationRequest
+		if err := json.NewDecoder(httpRequest.Body).Decode(&request); err != nil || request.StageID != "target-credential" || request.RequestDigest == "" {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		response.Header().Set("Content-Type", "application/vnd.openkubes.stage-authorization+json")
+		response.WriteHeader(http.StatusCreated)
+		response.Write(stageAuthorizationEnvelopeForRequest(t, request, publicKey, privateKey))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := writeBundleFile(t, root, "authority.pub", []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n"))
+	resolver, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
+		Endpoint: server.URL + "/v1/stage-authorizations", TokenFile: writeBundleFile(t, root, "token", []byte("authority-token")),
+		CAFile: writeRuntimeBindingServerCA(t, root, "ca.crt", server), PublicKeyPath: keyPath,
+		OutputDirectory: root, Clock: func() time.Time { return time.Date(2026, 8, 18, 8, 5, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveStageAuthorization(context.Background(), resume, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := resolved.Source()
+	if err != nil || source.PublicKeyPath != keyPath || source.EvaluationTime != time.Date(2026, 8, 18, 8, 5, 0, 0, time.UTC) {
+		t.Fatalf("unexpected HTTP authorization source: %#v %v", source, err)
+	}
+	info, err := os.Lstat(source.GrantPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || filepath.Dir(source.GrantPath) != root {
+		t.Fatalf("HTTP grant was not persisted privately: %#v %v", info, err)
+	}
+	if _, err := ResolveStageAuthorization(context.Background(), resume, resolver); err == nil {
+		t.Fatal("same authorization request was sent twice")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 {
+		t.Fatalf("authority requests=%d, want 1", requests)
+	}
+}
+
+func TestStageAuthorizationHTTPResolverRejectsRedirectAndUnsafeConfiguration(t *testing.T) {
+	fixture := targetCredentialBundleFixture(t)
+	resume := StageResumeConfig{PlanPath: fixture.config.PlanPath, PlanExpected: fixture.config.PlanExpected, Receipts: fixture.config.Receipts}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetCalls := 0
+	target := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { targetCalls++ }))
+	defer target.Close()
+	redirect := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Location", target.URL)
+		response.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := StageAuthorizationHTTPResolverConfig{
+		Endpoint: redirect.URL + "/v1/stage-authorizations", TokenFile: writeBundleFile(t, root, "token", []byte("authority-token")),
+		CAFile:          writeRuntimeBindingServerCA(t, root, "ca.crt", redirect),
+		PublicKeyPath:   writeBundleFile(t, root, "authority.pub", []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n")),
+		OutputDirectory: root, Clock: time.Now,
+	}
+	resolver, err := OpenStageAuthorizationHTTPResolver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, cursor, _, err := loadStageResumeWithPrefix(resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, _ := cursor.Decision()
+	unsafeRequest, err := newStageAuthorizationRequest(plan, decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsafeRequest.StageID = "../../escape"
+	unsafeRequest.RequestDigest, _ = stageAuthorizationRequestDigest(unsafeRequest)
+	if _, err := resolver.ResolveStageAuthorization(context.Background(), unsafeRequest); err == nil {
+		t.Fatal("path-capable stage identity reached HTTP resolver")
+	}
+	if _, err := ResolveStageAuthorization(context.Background(), resume, resolver); err == nil || targetCalls != 0 {
+		t.Fatalf("authority redirect was followed: targetCalls=%d err=%v", targetCalls, err)
+	}
+	config.Endpoint = "http://example.invalid:80/v1/stage-authorizations"
+	if _, err := OpenStageAuthorizationHTTPResolver(config); err == nil {
+		t.Fatal("cleartext non-loopback authority was accepted")
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config.Endpoint = redirect.URL + "/v1/stage-authorizations"
+	if _, err := OpenStageAuthorizationHTTPResolver(config); err == nil {
+		t.Fatal("broad grant directory was accepted")
+	}
+}
+
+func stageAuthorizationEnvelopeForRequest(t *testing.T, request StageAuthorizationRequest, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey) []byte {
+	t.Helper()
+	payload := authorization.StagePayload{
+		Audience: request.Audience, GrantID: "ok147-http-" + request.StageID, Decision: "ALLOW",
+		PlanDigest: request.PlanDigest, ContractIdentity: request.ContractIdentity, ContractRevision: request.ContractRevision,
+		EnablementRevision: request.EnablementRevision, PlatformRevision: request.PlatformRevision, ExecutionFixture: request.ExecutionFixture,
+		StageID: request.StageID, StageOrder: request.StageOrder, StageDigest: request.StageDigest,
+		Operation: request.Operation, Authority: request.Authority,
+		NotBefore: "2026-08-18T07:59:00Z", NotAfter: "2026-08-18T08:20:00Z", MaxUses: request.MaxUses,
+	}
+	for _, predecessor := range request.Predecessors {
+		payload.Predecessors = append(payload.Predecessors, authorization.StagePredecessor{StageID: predecessor.StageID, OutcomeDigest: predecessor.ReceiptDigest})
+	}
+	signed, err := authorization.StageSigningBytes(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mustJSON(t, map[string]any{
+		"format": authorization.StageFormat, "payload": payload,
+		"signature": map[string]any{"algorithm": "Ed25519", "keyId": digest.SHA256(publicKey), "value": base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, signed))},
+	})
+}

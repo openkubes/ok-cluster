@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
@@ -18,6 +20,8 @@ const (
 	StageAuthorizationRequestFormat         = "ok147-stage-authorization-request/v1"
 	ResolvedStageAuthorizationReceiptFormat = "ok147-resolved-stage-authorization/v1"
 )
+
+var stageAuthorizationRequestNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,127}$`)
 
 // StageAuthorizationRequest is the redaction-safe, canonical input supplied
 // to an authority after the direct predecessor receipt exists. It contains no
@@ -99,6 +103,43 @@ type ResolvedStageAuthorization struct {
 	source   StageAuthorizationSource
 	receipt  ResolvedStageAuthorizationReceipt
 	verified bool
+}
+
+func (request StageAuthorizationRequest) Bytes() ([]byte, error) {
+	requestDigest, err := stageAuthorizationRequestDigest(request)
+	if err != nil || request.RequestDigest != requestDigest || request.Format != StageAuthorizationRequestFormat ||
+		request.Audience != authorization.StageAudience || request.MaxUses != 1 || request.StageOrder < 1 ||
+		!stageAuthorizationRequestNamePattern.MatchString(request.StageID) || strings.TrimSpace(request.Operation) != request.Operation || request.Operation == "" ||
+		!stageAuthorizationRequestNamePattern.MatchString(request.Authority) || request.Predecessors == nil {
+		return nil, errors.New("stage authorization request was not produced by verification")
+	}
+	for _, value := range []string{
+		request.RequestDigest, request.PlanDigest, request.ContractRevision, request.EnablementRevision,
+		request.PlatformRevision, request.ExecutionFixture, request.StageDigest,
+	} {
+		if !stageReceiptPrefixDigestPattern.MatchString(value) {
+			return nil, errors.New("stage authorization request digest identity is invalid")
+		}
+	}
+	if request.ContractIdentity.Name == "" || request.ContractIdentity.Namespace == "" {
+		return nil, errors.New("stage authorization request Contract identity is incomplete")
+	}
+	for _, predecessor := range request.Predecessors {
+		if !stageAuthorizationRequestNamePattern.MatchString(predecessor.StageID) || !stageReceiptPrefixDigestPattern.MatchString(predecessor.ReceiptDigest) {
+			return nil, errors.New("stage authorization request predecessor is invalid")
+		}
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return contract.JCS(value)
 }
 
 // ResolveStageAuthorization derives the only acceptable authorization
