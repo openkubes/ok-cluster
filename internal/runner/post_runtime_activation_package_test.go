@@ -24,7 +24,9 @@ func TestBuildPostRuntimeExecutionActivationPackageBindsPrivateSecretAndJob(t *t
 		t.Fatal(err)
 	}
 	if receipt.Format != PostRuntimeExecutionActivationPackageFormat || receipt.State != "VERIFIED" || receipt.ActivationSecret != config.ActivationSecret ||
-		receipt.PrivateFileCount != len(postRuntimeExecutionBundleFiles) || receipt.MutationAllowed || len(receipt.ObjectKinds) != 3 {
+		receipt.ManagementAuthority != "ok-mgmt" || !stageReceiptPrefixDigestPattern.MatchString(receipt.PlanDigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(receipt.TargetIdentityDigest) || receipt.PrivateFileCount != len(postRuntimeExecutionBundleFiles) ||
+		receipt.MutationAllowed || len(receipt.ObjectKinds) != 3 {
 		t.Fatalf("unexpected activation package receipt: %#v", receipt)
 	}
 	public, err := json.Marshal(receipt)
