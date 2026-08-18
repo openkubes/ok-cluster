@@ -42,6 +42,51 @@ func TestPostRuntimePrepareVerifiesWithoutExecution(t *testing.T) {
 	}
 }
 
+func TestPostRuntimeMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
+	previous := materializePostRuntimeBundle
+	defer func() { materializePostRuntimeBundle = previous }()
+	calls := 0
+	materializePostRuntimeBundle = func(config runner.PostRuntimeExecutionBundleMaterializationConfig) (runner.PostRuntimeExecutionBundleReceipt, error) {
+		calls++
+		if config.SourceDirectory != "/var/run/openkubes/source" || config.DestinationDirectory != "/var/run/openkubes/workspace" || config.ExpectedBundleDigest != testSHA("1") {
+			t.Fatalf("unexpected materialization config: %#v", config)
+		}
+		return runner.PostRuntimeExecutionBundleReceipt{
+			Format: runner.PostRuntimeExecutionBundleReceiptFormat, State: "MATERIALIZED_VERIFIED", BundleDigest: testSHA("1"), FileCount: 34,
+		}, nil
+	}
+	arguments := []string{
+		"cluster", "stage", "run", "post-runtime", "materialize", "--source", "/var/run/openkubes/source",
+		"--destination", "/var/run/openkubes/workspace", "--expected-bundle-digest", testSHA("1"), "--materialize",
+	}
+	var stdout bytes.Buffer
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || !strings.Contains(stdout.String(), `"state": "MATERIALIZED_VERIFIED"`) {
+		t.Fatalf("materialization did not execute exactly once: calls=%d output=%s", calls, stdout.String())
+	}
+	for name, remove := range map[string]string{"no explicit flag": "--materialize", "no digest": testSHA("1"), "positional": ""} {
+		t.Run(name, func(t *testing.T) {
+			candidate := append([]string(nil), arguments...)
+			if remove == "" {
+				candidate = append(candidate, "extra")
+			} else {
+				for index, value := range candidate {
+					if value == remove {
+						candidate = append(candidate[:index], candidate[index+1:]...)
+						break
+					}
+				}
+			}
+			before := calls
+			if err := run(candidate, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || calls != before {
+				t.Fatalf("unsafe materialization reached runner: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
 func TestPostRuntimeExecuteRequiresPreparedIdentityAndRunsOnce(t *testing.T) {
 	fake := &fakePostRuntimeExecutor{receipt: runner.PostRuntimeExecutionReceipt{
 		Format: runner.PostRuntimeExecutionReceiptFormat, State: "SUCCEEDED", PlanDigest: testSHA("2"),
