@@ -24,11 +24,44 @@ var openPostRuntimeExecutor = func(path string) (postRuntimeExecutor, runner.Pos
 	return runner.OpenPostRuntimeExecutionManifest(path)
 }
 
+var materializePostRuntimeBundle = runner.MaterializePostRuntimeExecutionBundle
+
 type postRuntimeCLIReceipt struct {
 	Format    string                                     `json:"format"`
 	State     string                                     `json:"state"`
 	Manifest  runner.PostRuntimeExecutionManifestReceipt `json:"manifest"`
 	Execution *runner.PostRuntimeExecutionReceipt        `json:"execution,omitempty"`
+}
+
+func runClusterStageRunPostRuntimeMaterialize(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run post-runtime materialize", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	source := flags.String("source", "", "projected immutable post-runtime bundle directory")
+	destination := flags.String("destination", "", "absent private workspace destination")
+	expectedBundleDigest := flags.String("expected-bundle-digest", "", "exact canonical bundle index digest")
+	materialize := flags.Bool("materialize", false, "create the private regular-file workspace")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*materialize {
+		return errors.New("post-runtime private materialization requires explicit --materialize")
+	}
+	if *source == "" || *destination == "" || !sha256DigestPattern.MatchString(*expectedBundleDigest) {
+		return errors.New("--source, --destination and a lowercase SHA-256 --expected-bundle-digest are required")
+	}
+	receipt, err := materializePostRuntimeBundle(runner.PostRuntimeExecutionBundleMaterializationConfig{
+		SourceDirectory: *source, DestinationDirectory: *destination, ExpectedBundleDigest: *expectedBundleDigest,
+	})
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if outputErr := encoder.Encode(receipt); outputErr != nil {
+		return outputErr
+	}
+	return err
 }
 
 func runClusterStageRunPostRuntimePrepare(arguments []string, stdout, stderr io.Writer) error {

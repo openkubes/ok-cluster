@@ -2753,6 +2753,24 @@ composite receipt before the command returns the failure. Neither operation
 adds automatic retry, rollback or cleanup. This closes the local activation
 surface; an ephemeral Kubernetes Job remains a separate checkpoint.
 
+The first ephemeral post-runtime Job envelope binds that same command to one
+immutable activation Secret, one canonical bundle-index digest and one
+semantic manifest digest. Because Kubernetes projected Secret entries are
+symlinks while the runner deliberately accepts only regular private files, a
+non-networked init invocation copies exactly 34 allowlisted, individually
+hashed inputs into one new `0700` memory-backed workspace as `0600` files. It
+also creates the private create-only authorization and receipt directories.
+The executor container can see only that workspace, not the original Secret
+projection.
+
+The Job has no automounted ServiceAccount token, no retry and a deadline around
+the CLI's three-hour bound. Its deny-all NetworkPolicy permits only four exact
+IP/port destinations: management/ledger, workload, Argo and the external
+authorization authority. This checkpoint renders and tests the materializer,
+NetworkPolicy and Job envelope offline. Construction and installation of the
+immutable activation Secret and launch of the resulting Job remain separate
+checkpoints.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
@@ -2762,8 +2780,8 @@ through the local CLI. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
 - the Stage 8-12 execution adapter and private manifest are exposed through one
-  local prepare/execute CLI, but not yet through an ephemeral Job orchestration
-  path;
+  local prepare/execute CLI and a bounded ephemeral Job envelope, but its
+  immutable activation Secret package and launch path are not yet complete;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the previously published runner image predates this staged-library closure;
