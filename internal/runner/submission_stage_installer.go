@@ -266,7 +266,11 @@ func verifySubmissionStageCreatedObject(raw []byte, expected submissionStageInst
 		return "", "", err
 	}
 	desired, err := decodeCapabilityJSONObject(expected.raw)
-	if err != nil || !capabilitySubset(desired, observed) {
+	if err != nil {
+		return "", "", errors.New("observed object does not contain exact package fields")
+	}
+	normalizeSubmissionStageAPIDefaults(desired, observed)
+	if !capabilitySubset(desired, observed) {
 		return "", "", errors.New("observed object does not contain exact package fields")
 	}
 	metadata, _ := observed["metadata"].(map[string]any)
@@ -276,6 +280,39 @@ func verifySubmissionStageCreatedObject(raw []byte, expected submissionStageInst
 		return "", "", errors.New("created object lacks bounded runtime identity")
 	}
 	return uid, resourceVersion, nil
+}
+
+// normalizeSubmissionStageAPIDefaults restores only API-server omissions that
+// are semantically identical to the verified package. Kubernetes may omit an
+// explicitly empty NetworkPolicy ingress list. With policyTypes containing
+// Ingress, both an omitted ingress field and ingress: [] mean deny all ingress.
+func normalizeSubmissionStageAPIDefaults(desired, observed map[string]any) {
+	if desired["apiVersion"] != "networking.k8s.io/v1" || desired["kind"] != "NetworkPolicy" || observed["apiVersion"] != desired["apiVersion"] || observed["kind"] != desired["kind"] {
+		return
+	}
+	desiredSpec, desiredOK := desired["spec"].(map[string]any)
+	observedSpec, observedOK := observed["spec"].(map[string]any)
+	if !desiredOK || !observedOK {
+		return
+	}
+	desiredIngress, desiredIngressOK := desiredSpec["ingress"].([]any)
+	_, observedIngressExists := observedSpec["ingress"]
+	if desiredIngressOK && len(desiredIngress) == 0 && !observedIngressExists && stringArrayContains(desiredSpec["policyTypes"], "Ingress") && stringArrayContains(observedSpec["policyTypes"], "Ingress") {
+		observedSpec["ingress"] = []any{}
+	}
+}
+
+func stringArrayContains(value any, expected string) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		if item == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func stageInstallationStatusError(method string, status int) error {

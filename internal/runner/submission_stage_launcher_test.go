@@ -155,6 +155,51 @@ func TestSubmissionStageLauncherRejectsExactPartialState(t *testing.T) {
 	}
 }
 
+func TestSubmissionStageLauncherResumesExactVerifiedPrefix(t *testing.T) {
+	stage, credentials, runtime, _, _ := submissionStageLaunchFixture(t)
+	api := newSubmissionStageLauncherAPI(t)
+	now := time.Date(2026, 8, 16, 12, 1, 0, 0, time.UTC)
+	first := newSubmissionStageLauncher(t, stage, credentials, runtime, api, now)
+	if receipt, err := first.Launch(context.Background()); err != nil || receipt.State != "LAUNCHED" {
+		t.Fatalf("first launch failed: %#v %v", receipt, err)
+	}
+	delete(api.objects, first.plan.Preflights[5].ObjectPath)
+	api.requests, api.posts = nil, 0
+
+	resume := newSubmissionStageLauncher(t, stage, credentials, runtime, api, now)
+	receipt, err := resume.Launch(context.Background())
+	if err != nil || receipt.State != "LAUNCHED" || receipt.MutationState != "ATTEMPTED" || len(receipt.Results) != 6 || api.posts != 1 || len(api.requests) != 7 {
+		t.Fatalf("exact prefix was not resumed: receipt=%#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
+	}
+	for index, result := range receipt.Results {
+		wantState := "EXISTING_VERIFIED"
+		if index == 5 {
+			wantState = "CREATED"
+		}
+		if result.Order != index+1 || result.ObjectState != wantState {
+			t.Fatalf("result %d differs: %#v", index+1, result)
+		}
+	}
+}
+
+func TestSubmissionStageCreatedNetworkPolicyAcceptsOmittedEmptyIngress(t *testing.T) {
+	stage, credentials, runtime, _, _ := submissionStageLaunchFixture(t)
+	api := newSubmissionStageLauncherAPI(t)
+	launcher := newSubmissionStageLauncher(t, stage, credentials, runtime, api, time.Date(2026, 8, 16, 12, 1, 0, 0, time.UTC))
+	expected := launcher.objects[1]
+	observed := decodeCapabilityJSONForTest(t, expected.raw)
+	metadata := observed["metadata"].(map[string]any)
+	metadata["uid"], metadata["resourceVersion"] = "network-policy-uid", "17"
+	delete(observed["spec"].(map[string]any), "ingress")
+	raw, err := json.Marshal(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := verifySubmissionStageCreatedObject(raw, expected); err != nil {
+		t.Fatalf("semantically identical API-defaulted NetworkPolicy was rejected: %v", err)
+	}
+}
+
 func TestSubmissionStageLauncherPreservesPartialPrefixAndStaleCredentialsStopLocally(t *testing.T) {
 	t.Run("partial prefix", func(t *testing.T) {
 		stage, credentials, runtime, _, _ := submissionStageLaunchFixture(t)
