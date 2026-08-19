@@ -127,8 +127,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - {name: input, mountPath: /var/run/openkubes/input, readOnly: true}
-${OK147_RECEIPT_VOLUME_MOUNT}            - {name: ledger-credential, mountPath: /var/run/openkubes/ledger/token, subPath: token, readOnly: true}
+${OK147_INPUT_VOLUME_MOUNTS}            - {name: ledger-credential, mountPath: /var/run/openkubes/ledger/token, subPath: token, readOnly: true}
             - {name: ledger-credential, mountPath: /var/run/openkubes/ledger/ca.crt, subPath: ca.crt, readOnly: true}
             - {name: authority-credential, mountPath: /var/run/openkubes/authority/token, subPath: token, readOnly: true}
             - {name: authority-credential, mountPath: /var/run/openkubes/authority/ca.crt, subPath: ca.crt, readOnly: true}
@@ -137,7 +136,8 @@ ${OK147_RECEIPT_VOLUME_MOUNT}            - {name: ledger-credential, mountPath: 
           configMap:
             name: "${OK147_INPUT_CONFIGMAP}"
             defaultMode: 0444
-${OK147_RECEIPT_CONFIGMAP_ITEM}        - name: ledger-credential
+            items:
+${OK147_INPUT_CONFIGMAP_ITEMS}        - name: ledger-credential
           secret:
             secretName: "${OK147_LEDGER_CREDENTIAL_SECRET}"
             defaultMode: 0440

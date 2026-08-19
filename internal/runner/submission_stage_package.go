@@ -86,6 +86,7 @@ func BuildSubmissionStagePackage(config SubmissionStagePackageConfig) (VerifiedS
 		LedgerCredentialSecret: config.LedgerCredentialSecret,
 		AuthorityAPIURL:        config.AuthorityAPIURL, AuthorityAPICIDR: config.AuthorityAPICIDR,
 		AuthorityCredentialSecret: config.AuthorityCredentialSecret,
+		InputDataKeys:             inputReceipt.DataKeys,
 	})
 	if err != nil {
 		return VerifiedSubmissionStagePackage{}, err
