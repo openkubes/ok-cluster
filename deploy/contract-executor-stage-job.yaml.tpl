@@ -127,14 +127,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - {name: input, mountPath: /var/run/openkubes/input/staged-plan.json, subPath: staged-plan.json, readOnly: true}
-            - {name: input, mountPath: /var/run/openkubes/input/receipt-prefix.json, subPath: receipt-prefix.json, readOnly: true}
-            - {name: input, mountPath: /var/run/openkubes/input/stage-grant.json, subPath: stage-grant.json, readOnly: true}
-            - {name: input, mountPath: /var/run/openkubes/input/stage-authority.pub, subPath: stage-authority.pub, readOnly: true}
-            - {name: input, mountPath: /var/run/openkubes/input/projection-manifest.json, subPath: projection-manifest.json, readOnly: true}
-            - {name: input, mountPath: /var/run/openkubes/input/authority-map.json, subPath: authority-map.json, readOnly: true}
-            - {name: input, mountPath: /var/run/openkubes/input/ok-infra-prerequisites.yaml, subPath: ok-infra-prerequisites.yaml, readOnly: true}
-            - {name: input, mountPath: /var/run/openkubes/input/ok-mgmt-lifecycle.yaml, subPath: ok-mgmt-lifecycle.yaml, readOnly: true}
+            - {name: input, mountPath: /var/run/openkubes/input, readOnly: true}
 ${OK147_RECEIPT_VOLUME_MOUNT}            - {name: ledger-credential, mountPath: /var/run/openkubes/ledger/token, subPath: token, readOnly: true}
             - {name: ledger-credential, mountPath: /var/run/openkubes/ledger/ca.crt, subPath: ca.crt, readOnly: true}
             - {name: authority-credential, mountPath: /var/run/openkubes/authority/token, subPath: token, readOnly: true}
@@ -144,15 +137,6 @@ ${OK147_RECEIPT_VOLUME_MOUNT}            - {name: ledger-credential, mountPath: 
           configMap:
             name: "${OK147_INPUT_CONFIGMAP}"
             defaultMode: 0444
-            items:
-              - {key: staged-plan.json, path: staged-plan.json}
-              - {key: receipt-prefix.json, path: receipt-prefix.json}
-              - {key: stage-grant.json, path: stage-grant.json}
-              - {key: stage-authority.pub, path: stage-authority.pub}
-              - {key: projection-manifest.json, path: projection-manifest.json}
-              - {key: authority-map.json, path: authority-map.json}
-              - {key: ok-infra-prerequisites.yaml, path: ok-infra-prerequisites.yaml}
-              - {key: ok-mgmt-lifecycle.yaml, path: ok-mgmt-lifecycle.yaml}
 ${OK147_RECEIPT_CONFIGMAP_ITEM}        - name: ledger-credential
           secret:
             secretName: "${OK147_LEDGER_CREDENTIAL_SECRET}"

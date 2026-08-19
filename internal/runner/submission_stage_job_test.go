@@ -61,23 +61,27 @@ func TestSubmissionStageJobIsBoundedToStageCredentialsAndEndpoints(t *testing.T)
 				}
 			}
 			mounts := arrayAt(t, container, "volumeMounts")
-			wantMounts := 12
-			if stageID == "cluster-lifecycle" {
-				wantMounts = 13
-			}
+			wantMounts := 5
 			if len(mounts) != wantMounts {
 				t.Fatalf("volumeMounts=%d, want %d", len(mounts), wantMounts)
 			}
-			providerMounted := false
+			inputMounted := false
 			for _, rawMount := range mounts {
 				mount := rawMount.(map[string]any)
-				if mount["subPath"] == nil || mount["readOnly"] != true {
-					t.Fatalf("input/credential is not a read-only subPath mount: %#v", mount)
+				if mount["readOnly"] != true {
+					t.Fatalf("input/credential is not read-only: %#v", mount)
 				}
-				providerMounted = providerMounted || mount["subPath"] == "provider-receipt.json"
+				if mount["name"] == "input" {
+					if mount["mountPath"] != "/var/run/openkubes/input" || mount["subPath"] != nil {
+						t.Fatalf("verified input closure is not mounted as a directory: %#v", mount)
+					}
+					inputMounted = true
+				} else if mount["subPath"] == nil {
+					t.Fatalf("credential is not a bounded subPath mount: %#v", mount)
+				}
 			}
-			if providerMounted != (stageID == "cluster-lifecycle") {
-				t.Fatalf("provider receipt mount differs for %s", stageID)
+			if !inputMounted {
+				t.Fatalf("verified input closure is not mounted for %s", stageID)
 			}
 			policySpec := objectAt(t, policy, "spec")
 			if ingress := arrayAt(t, policySpec, "ingress"); len(ingress) != 0 {
