@@ -2,7 +2,6 @@ package ledger
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -69,7 +68,7 @@ func TestStageReceiptSurvivesLedgerRecreation(t *testing.T) {
 	}
 }
 
-func TestStageReceiptSlotRejectsConflictingOutcome(t *testing.T) {
+func TestStageReceiptSlotPreservesRetryOutcome(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "ledger"))
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +80,19 @@ func TestStageReceiptSlotRejectsConflictingOutcome(t *testing.T) {
 	if _, err := store.StoreStageReceipt(context.Background(), plan, first, []stagereceipt.Verified{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.StoreStageReceipt(context.Background(), plan, conflict, []stagereceipt.Verified{}); !errors.Is(err, ErrStageReceiptConflict) {
-		t.Fatalf("conflicting receipt = %v, want ErrStageReceiptConflict", err)
+	firstDigest, _ := first.Digest()
+	conflictDigest, _ := conflict.Digest()
+	if _, err := store.StoreStageReceipt(context.Background(), plan, conflict, []stagereceipt.Verified{}); err != nil {
+		t.Fatalf("retry receipt was not preserved: %v", err)
+	}
+	for _, expected := range []string{firstDigest, conflictDigest} {
+		loaded, err := store.LoadStageReceipt(context.Background(), plan, "provider-prerequisites", expected, []stagereceipt.Verified{})
+		if err != nil {
+			t.Fatalf("load immutable attempt %s: %v", expected, err)
+		}
+		if got, _ := loaded.Digest(); got != expected {
+			t.Fatalf("loaded retry digest = %s, want %s", got, expected)
+		}
 	}
 }
 
