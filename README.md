@@ -26,9 +26,13 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Blue/Green upgrades** — rolling Kubernetes version upgrades with workload migration
 - **GitOps-ready** — all cluster state is declarative YAML, rendered from templates
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
-- **Bounded Contract Executor MVP** — one shared Go core for the local `ok` CLI
-  and short-lived `ok-mgmt` Jobs. `cluster create` remains non-mutating, while
-  the staged runner models twelve predecessor-bound submission, observation,
+- **Bounded Contract Executor MVP** — one shared Go core powers the local `ok` CLI and short-lived `ok-mgmt` Jobs across twelve bounded stages.
+
+<details>
+<summary><strong>Bounded Contract Executor MVP — technical details</strong></summary>
+
+  `cluster create` remains non-mutating, while the staged runner models twelve
+  predecessor-bound submission, observation,
   binding, credential and evaluation stages with a durable ledger, exact
   split authorities and no retry. The initial `cluster stage run --execute`
   path remains the separately authorized two-stage Contract-to-CAPI boundary.
@@ -195,6 +199,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   before any write, then can create only Secret, NetworkPolicy and Job in that
   order. This complete Job path is tested offline and against fake APIs but is
   not yet live-proven on DEV.
+
+</details>
 
 ---
 
