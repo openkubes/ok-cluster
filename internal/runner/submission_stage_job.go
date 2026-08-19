@@ -79,8 +79,6 @@ func RenderSubmissionStageJobTemplate(template []byte, values SubmissionStageJob
 		if authorityEndpoint != ledgerEndpoint {
 			return nil, errors.New("cluster lifecycle authority must use the management ledger endpoint")
 		}
-		receiptMount = "            - name: input\n              mountPath: /var/run/openkubes/input/provider-receipt.json\n              subPath: provider-receipt.json\n              readOnly: true\n"
-		receiptItem = "              - key: provider-receipt.json\n                path: provider-receipt.json\n"
 	default:
 		return nil, errors.New("submission stage Job supports only Contract-to-CAPI stages")
 	}
