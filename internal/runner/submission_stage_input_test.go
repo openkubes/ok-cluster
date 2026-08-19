@@ -160,3 +160,49 @@ func TestBuildSubmissionStageInputFailsClosed(t *testing.T) {
 		t.Fatalf("oversized input was accepted: %v", err)
 	}
 }
+
+func TestBuildSubmissionStageInputIncludesCompleteProjectionClosure(t *testing.T) {
+	fixture := submissionBundleFixture(t, false, "")
+	root := filepath.Dir(fixture.config.ProjectionManifestPath)
+	extraName := "renderer-input.yaml"
+	extraRaw := []byte("profile: datacenter-isolated-v1\n")
+	if err := os.WriteFile(filepath.Join(root, extraName), extraRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestRaw, err := os.ReadFile(fixture.config.ProjectionManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["artifacts"].(map[string]any)[extraName] = digest.SHA256(extraRaw)
+	updated, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.config.ProjectionManifestPath, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	verified, err := BuildSubmissionStageInput(fixture.config, "ok147-projection-closure-input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := verified.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := verified.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configMap submissionStageInputConfigMap
+	if err := json.Unmarshal(raw, &configMap); err != nil {
+		t.Fatal(err)
+	}
+	if configMap.Data[extraName] != string(extraRaw) || !contains(receipt.DataKeys, extraName) {
+		t.Fatalf("projection closure artifact was not packaged: keys=%v", receipt.DataKeys)
+	}
+}
