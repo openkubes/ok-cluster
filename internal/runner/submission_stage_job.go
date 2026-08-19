@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ type SubmissionStageJobValues struct {
 	AuthorityAPIURL           string
 	AuthorityAPICIDR          string
 	AuthorityCredentialSecret string
+	InputDataKeys             []string
 }
 
 // RenderSubmissionStageJobTemplate performs only validated literal
@@ -69,7 +71,6 @@ func RenderSubmissionStageJobTemplate(template []byte, values SubmissionStageJob
 	if err != nil {
 		return nil, fmt.Errorf("submission stage Job authority endpoint: %w", err)
 	}
-	receiptMount, receiptItem := "", ""
 	switch values.StageID {
 	case "provider-prerequisites":
 		if authorityEndpoint == ledgerEndpoint {
@@ -81,6 +82,10 @@ func RenderSubmissionStageJobTemplate(template []byte, values SubmissionStageJob
 		}
 	default:
 		return nil, errors.New("submission stage Job supports only Contract-to-CAPI stages")
+	}
+	inputMounts, inputItems, err := submissionStageInputVolumeFragments(values.StageID, values.InputDataKeys)
+	if err != nil {
+		return nil, err
 	}
 	replacements := map[string]string{
 		"${OK147_RUN_ID}": values.RunID, "${OK147_STAGE_ID}": values.StageID,
@@ -95,7 +100,7 @@ func RenderSubmissionStageJobTemplate(template []byte, values SubmissionStageJob
 		"${OK147_LEDGER_API_PORT}": ledgerPort, "${OK147_LEDGER_CREDENTIAL_SECRET}": values.LedgerCredentialSecret,
 		"${OK147_AUTHORITY_API_URL}": values.AuthorityAPIURL, "${OK147_AUTHORITY_API_CIDR}": values.AuthorityAPICIDR,
 		"${OK147_AUTHORITY_API_PORT}": authorityPort, "${OK147_AUTHORITY_CREDENTIAL_SECRET}": values.AuthorityCredentialSecret,
-		"${OK147_RECEIPT_VOLUME_MOUNT}": receiptMount, "${OK147_RECEIPT_CONFIGMAP_ITEM}": receiptItem,
+		"${OK147_INPUT_VOLUME_MOUNTS}": inputMounts, "${OK147_INPUT_CONFIGMAP_ITEMS}": inputItems,
 	}
 	result := string(template)
 	for placeholder, value := range replacements {
@@ -108,6 +113,46 @@ func RenderSubmissionStageJobTemplate(template []byte, values SubmissionStageJob
 		return nil, errors.New("submission stage Job template contains an unknown placeholder")
 	}
 	return []byte(result), nil
+}
+
+func submissionStageInputVolumeFragments(stageID string, dataKeys []string) (string, string, error) {
+	if len(dataKeys) == 0 || len(dataKeys) > 32 {
+		return "", "", errors.New("submission stage input data-key set is invalid")
+	}
+	keys := append([]string(nil), dataKeys...)
+	sort.Strings(keys)
+	keyPattern := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
+	seen := make(map[string]bool, len(keys))
+	var mounts, items strings.Builder
+	for _, key := range keys {
+		if !keyPattern.MatchString(key) || seen[key] {
+			return "", "", errors.New("submission stage input data key is unsafe or repeated")
+		}
+		seen[key] = true
+		mounts.WriteString("            - {name: input, mountPath: /var/run/openkubes/input/")
+		mounts.WriteString(key)
+		mounts.WriteString(", subPath: ")
+		mounts.WriteString(key)
+		mounts.WriteString(", readOnly: true}\n")
+		items.WriteString("              - {key: ")
+		items.WriteString(key)
+		items.WriteString(", path: ")
+		items.WriteString(key)
+		items.WriteString("}\n")
+	}
+	for _, required := range []string{
+		"staged-plan.json", "receipt-prefix.json", "stage-grant.json", "stage-authority.pub",
+		"projection-manifest.json", "authority-map.json", "ok-infra-prerequisites.yaml", "ok-mgmt-lifecycle.yaml",
+	} {
+		if !seen[required] {
+			return "", "", errors.New("submission stage input data-key set is incomplete")
+		}
+	}
+	providerReceipt := seen[providerReceiptInputKey]
+	if providerReceipt != (stageID == "cluster-lifecycle") {
+		return "", "", errors.New("submission stage provider receipt key differs from stage")
+	}
+	return mounts.String(), items.String(), nil
 }
 
 func exactAPIEndpoint(rawURL, rawCIDR string) (string, string, error) {

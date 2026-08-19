@@ -23,6 +23,7 @@ func TestSubmissionStageJobIsBoundedToStageCredentialsAndEndpoints(t *testing.T)
 			values.StageID = stageID
 			if stageID == "cluster-lifecycle" {
 				values.AuthorityAPIURL, values.AuthorityAPICIDR = values.LedgerAPIURL, values.LedgerAPICIDR
+				values.InputDataKeys = append(values.InputDataKeys, providerReceiptInputKey)
 			}
 			materialized, err := RenderSubmissionStageJobTemplate(raw, values)
 			if err != nil {
@@ -61,27 +62,28 @@ func TestSubmissionStageJobIsBoundedToStageCredentialsAndEndpoints(t *testing.T)
 				}
 			}
 			mounts := arrayAt(t, container, "volumeMounts")
-			wantMounts := 5
+			wantMounts := len(values.InputDataKeys) + 4
 			if len(mounts) != wantMounts {
 				t.Fatalf("volumeMounts=%d, want %d", len(mounts), wantMounts)
 			}
-			inputMounted := false
+			inputMounts := 0
 			for _, rawMount := range mounts {
 				mount := rawMount.(map[string]any)
 				if mount["readOnly"] != true {
 					t.Fatalf("input/credential is not read-only: %#v", mount)
 				}
 				if mount["name"] == "input" {
-					if mount["mountPath"] != "/var/run/openkubes/input" || mount["subPath"] != nil {
-						t.Fatalf("verified input closure is not mounted as a directory: %#v", mount)
+					key, ok := mount["subPath"].(string)
+					if !ok || mount["mountPath"] != "/var/run/openkubes/input/"+key || !contains(values.InputDataKeys, key) {
+						t.Fatalf("verified input is not an exact subPath mount: %#v", mount)
 					}
-					inputMounted = true
+					inputMounts++
 				} else if mount["subPath"] == nil {
 					t.Fatalf("credential is not a bounded subPath mount: %#v", mount)
 				}
 			}
-			if !inputMounted {
-				t.Fatalf("verified input closure is not mounted for %s", stageID)
+			if inputMounts != len(values.InputDataKeys) {
+				t.Fatalf("input mounts=%d, want %d for %s", inputMounts, len(values.InputDataKeys), stageID)
 			}
 			policySpec := objectAt(t, policy, "spec")
 			if ingress := arrayAt(t, policySpec, "ingress"); len(ingress) != 0 {
@@ -138,6 +140,11 @@ func validSubmissionStageJobValues() SubmissionStageJobValues {
 		InputConfigMap: "ok147-provider-input", ReceiptPrefixDigest: prefixSHA("e"),
 		LedgerAPIURL: "https://192.0.2.12:6443", LedgerAPICIDR: "192.0.2.12/32", LedgerCredentialSecret: "ok147-ledger-credential",
 		AuthorityAPIURL: "https://192.0.2.11:6443", AuthorityAPICIDR: "192.0.2.11/32", AuthorityCredentialSecret: "ok147-authority-credential",
+		InputDataKeys: []string{
+			"authority-map.json", "ok-infra-prerequisites.yaml", "ok-mgmt-lifecycle.yaml", "projection-manifest.json",
+			"receipt-prefix.json", "renderer-input.yaml", "renderer-source.yaml", "resolved-renderer-input.yaml",
+			"stage-authority.pub", "stage-grant.json", "staged-plan.json",
+		},
 	}
 }
 
