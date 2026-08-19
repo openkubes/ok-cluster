@@ -38,12 +38,13 @@ type SubmissionStageBundleConfig struct {
 // VerifiedSubmissionStageBundle retains only values produced by verification.
 // Its internals are consumed by the shared local/Job runtime below.
 type VerifiedSubmissionStageBundle struct {
-	plan       stageplan.Binding
-	cursor     stagecursor.Cursor
-	grant      authorization.VerifiedStageGrant
-	projection submission.Plan
-	stageID    string
-	verified   bool
+	plan              stageplan.Binding
+	cursor            stagecursor.Cursor
+	grant             authorization.VerifiedStageGrant
+	projectionBinding projection.Binding
+	projection        submission.Plan
+	stageID           string
+	verified          bool
 }
 
 type SubmissionStageRuntimeConfig struct {
@@ -135,7 +136,15 @@ func LoadSubmissionStageBundle(config SubmissionStageBundleConfig) (VerifiedSubm
 	if _, err := authorization.BindStageGrant(grant, plan, decision.StageID, directPredecessors); err != nil {
 		return VerifiedSubmissionStageBundle{}, err
 	}
-	return VerifiedSubmissionStageBundle{plan: plan, cursor: cursor, grant: grant, projection: projected, stageID: decision.StageID, verified: true}, nil
+	return VerifiedSubmissionStageBundle{
+		plan:              plan,
+		cursor:            cursor,
+		grant:             grant,
+		projectionBinding: projectionBinding,
+		projection:        projected,
+		stageID:           decision.StageID,
+		verified:          true,
+	}, nil
 }
 
 func (bundle VerifiedSubmissionStageBundle) Decision() (stagecursor.Decision, error) {

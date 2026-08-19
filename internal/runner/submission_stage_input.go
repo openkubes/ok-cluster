@@ -64,7 +64,8 @@ func BuildSubmissionStageInput(config SubmissionStageBundleConfig, configMapName
 	if !submissionStageInputNamePattern.MatchString(configMapName) || len(configMapName) > 63 || !strings.HasPrefix(configMapName, "ok147-") {
 		return VerifiedSubmissionStageInput{}, errors.New("submission stage input ConfigMap name is invalid")
 	}
-	if _, err := LoadSubmissionStageBundle(config); err != nil {
+	bundle, err := LoadSubmissionStageBundle(config)
+	if err != nil {
 		return VerifiedSubmissionStageInput{}, err
 	}
 
@@ -80,6 +81,18 @@ func BuildSubmissionStageInput(config SubmissionStageBundleConfig, configMapName
 		"authority-map.json":          filepath.Join(root, "authority-map.json"),
 		"ok-infra-prerequisites.yaml": filepath.Join(root, "ok-infra-prerequisites.yaml"),
 		"ok-mgmt-lifecycle.yaml":      filepath.Join(root, "ok-mgmt-lifecycle.yaml"),
+	}
+	projectionBaseKeys := map[string]bool{
+		"authority-map.json": true, "ok-infra-prerequisites.yaml": true, "ok-mgmt-lifecycle.yaml": true,
+	}
+	for _, artifact := range bundle.projectionBinding.Artifacts {
+		if _, exists := paths[artifact.Name]; exists {
+			if !projectionBaseKeys[artifact.Name] {
+				return VerifiedSubmissionStageInput{}, errors.New("projection artifact collides with reserved stage input key")
+			}
+			continue
+		}
+		paths[artifact.Name] = filepath.Join(root, artifact.Name)
 	}
 	prefix := stageReceiptPrefixDocument{Format: StageReceiptPrefixFormat, Receipts: []stageReceiptPrefixEntry{}}
 	switch config.ExpectedStageID {
