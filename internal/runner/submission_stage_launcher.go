@@ -227,14 +227,23 @@ func (launcher *KubernetesSubmissionStageLauncher) Launch(ctx context.Context) (
 		}
 		return receipt, nil
 	}
-	runtime, runtimeExists := existing[1]
-	if len(existing) != 0 && !(len(existing) == 1 && runtimeExists) {
-		return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", errors.New("stage launch found an exact partial state; global preflight stopped"))
+	prefixLength := 0
+	for order := 1; order <= len(launcher.plan.Preflights); order++ {
+		if _, ok := existing[order]; !ok {
+			break
+		}
+		prefixLength = order
+	}
+	if len(existing) != prefixLength {
+		return stopSubmissionStageLaunch(receipt, "STOPPED_ZERO_WRITE", errors.New("stage launch found a non-prefix partial state; global preflight stopped"))
 	}
 
 	receipt.State = "LAUNCHING"
-	if runtimeExists {
-		receipt.Results = append(receipt.Results, runtime)
+	for order := 1; order <= prefixLength; order++ {
+		receipt.Results = append(receipt.Results, existing[order])
+	}
+	if prefixLength >= 1 {
+		// The exact runtime prefix was already verified above.
 	} else {
 		receipt.MutationState = "ATTEMPTED_UNKNOWN"
 		result, err := launcher.createRuntime(ctx)
@@ -245,6 +254,9 @@ func (launcher *KubernetesSubmissionStageLauncher) Launch(ctx context.Context) (
 		receipt.Results = append(receipt.Results, result)
 	}
 	for index, secret := range launcher.secrets {
+		if index+2 <= prefixLength {
+			continue
+		}
 		receipt.MutationState = "ATTEMPTED_UNKNOWN"
 		result, err := launcher.createSecret(ctx, index+2, secret)
 		if err != nil {
@@ -254,6 +266,9 @@ func (launcher *KubernetesSubmissionStageLauncher) Launch(ctx context.Context) (
 		receipt.Results = append(receipt.Results, result)
 	}
 	for index, object := range launcher.objects {
+		if index+4 <= prefixLength {
+			continue
+		}
 		receipt.MutationState = "ATTEMPTED_UNKNOWN"
 		result, err := launcher.createStageObject(ctx, index+4, object)
 		if err != nil {
