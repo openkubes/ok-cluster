@@ -227,7 +227,7 @@ func collectorFixture(t *testing.T) (Policy, NetworkProfile, *fakeNetworkGetter,
 		"/apis/apps/v1/namespaces/kube-system/deployments/cilium-operator":   jsonBytes(t, component("Deployment", "cilium-operator", "component-uid-3", "cilium-operator", profile.ExpectedImages.CiliumOperator, 1)),
 		"/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dcilium": jsonBytes(t, map[string]any{"apiVersion": "v1", "kind": "PodList", "items": []any{pod("cilium-b", "pod-uid-2", "node-b"), pod("cilium-a", "pod-uid-1", "node-a")}}),
 	}}
-	path := func() map[string]any { return map[string]any{"lastProbed": "2026-08-16T09:57:00Z"} }
+	path := func() map[string]any { return map[string]any{"lastProbed": "2026-08-16T09:58:00Z"} }
 	probeNode := func(name string) map[string]any {
 		return map[string]any{"name": name,
 			"host":            map[string]any{"primary-address": map[string]any{"http": path(), "icmp": path()}},

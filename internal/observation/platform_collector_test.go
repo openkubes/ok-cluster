@@ -142,6 +142,38 @@ func TestPlatformCollectorBindsRuntimeTargetAfterSubmission(t *testing.T) {
 	}
 }
 
+func TestPlatformApplicationSpecIdentityDefaultsDirectoryRecurseFalse(t *testing.T) {
+	base := map[string]any{
+		"project": "openkubes-disposable",
+		"source": map[string]any{
+			"repoURL": "https://github.com/openkubes/ok-observability.git",
+			"path":    "alerting", "targetRevision": strings.Repeat("6", 40),
+			"directory": map[string]any{"include": "prometheus-rules.yaml", "recurse": false},
+		},
+		"destination": map[string]any{"name": "disposable-ok141", "namespace": "ok-observability"},
+	}
+	defaulted := map[string]any{
+		"project": base["project"],
+		"source": map[string]any{
+			"repoURL": "https://github.com/openkubes/ok-observability.git",
+			"path":    "alerting", "targetRevision": strings.Repeat("6", 40),
+			"directory": map[string]any{"include": "prometheus-rules.yaml"},
+		},
+		"destination": base["destination"],
+	}
+	want, _, err := PlatformApplicationSpecIdentity(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := PlatformApplicationSpecIdentity(defaulted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("explicit and omitted recurse=false differ: got %s want %s", got, want)
+	}
+}
+
 func platformCollectorFixture(t *testing.T) (Policy, PlatformProfile, PlatformCapabilityState, *fakePlatformRawGetter) {
 	t.Helper()
 	policy, profile, snapshot := validPlatformFixture(t)

@@ -200,11 +200,28 @@ func normalizedPlatformApplicationSpec(spec map[string]any) (map[string]any, str
 	if !validGitCommit(revision) || text(source["repoURL"]) == "" || text(source["path"]) == "" || text(spec["project"]) == "" || text(destination["name"]) == "" || text(destination["namespace"]) == "" {
 		return nil, "", errors.New("Argo Application semantic identity is incomplete or mutable")
 	}
+	// Argo's API representation may omit directory.recurse=false even when the
+	// submitted desired object spells the default explicitly. Bind the semantic
+	// default so the desired and observed forms retain one identity.
+	normalizedSource := make(map[string]any, len(source))
+	for key, value := range source {
+		normalizedSource[key] = value
+	}
+	if directory, ok := source["directory"].(map[string]any); ok {
+		normalizedDirectory := make(map[string]any, len(directory)+1)
+		for key, value := range directory {
+			normalizedDirectory[key] = value
+		}
+		if _, present := normalizedDirectory["recurse"]; !present {
+			normalizedDirectory["recurse"] = false
+		}
+		normalizedSource["directory"] = normalizedDirectory
+	}
 	// Keep all source and sync semantics, but only the stable target fields. The
 	// API may default unrelated destination fields; these cannot change P.
 	normalized := map[string]any{
 		"project":     spec["project"],
-		"source":      source,
+		"source":      normalizedSource,
 		"destination": map[string]any{"name": destination["name"], "namespace": destination["namespace"]},
 	}
 	if syncPolicy, exists := spec["syncPolicy"]; exists {

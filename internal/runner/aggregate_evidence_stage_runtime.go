@@ -99,3 +99,12 @@ func (stage OpenedAggregateEvidenceStage) Run(ctx context.Context) (execution.Ev
 	}
 	return stage.operation.Run(ctx, stage.plan, stage.cursor)
 }
+
+// Retry repeats the bounded aggregate evaluation only when the caller binds
+// the exact digest of an existing FAILED Stage-12 receipt.
+func (stage OpenedAggregateEvidenceStage) Retry(ctx context.Context, failedReceiptDigest string) (execution.EvaluationStageRunReceipt, error) {
+	if !stage.verified {
+		return execution.EvaluationStageRunReceipt{}, errors.New("aggregate evidence stage is not opened")
+	}
+	return stage.operation.Retry(ctx, stage.plan, stage.cursor, failedReceiptDigest)
+}

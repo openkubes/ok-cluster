@@ -3,7 +3,6 @@ package observation
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"time"
 )
@@ -11,6 +10,15 @@ import (
 const (
 	NetworkProfileFormat  = "ok147-network-profile/v1"
 	NetworkSnapshotFormat = "ok147-network-snapshot/v1"
+
+	// These bounds are the versioned Cilium cache-freshness semantics proven
+	// by OK-141. The advertised interval is runtime evidence; 60 seconds is
+	// the bounded API publication allowance and 10 seconds covers scheduling
+	// and clock skew. They intentionally do not reinterpret the immutable
+	// network profile identity.
+	maximumAdvertisedProbeIntervalSeconds = 300
+	probePublicationAllowanceSeconds      = 60
+	probeSchedulingClockToleranceSeconds  = 10
 )
 
 // NetworkProfile contains the reviewed, immutable semantics behind E. The
@@ -347,12 +355,12 @@ func evaluateNetworkComponents(profile NetworkProfile, components []NetworkCompo
 func evaluateNetworkProbe(profile NetworkProfile, snapshot NetworkSnapshot, nodeUIDs map[string]struct{}) (string, string) {
 	observedAt, _ := time.Parse(time.RFC3339Nano, snapshot.ObservedAt)
 	responseAt, err := time.Parse(time.RFC3339Nano, snapshot.Probe.ResponseTimestamp)
-	if err != nil || snapshot.Probe.ProbeIntervalMilliseconds <= 0 || snapshot.Probe.ProbeIntervalMilliseconds > profile.MaximumProbeIntervalSeconds*1000 {
+	if err != nil || snapshot.Probe.ProbeIntervalMilliseconds <= 0 || snapshot.Probe.ProbeIntervalMilliseconds > maximumAdvertisedProbeIntervalSeconds*1000 {
 		return "False", "FunctionalProbeInvalid"
 	}
 	probeIntervalSeconds := float64(snapshot.Probe.ProbeIntervalMilliseconds) / 1000
-	maximumAge := math.Max(float64(profile.MinimumProbeFreshnessSeconds), 2*probeIntervalSeconds+float64(profile.CacheExposureSeconds))
-	if age := observedAt.Sub(responseAt).Seconds(); age < -5 || age > maximumAge {
+	maximumAge := probeIntervalSeconds + probePublicationAllowanceSeconds + probeSchedulingClockToleranceSeconds
+	if age := observedAt.Sub(responseAt).Seconds(); age < -probeSchedulingClockToleranceSeconds || age > maximumAge {
 		return "False", "FunctionalProbeStale"
 	}
 	expectedPathCount := len(nodeUIDs) * 4
@@ -376,7 +384,7 @@ func evaluateNetworkProbe(profile NetworkProfile, snapshot NetworkSnapshot, node
 		if err != nil {
 			return "False", "FunctionalProbeInvalid"
 		}
-		if age := observedAt.Sub(lastProbed).Seconds(); age < -5 || age > maximumAge {
+		if age := observedAt.Sub(lastProbed).Seconds(); age < -probeSchedulingClockToleranceSeconds || age > maximumAge {
 			return "False", "FunctionalProbeStale"
 		}
 	}

@@ -40,6 +40,46 @@ func TestEvaluationStagePersistsTerminalResultWithoutRawError(t *testing.T) {
 	}
 }
 
+func TestEvaluationStageRetriesOnlyExactFailedReceipt(t *testing.T) {
+	plan, cursor, at := aggregateEvaluationCursor(t)
+	store, _ := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
+	evaluator := &fakeStageEvaluator{binding: evaluationBinding(t, plan), result: StageEvaluationResult{Outcome: "FAILED", EvidenceDigest: stagedSHA("f"), CompletedAt: at}}
+	operation := EvaluationStageOperation{Ledger: store, Evaluator: evaluator}
+	failed, err := operation.Run(context.Background(), plan, cursor)
+	var resultErr *EvaluationStageResultError
+	if !errors.As(err, &resultErr) || failed.State != "COMPLETED_FAILED" || evaluator.calls != 1 {
+		t.Fatalf("failed evaluation was not retained: %#v calls=%d err=%v", failed, evaluator.calls, err)
+	}
+	for name, receiptDigest := range map[string]string{"invalid": "invalid", "wrong": stagedSHA("0")} {
+		t.Run(name, func(t *testing.T) {
+			if receipt, retryErr := operation.Retry(context.Background(), plan, cursor, receiptDigest); retryErr == nil || receipt.StageReceiptDigest != "" || evaluator.calls != 1 {
+				t.Fatalf("unsafe retry reached evaluator: %#v calls=%d err=%v", receipt, evaluator.calls, retryErr)
+			}
+		})
+	}
+	evaluator.result = StageEvaluationResult{Outcome: "SUCCEEDED", EvidenceDigest: stagedSHA("e"), CompletedAt: at.Add(time.Second)}
+	retried, err := operation.Retry(context.Background(), plan, cursor, failed.StageReceiptDigest)
+	if err != nil || retried.State != "COMPLETED_SUCCEEDED" || retried.StageReceiptDigest == failed.StageReceiptDigest || evaluator.calls != 2 {
+		t.Fatalf("exact failed receipt retry did not succeed: %#v calls=%d err=%v", retried, evaluator.calls, err)
+	}
+	replayed, err := operation.Run(context.Background(), plan, cursor)
+	if !errors.As(err, &resultErr) || replayed != failed || evaluator.calls != 2 {
+		t.Fatalf("legacy deterministic receipt changed after retry: %#v calls=%d err=%v", replayed, evaluator.calls, err)
+	}
+	predecessors, err := cursor.Predecessors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadStageReceipt(context.Background(), plan, "aggregate-evidence", retried.StageReceiptDigest, predecessors)
+	if err != nil {
+		t.Fatalf("retry attempt receipt is not addressable: %v", err)
+	}
+	loadedReceipt, _ := loaded.Receipt()
+	if loadedReceipt.State != "SUCCEEDED" {
+		t.Fatalf("unexpected retry attempt receipt: %#v", loadedReceipt)
+	}
+}
+
 func TestEvaluationStageFailsClosedBeforePersistence(t *testing.T) {
 	plan, cursor, at := aggregateEvaluationCursor(t)
 	for name, mutate := range map[string]func(*fakeStageEvaluator){

@@ -75,6 +75,9 @@ func TestAggregateEvidenceStageBundleOpensWithoutClusterContact(t *testing.T) {
 	if _, err := (OpenedAggregateEvidenceStage{}).Run(context.Background()); err == nil {
 		t.Fatal("unopened aggregate evidence stage could run")
 	}
+	if _, err := (OpenedAggregateEvidenceStage{}).Retry(context.Background(), runnerStageSHA("f")); err == nil {
+		t.Fatal("unopened aggregate evidence stage could retry")
+	}
 
 	runtime = aggregateEvidenceRuntime(t, bundle, "shared-token", "shared-token", "argo-token")
 	if _, err := bundle.Open(runtime); err == nil {
