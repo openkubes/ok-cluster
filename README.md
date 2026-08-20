@@ -209,7 +209,11 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   supports an explicit receipt-bound continuation: a separately signed grant
   with a new GrantID is claimed once in the existing ledger before a new
   TokenRequest. The original Stage-8 receipt remains unchanged and automatic
-  mutation retry is still prohibited.
+  mutation retry is still prohibited. A package-private registration refresh
+  primitive additionally verifies the complete existing AppProject and static
+  cluster-Secret binding before one UID/resourceVersion-protected token update;
+  it remains unusable until a separate Stage-9 recovery grant and ledger claim
+  are composed around it.
 
 </details>
 

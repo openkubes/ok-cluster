@@ -2727,6 +2727,19 @@ claims that grant before one new TokenRequest and records its outcome, while
 the authoritative Stage-8 receipt is neither finalized again nor overwritten.
 Only a successful recovery recreates the one-use in-memory handoff for Stage 9.
 
+The registration-side refresh primitive is narrower than a general adoption
+or update path. It first requires the existing AppProject to have the exact
+bound spec, labels and annotations. It then accepts only the exact bound Argo
+cluster Secret: the target name, server, namespaces, project, cluster-resource
+mode, CA configuration and all non-expiration annotations must match. The old
+bearer token must be structurally present and different from the newly issued
+one. A single `PUT` carries the observed UID and resourceVersion and changes
+only the new credential configuration plus its bound expiration; the response
+is reverified byte-for-byte at the data boundary. Drift stops before mutation,
+and an unknown `PUT` outcome is preserved without retry. This package-private
+primitive grants no authority by itself; composition still requires a fresh
+Stage-9 recovery authorization and durable ledger claim.
+
 The in-process post-runtime orchestrator now fixes the Stage 8-12 call order
 and passes the one-use credential handoff only from Stage 8 to Stage 9. It
 validates every redaction-safe run receipt against one Plan digest, stops at
