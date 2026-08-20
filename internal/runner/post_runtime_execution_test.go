@@ -103,6 +103,68 @@ func TestPostRuntimeExecutionStopsAfterDurableReceiptWhenNextGrantIsUnavailable(
 	}
 }
 
+func TestPostRuntimeExecutionContinuesFromReceiptBoundCredentialRecovery(t *testing.T) {
+	config, factories, calls, _ := postRuntimeExecutionFixture(t)
+	bundle, err := LoadTargetCredentialStageBundle(config.TargetCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := config.TargetCredential.EvaluationTime.Add(time.Minute)
+	credentialAPI, requests := newTargetCredentialExecutionAPI(t, now, 201)
+	defer credentialAPI.Close()
+	ledgerAPI := newRuntimeBindingLedgerAPI(t)
+	defer ledgerAPI.Close()
+	runtime := targetCredentialExecutionRuntime(t, targetCredentialBundleTestFixture{
+		config: config.TargetCredential, plan: bundle.plan, policyDigest: bundle.receipt.PolicyDigest,
+		accessDigest: bundle.receipt.TargetAccessArtifactDigest,
+	}, ledgerAPI.Server, credentialAPI, now)
+	original, err := bundle.Open(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, handoff, err := original.RunHandoff(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := handoff.StageReceiptBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorPath := filepath.Join(config.ReceiptDirectory, postRuntimeReceiptFiles["target-credential"])
+	if err := os.WriteFile(priorPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prior := StageReceiptSource{Path: priorPath, Digest: run.StageReceiptDigest}
+	recoveryGrantRoot := t.TempDir()
+	config.TargetCredentialRun = runtime
+	config.TargetCredentialRecovery = &PostRuntimeTargetCredentialRecoveryConfig{
+		StageReceipt: prior,
+		Authorization: TargetCredentialRecoveryAuthorizationResolverFunc(func(_ context.Context, request TargetCredentialRecoveryAuthorizationRequest) (StageAuthorizationSource, error) {
+			return writeTargetCredentialRecoveryGrant(t, recoveryGrantRoot, request, now), nil
+		}),
+	}
+	executor, err := openPostRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "SUCCEEDED" || receipt.ResolvedRecoveryAuthorization == nil || receipt.TargetCredentialRecovery == nil ||
+		receipt.TargetCredentialRecovery.State != "REISSUED" || receipt.Checkpoints[0].StageReceiptDigest != prior.Digest ||
+		len(receipt.ResolvedAuthorizations) != 2 || requests.Load() != 2 {
+		t.Fatalf("post-runtime recovery did not continue exact suffix: %#v requests=%d", receipt, requests.Load())
+	}
+	if !reflect.DeepEqual(*calls, postRuntimeStageOrder[1:]) {
+		t.Fatalf("normal Stage-8 factory ran during recovery: calls=%v", *calls)
+	}
+	stored, err := os.ReadFile(priorPath)
+	if err != nil || digest.SHA256(stored) != prior.Digest {
+		t.Fatalf("recovery changed prior Stage-8 receipt: %v", err)
+	}
+}
+
 func postRuntimeExecutionFixture(t *testing.T) (PostRuntimeExecutionConfig, postRuntimeExecutionFactories, *[]string, *[]StageAuthorizationRequest) {
 	t.Helper()
 	credential := targetCredentialBundleFixture(t)

@@ -204,7 +204,12 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   bounded `ok-mgmt` installer credential, completes three exact-name GETs
   before any write, then can create only Secret, NetworkPolicy and Job in that
   order. This complete Job path is tested offline and against fake APIs but is
-  not yet live-proven on DEV.
+  not yet live-proven on DEV. If the process loses its memory-only target
+  credential after a durable successful Stage-8 receipt, the library now
+  supports an explicit receipt-bound continuation: a separately signed grant
+  with a new GrantID is claimed once in the existing ledger before a new
+  TokenRequest. The original Stage-8 receipt remains unchanged and automatic
+  mutation retry is still prohibited.
 
 </details>
 

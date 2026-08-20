@@ -2717,10 +2717,15 @@ only normalized, revision-correlated evidence.
 
 The memory-only target credential intentionally creates a narrow process-crash
 boundary between successful credential issuance and durable registration. The
-runner must not solve that boundary by persisting the bearer token. A later
-orchestrator checkpoint must either execute those steps within one bounded
-process lifetime or obtain a fresh independently authorized credential after a
-pre-registration stop.
+runner does not solve that boundary by persisting the bearer token. It normally
+executes both steps within one bounded process lifetime. If that process stops
+after the immutable successful Stage-8 receipt, the recovery path first binds a
+redaction-safe recovery request to that exact receipt and the original Stage-8
+authorization. An external authority must return a new signed Stage-8 grant
+with a different authorization digest and GrantID. The existing durable ledger
+claims that grant before one new TokenRequest and records its outcome, while
+the authoritative Stage-8 receipt is neither finalized again nor overwritten.
+Only a successful recovery recreates the one-use in-memory handoff for Stage 9.
 
 The in-process post-runtime orchestrator now fixes the Stage 8-12 call order
 and passes the one-use credential handoff only from Stage 8 to Stage 9. It
@@ -2760,15 +2765,19 @@ issuer: deployment and operation of that external authority remain outside
 this checkpoint.
 
 The concrete post-runtime execution adapter now composes those boundaries into
-one single-use Stage 8-12 library path. It starts from the exact seven-receipt
-cursor, reuses one verified runtime binding, executes the memory-only
-credential handoff, resolves Stage 9 and Stage 10 authorization only after the
-current predecessor receipt is durable, and opens the existing registration,
-Application, observation and aggregate operations. Canonical Stage 8-11
-receipts are persisted create-only as private `0600` files for the next
-cursor. A missing grant, failed stage, malformed receipt, unsafe destination
-or cancelled context stops the suffix without retry, rollback or cleanup. The
-adapter itself does not own a CLI or Job activation surface; the later
+one single-use Stage 8-12 library path. It normally starts from the exact
+seven-receipt cursor, reuses one verified runtime binding, executes the
+memory-only credential handoff, resolves Stage 9 and Stage 10 authorization
+only after the current predecessor receipt is durable, and opens the existing
+registration, Application, observation and aggregate operations. An explicit
+recovery configuration may instead supply the exact successful Stage-8 receipt
+and the separate recovery authority described above; after the new grant is
+durably consumed, execution continues at Stage 9 using that unchanged receipt
+as the authoritative predecessor. Canonical Stage 8-11 receipts are persisted
+create-only as private `0600` files for the next cursor. A missing grant,
+consumed recovery grant, failed stage, malformed receipt, unsafe destination or
+cancelled context stops the suffix without automatic retry, rollback or
+cleanup. The adapter itself does not own a CLI or Job activation surface; the
 activation layer composes it without widening this library boundary.
 
 The private post-runtime execution manifest now provides the local activation
