@@ -21,12 +21,12 @@ func TestTargetCredentialRecoveryRequiresIndependentGrantAndClaimsBeforeIssuance
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 17, 16, 1, 0, 0, time.UTC)
-	credentialAPI, requests := newTargetCredentialExecutionAPI(t, now, http.StatusCreated)
-	defer credentialAPI.Close()
+	originalAPI, originalRequests := newTargetCredentialExecutionAPI(t, now, http.StatusCreated)
+	defer originalAPI.Close()
 	ledgerAPI := newRuntimeBindingLedgerAPI(t)
 	defer ledgerAPI.Close()
-	runtime := targetCredentialExecutionRuntime(t, fixture, ledgerAPI.Server, credentialAPI, now)
-	bound, err := bundle.Open(runtime)
+	originalRuntime := targetCredentialExecutionRuntime(t, fixture, ledgerAPI.Server, originalAPI, now)
+	bound, err := bundle.Open(originalRuntime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,10 @@ func TestTargetCredentialRecoveryRequiresIndependentGrantAndClaimsBeforeIssuance
 		t.Fatal(err)
 	}
 	prior := StageReceiptSource{Path: writeBundleFile(t, t.TempDir(), "stage-8.json", priorRaw), Digest: stageRun.StageReceiptDigest}
+	recoveryTime := now.Add(15 * time.Minute)
+	recoveryAPI, recoveryRequests := newTargetCredentialExecutionAPI(t, recoveryTime, http.StatusCreated)
+	defer recoveryAPI.Close()
+	recoveryRuntime := targetCredentialExecutionRuntime(t, fixture, ledgerAPI.Server, recoveryAPI, recoveryTime)
 
 	if _, err := ResolveTargetCredentialRecoveryAuthorization(context.Background(), bundle, prior,
 		TargetCredentialRecoveryAuthorizationResolverFunc(func(context.Context, TargetCredentialRecoveryAuthorizationRequest) (StageAuthorizationSource, error) {
@@ -52,7 +56,7 @@ func TestTargetCredentialRecoveryRequiresIndependentGrantAndClaimsBeforeIssuance
 	resolved, err := ResolveTargetCredentialRecoveryAuthorization(context.Background(), bundle, prior,
 		TargetCredentialRecoveryAuthorizationResolverFunc(func(_ context.Context, request TargetCredentialRecoveryAuthorizationRequest) (StageAuthorizationSource, error) {
 			observed = request
-			return writeTargetCredentialRecoveryGrant(t, root, request, now), nil
+			return writeTargetCredentialRecoveryGrant(t, root, request, recoveryTime), nil
 		}))
 	if err != nil {
 		t.Fatal(err)
@@ -64,13 +68,13 @@ func TestTargetCredentialRecoveryRequiresIndependentGrantAndClaimsBeforeIssuance
 	}
 
 	recovery, recoveredHandoff, err := RecoverTargetCredential(context.Background(), TargetCredentialRecoveryConfig{
-		Bundle: bundle, StageReceipt: prior, Authorization: resolved, Ledger: runtime.Ledger, Workload: runtime.Workload,
-		Clock: func() time.Time { return now },
+		Bundle: bundle, StageReceipt: prior, Authorization: resolved, Ledger: recoveryRuntime.Ledger, Workload: recoveryRuntime.Workload,
+		Clock: func() time.Time { return recoveryTime },
 	})
 	if err != nil || recovery.State != "REISSUED" || recovery.Claim == nil || recovery.Outcome == nil ||
 		recovery.Outcome.Outcome != "SUCCEEDED" || recovery.RecoveryAuthorizationDigest == recovery.OriginalAuthorizationDigest ||
-		recovery.CredentialBytesInReceipt || recovery.StageReceiptRewritten || recoveredHandoff == nil || requests.Load() != 2 {
-		t.Fatalf("recovery did not complete safely: %#v requests=%d err=%v", recovery, requests.Load(), err)
+		recovery.CredentialBytesInReceipt || recovery.StageReceiptRewritten || recoveredHandoff == nil || originalRequests.Load() != 1 || recoveryRequests.Load() != 1 {
+		t.Fatalf("recovery did not complete safely: %#v original=%d recovery=%d err=%v", recovery, originalRequests.Load(), recoveryRequests.Load(), err)
 	}
 	if recoveredHandoffDigest, err := recoveredHandoff.StageReceiptDigest(); err != nil || recoveredHandoffDigest != prior.Digest {
 		t.Fatalf("recovery rewrote authoritative Stage-8 receipt: %q %v", recoveredHandoffDigest, err)
@@ -79,10 +83,10 @@ func TestTargetCredentialRecoveryRequiresIndependentGrantAndClaimsBeforeIssuance
 		t.Fatalf("recovery created another Stage-8 receipt: count=%d", got)
 	}
 	if _, _, err := RecoverTargetCredential(context.Background(), TargetCredentialRecoveryConfig{
-		Bundle: bundle, StageReceipt: prior, Authorization: resolved, Ledger: runtime.Ledger, Workload: runtime.Workload,
-		Clock: func() time.Time { return now },
-	}); err == nil || requests.Load() != 2 {
-		t.Fatalf("consumed recovery grant was reused: requests=%d err=%v", requests.Load(), err)
+		Bundle: bundle, StageReceipt: prior, Authorization: resolved, Ledger: recoveryRuntime.Ledger, Workload: recoveryRuntime.Workload,
+		Clock: func() time.Time { return recoveryTime },
+	}); err == nil || recoveryRequests.Load() != 1 {
+		t.Fatalf("consumed recovery grant was reused: requests=%d err=%v", recoveryRequests.Load(), err)
 	}
 }
 
@@ -115,12 +119,13 @@ func TestTargetCredentialRecoveryDurablyStopsFailedIssuance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	failureAPI, requests := newTargetCredentialExecutionAPI(t, now, http.StatusForbidden)
+	recoveryTime := now.Add(15 * time.Minute)
+	failureAPI, requests := newTargetCredentialExecutionAPI(t, recoveryTime, http.StatusForbidden)
 	defer failureAPI.Close()
-	failureRuntime := targetCredentialExecutionRuntime(t, fixture, ledgerAPI.Server, failureAPI, now)
+	failureRuntime := targetCredentialExecutionRuntime(t, fixture, ledgerAPI.Server, failureAPI, recoveryTime)
 	receipt, recovered, recoveryErr := RecoverTargetCredential(context.Background(), TargetCredentialRecoveryConfig{
 		Bundle: bundle, StageReceipt: prior, Authorization: resolved, Ledger: failureRuntime.Ledger, Workload: failureRuntime.Workload,
-		Clock: func() time.Time { return now },
+		Clock: func() time.Time { return recoveryTime },
 	})
 	if recoveryErr == nil || receipt.State != "COMPLETED_STOPPED" || receipt.Claim == nil || receipt.Outcome == nil ||
 		receipt.Outcome.Outcome != "STOPPED" || receipt.Outcome.MutationState != "UNKNOWN" || recovered != nil || requests.Load() != 1 {
@@ -128,7 +133,7 @@ func TestTargetCredentialRecoveryDurablyStopsFailedIssuance(t *testing.T) {
 	}
 	if _, _, err := RecoverTargetCredential(context.Background(), TargetCredentialRecoveryConfig{
 		Bundle: bundle, StageReceipt: prior, Authorization: resolved, Ledger: failureRuntime.Ledger, Workload: failureRuntime.Workload,
-		Clock: func() time.Time { return now },
+		Clock: func() time.Time { return recoveryTime },
 	}); err == nil || requests.Load() != 1 {
 		t.Fatalf("durably stopped recovery was retried: requests=%d err=%v", requests.Load(), err)
 	}

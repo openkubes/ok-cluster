@@ -308,7 +308,7 @@ func RecoverTargetCredential(ctx context.Context, config TargetCredentialRecover
 		return receipt, nil, errors.New("complete target-credential recovery outcome")
 	}
 	receipt.Outcome, receipt.State = &outcome, "REISSUED"
-	handoff, err := newVerifiedTargetCredentialStageHandoff(config.Bundle.plan, config.Bundle.prefix, prior, credential)
+	handoff, err := newVerifiedRecoveredTargetCredentialStageHandoff(config.Bundle.plan, config.Bundle.prefix, prior, credential, receipt)
 	if err != nil {
 		return receipt, nil, err
 	}

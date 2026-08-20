@@ -14,13 +14,15 @@ import (
 // receipt to one private, memory-only credential. Only the redacted receipts
 // are publicly readable; the credential can be consumed once inside runner.
 type VerifiedTargetCredentialStageHandoff struct {
-	mu         sync.Mutex
-	plan       stageplan.Binding
-	prefix     []stagereceipt.Verified
-	receipt    stagereceipt.Verified
-	credential VerifiedTargetCredentialMaterial
-	consumed   bool
-	verified   bool
+	mu                       sync.Mutex
+	plan                     stageplan.Binding
+	prefix                   []stagereceipt.Verified
+	receipt                  stagereceipt.Verified
+	credential               VerifiedTargetCredentialMaterial
+	credentialEvidenceDigest string
+	recoveryRequestDigest    string
+	consumed                 bool
+	verified                 bool
 }
 
 func newVerifiedTargetCredentialStageHandoff(plan stageplan.Binding, prefix []stagereceipt.Verified, receipt stagereceipt.Verified, credential VerifiedTargetCredentialMaterial) (*VerifiedTargetCredentialStageHandoff, error) {
@@ -53,7 +55,63 @@ func newVerifiedTargetCredentialStageHandoff(plan stageplan.Binding, prefix []st
 	if err != nil || decision.State != "NEXT" || decision.StageID != "target-registration" {
 		return nil, errors.New("target-credential handoff does not select target registration")
 	}
-	return &VerifiedTargetCredentialStageHandoff{plan: plan, prefix: combined, receipt: receipt, credential: credential, verified: true}, nil
+	return &VerifiedTargetCredentialStageHandoff{
+		plan: plan, prefix: combined, receipt: receipt, credential: credential,
+		credentialEvidenceDigest: digest.SHA256(issuedRaw), verified: true,
+	}, nil
+}
+
+func newVerifiedRecoveredTargetCredentialStageHandoff(plan stageplan.Binding, prefix []stagereceipt.Verified, prior stagereceipt.Verified, credential VerifiedTargetCredentialMaterial, recovery TargetCredentialRecoveryReceipt) (*VerifiedTargetCredentialStageHandoff, error) {
+	if len(prefix) != 7 || recovery.Format != TargetCredentialRecoveryReceiptFormat || recovery.State != "REISSUED" ||
+		recovery.Outcome == nil || recovery.Outcome.Outcome != "SUCCEEDED" || recovery.Outcome.MutationState != "ATTEMPTED" ||
+		recovery.CredentialBytesInReceipt || recovery.StageReceiptRewritten || recovery.PlanDigest != plan.PlanDigest {
+		return nil, errors.New("recovered target-credential handoff requires exact successful recovery evidence")
+	}
+	priorDigest, err := prior.Digest()
+	if err != nil || priorDigest != recovery.PriorStageReceiptDigest {
+		return nil, errors.New("recovered target-credential handoff prior receipt differs")
+	}
+	stage, err := prior.Receipt()
+	if err != nil || stage.StageID != "target-credential" || stage.State != "SUCCEEDED" || stage.MutationState != "ATTEMPTED" || stage.PlanDigest != plan.PlanDigest {
+		return nil, errors.New("recovered target-credential handoff lacks successful Stage-8 receipt")
+	}
+	issued, err := credential.Receipt()
+	if err != nil || issued.TargetIdentityDigest != recovery.TargetIdentityDigest {
+		return nil, errors.New("recovered target-credential handoff target differs")
+	}
+	issuedRaw, err := canonicalTargetRegistrationValue(issued)
+	if err != nil || digest.SHA256(issuedRaw) != recovery.CredentialIssueReceiptDigest || recovery.Outcome.EvidenceDigest != recovery.CredentialIssueReceiptDigest {
+		return nil, errors.New("recovered target-credential handoff evidence differs")
+	}
+	combined := append(append([]stagereceipt.Verified(nil), prefix...), prior)
+	cursor, err := stagecursor.Evaluate(plan, combined)
+	if err != nil {
+		return nil, err
+	}
+	decision, err := cursor.Decision()
+	if err != nil || decision.State != "NEXT" || decision.StageID != "target-registration" {
+		return nil, errors.New("recovered target-credential handoff does not select target registration")
+	}
+	return &VerifiedTargetCredentialStageHandoff{
+		plan: plan, prefix: combined, receipt: prior, credential: credential,
+		credentialEvidenceDigest: recovery.CredentialIssueReceiptDigest,
+		recoveryRequestDigest:    recovery.RecoveryRequestDigest, verified: true,
+	}, nil
+}
+
+func (handoff *VerifiedTargetCredentialStageHandoff) credentialEvidence() (string, string, error) {
+	if handoff == nil {
+		return "", "", errors.New("target-credential handoff is required")
+	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
+	if !handoff.verified || handoff.consumed || !stageReceiptPrefixDigestPattern.MatchString(handoff.credentialEvidenceDigest) {
+		return "", "", errors.New("target-credential handoff evidence is unavailable")
+	}
+	if handoff.recoveryRequestDigest != "" && !stageReceiptPrefixDigestPattern.MatchString(handoff.recoveryRequestDigest) {
+		return "", "", errors.New("target-credential recovery request identity is invalid")
+	}
+	return handoff.credentialEvidenceDigest, handoff.recoveryRequestDigest, nil
 }
 
 func (handoff *VerifiedTargetCredentialStageHandoff) StageReceipt() (stagereceipt.Receipt, error) {
