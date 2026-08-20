@@ -177,6 +177,15 @@ func (stage OpenedRuntimeBindingStage) Run(ctx context.Context) (execution.Bindi
 	return stage.operation.Run(ctx, stage.plan, stage.cursor)
 }
 
+// Retry performs one digest-bound retry after an immutable terminal binding
+// receipt while preserving every prior attempt.
+func (stage OpenedRuntimeBindingStage) Retry(ctx context.Context, terminalReceiptDigest string) (execution.BindingStageRunReceipt, error) {
+	if !stage.verified {
+		return execution.BindingStageRunReceipt{}, errors.New("runtime binding stage is not opened")
+	}
+	return stage.operation.Retry(ctx, stage.plan, stage.cursor, terminalReceiptDigest)
+}
+
 // EvidenceReceipt exposes only the redaction-safe receipt from a binding call
 // made by this opened stage. Private material and runtime identities remain in
 // the selected private persistence implementation.

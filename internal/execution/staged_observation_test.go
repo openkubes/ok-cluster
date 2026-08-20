@@ -46,6 +46,59 @@ func TestObservationStagePersistsTerminalResultWithoutRawError(t *testing.T) {
 	}
 }
 
+func TestObservationStageRetriesOnlyExactFailedReceipt(t *testing.T) {
+	plan, cursor, at := lifecycleObservationCursor(t)
+	store, _ := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
+	observer := &fakeStageObserver{
+		binding: observationBinding(t, plan, "lifecycle-observation"),
+		result:  StageObservationResult{Outcome: "FAILED", EvidenceDigest: stagedSHA("f"), CompletedAt: at},
+	}
+	operation := ObservationStageOperation{Ledger: store, Observer: observer}
+	failed, err := operation.Run(context.Background(), plan, cursor)
+	var resultErr *ObservationStageResultError
+	if !errors.As(err, &resultErr) || failed.State != "COMPLETED_FAILED" || observer.calls != 1 {
+		t.Fatalf("failed observation was not retained: %#v calls=%d err=%v", failed, observer.calls, err)
+	}
+	observer.result = StageObservationResult{Outcome: "FAILED", EvidenceDigest: stagedSHA("d"), CompletedAt: at.Add(time.Second)}
+	for name, digest := range map[string]string{"invalid": "invalid", "wrong": stagedSHA("0")} {
+		t.Run(name, func(t *testing.T) {
+			if receipt, err := operation.Retry(context.Background(), plan, cursor, digest); err == nil || receipt.StageReceiptDigest != "" || observer.calls != 1 {
+				t.Fatalf("unsafe retry reached observer: %#v calls=%d err=%v", receipt, observer.calls, err)
+			}
+		})
+	}
+	failedAttempt, err := operation.Retry(context.Background(), plan, cursor, failed.StageReceiptDigest)
+	if !errors.As(err, &resultErr) || failedAttempt.State != "COMPLETED_FAILED" || failedAttempt.StageReceiptDigest == failed.StageReceiptDigest || observer.calls != 2 {
+		t.Fatalf("exact failed receipt retry was not retained: %#v calls=%d err=%v", failedAttempt, observer.calls, err)
+	}
+	observer.result = StageObservationResult{Outcome: "SUCCEEDED", EvidenceDigest: stagedSHA("e"), CompletedAt: at.Add(2 * time.Second)}
+	retried, err := operation.Retry(context.Background(), plan, cursor, failedAttempt.StageReceiptDigest)
+	if err != nil || retried.State != "COMPLETED_SUCCEEDED" || retried.StageReceiptDigest == failedAttempt.StageReceiptDigest || observer.calls != 3 {
+		t.Fatalf("digest-addressed failed attempt retry did not succeed: %#v calls=%d err=%v", retried, observer.calls, err)
+	}
+	replayed, err := operation.Run(context.Background(), plan, cursor)
+	if !errors.As(err, &resultErr) || replayed != failed || observer.calls != 3 {
+		t.Fatalf("legacy deterministic receipt changed after retry: %#v calls=%d err=%v", replayed, observer.calls, err)
+	}
+	loaded, err := store.LoadStageReceipt(context.Background(), plan, "lifecycle-observation", retried.StageReceiptDigest, cursorMustPredecessors(t, cursor))
+	if err != nil {
+		t.Fatalf("retry attempt receipt is not addressable: %v", err)
+	}
+	loadedReceipt, _ := loaded.Receipt()
+	if loadedReceipt.State != "SUCCEEDED" {
+		t.Fatalf("unexpected retry attempt receipt: %#v", loadedReceipt)
+	}
+}
+
+func cursorMustPredecessors(t *testing.T, cursor stagecursor.Cursor) []stagereceipt.Verified {
+	t.Helper()
+	items, err := cursor.Predecessors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
 func TestObservationStageFailsClosedBeforePersistence(t *testing.T) {
 	plan, cursor, at := lifecycleObservationCursor(t)
 	for name, mutate := range map[string]func(*fakeStageObserver){

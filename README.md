@@ -65,6 +65,12 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   explicit canonical receipt prefix and reports only the next, completed or
   stopped cursor state; it has no grant, credential, endpoint or execution
   capability and can safely select the next read-only stage after a restart.
+  Lifecycle/Network observation and runtime binding additionally permit one
+  explicit retry only when the caller supplies the exact immutable terminal
+  receipt digest. The first receipt remains unchanged and every different
+  result is retained in a digest-addressed attempt slot. A generic receipt
+  materializer can copy one independently selected successful ledger receipt
+  to an absent private `0600` path without executing a stage.
   Successful Cluster-lifecycle submission also carries a SHA-256 binding of
   the exact CAPI Cluster UID through the durable outcome and stage receipt;
   the raw UID is not emitted in redaction-safe evidence. The next typed
@@ -198,7 +204,16 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   bounded `ok-mgmt` installer credential, completes three exact-name GETs
   before any write, then can create only Secret, NetworkPolicy and Job in that
   order. This complete Job path is tested offline and against fake APIs but is
-  not yet live-proven on DEV.
+  not yet live-proven on DEV. If the process loses its memory-only target
+  credential after a durable successful Stage-8 receipt, the library now
+  supports an explicit receipt-bound continuation: a separately signed grant
+  with a new GrantID is claimed once in the existing ledger before a new
+  TokenRequest. The original Stage-8 receipt remains unchanged and automatic
+  mutation retry is still prohibited. A package-private registration refresh
+  primitive additionally verifies the complete existing AppProject and static
+  cluster-Secret binding before one UID/resourceVersion-protected token update;
+  it remains unusable until a separate Stage-9 recovery grant and ledger claim
+  are composed around it.
 
 </details>
 

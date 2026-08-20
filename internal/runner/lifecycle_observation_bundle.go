@@ -113,3 +113,12 @@ func (stage OpenedLifecycleObservationStage) Run(ctx context.Context) (execution
 	}
 	return stage.operation.Run(ctx, stage.plan, stage.cursor)
 }
+
+// Retry performs one explicitly bound read-only retry after an immutable
+// FAILED lifecycle observation receipt.
+func (stage OpenedLifecycleObservationStage) Retry(ctx context.Context, failedReceiptDigest string) (execution.ObservationStageRunReceipt, error) {
+	if !stage.verified {
+		return execution.ObservationStageRunReceipt{}, errors.New("lifecycle observation stage is not opened")
+	}
+	return stage.operation.Retry(ctx, stage.plan, stage.cursor, failedReceiptDigest)
+}

@@ -258,7 +258,24 @@ func addonSpecDigest(spec map[string]any, includeClusterRef bool) (string, error
 	}
 	semantic := make(map[string]any, len(keys))
 	for _, key := range keys {
-		semantic[key] = spec[key]
+		value := spec[key]
+		// CAAPH defaults an omitted enableClientCache to false when persisting
+		// HelmChartProxy objects. The API-defaulted representation and the
+		// submitted representation have identical Helm semantics, so their
+		// revision identity must not diverge.
+		if key == "options" {
+			if options, ok := value.(map[string]any); ok {
+				normalized := make(map[string]any, len(options))
+				for option, optionValue := range options {
+					if option == "enableClientCache" && optionValue == false {
+						continue
+					}
+					normalized[option] = optionValue
+				}
+				value = normalized
+			}
+		}
+		semantic[key] = value
 	}
 	return canonicalDigest(semantic)
 }

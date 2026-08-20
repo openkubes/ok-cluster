@@ -53,14 +53,16 @@ type TargetRegistrationStageBundleReceipt struct {
 }
 
 type VerifiedTargetRegistrationStageBundle struct {
-	plan       stageplan.Binding
-	cursor     stagecursor.Cursor
-	prefix     []stagereceipt.Verified
-	grant      authorization.VerifiedStageGrant
-	projection submission.TargetRegistrationPlan
-	receipt    TargetRegistrationStageBundleReceipt
-	handoff    *VerifiedTargetCredentialStageHandoff
-	verified   bool
+	plan                     stageplan.Binding
+	cursor                   stagecursor.Cursor
+	prefix                   []stagereceipt.Verified
+	grant                    authorization.VerifiedStageGrant
+	projection               submission.TargetRegistrationPlan
+	receipt                  TargetRegistrationStageBundleReceipt
+	handoff                  *VerifiedTargetCredentialStageHandoff
+	credentialEvidenceDigest string
+	recoveryRequestDigest    string
+	verified                 bool
 }
 
 type TargetRegistrationStageRuntimeConfig struct {
@@ -125,7 +127,13 @@ func LoadTargetRegistrationStageBundleFromHandoff(config TargetRegistrationStage
 	if err != nil {
 		return VerifiedTargetRegistrationStageBundle{}, err
 	}
+	credentialEvidence, recoveryRequest, err := config.Handoff.credentialEvidence()
+	if err != nil {
+		return VerifiedTargetRegistrationStageBundle{}, err
+	}
 	bundle.handoff = config.Handoff
+	bundle.credentialEvidenceDigest = credentialEvidence
+	bundle.recoveryRequestDigest = recoveryRequest
 	return bundle, nil
 }
 
@@ -262,6 +270,12 @@ func (stage BoundTargetRegistrationStage) Run(ctx context.Context) (execution.St
 func verifyTargetRegistrationStageBundle(bundle VerifiedTargetRegistrationStageBundle) error {
 	if !bundle.verified || bundle.receipt.Format != TargetRegistrationStageBundleReceiptFormat || bundle.receipt.State != "VERIFIED" || bundle.receipt.StageID != "target-registration" || bundle.receipt.CredentialMaterialPresent || bundle.receipt.MutationAllowed || len(bundle.prefix) != 8 {
 		return errors.New("target-registration stage bundle was not produced by verification")
+	}
+	if bundle.handoff != nil && !stageReceiptPrefixDigestPattern.MatchString(bundle.credentialEvidenceDigest) {
+		return errors.New("target-registration handoff credential evidence is invalid")
+	}
+	if bundle.recoveryRequestDigest != "" && !stageReceiptPrefixDigestPattern.MatchString(bundle.recoveryRequestDigest) {
+		return errors.New("target-registration recovery request identity is invalid")
 	}
 	for _, value := range []string{
 		bundle.receipt.PlanDigest, bundle.receipt.AuthorizationDigest, bundle.receipt.ArtifactDigest,

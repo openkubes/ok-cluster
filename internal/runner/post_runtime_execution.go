@@ -9,6 +9,8 @@ import (
 	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/observation"
+	"github.com/openkubes/ok-cluster/internal/stagecursor"
+	"github.com/openkubes/ok-cluster/internal/stagereceipt"
 	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
@@ -43,29 +45,52 @@ type PostRuntimeAggregateEvidenceConfig struct {
 	Runtime AggregateEvidenceStageFileRuntimeConfig
 }
 
+// PostRuntimeTargetCredentialRecoveryConfig selects the explicit crash-only
+// continuation path after Stage 8 succeeded durably but its memory-only
+// credential handoff was lost. It never replaces the normal first attempt.
+type PostRuntimeTargetCredentialRecoveryConfig struct {
+	StageReceipt  StageReceiptSource
+	Authorization TargetCredentialRecoveryAuthorizationResolver
+}
+
+// PostRuntimeTargetRegistrationRecoveryConfig selects the explicit crash-only
+// continuation path after Stage 9 succeeded durably but the short-lived target
+// credential embedded in the Argo registration has expired. It is valid only
+// together with target-credential recovery and never replaces a first attempt.
+type PostRuntimeTargetRegistrationRecoveryConfig struct {
+	StageReceipt  StageReceiptSource
+	Authorization TargetRegistrationRecoveryAuthorizationResolver
+}
+
 // PostRuntimeExecutionConfig supplies immutable artifacts and private runtime
 // bindings for exactly Stage 8-12. The Stage-8 grant is already part of its
 // verified bundle; later mutating grants are resolved only after their direct
 // predecessor receipt is durable.
 type PostRuntimeExecutionConfig struct {
-	TargetCredential     TargetCredentialStageBundleConfig
-	TargetCredentialRun  TargetCredentialStageRuntimeConfig
-	Authorization        StageAuthorizationResolver
-	TargetRegistration   PostRuntimeTargetRegistrationConfig
-	PlatformApplications PostRuntimePlatformApplicationsConfig
-	PlatformObservation  PostRuntimePlatformObservationConfig
-	AggregateEvidence    PostRuntimeAggregateEvidenceConfig
-	RuntimeBinding       RuntimeBindingMaterialFileConfig
-	ReceiptDirectory     string
+	TargetCredential           TargetCredentialStageBundleConfig
+	TargetCredentialRun        TargetCredentialStageRuntimeConfig
+	TargetCredentialRecovery   *PostRuntimeTargetCredentialRecoveryConfig
+	TargetRegistrationRecovery *PostRuntimeTargetRegistrationRecoveryConfig
+	Authorization              StageAuthorizationResolver
+	TargetRegistration         PostRuntimeTargetRegistrationConfig
+	PlatformApplications       PostRuntimePlatformApplicationsConfig
+	PlatformObservation        PostRuntimePlatformObservationConfig
+	AggregateEvidence          PostRuntimeAggregateEvidenceConfig
+	RuntimeBinding             RuntimeBindingMaterialFileConfig
+	ReceiptDirectory           string
 }
 
 type PostRuntimeExecutionReceipt struct {
-	Format                 string                              `json:"format"`
-	State                  string                              `json:"state"`
-	PlanDigest             string                              `json:"planDigest,omitempty"`
-	StoppedAt              string                              `json:"stoppedAt,omitempty"`
-	Checkpoints            []PostRuntimeStageCheckpoint        `json:"checkpoints"`
-	ResolvedAuthorizations []ResolvedStageAuthorizationReceipt `json:"resolvedAuthorizations"`
+	Format                                    string                                                  `json:"format"`
+	State                                     string                                                  `json:"state"`
+	PlanDigest                                string                                                  `json:"planDigest,omitempty"`
+	StoppedAt                                 string                                                  `json:"stoppedAt,omitempty"`
+	Checkpoints                               []PostRuntimeStageCheckpoint                            `json:"checkpoints"`
+	ResolvedAuthorizations                    []ResolvedStageAuthorizationReceipt                     `json:"resolvedAuthorizations"`
+	ResolvedRecoveryAuthorization             *ResolvedTargetCredentialRecoveryAuthorizationReceipt   `json:"resolvedRecoveryAuthorization,omitempty"`
+	TargetCredentialRecovery                  *TargetCredentialRecoveryReceipt                        `json:"targetCredentialRecovery,omitempty"`
+	ResolvedRegistrationRecoveryAuthorization *ResolvedTargetRegistrationRecoveryAuthorizationReceipt `json:"resolvedRegistrationRecoveryAuthorization,omitempty"`
+	TargetRegistrationRecovery                *TargetRegistrationRecoveryReceipt                      `json:"targetRegistrationRecovery,omitempty"`
 }
 
 type postRuntimeCredentialInvocation struct {
@@ -88,21 +113,25 @@ type postRuntimeEvaluationInvocation struct {
 }
 
 type postRuntimeExecutionFactories struct {
-	credential   func(TargetCredentialStageBundleConfig, TargetCredentialStageRuntimeConfig) (postRuntimeCredentialInvocation, error)
-	registration func(StageResumeConfig, *VerifiedTargetCredentialStageHandoff, StageAuthorizationSource, PostRuntimeTargetRegistrationConfig, VerifiedRuntimeBindingMaterial) (postRuntimeStagedInvocation, error)
-	applications func(StageResumeConfig, StageAuthorizationSource, PostRuntimePlatformApplicationsConfig) (postRuntimeStagedInvocation, error)
-	observation  func(StageResumeConfig, PostRuntimePlatformObservationConfig) (postRuntimeObservationInvocation, error)
-	aggregate    func(StageResumeConfig, PostRuntimeAggregateEvidenceConfig, VerifiedRuntimeBindingMaterial) (postRuntimeEvaluationInvocation, error)
+	credential           func(TargetCredentialStageBundleConfig, TargetCredentialStageRuntimeConfig) (postRuntimeCredentialInvocation, error)
+	registration         func(StageResumeConfig, *VerifiedTargetCredentialStageHandoff, StageAuthorizationSource, PostRuntimeTargetRegistrationConfig, VerifiedRuntimeBindingMaterial) (postRuntimeStagedInvocation, error)
+	applications         func(StageResumeConfig, StageAuthorizationSource, PostRuntimePlatformApplicationsConfig) (postRuntimeStagedInvocation, error)
+	observation          func(StageResumeConfig, PostRuntimePlatformObservationConfig) (postRuntimeObservationInvocation, error)
+	aggregate            func(StageResumeConfig, PostRuntimeAggregateEvidenceConfig, VerifiedRuntimeBindingMaterial) (postRuntimeEvaluationInvocation, error)
+	registrationRecovery func(context.Context, TargetRegistrationRecoveryConfig) (TargetRegistrationRecoveryReceipt, error)
 }
 
 type PostRuntimeExecution struct {
-	config     PostRuntimeExecutionConfig
-	initial    StageResumeConfig
-	runtime    VerifiedRuntimeBindingMaterial
-	credential postRuntimeCredentialInvocation
-	factories  postRuntimeExecutionFactories
-	mu         sync.Mutex
-	used       bool
+	config               PostRuntimeExecutionConfig
+	initial              StageResumeConfig
+	runtime              VerifiedRuntimeBindingMaterial
+	credential           postRuntimeCredentialInvocation
+	recoveryBundle       *VerifiedTargetCredentialStageBundle
+	recovery             *PostRuntimeTargetCredentialRecoveryConfig
+	registrationRecovery *PostRuntimeTargetRegistrationRecoveryConfig
+	factories            postRuntimeExecutionFactories
+	mu                   sync.Mutex
+	used                 bool
 }
 
 // OpenPostRuntimeExecution performs bounded local loading only. It opens
@@ -125,7 +154,14 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 	if err != nil || decision.State != "NEXT" || decision.StageID != "target-credential" || len(initial.Receipts) != 7 {
 		return nil, errors.New("post-runtime execution requires the exact Stage-8 cursor")
 	}
-	for _, stageID := range postRuntimeStageOrder[:4] {
+	persistedStages := postRuntimeStageOrder[:4]
+	if config.TargetCredentialRecovery != nil {
+		persistedStages = postRuntimeStageOrder[1:4]
+	}
+	if config.TargetRegistrationRecovery != nil {
+		persistedStages = postRuntimeStageOrder[2:4]
+	}
+	for _, stageID := range persistedStages {
 		if err := validateRuntimeBindingOutputPath(filepath.Join(config.ReceiptDirectory, postRuntimeReceiptFiles[stageID])); err != nil {
 			return nil, errors.New("post-runtime receipt destination is invalid")
 		}
@@ -136,9 +172,48 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 	if err != nil {
 		return nil, errors.New("load post-runtime execution binding")
 	}
-	credential, err := factories.credential(config.TargetCredential, config.TargetCredentialRun)
-	if err != nil || credential.run == nil || credential.ledger == nil {
-		return nil, errors.New("open post-runtime target credential stage")
+	var credential postRuntimeCredentialInvocation
+	var recoveryBundle *VerifiedTargetCredentialStageBundle
+	if config.TargetCredentialRecovery == nil {
+		credential, err = factories.credential(config.TargetCredential, config.TargetCredentialRun)
+		if err != nil || credential.run == nil || credential.ledger == nil {
+			return nil, errors.New("open post-runtime target credential stage")
+		}
+	} else {
+		retainedRecovery := *config.TargetCredentialRecovery
+		config.TargetCredentialRecovery = &retainedRecovery
+		if config.TargetCredentialRecovery.Authorization == nil {
+			return nil, errors.New("post-runtime target-credential recovery authorization is required")
+		}
+		bundle, loadErr := LoadTargetCredentialStageBundle(config.TargetCredential)
+		if loadErr != nil {
+			return nil, errors.New("load post-runtime target-credential recovery bundle")
+		}
+		if _, loadErr = loadSuccessfulTargetCredentialReceipt(bundle, config.TargetCredentialRecovery.StageReceipt); loadErr != nil {
+			return nil, errors.New("verify post-runtime target-credential recovery receipt")
+		}
+		recoveryBundle = &bundle
+	}
+	var registrationRecovery *PostRuntimeTargetRegistrationRecoveryConfig
+	if config.TargetRegistrationRecovery != nil {
+		if config.TargetCredentialRecovery == nil || config.TargetRegistrationRecovery.Authorization == nil || recoveryBundle == nil || factories.registrationRecovery == nil {
+			return nil, errors.New("post-runtime target-registration recovery requires credential recovery and independent authorization")
+		}
+		retained := *config.TargetRegistrationRecovery
+		config.TargetRegistrationRecovery = &retained
+		stageEight, loadErr := loadSuccessfulTargetCredentialReceipt(*recoveryBundle, config.TargetCredentialRecovery.StageReceipt)
+		if loadErr != nil {
+			return nil, errors.New("verify post-runtime target-credential recovery receipt for registration recovery")
+		}
+		prefix := append(append([]stagereceipt.Verified(nil), recoveryBundle.prefix...), stageEight)
+		cursor, loadErr := stagecursor.Evaluate(recoveryBundle.plan, prefix)
+		if loadErr != nil {
+			return nil, errors.New("evaluate post-runtime target-registration recovery prefix")
+		}
+		if _, loadErr = loadSuccessfulTargetRegistrationReceipt(recoveryBundle.plan, cursor, prefix, retained.StageReceipt); loadErr != nil {
+			return nil, errors.New("verify post-runtime target-registration recovery receipt")
+		}
+		registrationRecovery = config.TargetRegistrationRecovery
 	}
 	config.TargetCredential.Receipts = append([]StageReceiptSource(nil), initial.Receipts...)
 	config.PlatformObservation.Profile.RequiredApplications = append([]observation.PlatformApplicationExpectation(nil), config.PlatformObservation.Profile.RequiredApplications...)
@@ -148,7 +223,9 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 	config.AggregateEvidence.Runtime.RuntimeMaterialPath = config.RuntimeBinding.MaterialPath
 	config.AggregateEvidence.Runtime.RuntimeReceiptPath = config.RuntimeBinding.ReceiptPath
 	return &PostRuntimeExecution{
-		config: config, initial: initial, runtime: runtime, credential: credential, factories: factories,
+		config: config, initial: initial, runtime: runtime, credential: credential,
+		recoveryBundle: recoveryBundle, recovery: config.TargetCredentialRecovery, factories: factories,
+		registrationRecovery: registrationRecovery,
 	}, nil
 }
 
@@ -169,8 +246,41 @@ func (executor *PostRuntimeExecution) Run(ctx context.Context) (PostRuntimeExecu
 
 	receipts := append([]StageReceiptSource(nil), executor.initial.Receipts...)
 	authorizations := []ResolvedStageAuthorizationReceipt{}
+	var recoveryAuthorization *ResolvedTargetCredentialRecoveryAuthorizationReceipt
+	var recoveryReceipt *TargetCredentialRecoveryReceipt
+	var registrationRecoveryAuthorization *ResolvedTargetRegistrationRecoveryAuthorizationReceipt
+	var registrationRecoveryReceipt *TargetRegistrationRecoveryReceipt
 	orchestration := PostRuntimeOrchestration{}
 	orchestration.RunTargetCredential = func(ctx context.Context) (execution.StagedOperationReceipt, *VerifiedTargetCredentialStageHandoff, error) {
+		if executor.recovery != nil {
+			if executor.recoveryBundle == nil {
+				return execution.StagedOperationReceipt{}, nil, errors.New("post-runtime recovery bundle is unavailable")
+			}
+			resolved, err := ResolveTargetCredentialRecoveryAuthorization(ctx, *executor.recoveryBundle, executor.recovery.StageReceipt, executor.recovery.Authorization)
+			if err != nil {
+				return execution.StagedOperationReceipt{}, nil, err
+			}
+			resolvedReceipt, err := resolved.Receipt()
+			if err != nil {
+				return execution.StagedOperationReceipt{}, nil, err
+			}
+			recovered, handoff, err := RecoverTargetCredential(ctx, TargetCredentialRecoveryConfig{
+				Bundle: *executor.recoveryBundle, StageReceipt: executor.recovery.StageReceipt, Authorization: resolved,
+				Ledger: executor.config.TargetCredentialRun.Ledger, Workload: executor.config.TargetCredentialRun.Workload,
+				Clock: executor.config.TargetCredentialRun.Clock,
+			})
+			recoveryAuthorization, recoveryReceipt = &resolvedReceipt, &recovered
+			runReceipt := execution.StagedOperationReceipt{
+				Format: execution.StagedReceiptFormat, State: "COMPLETED_SUCCEEDED",
+				PlanDigest: executor.recoveryBundle.plan.PlanDigest, StageID: "target-credential",
+				StageReceiptDigest: executor.recovery.StageReceipt.Digest,
+			}
+			if err != nil {
+				return runReceipt, nil, err
+			}
+			receipts = append(receipts, executor.recovery.StageReceipt)
+			return runReceipt, handoff, nil
+		}
 		runReceipt, handoff, err := executor.credential.run(ctx)
 		if err != nil {
 			return runReceipt, handoff, err
@@ -183,6 +293,33 @@ func (executor *PostRuntimeExecution) Run(ctx context.Context) (PostRuntimeExecu
 		return runReceipt, handoff, nil
 	}
 	orchestration.RunTargetRegistration = func(ctx context.Context, handoff *VerifiedTargetCredentialStageHandoff, _ execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
+		if executor.registrationRecovery != nil {
+			resolved, err := ResolveTargetRegistrationRecoveryAuthorization(ctx, handoff, executor.registrationRecovery.StageReceipt, executor.registrationRecovery.Authorization)
+			if err != nil {
+				return execution.StagedOperationReceipt{}, err
+			}
+			resolvedReceipt, err := resolved.Receipt()
+			if err != nil {
+				return execution.StagedOperationReceipt{}, err
+			}
+			recovered, err := executor.factories.registrationRecovery(ctx, TargetRegistrationRecoveryConfig{
+				Handoff: handoff, PriorStageReceipt: executor.registrationRecovery.StageReceipt, Authorization: resolved,
+				ArtifactPath: executor.config.TargetRegistration.ArtifactPath, Expected: executor.config.TargetRegistration.Expected,
+				Ledger: executor.config.TargetRegistration.Runtime.Ledger, GitOps: executor.config.TargetRegistration.Runtime.GitOps,
+				Runtime: executor.runtime, MaterializationTime: executor.config.TargetRegistration.Runtime.MaterializationTime,
+				Clock: executor.config.TargetRegistration.Runtime.Clock,
+			})
+			registrationRecoveryAuthorization, registrationRecoveryReceipt = &resolvedReceipt, &recovered
+			runReceipt := execution.StagedOperationReceipt{
+				Format: execution.StagedReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: executor.recoveryBundle.plan.PlanDigest,
+				StageID: "target-registration", StageReceiptDigest: executor.registrationRecovery.StageReceipt.Digest,
+			}
+			if err != nil {
+				return runReceipt, err
+			}
+			receipts = append(receipts, executor.registrationRecovery.StageReceipt)
+			return runReceipt, nil
+		}
 		resolved, err := ResolveStageAuthorization(ctx, executor.resume(receipts), executor.config.Authorization)
 		if err != nil {
 			return execution.StagedOperationReceipt{}, err
@@ -262,8 +399,11 @@ func (executor *PostRuntimeExecution) Run(ctx context.Context) (PostRuntimeExecu
 	result := PostRuntimeExecutionReceipt{
 		Format: PostRuntimeExecutionReceiptFormat, State: orchestrationReceipt.State,
 		PlanDigest: orchestrationReceipt.PlanDigest, StoppedAt: orchestrationReceipt.StoppedAt,
-		Checkpoints:            append([]PostRuntimeStageCheckpoint(nil), orchestrationReceipt.Checkpoints...),
-		ResolvedAuthorizations: append([]ResolvedStageAuthorizationReceipt(nil), authorizations...),
+		Checkpoints:                   append([]PostRuntimeStageCheckpoint(nil), orchestrationReceipt.Checkpoints...),
+		ResolvedAuthorizations:        append([]ResolvedStageAuthorizationReceipt(nil), authorizations...),
+		ResolvedRecoveryAuthorization: recoveryAuthorization, TargetCredentialRecovery: recoveryReceipt,
+		ResolvedRegistrationRecoveryAuthorization: registrationRecoveryAuthorization,
+		TargetRegistrationRecovery:                registrationRecoveryReceipt,
 	}
 	return result, err
 }
@@ -394,5 +534,6 @@ func defaultPostRuntimeExecutionFactories() postRuntimeExecutionFactories {
 			}
 			return postRuntimeEvaluationInvocation{run: opened.Run}, nil
 		},
+		registrationRecovery: RecoverTargetRegistration,
 	}
 }

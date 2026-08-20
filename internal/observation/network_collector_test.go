@@ -61,6 +61,38 @@ func TestNetworkSourceCollectorNormalizesOrderDeterministically(t *testing.T) {
 	}
 }
 
+func TestAddonSpecDigestNormalizesCAAPHDefaultedFalse(t *testing.T) {
+	requested := map[string]any{
+		"chartName": "cilium", "repoURL": "oci://quay.io/cilium/charts", "version": "1.19.6",
+		"releaseName": "cilium", "namespace": "kube-system", "reconcileStrategy": "Continuous",
+		"valuesTemplate": "pinned-values", "options": map[string]any{"wait": true},
+	}
+	defaulted := map[string]any{}
+	for key, value := range requested {
+		defaulted[key] = value
+	}
+	defaulted["options"] = map[string]any{"wait": true, "enableClientCache": false}
+	want, err := addonSpecDigest(requested, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := addonSpecDigest(defaulted, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("CAAPH false default changed HCP semantics: got %s want %s", got, want)
+	}
+	defaulted["options"] = map[string]any{"wait": true, "enableClientCache": true}
+	changed, err := addonSpecDigest(defaulted, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == want {
+		t.Fatal("explicit enableClientCache=true did not change HCP semantics")
+	}
+}
+
 func TestNetworkSourceCollectorRejectsDifferentRuntimeAuthorityBeforeReads(t *testing.T) {
 	policy, _, management, workload, probe := collectorFixture(t)
 	collector := mustNetworkCollector(t, policy, management, workload, probe)

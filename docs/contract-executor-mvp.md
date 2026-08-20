@@ -873,6 +873,27 @@ not sufficient. This checkpoint only persists evidence: it does not execute a
 stage, consume a grant, select a retry, contact a cluster during construction,
 or activate the CLI/Job path.
 
+## Explicit terminal-receipt retry boundary
+
+Lifecycle and Network observation plus runtime binding now expose one
+deliberate retry boundary. A caller must supply the exact digest of an
+immutable `FAILED` observation receipt or `FAILED`/`STOPPED` binding receipt.
+The runner reloads and reverifies that receipt against the same Plan and direct
+predecessor chain before invoking the bounded operation again. A missing,
+successful, foreign or malformed receipt stops before source access.
+
+The original deterministic receipt is never replaced. A different result is
+stored in its digest-addressed attempt slot, so both failure and recovery remain
+auditable. The CLI routes this boundary only through explicit
+`--retry-after-failed-receipt-digest` or
+`--retry-after-terminal-receipt-digest` flags. It never chooses a latest
+attempt, infers retry authority from elapsed time or retries a mutating stage.
+
+For process handoff, `ok cluster stage receipt materialize --execute` can load
+one independently digest-bound successful receipt from the durable ledger and
+write its canonical bytes create-only to an absent private path. The command
+does not run a stage or convert a terminal receipt into success.
+
 ## Durable mutating-stage outcome finalization
 
 A completed mutating-stage ledger outcome can now be transformed into the
@@ -2633,6 +2654,12 @@ CAPI read, one Network source pass, three exact Argo Application reads and one
 capability read. Once the Stage-12 receipt is durable, replay performs no
 additional authoritative-source access.
 
+Network source correlation also normalizes CAAPH's semantic default for
+`spec.options.enableClientCache`: an omitted field and an API-defaulted
+`false` are equivalent. Other option differences remain revision-significant.
+This prevents API defaulting from manufacturing a false E mismatch without
+weakening the exact HelmChartProxy/HelmReleaseProxy identity checks.
+
 Stage 12 also has an explicit local launch surface:
 
 ```text
@@ -2690,10 +2717,34 @@ only normalized, revision-correlated evidence.
 
 The memory-only target credential intentionally creates a narrow process-crash
 boundary between successful credential issuance and durable registration. The
-runner must not solve that boundary by persisting the bearer token. A later
-orchestrator checkpoint must either execute those steps within one bounded
-process lifetime or obtain a fresh independently authorized credential after a
-pre-registration stop.
+runner does not solve that boundary by persisting the bearer token. It normally
+executes both steps within one bounded process lifetime. If that process stops
+after the immutable successful Stage-8 receipt, the recovery path first binds a
+redaction-safe recovery request to that exact receipt and the original Stage-8
+authorization. An external authority must return a new signed Stage-8 grant
+with a different authorization digest and GrantID. The existing durable ledger
+claims that grant before one new TokenRequest and records its outcome, while
+the authoritative Stage-8 receipt is neither finalized again nor overwritten.
+Only a successful recovery recreates the one-use in-memory handoff for Stage 9.
+
+The registration-side refresh primitive is narrower than a general adoption
+or update path. It first requires the existing AppProject to have the exact
+bound spec, labels and annotations. It then accepts only the exact bound Argo
+cluster Secret: the target name, server, namespaces, project, cluster-resource
+mode, CA configuration and all non-expiration annotations must match. The old
+bearer token must be structurally present and different from the newly issued
+one. A single `PUT` carries the observed UID and resourceVersion and changes
+only the new credential configuration plus its bound expiration; the response
+is reverified byte-for-byte at the data boundary. Drift stops before mutation,
+and an unknown `PUT` outcome is preserved without retry. The recovery
+coordinator now places a separate redaction-safe Stage-9 authorization request
+and durable ledger claim around this package-private primitive. That request
+binds the immutable successful Stage-9 receipt, the Stage-8 credential-recovery
+request and the new credential evidence. It accepts only a fresh signed
+Stage-9 grant, claims it before the first registration read and records a
+durable `SUCCEEDED` or `STOPPED` outcome without finalizing or rewriting the
+historical Stage-9 receipt. A consumed recovery grant cannot reach a second
+`PUT`.
 
 The in-process post-runtime orchestrator now fixes the Stage 8-12 call order
 and passes the one-use credential handoff only from Stage 8 to Stage 9. It
@@ -2733,15 +2784,24 @@ issuer: deployment and operation of that external authority remain outside
 this checkpoint.
 
 The concrete post-runtime execution adapter now composes those boundaries into
-one single-use Stage 8-12 library path. It starts from the exact seven-receipt
-cursor, reuses one verified runtime binding, executes the memory-only
-credential handoff, resolves Stage 9 and Stage 10 authorization only after the
-current predecessor receipt is durable, and opens the existing registration,
-Application, observation and aggregate operations. Canonical Stage 8-11
-receipts are persisted create-only as private `0600` files for the next
-cursor. A missing grant, failed stage, malformed receipt, unsafe destination
-or cancelled context stops the suffix without retry, rollback or cleanup. The
-adapter itself does not own a CLI or Job activation surface; the later
+one single-use Stage 8-12 library path. It normally starts from the exact
+seven-receipt cursor, reuses one verified runtime binding, executes the
+memory-only credential handoff, resolves Stage 9 and Stage 10 authorization
+only after the current predecessor receipt is durable, and opens the existing
+registration, Application, observation and aggregate operations. An explicit
+recovery configuration may instead supply the exact successful Stage-8 receipt
+and the separate recovery authority described above; after the new grant is
+durably consumed, execution continues at Stage 9 using that unchanged receipt
+as the authoritative predecessor. If Stage 9 had also completed before the
+process stopped, a second explicit recovery configuration must provide its
+exact successful receipt and an independent Stage-9 recovery authority. The
+adapter then refreshes only the bound registration credential, retains both
+historical Stage-8 and Stage-9 receipts unchanged, and resumes at Stage 10.
+Canonical receipts produced by the normal path are persisted create-only as
+private `0600` files for the next cursor. A missing grant,
+consumed recovery grant, failed stage, malformed receipt, unsafe destination or
+cancelled context stops the suffix without automatic retry, rollback or
+cleanup. The adapter itself does not own a CLI or Job activation surface; the
 activation layer composes it without widening this library boundary.
 
 The private post-runtime execution manifest now provides the local activation

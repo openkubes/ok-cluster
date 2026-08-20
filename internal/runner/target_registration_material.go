@@ -154,7 +154,11 @@ func BuildTargetRegistrationMaterial(config TargetRegistrationMaterializeConfig)
 		return VerifiedTargetRegistrationMaterial{}, errors.New("canonicalize target-credential receipt")
 	}
 	credentialStageReceipt, err := bundle.prefix[7].Receipt()
-	if err != nil || credentialStageReceipt.StageID != "target-credential" || credentialStageReceipt.EvidenceDigest != digest.SHA256(credentialReceiptRaw) {
+	wantCredentialEvidence := credentialStageReceipt.EvidenceDigest
+	if bundle.credentialEvidenceDigest != "" {
+		wantCredentialEvidence = bundle.credentialEvidenceDigest
+	}
+	if err != nil || credentialStageReceipt.StageID != "target-credential" || wantCredentialEvidence != digest.SHA256(credentialReceiptRaw) {
 		return VerifiedTargetRegistrationMaterial{}, errors.New("target-credential material differs from durable stage evidence")
 	}
 	binding := targetRegistrationSafeBinding{
