@@ -35,8 +35,8 @@ type TargetRegistrationRefreshReceipt struct {
 	StaticRegistrationPreserved  bool   `json:"staticRegistrationPreserved"`
 }
 
-// kubernetesTargetRegistrationRefresher is deliberately package-private. A
-// later recovery coordinator must place a fresh independently authorized and
+// kubernetesTargetRegistrationRefresher is deliberately package-private. The
+// recovery coordinator places a fresh independently authorized and
 // ledger-claimed Stage-9 operation around this single exact replacement.
 type kubernetesTargetRegistrationRefresher struct {
 	mu             sync.Mutex

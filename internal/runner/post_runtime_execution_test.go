@@ -165,6 +165,118 @@ func TestPostRuntimeExecutionContinuesFromReceiptBoundCredentialRecovery(t *test
 	}
 }
 
+func TestPostRuntimeExecutionContinuesFromReceiptBoundRegistrationRecovery(t *testing.T) {
+	config, factories, calls, requests := postRuntimeExecutionFixture(t)
+	bundle, err := LoadTargetCredentialStageBundle(config.TargetCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := config.TargetCredential.EvaluationTime.Add(time.Minute)
+	credentialAPI, tokenRequests := newTargetCredentialExecutionAPI(t, now, 201)
+	defer credentialAPI.Close()
+	ledgerAPI := newRuntimeBindingLedgerAPI(t)
+	defer ledgerAPI.Close()
+	runtime := targetCredentialExecutionRuntime(t, targetCredentialBundleTestFixture{
+		config: config.TargetCredential, plan: bundle.plan, policyDigest: bundle.receipt.PolicyDigest,
+		accessDigest: bundle.receipt.TargetAccessArtifactDigest,
+	}, ledgerAPI.Server, credentialAPI, now)
+	original, err := bundle.Open(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageEightRun, stageEightHandoff, err := original.RunHandoff(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageEightRaw, err := stageEightHandoff.StageReceiptBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageEightPath := filepath.Join(config.ReceiptDirectory, postRuntimeReceiptFiles["target-credential"])
+	if err := os.WriteFile(stageEightPath, stageEightRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stageEight := StageReceiptSource{Path: stageEightPath, Digest: stageEightRun.StageReceiptDigest}
+
+	resume := StageResumeConfig{PlanPath: config.TargetCredential.PlanPath, PlanExpected: config.TargetCredential.PlanExpected,
+		Receipts: append(append([]StageReceiptSource(nil), config.TargetCredential.Receipts...), stageEight)}
+	plan, cursor, _, err := loadStageResumeWithPrefix(resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessors, err := cursor.Predecessors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageNine, err := stagereceipt.New(plan, "target-registration", predecessors, "SUCCEEDED", "ATTEMPTED",
+		digest.SHA256([]byte("original-registration-outcome")), digest.SHA256([]byte("original-registration-evidence")), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageNineRaw, err := stageNine.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageNineDigest, err := stageNine.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageNinePath := filepath.Join(config.ReceiptDirectory, postRuntimeReceiptFiles["target-registration"])
+	if err := os.WriteFile(stageNinePath, stageNineRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stageNineSource := StageReceiptSource{Path: stageNinePath, Digest: stageNineDigest}
+
+	grantRoot := t.TempDir()
+	config.TargetCredentialRun = runtime
+	config.TargetCredentialRecovery = &PostRuntimeTargetCredentialRecoveryConfig{
+		StageReceipt: stageEight,
+		Authorization: TargetCredentialRecoveryAuthorizationResolverFunc(func(_ context.Context, request TargetCredentialRecoveryAuthorizationRequest) (StageAuthorizationSource, error) {
+			return writeTargetCredentialRecoveryGrant(t, grantRoot, request, now), nil
+		}),
+	}
+	config.TargetRegistrationRecovery = &PostRuntimeTargetRegistrationRecoveryConfig{
+		StageReceipt: stageNineSource,
+		Authorization: TargetRegistrationRecoveryAuthorizationResolverFunc(func(_ context.Context, request TargetRegistrationRecoveryAuthorizationRequest) (StageAuthorizationSource, error) {
+			return writeTargetRegistrationRecoveryGrant(t, grantRoot, request, now), nil
+		}),
+	}
+	factories.registrationRecovery = func(_ context.Context, recovery TargetRegistrationRecoveryConfig) (TargetRegistrationRecoveryReceipt, error) {
+		*calls = append(*calls, "target-registration")
+		if recovery.PriorStageReceipt.Digest != stageNineDigest || recovery.Handoff == nil || !recovery.Authorization.verified {
+			t.Fatalf("registration recovery config differs: %#v", recovery)
+		}
+		return TargetRegistrationRecoveryReceipt{
+			Format: TargetRegistrationRecoveryReceiptFormat, State: "REFRESHED", PlanDigest: plan.PlanDigest,
+			PriorStageReceiptDigest: stageNineDigest, RecoveryRequestDigest: recovery.Authorization.request.RequestDigest,
+		}, nil
+	}
+
+	executor, err := openPostRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "SUCCEEDED" || receipt.ResolvedRecoveryAuthorization == nil || receipt.TargetCredentialRecovery == nil ||
+		receipt.ResolvedRegistrationRecoveryAuthorization == nil || receipt.TargetRegistrationRecovery == nil ||
+		receipt.TargetRegistrationRecovery.State != "REFRESHED" || len(receipt.ResolvedAuthorizations) != 1 || len(receipt.Checkpoints) != 5 ||
+		receipt.Checkpoints[0].StageReceiptDigest != stageEight.Digest || receipt.Checkpoints[1].StageReceiptDigest != stageNineDigest ||
+		tokenRequests.Load() != 2 {
+		t.Fatalf("post-runtime registration recovery did not continue exact suffix: %#v tokenRequests=%d", receipt, tokenRequests.Load())
+	}
+	if !reflect.DeepEqual(*calls, postRuntimeStageOrder[1:]) || len(*requests) != 1 || (*requests)[0].StageID != "platform-applications" {
+		t.Fatalf("normal registration path ran during recovery: calls=%v requests=%#v", *calls, *requests)
+	}
+	storedEight, errEight := os.ReadFile(stageEightPath)
+	storedNine, errNine := os.ReadFile(stageNinePath)
+	if errEight != nil || errNine != nil || digest.SHA256(storedEight) != stageEight.Digest || digest.SHA256(storedNine) != stageNineDigest {
+		t.Fatalf("registration recovery changed historical receipts: stage8=%v stage9=%v", errEight, errNine)
+	}
+}
+
 func postRuntimeExecutionFixture(t *testing.T) (PostRuntimeExecutionConfig, postRuntimeExecutionFactories, *[]string, *[]StageAuthorizationRequest) {
 	t.Helper()
 	credential := targetCredentialBundleFixture(t)

@@ -2736,9 +2736,15 @@ bearer token must be structurally present and different from the newly issued
 one. A single `PUT` carries the observed UID and resourceVersion and changes
 only the new credential configuration plus its bound expiration; the response
 is reverified byte-for-byte at the data boundary. Drift stops before mutation,
-and an unknown `PUT` outcome is preserved without retry. This package-private
-primitive grants no authority by itself; composition still requires a fresh
-Stage-9 recovery authorization and durable ledger claim.
+and an unknown `PUT` outcome is preserved without retry. The recovery
+coordinator now places a separate redaction-safe Stage-9 authorization request
+and durable ledger claim around this package-private primitive. That request
+binds the immutable successful Stage-9 receipt, the Stage-8 credential-recovery
+request and the new credential evidence. It accepts only a fresh signed
+Stage-9 grant, claims it before the first registration read and records a
+durable `SUCCEEDED` or `STOPPED` outcome without finalizing or rewriting the
+historical Stage-9 receipt. A consumed recovery grant cannot reach a second
+`PUT`.
 
 The in-process post-runtime orchestrator now fixes the Stage 8-12 call order
 and passes the one-use credential handoff only from Stage 8 to Stage 9. It
@@ -2786,8 +2792,13 @@ registration, Application, observation and aggregate operations. An explicit
 recovery configuration may instead supply the exact successful Stage-8 receipt
 and the separate recovery authority described above; after the new grant is
 durably consumed, execution continues at Stage 9 using that unchanged receipt
-as the authoritative predecessor. Canonical Stage 8-11 receipts are persisted
-create-only as private `0600` files for the next cursor. A missing grant,
+as the authoritative predecessor. If Stage 9 had also completed before the
+process stopped, a second explicit recovery configuration must provide its
+exact successful receipt and an independent Stage-9 recovery authority. The
+adapter then refreshes only the bound registration credential, retains both
+historical Stage-8 and Stage-9 receipts unchanged, and resumes at Stage 10.
+Canonical receipts produced by the normal path are persisted create-only as
+private `0600` files for the next cursor. A missing grant,
 consumed recovery grant, failed stage, malformed receipt, unsafe destination or
 cancelled context stops the suffix without automatic retry, rollback or
 cleanup. The adapter itself does not own a CLI or Job activation surface; the
