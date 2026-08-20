@@ -530,6 +530,19 @@ var executeLifecycleObservationStage = func(ctx context.Context, bundleConfig ru
 	return opened.Run(ctx)
 }
 
+var executeLifecycleObservationStageRetry = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.LifecycleObservationStageRuntimeConfig, failedReceiptDigest string) (execution.ObservationStageRunReceipt, error) {
+	bundle, err := runner.LoadLifecycleObservationStageBundle(bundleConfig)
+	if err != nil {
+		return execution.ObservationStageRunReceipt{}, err
+	}
+	runtimeConfig.Management.AuthorityIdentity = bundleConfig.PlanExpected.ManagementAuthority
+	opened, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.ObservationStageRunReceipt{}, err
+	}
+	return opened.Retry(ctx, failedReceiptDigest)
+}
+
 var executeNetworkObservationStage = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.NetworkObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
 	bundle, err := runner.LoadNetworkObservationStageBundle(bundleConfig)
 	if err != nil {
@@ -541,6 +554,19 @@ var executeNetworkObservationStage = func(ctx context.Context, bundleConfig runn
 		return execution.ObservationStageRunReceipt{}, err
 	}
 	return opened.Run(ctx)
+}
+
+var executeNetworkObservationStageRetry = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.NetworkObservationStageRuntimeConfig, failedReceiptDigest string) (execution.ObservationStageRunReceipt, error) {
+	bundle, err := runner.LoadNetworkObservationStageBundle(bundleConfig)
+	if err != nil {
+		return execution.ObservationStageRunReceipt{}, err
+	}
+	runtimeConfig.Management.AuthorityIdentity = bundleConfig.PlanExpected.ManagementAuthority
+	opened, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.ObservationStageRunReceipt{}, err
+	}
+	return opened.Retry(ctx, failedReceiptDigest)
 }
 
 var executeRuntimeBindingStage = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.RuntimeBindingStageRuntimeConfig) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
@@ -570,6 +596,40 @@ var executeKubernetesRuntimeBindingStage = func(ctx context.Context, bundleConfi
 		return execution.BindingStageRunReceipt{}, nil, err
 	}
 	receipt, runErr := opened.Run(ctx)
+	evidence, evidenceErr := opened.EvidenceReceipt()
+	if evidenceErr == nil {
+		return receipt, &evidence, runErr
+	}
+	return receipt, nil, runErr
+}
+
+var executeRuntimeBindingStageRetry = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.RuntimeBindingStageRuntimeConfig, terminalReceiptDigest string) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+	bundle, err := runner.LoadRuntimeBindingStageBundle(bundleConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	opened, err := bundle.Open(runtimeConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	receipt, runErr := opened.Retry(ctx, terminalReceiptDigest)
+	evidence, evidenceErr := opened.EvidenceReceipt()
+	if evidenceErr == nil {
+		return receipt, &evidence, runErr
+	}
+	return receipt, nil, runErr
+}
+
+var executeKubernetesRuntimeBindingStageRetry = func(ctx context.Context, bundleConfig runner.StageResumeConfig, runtimeConfig runner.RuntimeBindingStageKubernetesRuntimeConfig, terminalReceiptDigest string) (execution.BindingStageRunReceipt, *runner.RuntimeBindingStageEvidenceReceipt, error) {
+	bundle, err := runner.LoadRuntimeBindingStageBundle(bundleConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	opened, err := bundle.OpenKubernetes(runtimeConfig)
+	if err != nil {
+		return execution.BindingStageRunReceipt{}, nil, err
+	}
+	receipt, runErr := opened.Retry(ctx, terminalReceiptDigest)
 	evidence, evidenceErr := opened.EvidenceReceipt()
 	if evidenceErr == nil {
 		return receipt, &evidence, runErr
@@ -614,6 +674,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "resume" {
 		return runClusterStageResume(arguments[3:], stdout, stderr)
+	}
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "receipt" && arguments[3] == "materialize" {
+		return runClusterStageReceiptMaterialize(ctx, arguments[4:], stdout, stderr)
 	}
 	if len(arguments) >= 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && arguments[3] == "lifecycle" && arguments[4] == "package" {
 		return runClusterStageObserveLifecyclePackage(arguments[5:], stdout, stderr)
@@ -717,7 +780,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime package ... | ok cluster stage run post-runtime materialize ... | ok cluster stage run post-runtime launch prepare ... | ok cluster stage run post-runtime launch execute ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage receipt materialize ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime package ... | ok cluster stage run post-runtime materialize ... | ok cluster stage run post-runtime launch prepare ... | ok cluster stage run post-runtime launch execute ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
@@ -898,6 +961,78 @@ func runClusterStageResume(arguments []string, stdout, stderr io.Writer) error {
 	return encoder.Encode(inspection)
 }
 
+func runClusterStageReceiptMaterialize(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage receipt materialize", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resumeFlags := addStageResumeFlags(flags)
+	execute := flags.Bool("execute", false, "materialize exactly one verified durable stage receipt")
+	runFormat := flags.String("run-format", "", "exact successful stage run receipt format")
+	planDigest := flags.String("plan-digest", "", "exact staged plan digest from the successful run")
+	stageID := flags.String("stage-id", "", "exact successful stage ID selected by the cursor")
+	stageReceiptDigest := flags.String("stage-receipt-digest", "", "exact durable successful stage receipt digest")
+	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
+	ledgerTokenFile := flags.String("ledger-token-file", "", "path to the short-lived ledger token")
+	ledgerCAFile := flags.String("ledger-ca-file", "", "path to the ledger Kubernetes API CA bundle")
+	output := flags.String("output", "", "exclusive private absolute output path for the verified receipt")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("stage receipt materialization requires explicit --execute")
+	}
+	resume, err := resumeFlags.config()
+	if err != nil {
+		return err
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--run-format", *runFormat}, {"--plan-digest", *planDigest}, {"--stage-id", *stageID},
+		{"--stage-receipt-digest", *stageReceiptDigest}, {"--ledger-api-endpoint", *ledgerAPIEndpoint},
+		{"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile}, {"--output", *output},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*planDigest) || !sha256DigestPattern.MatchString(*stageReceiptDigest) {
+		return errors.New("stage receipt materialization requires exact SHA-256 identities")
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, runtimeBindingRunTimeout)
+	defer cancel()
+	store, err := runner.OpenKubernetesLedger(runner.KubernetesLedgerConfig{
+		Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
+	})
+	if err != nil {
+		return errors.New("open durable stage receipt ledger")
+	}
+	material, err := runner.LoadStageReceiptMaterial(boundedContext, runner.StageReceiptBridgeConfig{
+		Bundle: resume, Ledger: store,
+		Run: runner.StageRunReceiptReference{
+			Format: *runFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: *planDigest,
+			StageID: *stageID, StageReceiptDigest: *stageReceiptDigest,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	source, err := material.Persist(*output)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(struct {
+		Format string `json:"format"`
+		State  string `json:"state"`
+		Stage  string `json:"stageId"`
+		Path   string `json:"path"`
+		Digest string `json:"digest"`
+	}{
+		Format: "ok147-stage-receipt-materialization/v1", State: "MATERIALIZED",
+		Stage: *stageID, Path: source.Path, Digest: source.Digest,
+	})
+}
+
 func runClusterStageObserveLifecycle(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster stage observe lifecycle", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -911,6 +1046,7 @@ func runClusterStageObserveLifecycle(ctx context.Context, arguments []string, st
 	managementCAFile := flags.String("management-ca-file", "", "path to the management Kubernetes API CA bundle")
 	pollInterval := flags.Duration("poll-interval", 0, "bounded interval between verified Unknown observations")
 	pollTimeout := flags.Duration("poll-timeout", 0, "maximum bounded lifecycle observation duration")
+	retryAfterReceipt := flags.String("retry-after-failed-receipt-digest", "", "retry only after the exact immutable FAILED observation receipt")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -935,10 +1071,13 @@ func runClusterStageObserveLifecycle(ctx context.Context, arguments []string, st
 	if *pollInterval < time.Second || *pollInterval > 5*time.Minute || *pollTimeout < *pollInterval || *pollTimeout > 6*time.Hour {
 		return errors.New("--poll-interval and --poll-timeout must define a valid bounded observation of at most 6h")
 	}
+	if *retryAfterReceipt != "" && !sha256DigestPattern.MatchString(*retryAfterReceipt) {
+		return errors.New("--retry-after-failed-receipt-digest must be an exact SHA-256 identity")
+	}
 	runTimeout := *pollTimeout + lifecycleObservationRunOverhead
 	boundedContext, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
-	receipt, runErr := executeLifecycleObservationStage(boundedContext, bundleConfig, runner.LifecycleObservationStageRuntimeConfig{
+	runtimeConfig := runner.LifecycleObservationStageRuntimeConfig{
 		Ledger: runner.KubernetesLedgerConfig{
 			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
 		},
@@ -947,7 +1086,14 @@ func runClusterStageObserveLifecycle(ctx context.Context, arguments []string, st
 		},
 		PollInterval: *pollInterval, PollTimeout: *pollTimeout,
 		Clock: func() time.Time { return time.Now().UTC() }, Wait: runner.WaitWithTimer,
-	})
+	}
+	var receipt execution.ObservationStageRunReceipt
+	var runErr error
+	if *retryAfterReceipt == "" {
+		receipt, runErr = executeLifecycleObservationStage(boundedContext, bundleConfig, runtimeConfig)
+	} else {
+		receipt, runErr = executeLifecycleObservationStageRetry(boundedContext, bundleConfig, runtimeConfig, *retryAfterReceipt)
+	}
 	if receipt.Format != "" {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetEscapeHTML(false)
@@ -978,6 +1124,7 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 	networkProfileDigest := flags.String("network-profile-digest", "", "expected NetworkReady profile digest")
 	pollInterval := flags.Duration("poll-interval", 0, "bounded interval between verified Unknown observations")
 	pollTimeout := flags.Duration("poll-timeout", 0, "maximum bounded network observation duration")
+	retryAfterReceipt := flags.String("retry-after-failed-receipt-digest", "", "retry only after the exact immutable FAILED observation receipt")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -1008,9 +1155,12 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 	if *pollInterval < time.Second || *pollInterval > 5*time.Minute || *pollTimeout < *pollInterval || *pollTimeout > 6*time.Hour {
 		return errors.New("--poll-interval and --poll-timeout must define a valid bounded observation of at most 6h")
 	}
+	if *retryAfterReceipt != "" && !sha256DigestPattern.MatchString(*retryAfterReceipt) {
+		return errors.New("--retry-after-failed-receipt-digest must be an exact SHA-256 identity")
+	}
 	boundedContext, cancel := context.WithTimeout(ctx, *pollTimeout+lifecycleObservationRunOverhead)
 	defer cancel()
-	receipt, runErr := executeNetworkObservationStage(boundedContext, bundleConfig, runner.NetworkObservationStageRuntimeConfig{
+	runtimeConfig := runner.NetworkObservationStageRuntimeConfig{
 		Ledger: runner.KubernetesLedgerConfig{
 			Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile,
 		},
@@ -1024,7 +1174,14 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 		NetworkProfilePath: *networkProfile, ExpectedNetworkProfileDigest: *networkProfileDigest,
 		PollInterval: *pollInterval, PollTimeout: *pollTimeout,
 		Clock: func() time.Time { return time.Now().UTC() }, Wait: runner.WaitWithTimer,
-	})
+	}
+	var receipt execution.ObservationStageRunReceipt
+	var runErr error
+	if *retryAfterReceipt == "" {
+		receipt, runErr = executeNetworkObservationStage(boundedContext, bundleConfig, runtimeConfig)
+	} else {
+		receipt, runErr = executeNetworkObservationStageRetry(boundedContext, bundleConfig, runtimeConfig, *retryAfterReceipt)
+	}
 	if receipt.Format != "" {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetEscapeHTML(false)
@@ -1052,6 +1209,7 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	persistenceTokenFile := flags.String("persistence-token-file", "", "path to the distinct short-lived runtime-binding Secret writer token")
 	persistenceCAFile := flags.String("persistence-ca-file", "", "path to the runtime-binding Secret writer Kubernetes API CA bundle")
 	output := flags.String("output", "", "absent absolute path in a private directory for the runtime binding")
+	retryAfterReceipt := flags.String("retry-after-terminal-receipt-digest", "", "retry only after the exact immutable FAILED or STOPPED binding receipt")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -1076,6 +1234,9 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	}
 	if !sha256DigestPattern.MatchString(*workloadBindingDigest) {
 		return errors.New("workload binding digest must be a lowercase SHA-256 identity")
+	}
+	if *retryAfterReceipt != "" && !sha256DigestPattern.MatchString(*retryAfterReceipt) {
+		return errors.New("--retry-after-terminal-receipt-digest must be an exact SHA-256 identity")
 	}
 	switch *persistenceMode {
 	case "local-file":
@@ -1108,19 +1269,29 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	outputFormat := "ok147-runtime-binding-execution/v1"
 	if *persistenceMode == "immutable-secret" {
 		outputFormat = "ok147-runtime-binding-execution/v2"
-		receipt, evidence, runErr = executeKubernetesRuntimeBindingStage(boundedContext, bundleConfig, runner.RuntimeBindingStageKubernetesRuntimeConfig{
+		runtimeConfig := runner.RuntimeBindingStageKubernetesRuntimeConfig{
 			Ledger: ledgerConfig, Workload: workloadConfig,
 			Persistence: runner.KubernetesAuthorityConfig{
 				Endpoint: *ledgerAPIEndpoint, AuthorityIdentity: bundleConfig.PlanExpected.ManagementAuthority,
 				TokenFile: *persistenceTokenFile, CAFile: *persistenceCAFile,
 			},
 			Clock: func() time.Time { return time.Now().UTC() },
-		})
+		}
+		if *retryAfterReceipt == "" {
+			receipt, evidence, runErr = executeKubernetesRuntimeBindingStage(boundedContext, bundleConfig, runtimeConfig)
+		} else {
+			receipt, evidence, runErr = executeKubernetesRuntimeBindingStageRetry(boundedContext, bundleConfig, runtimeConfig, *retryAfterReceipt)
+		}
 	} else {
-		receipt, evidence, runErr = executeRuntimeBindingStage(boundedContext, bundleConfig, runner.RuntimeBindingStageRuntimeConfig{
+		runtimeConfig := runner.RuntimeBindingStageRuntimeConfig{
 			Ledger: ledgerConfig, Workload: workloadConfig, OutputPath: *output,
 			Clock: func() time.Time { return time.Now().UTC() },
-		})
+		}
+		if *retryAfterReceipt == "" {
+			receipt, evidence, runErr = executeRuntimeBindingStage(boundedContext, bundleConfig, runtimeConfig)
+		} else {
+			receipt, evidence, runErr = executeRuntimeBindingStageRetry(boundedContext, bundleConfig, runtimeConfig, *retryAfterReceipt)
+		}
 	}
 	if receipt.Format != "" {
 		encoder := json.NewEncoder(stdout)

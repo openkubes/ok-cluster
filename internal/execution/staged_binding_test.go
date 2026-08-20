@@ -46,6 +46,28 @@ func TestBindingStagePersistsTerminalResultWithoutRawError(t *testing.T) {
 	}
 }
 
+func TestBindingStageRetriesOnlyExactTerminalReceipt(t *testing.T) {
+	plan, cursor, at := runtimeBindingCursor(t)
+	store, _ := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
+	binder := &fakeStageBinder{binding: binderBinding(t, plan, "runtime-binding"), result: StageBindingResult{Outcome: "STOPPED", EvidenceDigest: stagedSHA("f"), CompletedAt: at}}
+	operation := BindingStageOperation{Ledger: store, Binder: binder}
+	stopped, err := operation.Run(context.Background(), plan, cursor)
+	var resultErr *BindingStageResultError
+	if !errors.As(err, &resultErr) || stopped.State != "COMPLETED_STOPPED" || binder.calls != 1 {
+		t.Fatalf("terminal binding was not retained: %#v calls=%d err=%v", stopped, binder.calls, err)
+	}
+	for _, value := range []string{"invalid", stagedSHA("0")} {
+		if retried, retryErr := operation.Retry(context.Background(), plan, cursor, value); retryErr == nil || retried.StageReceiptDigest != "" || binder.calls != 1 {
+			t.Fatalf("unsafe retry reached binder: %#v calls=%d err=%v", retried, binder.calls, retryErr)
+		}
+	}
+	binder.result = StageBindingResult{Outcome: "SUCCEEDED", EvidenceDigest: stagedSHA("e"), CompletedAt: at.Add(time.Second)}
+	retried, err := operation.Retry(context.Background(), plan, cursor, stopped.StageReceiptDigest)
+	if err != nil || retried.State != "COMPLETED_SUCCEEDED" || retried.StageReceiptDigest == stopped.StageReceiptDigest || binder.calls != 2 {
+		t.Fatalf("exact terminal retry did not succeed: %#v calls=%d err=%v", retried, binder.calls, err)
+	}
+}
+
 func TestBindingStageFailsClosedBeforePersistence(t *testing.T) {
 	plan, cursor, at := runtimeBindingCursor(t)
 	for name, mutate := range map[string]func(*fakeStageBinder){

@@ -255,6 +255,25 @@ func TestStageResumeRequiresCompleteUnambiguousInputs(t *testing.T) {
 	}
 }
 
+func TestStageReceiptMaterializeFailsClosedBeforeLedgerContact(t *testing.T) {
+	valid := stageReceiptMaterializeArguments()
+	for name, arguments := range map[string][]string{
+		"missing execute":     removeArgument(valid, "--execute"),
+		"bad plan digest":     replaceArgument(valid, "--plan-digest", "sha256:ABC"),
+		"bad receipt digest":  replaceArgument(valid, "--stage-receipt-digest", "invalid"),
+		"missing run format":  removeArgumentWithValue(valid, "--run-format"),
+		"missing output":      removeArgumentWithValue(valid, "--output"),
+		"positional argument": append(append([]string{}, valid...), "unexpected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err == nil || stdout.Len() != 0 {
+				t.Fatalf("unsafe receipt materialization input was accepted: err=%v stdout=%s", err, stdout.String())
+			}
+		})
+	}
+}
+
 func TestStageObserveLifecycleRequiresExplicitExecutionAndBindsRuntime(t *testing.T) {
 	previous := executeLifecycleObservationStage
 	defer func() { executeLifecycleObservationStage = previous }()
@@ -295,6 +314,38 @@ func TestStageObserveLifecycleRequiresExplicitExecutionAndBindsRuntime(t *testin
 	}
 }
 
+func TestStageObserveLifecycleRoutesExactFailedReceiptRetry(t *testing.T) {
+	previousRun := executeLifecycleObservationStage
+	previousRetry := executeLifecycleObservationStageRetry
+	defer func() {
+		executeLifecycleObservationStage = previousRun
+		executeLifecycleObservationStageRetry = previousRetry
+	}()
+	runCalls, retryCalls := 0, 0
+	executeLifecycleObservationStage = func(context.Context, runner.StageResumeConfig, runner.LifecycleObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		runCalls++
+		return execution.ObservationStageRunReceipt{}, nil
+	}
+	executeLifecycleObservationStageRetry = func(_ context.Context, _ runner.StageResumeConfig, _ runner.LifecycleObservationStageRuntimeConfig, digest string) (execution.ObservationStageRunReceipt, error) {
+		retryCalls++
+		if digest != testSHA("4") {
+			t.Fatalf("unexpected failed receipt binding: %s", digest)
+		}
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat, State: "COMPLETED_SUCCEEDED",
+			PlanDigest: testSHA("9"), StageID: "lifecycle-observation", StageReceiptDigest: testSHA("8"),
+		}, nil
+	}
+	arguments := append(stageObserveLifecycleArguments(), "--retry-after-failed-receipt-digest", testSHA("4"))
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("retry run: %v; stderr=%s", err, stderr.String())
+	}
+	if runCalls != 0 || retryCalls != 1 {
+		t.Fatalf("retry routing differs: run=%d retry=%d", runCalls, retryCalls)
+	}
+}
+
 func TestStageObserveLifecycleFailsClosedBeforeExecution(t *testing.T) {
 	previous := executeLifecycleObservationStage
 	defer func() { executeLifecycleObservationStage = previous }()
@@ -312,6 +363,7 @@ func TestStageObserveLifecycleFailsClosedBeforeExecution(t *testing.T) {
 		"too frequent":             replaceArgument(valid, "--poll-interval", "500ms"),
 		"interval exceeds timeout": replaceArgument(valid, "--poll-interval", "6m"),
 		"too long":                 replaceArgument(valid, "--poll-timeout", "7h"),
+		"invalid retry receipt":    append(append([]string{}, valid...), "--retry-after-failed-receipt-digest", "invalid"),
 		"positional":               append(append([]string{}, valid...), "unexpected"),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -388,6 +440,38 @@ func TestStageObserveNetworkRequiresExplicitExecutionAndBindsRuntime(t *testing.
 	}
 }
 
+func TestStageObserveNetworkRoutesExactFailedReceiptRetry(t *testing.T) {
+	previousRun := executeNetworkObservationStage
+	previousRetry := executeNetworkObservationStageRetry
+	defer func() {
+		executeNetworkObservationStage = previousRun
+		executeNetworkObservationStageRetry = previousRetry
+	}()
+	runCalls, retryCalls := 0, 0
+	executeNetworkObservationStage = func(context.Context, runner.StageResumeConfig, runner.NetworkObservationStageRuntimeConfig) (execution.ObservationStageRunReceipt, error) {
+		runCalls++
+		return execution.ObservationStageRunReceipt{}, nil
+	}
+	executeNetworkObservationStageRetry = func(_ context.Context, _ runner.StageResumeConfig, _ runner.NetworkObservationStageRuntimeConfig, receiptDigest string) (execution.ObservationStageRunReceipt, error) {
+		retryCalls++
+		if receiptDigest != testSHA("6") {
+			t.Fatalf("unexpected failed receipt binding: %s", receiptDigest)
+		}
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat, State: "COMPLETED_SUCCEEDED",
+			PlanDigest: testSHA("9"), StageID: "network-observation", StageReceiptDigest: testSHA("8"),
+		}, nil
+	}
+	arguments := append(stageObserveNetworkArguments(), "--retry-after-failed-receipt-digest", testSHA("6"))
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatalf("retry run: %v; stderr=%s", err, stderr.String())
+	}
+	if runCalls != 0 || retryCalls != 1 {
+		t.Fatalf("retry routing differs: run=%d retry=%d", runCalls, retryCalls)
+	}
+}
+
 func TestStageObserveNetworkFailsClosedBeforeExecution(t *testing.T) {
 	previous := executeNetworkObservationStage
 	defer func() { executeNetworkObservationStage = previous }()
@@ -407,6 +491,7 @@ func TestStageObserveNetworkFailsClosedBeforeExecution(t *testing.T) {
 		"too frequent":             replaceArgument(valid, "--poll-interval", "500ms"),
 		"interval exceeds timeout": replaceArgument(valid, "--poll-interval", "6m"),
 		"too long":                 replaceArgument(valid, "--poll-timeout", "7h"),
+		"invalid retry receipt":    append(append([]string{}, valid...), "--retry-after-failed-receipt-digest", "invalid"),
 		"positional":               append(append([]string{}, valid...), "unexpected"),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -542,6 +627,7 @@ func TestStageBindRuntimeFailsClosedBeforeExecution(t *testing.T) {
 		"missing workload token":   removeArgumentWithValue(valid, "--workload-token-file"),
 		"relative output":          replaceArgument(valid, "--output", "runtime-binding.json"),
 		"unclean output":           replaceArgument(valid, "--output", "/private/tmp/../tmp/runtime-binding.json"),
+		"invalid retry receipt":    append(append([]string{}, valid...), "--retry-after-terminal-receipt-digest", "invalid"),
 		"positional":               append(append([]string{}, valid...), "unexpected"),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1538,6 +1624,18 @@ func stageResumeArguments() []string {
 		"--intent-revision", testSHA("a"), "--enablement-revision", testSHA("b"), "--platform-revision", testSHA("c"),
 		"--execution-fixture", testSHA("d"), "--infrastructure-authority", "ok-infra", "--management-authority", "ok-mgmt", "--gitops-authority", "ok-shared",
 	}
+}
+
+func stageReceiptMaterializeArguments() []string {
+	resume := stageResumeArguments()
+	arguments := append([]string{"cluster", "stage", "receipt", "materialize"}, resume[3:]...)
+	return append(arguments,
+		"--execute", "--run-format", execution.ObservationStageReceiptFormat,
+		"--plan-digest", testSHA("9"), "--stage-id", "lifecycle-observation",
+		"--stage-receipt-digest", testSHA("8"),
+		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/tmp/ledger-token", "--ledger-ca-file", "/tmp/ledger-ca",
+		"--output", "/private/tmp/lifecycle-observation.json",
+	)
 }
 
 func stageRunArguments() []string {

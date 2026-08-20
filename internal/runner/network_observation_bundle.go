@@ -129,6 +129,15 @@ func (stage OpenedNetworkObservationStage) Run(ctx context.Context) (execution.O
 	return stage.operation.Run(ctx, stage.plan, stage.cursor)
 }
 
+// Retry performs one explicitly bound read-only retry after an immutable
+// FAILED network observation receipt.
+func (stage OpenedNetworkObservationStage) Retry(ctx context.Context, failedReceiptDigest string) (execution.ObservationStageRunReceipt, error) {
+	if !stage.verified {
+		return execution.ObservationStageRunReceipt{}, errors.New("network observation stage is not opened")
+	}
+	return stage.operation.Retry(ctx, stage.plan, stage.cursor, failedReceiptDigest)
+}
+
 func sameSecret(first, second string) bool {
 	return len(first) == len(second) && subtle.ConstantTimeCompare([]byte(first), []byte(second)) == 1
 }

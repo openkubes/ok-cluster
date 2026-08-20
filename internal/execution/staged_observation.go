@@ -57,6 +57,21 @@ func (err *ObservationStageResultError) Error() string {
 // receipt is returned without observing again, making process termination
 // after receipt persistence safe to resume.
 func (operation ObservationStageOperation) Run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor) (ObservationStageRunReceipt, error) {
+	return operation.run(ctx, plan, cursor, "")
+}
+
+// Retry invokes the observer again only when the caller binds the exact
+// immutable digest of an already persisted FAILED receipt. The original
+// deterministic receipt remains untouched; StoreStageReceipt persists the
+// new result in its digest-addressed attempt slot.
+func (operation ObservationStageOperation) Retry(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, failedReceiptDigest string) (ObservationStageRunReceipt, error) {
+	if !stagedDigestPattern.MatchString(failedReceiptDigest) {
+		return ObservationStageRunReceipt{Format: ObservationStageReceiptFormat, State: "PREOBSERVATION"}, errors.New("failed observation receipt digest is invalid")
+	}
+	return operation.run(ctx, plan, cursor, failedReceiptDigest)
+}
+
+func (operation ObservationStageOperation) run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, failedReceiptDigest string) (ObservationStageRunReceipt, error) {
 	receipt := ObservationStageRunReceipt{Format: ObservationStageReceiptFormat, State: "PREOBSERVATION"}
 	if operation.Ledger == nil || operation.Observer == nil {
 		return receipt, errors.New("observation stage ledger and observer are required")
@@ -83,7 +98,19 @@ func (operation ObservationStageOperation) Run(ctx context.Context, plan stagepl
 	if existing, found, err := operation.Ledger.InspectStageReceipt(ctx, plan, decision.StageID, predecessors); err != nil {
 		return receipt, err
 	} else if found {
-		return finalizeObservationRunReceipt(receipt, existing)
+		if failedReceiptDigest == "" {
+			return finalizeObservationRunReceipt(receipt, existing)
+		}
+		failed, loadErr := operation.Ledger.LoadStageReceipt(ctx, plan, decision.StageID, failedReceiptDigest, predecessors)
+		if loadErr != nil {
+			return receipt, errors.New("observation retry does not bind an existing FAILED receipt")
+		}
+		failedReceipt, receiptErr := failed.Receipt()
+		if receiptErr != nil || failedReceipt.State != "FAILED" {
+			return receipt, errors.New("observation retry does not bind an existing FAILED receipt")
+		}
+	} else if failedReceiptDigest != "" {
+		return receipt, errors.New("observation retry requires an existing FAILED receipt")
 	}
 
 	result, observeErr := operation.Observer.Observe(ctx)

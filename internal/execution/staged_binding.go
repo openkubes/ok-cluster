@@ -63,6 +63,19 @@ func (err *BindingStageResultError) Error() string {
 // is returned without opening the binder again, so a process restart cannot
 // silently regenerate a different runtime identity.
 func (operation BindingStageOperation) Run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor) (BindingStageRunReceipt, error) {
+	return operation.run(ctx, plan, cursor, "")
+}
+
+// Retry invokes the binder again only when the caller binds the exact digest
+// of an immutable FAILED or STOPPED receipt. Earlier receipts remain intact.
+func (operation BindingStageOperation) Retry(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, terminalReceiptDigest string) (BindingStageRunReceipt, error) {
+	if !stagedDigestPattern.MatchString(terminalReceiptDigest) {
+		return BindingStageRunReceipt{Format: BindingStageReceiptFormat, State: "PREBINDING"}, errors.New("terminal binding receipt digest is invalid")
+	}
+	return operation.run(ctx, plan, cursor, terminalReceiptDigest)
+}
+
+func (operation BindingStageOperation) run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, terminalReceiptDigest string) (BindingStageRunReceipt, error) {
 	receipt := BindingStageRunReceipt{Format: BindingStageReceiptFormat, State: "PREBINDING"}
 	if operation.Ledger == nil || operation.Binder == nil {
 		return receipt, errors.New("binding stage ledger and binder are required")
@@ -89,7 +102,19 @@ func (operation BindingStageOperation) Run(ctx context.Context, plan stageplan.B
 	if existing, found, err := operation.Ledger.InspectStageReceipt(ctx, plan, decision.StageID, predecessors); err != nil {
 		return receipt, err
 	} else if found {
-		return finalizeBindingRunReceipt(receipt, existing)
+		if terminalReceiptDigest == "" {
+			return finalizeBindingRunReceipt(receipt, existing)
+		}
+		terminal, loadErr := operation.Ledger.LoadStageReceipt(ctx, plan, decision.StageID, terminalReceiptDigest, predecessors)
+		if loadErr != nil {
+			return receipt, errors.New("binding retry does not bind an existing terminal receipt")
+		}
+		terminalReceipt, receiptErr := terminal.Receipt()
+		if receiptErr != nil || terminalReceipt.State != "FAILED" && terminalReceipt.State != "STOPPED" {
+			return receipt, errors.New("binding retry does not bind an existing terminal receipt")
+		}
+	} else if terminalReceiptDigest != "" {
+		return receipt, errors.New("binding retry requires an existing terminal receipt")
 	}
 
 	result, bindErr := operation.Binder.Bind(ctx)
