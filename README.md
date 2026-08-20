@@ -65,6 +65,12 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   explicit canonical receipt prefix and reports only the next, completed or
   stopped cursor state; it has no grant, credential, endpoint or execution
   capability and can safely select the next read-only stage after a restart.
+  Lifecycle/Network observation and runtime binding additionally permit one
+  explicit retry only when the caller supplies the exact immutable terminal
+  receipt digest. The first receipt remains unchanged and every different
+  result is retained in a digest-addressed attempt slot. A generic receipt
+  materializer can copy one independently selected successful ledger receipt
+  to an absent private `0600` path without executing a stage.
   Successful Cluster-lifecycle submission also carries a SHA-256 binding of
   the exact CAPI Cluster UID through the durable outcome and stage receipt;
   the raw UID is not emitted in redaction-safe evidence. The next typed

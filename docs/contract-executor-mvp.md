@@ -873,6 +873,27 @@ not sufficient. This checkpoint only persists evidence: it does not execute a
 stage, consume a grant, select a retry, contact a cluster during construction,
 or activate the CLI/Job path.
 
+## Explicit terminal-receipt retry boundary
+
+Lifecycle and Network observation plus runtime binding now expose one
+deliberate retry boundary. A caller must supply the exact digest of an
+immutable `FAILED` observation receipt or `FAILED`/`STOPPED` binding receipt.
+The runner reloads and reverifies that receipt against the same Plan and direct
+predecessor chain before invoking the bounded operation again. A missing,
+successful, foreign or malformed receipt stops before source access.
+
+The original deterministic receipt is never replaced. A different result is
+stored in its digest-addressed attempt slot, so both failure and recovery remain
+auditable. The CLI routes this boundary only through explicit
+`--retry-after-failed-receipt-digest` or
+`--retry-after-terminal-receipt-digest` flags. It never chooses a latest
+attempt, infers retry authority from elapsed time or retries a mutating stage.
+
+For process handoff, `ok cluster stage receipt materialize --execute` can load
+one independently digest-bound successful receipt from the durable ledger and
+write its canonical bytes create-only to an absent private path. The command
+does not run a stage or convert a terminal receipt into success.
+
 ## Durable mutating-stage outcome finalization
 
 A completed mutating-stage ledger outcome can now be transformed into the
@@ -2632,6 +2653,12 @@ Local TLS integration tests prove the final operation performs exactly one
 CAPI read, one Network source pass, three exact Argo Application reads and one
 capability read. Once the Stage-12 receipt is durable, replay performs no
 additional authoritative-source access.
+
+Network source correlation also normalizes CAAPH's semantic default for
+`spec.options.enableClientCache`: an omitted field and an API-defaulted
+`false` are equivalent. Other option differences remain revision-significant.
+This prevents API defaulting from manufacturing a false E mismatch without
+weakening the exact HelmChartProxy/HelmReleaseProxy identity checks.
 
 Stage 12 also has an explicit local launch surface:
 
