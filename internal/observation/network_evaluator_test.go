@@ -117,14 +117,14 @@ func TestEvaluateNetworkSnapshotFailsClosed(t *testing.T) {
 
 func TestEvaluateNetworkSnapshotUsesBoundedDynamicCacheFreshness(t *testing.T) {
 	policy, profile, snapshot := validNetworkFixture(t)
-	// 2 * 96.566s probe interval + 60s cache exposure = 253.132s.
+	// 96.566s advertised interval + 60s publication + 10s tolerance = 166.566s.
 	snapshot.Probe.ProbeIntervalMilliseconds = 96566
-	snapshot.Probe.Paths[0].LastProbed = "2026-08-16T09:56:00Z" // 240s old.
+	snapshot.Probe.Paths[0].LastProbed = "2026-08-16T09:57:30Z" // 150s old.
 	evidence, err := EvaluateNetworkSnapshot(policy, profile, snapshot)
 	if err != nil || evidence.Status != "True" {
 		t.Fatalf("valid cached Cilium path was rejected: %#v %v", evidence, err)
 	}
-	snapshot.Probe.Paths[0].LastProbed = "2026-08-16T09:55:30Z" // 270s old.
+	snapshot.Probe.Paths[0].LastProbed = "2026-08-16T09:57:00Z" // 180s old.
 	evidence, err = EvaluateNetworkSnapshot(policy, profile, snapshot)
 	if err != nil || evidence.Status != "False" || evidence.Reason != "FunctionalProbeStale" {
 		t.Fatalf("stale cached Cilium path was accepted: %#v %v", evidence, err)
@@ -143,7 +143,7 @@ func TestEvaluateNetworkSnapshotRejectsMalformedUnboundedInput(t *testing.T) {
 			snapshot.Nodes = make([]NetworkNode, 101)
 		},
 		"unbounded probe interval": func(_ *NetworkProfile, snapshot *NetworkSnapshot) {
-			snapshot.Probe.ProbeIntervalMilliseconds = 601000
+			snapshot.Probe.ProbeIntervalMilliseconds = 300001
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -214,7 +214,7 @@ func validNetworkFixture(t *testing.T) (Policy, NetworkProfile, NetworkSnapshot)
 	for _, node := range nodes {
 		for _, scope := range []string{"host", "health-endpoint"} {
 			for _, protocol := range []string{"http", "icmp"} {
-				paths = append(paths, NetworkProbePath{NodeUID: node.UID, Scope: scope, Protocol: protocol, LastProbed: "2026-08-16T09:57:00Z"})
+				paths = append(paths, NetworkProbePath{NodeUID: node.UID, Scope: scope, Protocol: protocol, LastProbed: "2026-08-16T09:58:00Z"})
 			}
 		}
 	}

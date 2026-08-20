@@ -57,6 +57,21 @@ func (err *EvaluationStageResultError) Error() string {
 // Run invokes at most one prebound evaluator. Once its receipt is durable,
 // replay returns that receipt without re-reading any authoritative source.
 func (operation EvaluationStageOperation) Run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor) (EvaluationStageRunReceipt, error) {
+	return operation.run(ctx, plan, cursor, "")
+}
+
+// Retry invokes the evaluator again only when the caller binds the exact
+// immutable digest of an already persisted FAILED receipt. The deterministic
+// first receipt remains untouched; the retry is stored as a digest-addressed
+// attempt.
+func (operation EvaluationStageOperation) Retry(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, failedReceiptDigest string) (EvaluationStageRunReceipt, error) {
+	if !stagedDigestPattern.MatchString(failedReceiptDigest) {
+		return EvaluationStageRunReceipt{Format: EvaluationStageReceiptFormat, State: "PREEVALUATION"}, errors.New("failed evaluation receipt digest is invalid")
+	}
+	return operation.run(ctx, plan, cursor, failedReceiptDigest)
+}
+
+func (operation EvaluationStageOperation) run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, failedReceiptDigest string) (EvaluationStageRunReceipt, error) {
 	receipt := EvaluationStageRunReceipt{Format: EvaluationStageReceiptFormat, State: "PREEVALUATION"}
 	if operation.Ledger == nil || operation.Evaluator == nil {
 		return receipt, errors.New("evaluation stage ledger and evaluator are required")
@@ -83,7 +98,19 @@ func (operation EvaluationStageOperation) Run(ctx context.Context, plan stagepla
 	if existing, found, err := operation.Ledger.InspectStageReceipt(ctx, plan, decision.StageID, predecessors); err != nil {
 		return receipt, err
 	} else if found {
-		return finalizeEvaluationRunReceipt(receipt, existing)
+		if failedReceiptDigest == "" {
+			return finalizeEvaluationRunReceipt(receipt, existing)
+		}
+		failed, loadErr := operation.Ledger.LoadStageReceipt(ctx, plan, decision.StageID, failedReceiptDigest, predecessors)
+		if loadErr != nil {
+			return receipt, errors.New("evaluation retry does not bind an existing FAILED receipt")
+		}
+		failedReceipt, receiptErr := failed.Receipt()
+		if receiptErr != nil || failedReceipt.State != "FAILED" {
+			return receipt, errors.New("evaluation retry does not bind an existing FAILED receipt")
+		}
+	} else if failedReceiptDigest != "" {
+		return receipt, errors.New("evaluation retry requires an existing FAILED receipt")
 	}
 
 	result, evaluateErr := operation.Evaluator.Evaluate(ctx)
