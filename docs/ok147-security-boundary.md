@@ -42,8 +42,9 @@ receipt alone grants no mutation authority.
 
 ## Credential boundary
 
-The activation Secret contains exactly the allowlisted private inputs for one
-run. A tokenless init container verifies their individual hashes and copies
+The two activation Secrets contain exactly the allowlisted executor and
+independent-evidence inputs for one run. Tokenless init containers verify their
+individual hashes and copy
 them from projected symlinks into a memory-backed `0700` workspace as regular
 `0600` files. The executor sees only that workspace.
 
@@ -54,19 +55,20 @@ The Job:
 - drops all Linux capabilities and forbids privilege escalation;
 - has no retry and a fixed active deadline;
 - uses only short-lived or stage-isolated credentials; and
-- has deny-by-default egress with four exact IP/port exceptions.
+- has deny-by-default egress with six exact IP/port exceptions.
 
-The immutable activation Secret retains credentials for the lifetime of the
-Job and Secret. Therefore its lifecycle is part of the operational risk: it
+The immutable activation Secrets retain credentials for their lifetime.
+Therefore their lifecycle is part of the operational risk: they
 must not be reused, copied to Git or treated as a durable credential store.
 Cleanup requires separate authority.
 
 ## Installation boundary
 
-The launcher can only perform exact-name `GET` and collection `POST` operations
-for one immutable Secret, one NetworkPolicy and one Job. All reads finish
-before the first write. It exposes no update, patch, apply, delete, list, watch,
-retry, rollback or cleanup operation.
+The launcher can only perform exact-name `GET` operations for the required
+Namespace, runtime ServiceAccount and four expected-absent activation objects,
+then collection `POST` operations for two immutable Secrets, one NetworkPolicy
+and one Job. All reads finish before the first write. It exposes no update,
+patch, apply, delete, list, watch, retry, rollback or cleanup operation.
 
 Kubernetes RBAC cannot prove create-body equality. The launcher therefore
 verifies the complete package digest before opening the installer credential,

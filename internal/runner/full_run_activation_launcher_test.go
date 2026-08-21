@@ -18,8 +18,12 @@ func TestPlanFullRunExecutionActivationInstallationBindsExactOrder(t *testing.T)
 		t.Fatal(err)
 	}
 	if plan.Format != FullRunExecutionActivationInstallationPlanFormat || plan.State != "VERIFIED" ||
-		plan.RunID != "ok147-full-run-01" || plan.Authority != "ok-mgmt" || plan.MutationAllowed || len(plan.Creates) != 4 {
+		plan.RunID != "ok147-full-run-01" || plan.Authority != "ok-mgmt" || plan.MutationAllowed || len(plan.Prerequisites) != 2 || len(plan.Creates) != 4 {
 		t.Fatalf("unexpected full-run activation plan: %#v", plan)
+	}
+	if plan.Prerequisites[0].Kind != "Namespace" || plan.Prerequisites[0].ExpectState != "PRESENT" ||
+		plan.Prerequisites[1].Kind != "ServiceAccount" || plan.Prerequisites[1].ExpectState != "PRESENT_EXACT_RUNTIME" {
+		t.Fatalf("unexpected full-run prerequisites: %#v", plan.Prerequisites)
 	}
 	for index, kind := range []string{"Secret", "Secret", "NetworkPolicy", "Job"} {
 		create := plan.Creates[index]
@@ -62,6 +66,7 @@ func TestPlanFullRunExecutionActivationInstallationFailsClosed(t *testing.T) {
 func TestFullRunExecutionActivationLauncherPreflightsThenCreates(t *testing.T) {
 	packaged := fullRunActivationLauncherPackage(t)
 	api := newSubmissionStageInstallerAPI(t)
+	seedFullRunActivationPrerequisites(api)
 	launcher := newFullRunActivationLauncher(t, packaged, api.client())
 	receipt, err := launcher.Launch(context.Background())
 	if err != nil || receipt.State != "ACTIVATED" || receipt.MutationState != "ATTEMPTED" || len(receipt.Results) != 4 {
@@ -72,11 +77,17 @@ func TestFullRunExecutionActivationLauncherPreflightsThenCreates(t *testing.T) {
 		receipt.PlanDigest != plan.PlanDigest || receipt.RunID != plan.RunID || receipt.Authority != "ok-mgmt" {
 		t.Fatalf("activation receipt identity differs: %#v", receipt)
 	}
-	if len(api.requests) != 8 {
-		t.Fatalf("requests=%d, want four GETs then four POSTs: %#v", len(api.requests), api.requests)
+	if len(api.requests) != 10 {
+		t.Fatalf("requests=%d, want two prerequisite GETs, four absence GETs, then four POSTs: %#v", len(api.requests), api.requests)
+	}
+	for index, prerequisite := range plan.Prerequisites {
+		request := api.requests[index]
+		if request.method != prerequisite.Method || request.path != prerequisite.ObjectPath || len(request.body) != 0 {
+			t.Fatalf("prerequisite %d differs: %#v", index, request)
+		}
 	}
 	for index, create := range plan.Creates {
-		preflight, submission := api.requests[index], api.requests[index+4]
+		preflight, submission := api.requests[index+2], api.requests[index+6]
 		if preflight.method != http.MethodGet || preflight.path != create.ObjectPath || len(preflight.body) != 0 {
 			t.Fatalf("preflight %d differs: %#v", index, preflight)
 		}
@@ -96,11 +107,12 @@ func TestFullRunExecutionActivationLauncherPreflightsThenCreates(t *testing.T) {
 func TestFullRunExecutionActivationLauncherStopsZeroWriteOnExistingObject(t *testing.T) {
 	packaged := fullRunActivationLauncherPackage(t)
 	api := newSubmissionStageInstallerAPI(t)
+	seedFullRunActivationPrerequisites(api)
 	plan, _ := PlanFullRunExecutionActivationInstallation(packaged)
 	api.objects[plan.Creates[3].ObjectPath] = map[string]any{"kind": "Job"}
 	launcher := newFullRunActivationLauncher(t, packaged, api.client())
 	receipt, err := launcher.Launch(context.Background())
-	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 4 {
+	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 6 {
 		t.Fatalf("existing activation object did not stop zero-write: %#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
 	}
 }
@@ -108,6 +120,7 @@ func TestFullRunExecutionActivationLauncherStopsZeroWriteOnExistingObject(t *tes
 func TestFullRunExecutionActivationLauncherPreservesPartialAndCannotRetry(t *testing.T) {
 	packaged := fullRunActivationLauncherPackage(t)
 	api := newSubmissionStageInstallerAPI(t)
+	seedFullRunActivationPrerequisites(api)
 	api.failPost = 3
 	launcher := newFullRunActivationLauncher(t, packaged, api.client())
 	receipt, err := launcher.Launch(context.Background())
@@ -119,6 +132,28 @@ func TestFullRunExecutionActivationLauncherPreservesPartialAndCannotRetry(t *tes
 	retry, retryErr := launcher.Launch(context.Background())
 	if retryErr == nil || retry.State != "STOPPED_ZERO_WRITE" || retry.MutationState != "NOT_ATTEMPTED" || len(api.requests) != requestCount {
 		t.Fatalf("single-use activation boundary failed: %#v requests=%d/%d err=%v", retry, len(api.requests), requestCount, retryErr)
+	}
+}
+
+func TestFullRunExecutionActivationLauncherStopsZeroWriteOnMissingOrChangedPrerequisite(t *testing.T) {
+	packaged := fullRunActivationLauncherPackage(t)
+	for name, seed := range map[string]func(*submissionStageInstallerAPI){
+		"missing": func(api *submissionStageInstallerAPI) {},
+		"changed runtime": func(api *submissionStageInstallerAPI) {
+			seedFullRunActivationPrerequisites(api)
+			path := "/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor-runtime"
+			api.objects[path]["automountServiceAccountToken"] = true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := newSubmissionStageInstallerAPI(t)
+			seed(api)
+			launcher := newFullRunActivationLauncher(t, packaged, api.client())
+			receipt, err := launcher.Launch(context.Background())
+			if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 {
+				t.Fatalf("unsafe prerequisite did not stop zero-write: %#v posts=%d err=%v", receipt, api.posts, err)
+			}
+		})
 	}
 }
 
@@ -168,4 +203,16 @@ func newFullRunActivationLauncher(t *testing.T, packaged VerifiedFullRunExecutio
 		t.Fatal(err)
 	}
 	return launcher
+}
+
+func seedFullRunActivationPrerequisites(api *submissionStageInstallerAPI) {
+	api.objects["/api/v1/namespaces/openkubes-execution-system"] = map[string]any{
+		"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "openkubes-execution-system"},
+	}
+	api.objects["/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor-runtime"] = map[string]any{
+		"apiVersion": "v1", "kind": "ServiceAccount", "automountServiceAccountToken": false,
+		"metadata": map[string]any{"name": "ok147-contract-executor-runtime", "namespace": "openkubes-execution-system", "labels": map[string]any{
+			"app.kubernetes.io/name": "ok-cluster-contract-executor", "openkubes.io/runtime-boundary": "submission-stage",
+		}},
+	}
 }
