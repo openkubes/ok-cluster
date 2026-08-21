@@ -6,8 +6,10 @@ Contract planning and now models the complete twelve-stage bounded execution
 path, including separately authorized mutations, a durable ledger, bounded
 observation and evaluation components and offline Kubernetes workload
 packaging. The stages are now composed into a typed in-process Stage 1-7 prefix,
-a Stage 8-12 suffix and a receipt-bound, single-use full-run library seam. Only
-the post-runtime suffix currently has a bounded ephemeral Job activation path.
+a Stage 8-12 suffix and a receipt-bound, single-use full-run library seam. The
+Stage 1-7 prefix and Stage 8-12 suffix both have concrete single-use execution
+adapters; only the post-runtime suffix currently has a bounded ephemeral Job
+activation path.
 That Job path is fully exercised offline and against fake APIs, but has not yet
 been run on the DEV management plane. The full-run library is not yet exposed
 as one local or Job-based CreateCluster activation. It is still an MVP rather
@@ -2803,6 +2805,20 @@ private directory, re-verifies the stored digest and returns the exact
 `StageReceiptSource` for the next bundle. Private credentials, endpoints and
 runtime identity never enter this bridge.
 
+The concrete pre-runtime execution adapter now wires that bridge to the
+existing typed Stage 1-7 bundles. It resolves authorization dynamically only
+for provider prerequisites, Cluster lifecycle, Enablement and target access,
+and only after the exact direct predecessor receipt is durable. Observation
+and runtime-binding stages never receive a mutation grant. After every
+successful stage, the adapter reloads the authoritative ledger receipt and
+persists canonical bytes create-only as a private `0600` receipt source before
+the next stage can open. If this bridge fails after the operation succeeded,
+the successful stage checkpoint is preserved and the single-use adapter stops
+without replaying that stage. Only a fully successful seven-stage execution
+exposes the defensive private prefix required by the full-run seam. This adds
+no renderer, policy authority, retry, rollback, cleanup, CLI command or Job
+mutation surface.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
@@ -2955,9 +2971,12 @@ activation implementation; it does not itself prove a live DEV Job run.
 
 The twelve-stage Go library and its durable replay semantics are complete and
 covered by unit, negative, local TLS integration and race tests. Stage 1-7 and
-Stage 8-12 each have an exact, fail-closed in-process orchestration order, and
-the single-use full-run seam binds them through the exact Plan and seven
-predecessor receipt digests. The Stage 8-12 suffix additionally has a local
+Stage 8-12 each have an exact, fail-closed in-process orchestration order and a
+concrete single-use execution adapter. The Stage 1-7 adapter dynamically binds
+its four mutation grants and persists all seven ledger-backed receipts before
+exposing its exact prefix. The full-run seam binds that prefix through the
+exact Plan and seven predecessor receipt digests. The Stage 8-12 suffix
+additionally has a local
 prepare/execute command, a bounded ephemeral Job, a deterministic private
 activation package, an exact installation plan and a single-use CLI launcher.
 Successful Stage-8 and Stage-9 crash boundaries can be reactivated through the
@@ -2965,8 +2984,8 @@ same manifest, authority, package, Job and CLI chain without rewriting their
 durable receipts. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- the joined full-run library has no shared local/Job CreateCluster activation
-  surface yet;
+- the joined concrete Stage 1-7 and Stage 8-12 adapters have no shared
+  local/Job CreateCluster activation surface yet;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
@@ -2981,13 +3000,13 @@ durable receipts. This is not yet the OK-147 Definition of Done:
   [ADR-030 amendment proposal](ok147-adr-030-amendment-proposal.md) are defined
   and remain to be reviewed with the live evidence.
 
-The remaining implementation work is the shared local/Job activation surface
-for the now receipt-bound full-run library; it is not a new controller or
-reconciliation mechanism. After that, live closure must publish the current
-image, construct fresh short-lived private inputs, run the exact bounded
-activation on `ok-mgmt`, preserve a stopped partial state without automatic
-retry, and separately repeat disposable-cluster and executor-termination
-conformance.
+The remaining implementation work is to compose the concrete Stage 1-7 and
+Stage 8-12 adapters behind one shared local/Job activation surface; it is not a
+new controller or reconciliation mechanism. After that, live closure must
+publish the current image, construct fresh short-lived private inputs, run the
+exact bounded activation on `ok-mgmt`, preserve a stopped partial state without
+automatic retry, and separately repeat disposable-cluster and
+executor-termination conformance.
 
 These remaining items may compose the verified packages, but must not add a
 second Contract-to-CAPI compiler, persistent aggregate-status controller,

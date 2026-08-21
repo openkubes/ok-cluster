@@ -1,0 +1,263 @@
+package runner
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/execution"
+	"github.com/openkubes/ok-cluster/internal/ledger"
+	"github.com/openkubes/ok-cluster/internal/stagereceipt"
+)
+
+func TestPreRuntimeExecutionComposesExactPrefixWithDynamicAuthorization(t *testing.T) {
+	config, factories, calls, requests := preRuntimeExecutionFixture(t)
+	executor, err := openPreRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err != nil {
+		t.Fatalf("%v requests=%#v calls=%v", err, *requests, *calls)
+	}
+	if receipt.Format != PreRuntimeExecutionReceiptFormat || receipt.State != "SUCCEEDED" || receipt.StoppedAt != "" ||
+		len(receipt.Checkpoints) != 7 || len(receipt.ResolvedAuthorizations) != 4 {
+		t.Fatalf("unexpected pre-runtime execution receipt: %#v", receipt)
+	}
+	if !reflect.DeepEqual(*calls, preRuntimeStageOrder) {
+		t.Fatalf("pre-runtime execution order differs: %v", *calls)
+	}
+	wantAuthorized := []string{"provider-prerequisites", "cluster-lifecycle", "enablement", "target-access"}
+	if len(*requests) != len(wantAuthorized) {
+		t.Fatalf("authorization count differs: %#v", *requests)
+	}
+	for index, stageID := range wantAuthorized {
+		if (*requests)[index].StageID != stageID || len((*requests)[index].Predecessors) != minInt(index, 1) {
+			t.Fatalf("authorization %d differs: %#v", index, (*requests)[index])
+		}
+	}
+	for _, stageID := range preRuntimeStageOrder {
+		path := filepath.Join(config.ReceiptDirectory, preRuntimeReceiptFiles[stageID])
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			t.Fatalf("receipt %s was not persisted privately: %#v %v", stageID, info, statErr)
+		}
+	}
+	prefix, err := executor.ReceiptPrefix()
+	if err != nil || len(prefix) != 7 {
+		t.Fatalf("completed private prefix is unavailable: %#v %v", prefix, err)
+	}
+	prefix[0].Digest = runnerStageSHA("f")
+	again, err := executor.ReceiptPrefix()
+	if err != nil || again[0].Digest == prefix[0].Digest {
+		t.Fatal("private receipt prefix was not defensively copied")
+	}
+	if second, err := executor.Run(context.Background()); err == nil || second.State != "STOPPED" || len(*calls) != 7 {
+		t.Fatalf("single-use executor ran twice: %#v calls=%v err=%v", second, *calls, err)
+	}
+	public := mustJSON(t, receipt)
+	for _, forbidden := range []string{config.ReceiptDirectory, "token", "endpoint", "kubeconfig"} {
+		if strings.Contains(string(public), forbidden) {
+			t.Fatalf("public pre-runtime receipt exposed %q", forbidden)
+		}
+	}
+}
+
+func TestPreRuntimeExecutionStopsAfterDurableReceiptWhenNextGrantIsUnavailable(t *testing.T) {
+	config, factories, calls, requests := preRuntimeExecutionFixture(t)
+	resolved := config.Authorization
+	config.Authorization = StageAuthorizationResolverFunc(func(ctx context.Context, request StageAuthorizationRequest) (StageAuthorizationSource, error) {
+		if request.StageID == "cluster-lifecycle" {
+			*requests = append(*requests, cloneStageAuthorizationRequest(request))
+			return StageAuthorizationSource{}, errors.New("private authority failure")
+		}
+		return resolved.ResolveStageAuthorization(ctx, request)
+	})
+	executor, err := openPreRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || len(receipt.Checkpoints) != 1 || len(*calls) != 1 {
+		t.Fatalf("authority stop did not preserve exact prefix: %#v calls=%v err=%v", receipt, *calls, err)
+	}
+	if _, err := os.Lstat(filepath.Join(config.ReceiptDirectory, preRuntimeReceiptFiles["provider-prerequisites"])); err != nil {
+		t.Fatal("successful provider receipt was not retained")
+	}
+	if _, err := executor.ReceiptPrefix(); err == nil {
+		t.Fatal("partial prefix was exposed as complete")
+	}
+}
+
+func TestPreRuntimeExecutionStopsWithoutReplayWhenReceiptPersistenceFails(t *testing.T) {
+	config, factories, calls, _ := preRuntimeExecutionFixture(t)
+	persistCalls := 0
+	factories.persist = func(context.Context, StageResumeConfig, *ledger.Ledger, StageRunReceiptReference, string) (StageReceiptSource, error) {
+		persistCalls++
+		return StageReceiptSource{}, errors.New("private persistence failure")
+	}
+	executor, err := openPreRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" || len(receipt.Checkpoints) != 1 ||
+		!reflect.DeepEqual(*calls, []string{"provider-prerequisites"}) || persistCalls != 1 {
+		t.Fatalf("persistence stop replayed or lost durable stage identity: %#v calls=%v persist=%d err=%v", receipt, *calls, persistCalls, err)
+	}
+	if _, err := executor.ReceiptPrefix(); err == nil {
+		t.Fatal("unpersisted prefix was exposed")
+	}
+}
+
+func TestOpenPreRuntimeExecutionRejectsUnsafeReceiptDestination(t *testing.T) {
+	config, factories, calls, _ := preRuntimeExecutionFixture(t)
+	if err := os.Chmod(config.ReceiptDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openPreRuntimeExecution(config, factories); err == nil || len(*calls) != 0 {
+		t.Fatalf("unsafe receipt directory was accepted: calls=%v err=%v", *calls, err)
+	}
+}
+
+func TestBindingStageReceiptReferenceRetainsExactPublicIdentity(t *testing.T) {
+	receipt := execution.BindingStageRunReceipt{
+		Format: execution.BindingStageReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: runnerStageSHA("a"),
+		StageID: "runtime-binding", StageReceiptDigest: runnerStageSHA("6"),
+	}
+	reference := BindingStageReceiptReference(receipt)
+	if reference.Format != receipt.Format || reference.State != receipt.State || reference.PlanDigest != receipt.PlanDigest ||
+		reference.StageID != receipt.StageID || reference.StageReceiptDigest != receipt.StageReceiptDigest {
+		t.Fatalf("binding receipt reference differs: %#v", reference)
+	}
+}
+
+func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRuntimeExecutionFactories, *[]string, *[]StageAuthorizationRequest) {
+	t.Helper()
+	base := submissionBundleFixture(t, false, "")
+	receiptDirectory := t.TempDir()
+	if err := os.Chmod(receiptDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	grantDirectory := t.TempDir()
+	if err := os.Chmod(grantDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	calls := []string{}
+	requests := []StageAuthorizationRequest{}
+	resolver := StageAuthorizationResolverFunc(func(_ context.Context, request StageAuthorizationRequest) (StageAuthorizationSource, error) {
+		requests = append(requests, cloneStageAuthorizationRequest(request))
+		return writeResolvedStageGrant(t, grantDirectory, request)
+	})
+	config := PreRuntimeExecutionConfig{
+		PlanPath: base.config.PlanPath, PlanExpected: base.config.PlanExpected,
+		ProjectionManifestPath: base.config.ProjectionManifestPath, ProjectionRoot: base.config.ProjectionRoot,
+		Authorization: resolver, ReceiptDirectory: receiptDirectory,
+	}
+	store := &ledger.Ledger{}
+	verified := map[string]stagereceipt.Verified{}
+	makeReceipt := func(resume StageResumeConfig, stageID string) (stagereceipt.Verified, string) {
+		plan, cursor, _, err := loadStageResumeWithPrefix(resume)
+		if err != nil {
+			t.Fatal(err)
+		}
+		predecessors, err := cursor.Predecessors()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mutation, outcome := "NOT_APPLICABLE", ""
+		if stageID == "provider-prerequisites" || stageID == "cluster-lifecycle" || stageID == "enablement" || stageID == "target-access" {
+			mutation, outcome = "ATTEMPTED", digest.SHA256([]byte("operation-"+stageID))
+		}
+		at := time.Date(2026, 8, 18, 8, len(resume.Receipts), 0, 0, time.UTC)
+		var stageReceipt stagereceipt.Verified
+		if stageID == "cluster-lifecycle" {
+			stageReceipt, err = stagereceipt.NewWithTargetClusterUIDDigest(plan, stageID, predecessors, "SUCCEEDED", mutation, outcome, digest.SHA256([]byte("evidence-"+stageID)), runnerStageSHA("7"), at)
+		} else {
+			stageReceipt, err = stagereceipt.New(plan, stageID, predecessors, "SUCCEEDED", mutation, outcome, digest.SHA256([]byte("evidence-"+stageID)), at)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiptDigest, err := stageReceipt.Digest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		verified[receiptDigest] = stageReceipt
+		return stageReceipt, receiptDigest
+	}
+	staged := func(resume StageResumeConfig, stageID string) preRuntimeStagedInvocation {
+		return preRuntimeStagedInvocation{store: store, run: func(context.Context) (execution.StagedOperationReceipt, error) {
+			calls = append(calls, stageID)
+			_, receiptDigest := makeReceipt(resume, stageID)
+			return execution.StagedOperationReceipt{Format: execution.StagedReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: base.plan.PlanDigest, StageID: stageID, StageReceiptDigest: receiptDigest}, nil
+		}}
+	}
+	observation := func(resume StageResumeConfig, stageID string) preRuntimeObservationInvocation {
+		return preRuntimeObservationInvocation{store: store, run: func(context.Context) (execution.ObservationStageRunReceipt, error) {
+			calls = append(calls, stageID)
+			_, receiptDigest := makeReceipt(resume, stageID)
+			return execution.ObservationStageRunReceipt{Format: execution.ObservationStageReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: base.plan.PlanDigest, StageID: stageID, StageReceiptDigest: receiptDigest}, nil
+		}}
+	}
+	factories := preRuntimeExecutionFactories{
+		submission: func(resume StageResumeConfig, stageID string, _ StageAuthorizationSource, _ PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
+			return staged(resume, stageID), nil
+		},
+		lifecycle: func(resume StageResumeConfig, _ PreRuntimeExecutionConfig) (preRuntimeObservationInvocation, error) {
+			return observation(resume, "lifecycle-observation"), nil
+		},
+		enablement: func(resume StageResumeConfig, _ StageAuthorizationSource, _ PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
+			return staged(resume, "enablement"), nil
+		},
+		network: func(resume StageResumeConfig, _ PreRuntimeExecutionConfig) (preRuntimeObservationInvocation, error) {
+			return observation(resume, "network-observation"), nil
+		},
+		binding: func(resume StageResumeConfig, _ PreRuntimeExecutionConfig) (preRuntimeBindingInvocation, error) {
+			return preRuntimeBindingInvocation{store: store, run: func(context.Context) (execution.BindingStageRunReceipt, error) {
+				calls = append(calls, "runtime-binding")
+				_, receiptDigest := makeReceipt(resume, "runtime-binding")
+				return execution.BindingStageRunReceipt{Format: execution.BindingStageReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: base.plan.PlanDigest, StageID: "runtime-binding", StageReceiptDigest: receiptDigest}, nil
+			}}, nil
+		},
+		target: func(resume StageResumeConfig, _ StageAuthorizationSource, _ PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
+			return staged(resume, "target-access"), nil
+		},
+		persist: func(_ context.Context, _ StageResumeConfig, _ *ledger.Ledger, reference StageRunReceiptReference, path string) (StageReceiptSource, error) {
+			stageReceipt, ok := verified[reference.StageReceiptDigest]
+			if !ok {
+				return StageReceiptSource{}, errors.New("test receipt is unavailable")
+			}
+			raw, err := stageReceipt.Bytes()
+			if err != nil {
+				return StageReceiptSource{}, err
+			}
+			file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				return StageReceiptSource{}, err
+			}
+			if _, err = file.Write(raw); err != nil {
+				file.Close()
+				return StageReceiptSource{}, err
+			}
+			if err = file.Close(); err != nil {
+				return StageReceiptSource{}, err
+			}
+			return StageReceiptSource{Path: path, Digest: reference.StageReceiptDigest}, nil
+		},
+	}
+	return config, factories, &calls, &requests
+}
+
+func minInt(first, second int) int {
+	if first < second {
+		return first
+	}
+	return second
+}

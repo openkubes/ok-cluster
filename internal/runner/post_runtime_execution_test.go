@@ -419,7 +419,7 @@ func writeResolvedStageGrant(t *testing.T, root string, request StageAuthorizati
 		PlanDigest: request.PlanDigest, ContractIdentity: request.ContractIdentity, ContractRevision: request.ContractRevision,
 		EnablementRevision: request.EnablementRevision, PlatformRevision: request.PlatformRevision, ExecutionFixture: request.ExecutionFixture,
 		StageID: request.StageID, StageOrder: request.StageOrder, StageDigest: request.StageDigest,
-		Operation: request.Operation, Authority: request.Authority, MaxUses: request.MaxUses,
+		Operation: request.Operation, Authority: request.Authority, Predecessors: []authorization.StagePredecessor{}, MaxUses: request.MaxUses,
 		NotBefore: "2026-08-18T07:59:00Z", NotAfter: "2026-08-18T08:20:00Z",
 	}
 	for _, predecessor := range request.Predecessors {

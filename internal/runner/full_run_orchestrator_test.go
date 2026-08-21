@@ -117,6 +117,31 @@ func TestFullRunOrchestrationStopsBeforeContinuationWhenPrefixStops(t *testing.T
 	}
 }
 
+func TestFullRunOrchestrationPreservesCompletedPrefixCheckpointWhenBridgeStops(t *testing.T) {
+	prefix := successfulPreRuntimeOrchestration(nil)
+	runProvider := prefix.RunProviderPrerequisites
+	prefix.RunProviderPrerequisites = func(ctx context.Context) (execution.StagedOperationReceipt, error) {
+		receipt, err := runProvider(ctx)
+		if err != nil {
+			return receipt, err
+		}
+		return receipt, errors.New("private receipt bridge failure")
+	}
+	bindCalls := 0
+	orchestration := &FullRunOrchestration{
+		PreRuntime: prefix,
+		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			bindCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" ||
+		len(receipt.Checkpoints) != 1 || bindCalls != 0 {
+		t.Fatalf("completed prefix checkpoint was not preserved: %#v bindCalls=%d err=%v", receipt, bindCalls, err)
+	}
+}
+
 func TestFullRunOrchestrationRejectsForeignContinuationBeforeRun(t *testing.T) {
 	for name, mutate := range map[string]func(*PostRuntimeContinuationBinding){
 		"foreign plan": func(binding *PostRuntimeContinuationBinding) { binding.PlanDigest = runnerStageSHA("f") },
@@ -159,6 +184,25 @@ func TestFullRunOrchestrationPreservesBoundedSuffixStop(t *testing.T) {
 	receipt, err := orchestration.Run(context.Background())
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "platform-applications" || len(receipt.Checkpoints) != 9 || continuation.calls.Load() != 1 {
 		t.Fatalf("suffix stop was not preserved: %#v calls=%d err=%v", receipt, continuation.calls.Load(), err)
+	}
+}
+
+func TestFullRunOrchestrationPreservesCompletedSuffixCheckpointWhenBridgeStops(t *testing.T) {
+	continuation := successfulFakePostRuntimeContinuation()
+	continuation.receipt.State = "STOPPED"
+	continuation.receipt.StoppedAt = "target-credential"
+	continuation.receipt.Checkpoints = continuation.receipt.Checkpoints[:1]
+	continuation.err = errors.New("private receipt bridge failure")
+	orchestration := &FullRunOrchestration{
+		PreRuntime: successfulPreRuntimeOrchestration(nil),
+		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			return continuation, nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		len(receipt.Checkpoints) != 8 || continuation.calls.Load() != 1 {
+		t.Fatalf("completed suffix checkpoint was not preserved: %#v calls=%d err=%v", receipt, continuation.calls.Load(), err)
 	}
 }
 

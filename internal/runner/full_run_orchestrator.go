@@ -129,7 +129,7 @@ func appendFullRunPrefix(receipt *FullRunOrchestrationReceipt, prefix PreRuntime
 		return errors.New("successful full-run prefix is incomplete")
 	}
 	if prefix.State == "STOPPED" {
-		if len(prefix.Checkpoints) >= len(preRuntimeStageOrder) || prefix.StoppedAt != preRuntimeStageOrder[len(prefix.Checkpoints)] {
+		if !validStoppedStage(preRuntimeStageOrder, len(prefix.Checkpoints), prefix.StoppedAt) {
 			return errors.New("stopped full-run prefix is inconsistent")
 		}
 	}
@@ -154,7 +154,7 @@ func appendFullRunSuffix(receipt *FullRunOrchestrationReceipt, suffix PostRuntim
 		return errors.New("successful full-run suffix is incomplete")
 	}
 	if suffix.State == "STOPPED" {
-		if len(suffix.Checkpoints) >= len(postRuntimeStageOrder) || suffix.StoppedAt != postRuntimeStageOrder[len(suffix.Checkpoints)] {
+		if !validStoppedStage(postRuntimeStageOrder, len(suffix.Checkpoints), suffix.StoppedAt) {
 			return errors.New("stopped full-run suffix is inconsistent")
 		}
 	}
@@ -220,6 +220,13 @@ func nextFullRunStage(checkpoints []FullRunStageCheckpoint) string {
 		return postRuntimeStageOrder[index]
 	}
 	return postRuntimeStageOrder[len(postRuntimeStageOrder)-1]
+}
+
+func validStoppedStage(order []string, completed int, stoppedAt string) bool {
+	if completed < len(order) && stoppedAt == order[completed] {
+		return true
+	}
+	return completed > 0 && completed <= len(order) && stoppedAt == order[completed-1]
 }
 
 func stopFullRunOrchestration(receipt FullRunOrchestrationReceipt, stageID string) (FullRunOrchestrationReceipt, error) {
