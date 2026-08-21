@@ -105,6 +105,43 @@ func TestKubernetesCapabilityFixtureClientRejectsForeignAuthorityAndRedirect(t *
 	}
 }
 
+func TestKubernetesCapabilityFixtureClientAcceptsExplicitClientCertificateTransport(t *testing.T) {
+	run, _ := observabilityCapabilityRun(observabilityProbeRequest(), "ok-observability")
+	authorization := "unobserved"
+	client, err := NewKubernetesCapabilityFixtureClient(KubernetesCapabilityFixtureClientConfig{
+		Endpoint: "http://127.0.0.1:12345", ClientCertificate: true, AuthorityIdentity: run.TargetClusterUID,
+		Client: &http.Client{Transport: capabilityRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			authorization = request.Header.Get("Authorization")
+			return capabilityJSONResponse(http.StatusNotFound, nil, nil), nil
+		})},
+	}, run, capabilityFixtureConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Create(context.Background()); err == nil {
+		t.Fatal("incomplete fixture preflight unexpectedly succeeded")
+	}
+	if authorization != "" || !client.clientCertificate || client.token != "" {
+		t.Fatalf("client-certificate fixture transport synthesized bearer authority: authorization=%q", authorization)
+	}
+
+	for name, mutate := range map[string]func(*KubernetesCapabilityFixtureClientConfig){
+		"ambiguous token and certificate": func(config *KubernetesCapabilityFixtureClientConfig) { config.BearerToken = "token" },
+		"missing transport identity":      func(config *KubernetesCapabilityFixtureClientConfig) { config.ClientCertificate = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := KubernetesCapabilityFixtureClientConfig{
+				Endpoint: "http://127.0.0.1:12345", ClientCertificate: true,
+				AuthorityIdentity: run.TargetClusterUID, Client: &http.Client{},
+			}
+			mutate(&config)
+			if _, err := NewKubernetesCapabilityFixtureClient(config, run, capabilityFixtureConfig()); err == nil {
+				t.Fatal("unsafe capability credential mode was accepted")
+			}
+		})
+	}
+}
+
 type capabilityRecordedRequest struct {
 	method string
 	path   string
