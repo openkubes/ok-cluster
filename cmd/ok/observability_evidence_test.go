@@ -12,6 +12,47 @@ import (
 	"github.com/openkubes/ok-cluster/internal/runner"
 )
 
+type fakeObservabilityEvidenceAuthorityRunner struct {
+	receipt runner.ObservabilityIndependentEvidenceReceipt
+	err     error
+	calls   *int
+}
+
+func (fake fakeObservabilityEvidenceAuthorityRunner) Run(context.Context) (runner.ObservabilityIndependentEvidenceReceipt, error) {
+	*fake.calls++
+	return fake.receipt, fake.err
+}
+
+func TestObservabilityEvidenceProduceUsesCanonicalAuthorityActivation(t *testing.T) {
+	previous := openObservabilityEvidenceAuthorityActivation
+	defer func() { openObservabilityEvidenceAuthorityActivation = previous }()
+	calls := 0
+	openObservabilityEvidenceAuthorityActivation = func(path string) (observabilityEvidenceAuthorityRunner, error) {
+		if path != "/private/evidence-authority/activation.json" {
+			t.Fatalf("unexpected evidence authority activation path: %q", path)
+		}
+		return fakeObservabilityEvidenceAuthorityRunner{calls: &calls, receipt: runner.ObservabilityIndependentEvidenceReceipt{
+			Format: runner.ObservabilityIndependentEvidenceReceiptFormat, State: "WRITTEN_VERIFIED",
+			EvidenceDigest: testSHA("4"), KeyID: testSHA("5"),
+		}}, nil
+	}
+	var stdout bytes.Buffer
+	arguments := []string{
+		"cluster", "stage", "evidence", "observability", "produce",
+		"--activation", "/private/evidence-authority/activation.json", "--produce",
+	}
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt runner.ObservabilityIndependentEvidenceReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "WRITTEN_VERIFIED" || calls != 1 {
+		t.Fatalf("authority activation receipt differs: %#v calls=%d err=%v", receipt, calls, err)
+	}
+	if err := run(append(arguments, "--timeout", "1m"), &bytes.Buffer{}, &bytes.Buffer{}); err == nil || calls != 1 {
+		t.Fatal("mixed activation and individual flags reached evidence authority")
+	}
+}
+
 func TestObservabilityEvidenceProduceRunsOneBoundedIndependentCollection(t *testing.T) {
 	previous := produceIndependentObservabilityEvidence
 	defer func() { produceIndependentObservabilityEvidence = previous }()

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -169,7 +170,30 @@ func observabilityEvidenceAuthorityPackageFixture(t *testing.T) (ObservabilityEv
 	if err := os.WriteFile(tokenPath, []byte("independent-evidence-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		raw, err := io.ReadAll(request.Body)
+		if err != nil {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var collection ObservabilityIndependentEvidenceCollectionRequest
+		if err := json.Unmarshal(raw, &collection); err != nil {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, requestDigest, err := canonicalObservabilityIndependentEvidenceCollectionRequest(collection)
+		if err != nil {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(ObservabilityIndependentEvidenceCollectionResponse{
+			Format: ObservabilityIndependentEvidenceCollectionResponseFormat, RequestDigest: requestDigest,
+			ReceiverDeliveryObserved: true, ReceiverIdentityDigest: digest.SHA256([]byte("receiver")),
+			ClusterLocalServicesReady: true, ExternalClusterDependencies: 0,
+			AutonomyProfileDigest: digest.SHA256([]byte("autonomy")),
+		})
+	}))
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
 		server.Close()
@@ -179,6 +203,7 @@ func observabilityEvidenceAuthorityPackageFixture(t *testing.T) (ObservabilityEv
 			ManifestPath: manifestPath, ActivationSecret: "ok147-observability-evidence-authority-01",
 			PrivateKeyPath: privateKeyPath, CollectorEndpoint: server.URL,
 			CollectorTokenPath: tokenPath, CollectorCAPath: caPath, CollectorCADigest: digest.SHA256(ca),
+			RuntimeAuthorityRoot: observabilityEvidenceAuthorityRoot, RuntimeHandoffRoot: observabilityEvidenceAuthorityHandoffRoot,
 			IdentityPollInterval: time.Second, IdentityWaitTimeout: 30 * time.Minute,
 			EvidenceValidFor: 10 * time.Minute, CollectionTimeout: 2 * time.Minute,
 		}, func() {

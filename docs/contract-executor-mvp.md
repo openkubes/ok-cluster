@@ -3119,6 +3119,22 @@ key or collector token, while the issuer receives no Kubernetes lifecycle or
 GitOps credential. Package construction remains offline, creates no Kubernetes
 object and grants no launch, retry, repair or reconciliation authority.
 
+The packaged activation is also executable through the same producer entry
+point without repeating its secret-bearing fields as Pod arguments:
+
+```text
+ok cluster stage evidence observability produce \
+  --activation /var/run/openkubes/evidence-authority/activation.json \
+  --produce
+```
+
+Opening this activation re-verifies its canonical bytes, TLS CA, short-lived
+collector credential and signing key locally. The resulting process is
+single-use: it waits boundedly for the runtime identity handoff, performs one
+collector request and writes one signed evidence file create-only. Individual
+producer flags cannot be combined with the packaged activation, and a stopped
+attempt exposes no automatic retry.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
