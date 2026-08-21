@@ -43,6 +43,7 @@ type FullRunExecutionActivationPackageReceipt struct {
 	EvidenceKeyID                 string   `json:"evidenceKeyId"`
 	CollectorAuthorityDigest      string   `json:"collectorAuthorityDigest"`
 	CollectorCADigest             string   `json:"collectorCaDigest"`
+	ImageDigest                   string   `json:"imageDigest"`
 	ManagementAuthority           string   `json:"managementAuthority"`
 	PrivateFileCount              int      `json:"privateFileCount"`
 	ObjectKinds                   []string `json:"objectKinds"`
@@ -137,6 +138,7 @@ func BuildFullRunExecutionActivationPackage(config FullRunExecutionActivationPac
 		ManifestDigest: bundleReceipt.ManifestDigest, PlanDigest: bundleReceipt.PlanDigest,
 		EvidenceActivationDigest: evidenceReceipt.ActivationDigest, EvidenceKeyID: evidenceReceipt.EvidenceKeyID,
 		CollectorAuthorityDigest: evidenceReceipt.CollectorAuthorityDigest, CollectorCADigest: evidenceReceipt.CollectorCADigest,
+		ImageDigest:         config.Job.ImageDigest,
 		ManagementAuthority: document.Plan.Expected.ManagementAuthority,
 		PrivateFileCount:    len(bundle.files) + evidenceReceipt.PrivateFileCount,
 		ObjectKinds:         []string{"Secret", "Secret", "NetworkPolicy", "Job"}, MutationAllowed: false,
@@ -181,6 +183,9 @@ func verifyFullRunExecutionActivationPackage(packaged VerifiedFullRunExecutionAc
 		if !stageReceiptPrefixDigestPattern.MatchString(identity) {
 			return errors.New("full-run activation package digest identity is incomplete")
 		}
+	}
+	if !capabilityImageDigestPattern.MatchString(receipt.ImageDigest) {
+		return errors.New("full-run activation package image identity is incomplete")
 	}
 	parts := bytes.SplitN(packaged.raw, []byte("\n---\n"), 3)
 	if len(parts) != 3 || digest.SHA256(parts[0]) != receipt.ActivationSecretObjectDigest ||

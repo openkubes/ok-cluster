@@ -22,8 +22,18 @@ func TestBuildObservabilityCollectorRuntimePackageBindsFourObjects(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	activationPackage, err := BuildObservabilityCollectorActivationPackage(config.Activation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activationReceipt, err := activationPackage.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if receipt.Format != ObservabilityCollectorRuntimePackageFormat || receipt.State != "VERIFIED" ||
 		receipt.PackageDigest != digest.SHA256(raw) || receipt.ImageDigest != config.ImageDigest || receipt.MutationAllowed ||
+		receipt.TLSCertificateDigest != activationReceipt.TLSCertificateDigest ||
+		receipt.ReceiverIdentityDigest != activationReceipt.ReceiverIdentityDigest || receipt.ProfileDigest != activationReceipt.ProfileDigest ||
 		!reflect.DeepEqual(receipt.ObjectKinds, []string{"Secret", "Service", "NetworkPolicy", "Job"}) {
 		t.Fatalf("unexpected collector runtime receipt: %#v", receipt)
 	}

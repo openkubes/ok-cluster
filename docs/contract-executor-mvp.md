@@ -3131,9 +3131,36 @@ ok evidence observability serve \
 
 This closes the offline post-runtime packaging and activation boundaries
 without turning the collector into a lifecycle owner. The package builder and
-materializer perform no API request or mutation. A fresh published image,
-bounded installation launcher and live receiver binding remain separate
-prerequisites before deployment.
+materializer perform no API request or mutation. A bounded installation
+launcher and live receiver binding remain separate prerequisites before
+deployment.
+
+Fresh-Run v3 now also has one fail-closed offline image/package correlation
+boundary:
+
+```text
+ok cluster stage run full bind-v3 \
+  --publication-receipt /private/publication.json \
+  --publication-receipt-digest sha256:<reviewed receipt identity> \
+  --source-sha <exact published main commit> \
+  --full-run-package-receipt /private/full-run-package-receipt.json \
+  --full-run-package-receipt-digest sha256:<reviewed receipt identity> \
+  --collector-package-receipt /private/collector-package-receipt.json \
+  --collector-package-receipt-digest sha256:<reviewed receipt identity>
+```
+
+The command accepts only the exact two-platform GHCR publication with SLSA
+and SPDX attestations and verified pullback. It then proves that executor and
+collector use that same digest-pinned image, the same source execution
+manifest, the same collector endpoint and the same self-signed TLS
+certificate identity. The collector's runtime-binding, receiver and profile
+identities are retained in the resulting receipt. The binding state is
+`VERIFIED_NOT_AUTHORIZED` and `mutationAllowed=false`; it neither publishes an
+image nor reads a credential or contacts Kubernetes. Because the collector
+can be bound only after the Stage-7 target-access prefix has produced runtime
+identity and its dedicated observer, ordered live installation remains an
+explicit post-prefix prerequisite rather than an implicit side effect of this
+offline receipt.
 
 The separately operated issuer no longer accepts the run ID, target Cluster
 UID, fixture digest or profile digest as manually repeated command arguments.
