@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const FullRunExecutionActivationInstallationPlanFormat = "ok147-full-run-execution-activation-installation-plan/v2"
+const FullRunExecutionActivationInstallationPlanFormat = "ok147-full-run-execution-activation-installation-plan/v3"
 
 type FullRunExecutionActivationPrerequisite struct {
 	Order       int    `json:"order"`
@@ -127,6 +127,16 @@ func PlanFullRunExecutionActivationInstallation(packaged VerifiedFullRunExecutio
 				ObjectPath: "/api/v1/namespaces/" + submissionStageInputNamespace, ExpectState: "PRESENT"},
 			{Order: 2, APIVersion: "v1", Kind: "ServiceAccount", Namespace: submissionStageInputNamespace, Name: "ok147-contract-executor-runtime", Method: http.MethodGet,
 				ObjectPath: "/api/v1/namespaces/" + submissionStageInputNamespace + "/serviceaccounts/ok147-contract-executor-runtime", ExpectState: "PRESENT_EXACT_RUNTIME"},
+			{Order: 3, APIVersion: "v1", Kind: "ServiceAccount", Namespace: submissionStageInputNamespace, Name: "ok147-contract-executor", Method: http.MethodGet,
+				ObjectPath: "/api/v1/namespaces/" + submissionStageInputNamespace + "/serviceaccounts/ok147-contract-executor", ExpectState: "PRESENT_EXACT_LEDGER_WRITER"},
+			{Order: 4, APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: submissionStageInputNamespace, Name: "ok147-ledger-writer", Method: http.MethodGet,
+				ObjectPath: "/apis/rbac.authorization.k8s.io/v1/namespaces/" + submissionStageInputNamespace + "/roles/ok147-ledger-writer", ExpectState: "PRESENT_EXACT_LEDGER_WRITER_ROLE"},
+			{Order: 5, APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: submissionStageInputNamespace, Name: "ok147-ledger-writer", Method: http.MethodGet,
+				ObjectPath: "/apis/rbac.authorization.k8s.io/v1/namespaces/" + submissionStageInputNamespace + "/rolebindings/ok147-ledger-writer", ExpectState: "PRESENT_EXACT_LEDGER_WRITER_BINDING"},
+			{Order: 6, APIVersion: "admissionregistration.k8s.io/v1", Kind: "ValidatingAdmissionPolicy", Name: "ok147-contract-executor-ledger", Method: http.MethodGet,
+				ObjectPath: "/apis/admissionregistration.k8s.io/v1/validatingadmissionpolicies/ok147-contract-executor-ledger", ExpectState: "PRESENT_EXACT_LEDGER_POLICY"},
+			{Order: 7, APIVersion: "admissionregistration.k8s.io/v1", Kind: "ValidatingAdmissionPolicyBinding", Name: "ok147-contract-executor-ledger", Method: http.MethodGet,
+				ObjectPath: "/apis/admissionregistration.k8s.io/v1/validatingadmissionpolicybindings/ok147-contract-executor-ledger", ExpectState: "PRESENT_EXACT_LEDGER_POLICY_BINDING"},
 		},
 		Creates: creates, MutationAllowed: false,
 	}, nil

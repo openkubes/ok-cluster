@@ -4,11 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"gopkg.in/yaml.v3"
 )
 
 func TestPlanFullRunExecutionActivationInstallationBindsExactOrder(t *testing.T) {
@@ -18,11 +24,12 @@ func TestPlanFullRunExecutionActivationInstallationBindsExactOrder(t *testing.T)
 		t.Fatal(err)
 	}
 	if plan.Format != FullRunExecutionActivationInstallationPlanFormat || plan.State != "VERIFIED" ||
-		plan.RunID != "ok147-full-run-01" || plan.Authority != "ok-mgmt" || plan.MutationAllowed || len(plan.Prerequisites) != 2 || len(plan.Creates) != 4 {
+		plan.RunID != "ok147-full-run-01" || plan.Authority != "ok-mgmt" || plan.MutationAllowed || len(plan.Prerequisites) != 7 || len(plan.Creates) != 4 {
 		t.Fatalf("unexpected full-run activation plan: %#v", plan)
 	}
 	if plan.Prerequisites[0].Kind != "Namespace" || plan.Prerequisites[0].ExpectState != "PRESENT" ||
-		plan.Prerequisites[1].Kind != "ServiceAccount" || plan.Prerequisites[1].ExpectState != "PRESENT_EXACT_RUNTIME" {
+		plan.Prerequisites[1].Kind != "ServiceAccount" || plan.Prerequisites[1].ExpectState != "PRESENT_EXACT_RUNTIME" ||
+		plan.Prerequisites[5].Kind != "ValidatingAdmissionPolicy" || plan.Prerequisites[6].Kind != "ValidatingAdmissionPolicyBinding" {
 		t.Fatalf("unexpected full-run prerequisites: %#v", plan.Prerequisites)
 	}
 	for index, kind := range []string{"Secret", "Secret", "NetworkPolicy", "Job"} {
@@ -77,8 +84,8 @@ func TestFullRunExecutionActivationLauncherPreflightsThenCreates(t *testing.T) {
 		receipt.PlanDigest != plan.PlanDigest || receipt.RunID != plan.RunID || receipt.Authority != "ok-mgmt" {
 		t.Fatalf("activation receipt identity differs: %#v", receipt)
 	}
-	if len(api.requests) != 10 {
-		t.Fatalf("requests=%d, want two prerequisite GETs, four absence GETs, then four POSTs: %#v", len(api.requests), api.requests)
+	if len(api.requests) != 15 {
+		t.Fatalf("requests=%d, want seven prerequisite GETs, four absence GETs, then four POSTs: %#v", len(api.requests), api.requests)
 	}
 	for index, prerequisite := range plan.Prerequisites {
 		request := api.requests[index]
@@ -87,7 +94,7 @@ func TestFullRunExecutionActivationLauncherPreflightsThenCreates(t *testing.T) {
 		}
 	}
 	for index, create := range plan.Creates {
-		preflight, submission := api.requests[index+2], api.requests[index+6]
+		preflight, submission := api.requests[index+7], api.requests[index+11]
 		if preflight.method != http.MethodGet || preflight.path != create.ObjectPath || len(preflight.body) != 0 {
 			t.Fatalf("preflight %d differs: %#v", index, preflight)
 		}
@@ -112,7 +119,7 @@ func TestFullRunExecutionActivationLauncherStopsZeroWriteOnExistingObject(t *tes
 	api.objects[plan.Creates[3].ObjectPath] = map[string]any{"kind": "Job"}
 	launcher := newFullRunActivationLauncher(t, packaged, api.client())
 	receipt, err := launcher.Launch(context.Background())
-	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 6 {
+	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 11 {
 		t.Fatalf("existing activation object did not stop zero-write: %#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
 	}
 }
@@ -143,6 +150,11 @@ func TestFullRunExecutionActivationLauncherStopsZeroWriteOnMissingOrChangedPrere
 			seedFullRunActivationPrerequisites(api)
 			path := "/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor-runtime"
 			api.objects[path]["automountServiceAccountToken"] = true
+		},
+		"weakened ledger policy": func(api *submissionStageInstallerAPI) {
+			seedFullRunActivationPrerequisites(api)
+			path := "/apis/admissionregistration.k8s.io/v1/validatingadmissionpolicies/ok147-contract-executor-ledger"
+			api.objects[path]["spec"].(map[string]any)["failurePolicy"] = "Ignore"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -206,13 +218,43 @@ func newFullRunActivationLauncher(t *testing.T, packaged VerifiedFullRunExecutio
 }
 
 func seedFullRunActivationPrerequisites(api *submissionStageInstallerAPI) {
-	api.objects["/api/v1/namespaces/openkubes-execution-system"] = map[string]any{
-		"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "openkubes-execution-system"},
+	_, filename, _, ok := goruntime.Caller(0)
+	if !ok {
+		api.t.Fatal("cannot resolve full-run prerequisite fixture path")
 	}
-	api.objects["/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor-runtime"] = map[string]any{
-		"apiVersion": "v1", "kind": "ServiceAccount", "automountServiceAccountToken": false,
-		"metadata": map[string]any{"name": "ok147-contract-executor-runtime", "namespace": "openkubes-execution-system", "labels": map[string]any{
-			"app.kubernetes.io/name": "ok-cluster-contract-executor", "openkubes.io/runtime-boundary": "submission-stage",
-		}},
+	wanted := map[string]string{
+		"Namespace//openkubes-execution-system":                                     "/api/v1/namespaces/openkubes-execution-system",
+		"ServiceAccount/openkubes-execution-system/ok147-contract-executor-runtime": "/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor-runtime",
+		"ServiceAccount/openkubes-execution-system/ok147-contract-executor":         "/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor",
+		"Role/openkubes-execution-system/ok147-ledger-writer":                       "/apis/rbac.authorization.k8s.io/v1/namespaces/openkubes-execution-system/roles/ok147-ledger-writer",
+		"RoleBinding/openkubes-execution-system/ok147-ledger-writer":                "/apis/rbac.authorization.k8s.io/v1/namespaces/openkubes-execution-system/rolebindings/ok147-ledger-writer",
+		"ValidatingAdmissionPolicy//ok147-contract-executor-ledger":                 "/apis/admissionregistration.k8s.io/v1/validatingadmissionpolicies/ok147-contract-executor-ledger",
+		"ValidatingAdmissionPolicyBinding//ok147-contract-executor-ledger":          "/apis/admissionregistration.k8s.io/v1/validatingadmissionpolicybindings/ok147-contract-executor-ledger",
+	}
+	for _, name := range []string{"contract-executor-ledger.yaml", "contract-executor-stage-runtime.yaml"} {
+		raw, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "..", "..", "deploy", name))
+		if err != nil {
+			api.t.Fatal(err)
+		}
+		decoder := yaml.NewDecoder(bytes.NewReader(raw))
+		for {
+			var object map[string]any
+			err := decoder.Decode(&object)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				api.t.Fatal(err)
+			}
+			metadata, _ := object["metadata"].(map[string]any)
+			key := textValue(object["kind"]) + "/" + textValue(metadata["namespace"]) + "/" + textValue(metadata["name"])
+			if objectPath, required := wanted[key]; required {
+				api.objects[objectPath] = object
+				delete(wanted, key)
+			}
+		}
+	}
+	if len(wanted) != 0 {
+		api.t.Fatalf("full-run deployment fixtures lack prerequisites: %#v", wanted)
 	}
 }

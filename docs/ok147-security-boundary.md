@@ -65,10 +65,12 @@ Cleanup requires separate authority.
 ## Installation boundary
 
 The launcher can only perform exact-name `GET` operations for the required
-Namespace, runtime ServiceAccount and four expected-absent activation objects,
-then collection `POST` operations for two immutable Secrets, one NetworkPolicy
-and one Job. All reads finish before the first write. It exposes no update,
-patch, apply, delete, list, watch, retry, rollback or cleanup operation.
+Namespace, runtime ServiceAccount, Ledger writer ServiceAccount/RBAC and
+fail-closed Ledger admission policy/binding plus four expected-absent activation
+objects. It then permits collection `POST` operations for two immutable
+Secrets, one NetworkPolicy and one Job. All reads finish before the first
+write. It exposes no update, patch, apply, delete, list, watch, retry, rollback
+or cleanup operation.
 
 Kubernetes RBAC cannot prove create-body equality. The launcher therefore
 verifies the complete package digest before opening the installer credential,
