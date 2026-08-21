@@ -3336,6 +3336,27 @@ single-address egress target is explicit. The output is create-only with mode
 does not open a Kubernetes credential, contact an API or grant installation
 authority.
 
+The corresponding bounded installer derives a credential-free plan from that
+same verified package. It requires four exact absence GETs before its first
+write and then permits only this order:
+
+```text
+GET executor Secret, Evidence Authority Secret, NetworkPolicy, Job
+        ↓ all four absent
+POST executor Secret
+POST Evidence Authority Secret
+POST NetworkPolicy
+POST Job
+```
+
+The package digest is checked before the management installer credential is
+opened. A pre-existing object stops with zero writes. Any failure or uncertain
+response after the first POST is retained as partial/unknown state; the
+single-use launcher exposes no retry, update, patch, apply, delete, rollback or
+cleanup path. Raw UIDs and resourceVersions are reduced to digests in its
+public receipt. Wiring this launcher to a separate prepare/execute CLI remains
+the next activation checkpoint.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
@@ -3362,8 +3383,8 @@ durable receipts. This is not yet the OK-147 Definition of Done:
 - the joined concrete Stage 1-7 and Stage 8-12 adapters have a shared
   activation boundary plus concrete local prepare/execute commands; the
   ephemeral full-run Job and private activation package select that same
-  production capability transport, while their bounded installer launcher
-  remains to be implemented;
+  production capability transport and have a bounded installer library, while
+  the installer prepare/execute CLI remains to be implemented;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
