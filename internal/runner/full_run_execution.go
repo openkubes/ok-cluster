@@ -13,8 +13,9 @@ import (
 // exact seven private sources are supplied only by the completed PreRuntime
 // execution in this same single-use run.
 type FullRunExecutionConfig struct {
-	PreRuntime  PreRuntimeExecutionConfig
-	PostRuntime PostRuntimeExecutionConfig
+	PreRuntime              PreRuntimeExecutionConfig
+	PostRuntime             PostRuntimeExecutionConfig
+	WorkloadAuthorityBinder FullRunWorkloadAuthorityBinder
 }
 
 type fullRunPreRuntimeExecution interface {
@@ -98,6 +99,11 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 			workloadAuthority, workloadErr := preRuntime.RuntimeWorkloadAuthority()
 			if workloadErr != nil {
 				return nil, errors.New("full-run lifecycle workload authority is unavailable")
+			}
+			if config.WorkloadAuthorityBinder != nil {
+				if bindErr := config.WorkloadAuthorityBinder.BindFullRunWorkloadAuthority(workloadAuthority); bindErr != nil {
+					return nil, errors.New("bind full-run capability workload authority")
+				}
 			}
 			bound := clonePostRuntimeExecutionConfigForFullRun(postRuntime)
 			bound.TargetCredential.Receipts = append([]StageReceiptSource(nil), privatePrefix...)
