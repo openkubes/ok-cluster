@@ -43,15 +43,17 @@ type FullRunExecutionActivationPackageReceipt struct {
 	EvidenceKeyID                 string   `json:"evidenceKeyId"`
 	CollectorAuthorityDigest      string   `json:"collectorAuthorityDigest"`
 	CollectorCADigest             string   `json:"collectorCaDigest"`
+	ManagementAuthority           string   `json:"managementAuthority"`
 	PrivateFileCount              int      `json:"privateFileCount"`
 	ObjectKinds                   []string `json:"objectKinds"`
 	MutationAllowed               bool     `json:"mutationAllowed"`
 }
 
 type VerifiedFullRunExecutionActivationPackage struct {
-	raw      []byte
-	receipt  FullRunExecutionActivationPackageReceipt
-	verified bool
+	raw                 []byte
+	receipt             FullRunExecutionActivationPackageReceipt
+	managementAuthority string
+	verified            bool
 }
 
 // BuildFullRunExecutionActivationPackage binds the executor Secret, the
@@ -135,10 +137,13 @@ func BuildFullRunExecutionActivationPackage(config FullRunExecutionActivationPac
 		ManifestDigest: bundleReceipt.ManifestDigest, PlanDigest: bundleReceipt.PlanDigest,
 		EvidenceActivationDigest: evidenceReceipt.ActivationDigest, EvidenceKeyID: evidenceReceipt.EvidenceKeyID,
 		CollectorAuthorityDigest: evidenceReceipt.CollectorAuthorityDigest, CollectorCADigest: evidenceReceipt.CollectorCADigest,
-		PrivateFileCount: len(bundle.files) + evidenceReceipt.PrivateFileCount,
-		ObjectKinds:      []string{"Secret", "Secret", "NetworkPolicy", "Job"}, MutationAllowed: false,
+		ManagementAuthority: document.Plan.Expected.ManagementAuthority,
+		PrivateFileCount:    len(bundle.files) + evidenceReceipt.PrivateFileCount,
+		ObjectKinds:         []string{"Secret", "Secret", "NetworkPolicy", "Job"}, MutationAllowed: false,
 	}
-	return VerifiedFullRunExecutionActivationPackage{raw: packageRaw, receipt: receipt, verified: true}, nil
+	return VerifiedFullRunExecutionActivationPackage{
+		raw: packageRaw, receipt: receipt, managementAuthority: document.Plan.Expected.ManagementAuthority, verified: true,
+	}, nil
 }
 
 func (packaged VerifiedFullRunExecutionActivationPackage) PrivateBytes() ([]byte, error) {
@@ -161,6 +166,7 @@ func verifyFullRunExecutionActivationPackage(packaged VerifiedFullRunExecutionAc
 	receipt := packaged.receipt
 	if !packaged.verified || receipt.Format != FullRunExecutionActivationPackageFormat || receipt.State != "VERIFIED" || receipt.MutationAllowed ||
 		len(packaged.raw) == 0 || digest.SHA256(packaged.raw) != receipt.PackageDigest || receipt.ActivationSecret == receipt.EvidenceAuthoritySecret ||
+		receipt.ManagementAuthority == "" || receipt.ManagementAuthority != packaged.managementAuthority ||
 		receipt.PrivateFileCount != len(fullRunExecutionBundleFiles)+len(observabilityEvidenceAuthorityProjectedFiles) ||
 		len(receipt.ObjectKinds) != 4 || receipt.ObjectKinds[0] != "Secret" || receipt.ObjectKinds[1] != "Secret" ||
 		receipt.ObjectKinds[2] != "NetworkPolicy" || receipt.ObjectKinds[3] != "Job" {

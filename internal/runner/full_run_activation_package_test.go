@@ -22,7 +22,7 @@ func TestBuildFullRunExecutionActivationPackageBindsBothAuthoritiesAndJob(t *tes
 	receipt, err := packaged.Receipt()
 	if err != nil || receipt.State != "VERIFIED" || receipt.MutationAllowed || receipt.PrivateFileCount != 30 ||
 		receipt.ActivationSecret != config.ActivationSecret || receipt.EvidenceAuthoritySecret != config.EvidenceAuthority.ActivationSecret ||
-		len(receipt.ObjectKinds) != 4 {
+		receipt.ManagementAuthority != "ok-mgmt" || len(receipt.ObjectKinds) != 4 {
 		t.Fatalf("unexpected full-run package receipt: %#v err=%v", receipt, err)
 	}
 	raw, err := packaged.PrivateBytes()
