@@ -58,8 +58,12 @@ func materializeFullRunExecutionBundle(config FullRunExecutionBundleMaterializat
 		return receipt, errors.New("full-run bundle destination must be absent")
 	}
 	handoffInfo, err := os.Lstat(config.HandoffDirectory)
-	if err != nil || !handoffInfo.IsDir() || handoffInfo.Mode()&os.ModeSymlink != 0 || handoffInfo.Mode().Perm()&0o077 != 0 {
+	if err != nil || !handoffInfo.IsDir() || handoffInfo.Mode()&os.ModeSymlink != 0 || handoffInfo.Mode().Perm()&0o007 != 0 {
 		return receipt, errors.New("full-run evidence handoff is not a private directory")
+	}
+	entries, err := os.ReadDir(config.HandoffDirectory)
+	if err != nil || len(entries) != 0 {
+		return receipt, errors.New("full-run evidence handoff must be empty before materialization")
 	}
 	indexRaw, err := readProjectedPostRuntimeBundleFile(config.SourceDirectory, fullRunExecutionBundleIndexName, 64*1024)
 	if err != nil {
