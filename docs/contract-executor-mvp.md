@@ -5,13 +5,13 @@ and in-cluster Job execution. The current boundary retains non-mutating
 Contract planning and now models the complete twelve-stage bounded execution
 path, including separately authorized mutations, a durable ledger, bounded
 observation and evaluation components and offline Kubernetes workload
-packaging. The stages are now composed into a typed in-process Stage 1-7 prefix
-and a separate local Stage 8-12 suffix. Only the post-runtime suffix currently
-has a bounded ephemeral Job activation path. That Job path is fully exercised
-offline and against fake APIs, but has not yet been run on the DEV management
-plane. The two orchestration segments are not yet joined into one CreateCluster
-activation. It is still an MVP rather than a general lifecycle runner or
-controller.
+packaging. The stages are now composed into a typed in-process Stage 1-7 prefix,
+a Stage 8-12 suffix and a receipt-bound, single-use full-run library seam. Only
+the post-runtime suffix currently has a bounded ephemeral Job activation path.
+That Job path is fully exercised offline and against fake APIs, but has not yet
+been run on the DEV management plane. The full-run library is not yet exposed
+as one local or Job-based CreateCluster activation. It is still an MVP rather
+than a general lifecycle runner or controller.
 
 ```text
 versioned contract + test schema
@@ -2773,6 +2773,29 @@ unconsumed credential. It deliberately exposes no retry, rollback or cleanup
 method. The later activation checkpoints provide its concrete CLI and Job
 adapters without changing this orchestrator's ownership.
 
+The full-run orchestrator joins those two segments without weakening the
+receipt boundary:
+
+```text
+Stage 1-7 completed receipt identities
+                  |
+                  v
+exact Plan + seven-digest continuation binding
+                  |
+             exact match only
+                  v
+concrete single-use PostRuntimeExecution (Stage 8-12)
+```
+
+The already-opened `PostRuntimeExecution` exposes the exact verified seven-
+receipt prefix it will consume. The full runner compares every stage ID, state
+and digest with the prefix it just completed before invoking Stage 8. A foreign
+Plan, changed/missing receipt, malformed suffix or cancelled context stops
+without running a later stage. The combined redaction-safe receipt contains
+only the twelve ordered stage identities. A second invocation is rejected.
+This is an in-process composition seam only: it adds no renderer, dynamic
+writer, retry, rollback, cleanup, CLI command or Job mutation surface.
+
 The accompanying receipt bridge can reload only the independently
 digest-bound, already durable public receipt selected by the current cursor.
 It writes canonical receipt bytes create-only as `0600` below an existing
@@ -2932,17 +2955,18 @@ activation implementation; it does not itself prove a live DEV Job run.
 
 The twelve-stage Go library and its durable replay semantics are complete and
 covered by unit, negative, local TLS integration and race tests. Stage 1-7 and
-Stage 8-12 now each have an exact, fail-closed in-process orchestration order.
-The Stage 8-12 suffix additionally has a local prepare/execute command, a
-bounded ephemeral Job, a deterministic private activation package, an exact
-installation plan and a single-use CLI launcher. Successful Stage-8 and
-Stage-9 crash boundaries can be reactivated through the same manifest,
-authority, package, Job and CLI chain without rewriting their durable receipts.
-This is not yet the OK-147 Definition of Done:
+Stage 8-12 each have an exact, fail-closed in-process orchestration order, and
+the single-use full-run seam binds them through the exact Plan and seven
+predecessor receipt digests. The Stage 8-12 suffix additionally has a local
+prepare/execute command, a bounded ephemeral Job, a deterministic private
+activation package, an exact installation plan and a single-use CLI launcher.
+Successful Stage-8 and Stage-9 crash boundaries can be reactivated through the
+same manifest, authority, package, Job and CLI chain without rewriting their
+durable receipts. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- the two orchestration segments are not yet joined into one typed
-  CreateCluster execution and activation surface;
+- the joined full-run library has no shared local/Job CreateCluster activation
+  surface yet;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
@@ -2957,13 +2981,13 @@ This is not yet the OK-147 Definition of Done:
   [ADR-030 amendment proposal](ok147-adr-030-amendment-proposal.md) are defined
   and remain to be reviewed with the live evidence.
 
-The remaining implementation work is the narrow receipt-bound seam between the
-two orchestrators and its shared local/Job activation surface; it is not a new
-controller or reconciliation mechanism. After that, live closure must publish
-the current image, construct fresh short-lived private inputs, run the exact
-bounded activation on `ok-mgmt`, preserve a stopped partial state without
-automatic retry, and separately repeat disposable-cluster and
-executor-termination conformance.
+The remaining implementation work is the shared local/Job activation surface
+for the now receipt-bound full-run library; it is not a new controller or
+reconciliation mechanism. After that, live closure must publish the current
+image, construct fresh short-lived private inputs, run the exact bounded
+activation on `ok-mgmt`, preserve a stopped partial state without automatic
+retry, and separately repeat disposable-cluster and executor-termination
+conformance.
 
 These remaining items may compose the verified packages, but must not add a
 second Contract-to-CAPI compiler, persistent aggregate-status controller,

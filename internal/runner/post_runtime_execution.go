@@ -124,6 +124,7 @@ type postRuntimeExecutionFactories struct {
 type PostRuntimeExecution struct {
 	config               PostRuntimeExecutionConfig
 	initial              StageResumeConfig
+	continuation         PostRuntimeContinuationBinding
 	runtime              VerifiedRuntimeBindingMaterial
 	credential           postRuntimeCredentialInvocation
 	recoveryBundle       *VerifiedTargetCredentialStageBundle
@@ -150,9 +151,17 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 		PlanPath: config.TargetCredential.PlanPath, PlanExpected: config.TargetCredential.PlanExpected,
 		Receipts: append([]StageReceiptSource(nil), config.TargetCredential.Receipts...),
 	}
-	decision, err := InspectStageResume(initial)
+	plan, cursor, prefix, err := loadStageResumeWithPrefix(initial)
+	if err != nil {
+		return nil, errors.New("verify post-runtime Stage-8 cursor")
+	}
+	decision, err := cursor.Decision()
 	if err != nil || decision.State != "NEXT" || decision.StageID != "target-credential" || len(initial.Receipts) != 7 {
 		return nil, errors.New("post-runtime execution requires the exact Stage-8 cursor")
+	}
+	continuation, err := newPostRuntimeContinuationBinding(plan.PlanDigest, prefix)
+	if err != nil {
+		return nil, errors.New("bind post-runtime continuation")
 	}
 	persistedStages := postRuntimeStageOrder[:4]
 	if config.TargetCredentialRecovery != nil {
@@ -223,10 +232,20 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 	config.AggregateEvidence.Runtime.RuntimeMaterialPath = config.RuntimeBinding.MaterialPath
 	config.AggregateEvidence.Runtime.RuntimeReceiptPath = config.RuntimeBinding.ReceiptPath
 	return &PostRuntimeExecution{
-		config: config, initial: initial, runtime: runtime, credential: credential,
+		config: config, initial: initial, continuation: continuation, runtime: runtime, credential: credential,
 		recoveryBundle: recoveryBundle, recovery: config.TargetCredentialRecovery, factories: factories,
 		registrationRecovery: registrationRecovery,
 	}, nil
+}
+
+// ContinuationBinding exposes only the exact seven redaction-safe predecessor
+// identities verified while opening this single-use execution.
+func (executor *PostRuntimeExecution) ContinuationBinding() (PostRuntimeContinuationBinding, error) {
+	if executor == nil || executor.continuation.Format != PostRuntimeContinuationBindingFormat ||
+		executor.continuation.State != postRuntimeContinuationBindingState || len(executor.continuation.Predecessors) != len(preRuntimeStageOrder) {
+		return PostRuntimeContinuationBinding{}, errors.New("post-runtime continuation is unavailable")
+	}
+	return executor.continuation.clone(), nil
 }
 
 // Run executes exactly one Stage 8-12 suffix. It persists only canonical
