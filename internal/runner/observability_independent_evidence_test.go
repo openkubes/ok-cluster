@@ -192,7 +192,7 @@ func newSignedObservabilityEvidenceMaterialWithPayload(t *testing.T, mutate func
 	if err != nil {
 		t.Fatal(err)
 	}
-	payloadRaw, err := json.Marshal(payload)
+	payloadRaw, err := canonicalObservabilityIndependentEvidencePayload(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
