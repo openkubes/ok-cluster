@@ -48,12 +48,18 @@ type PostRuntimeContinuation interface {
 	Run(context.Context) (PostRuntimeExecutionReceipt, error)
 }
 
+// PreRuntimeContinuation is the redaction-safe prefix seam. Both the typed
+// orchestration and the concrete Stage 1-7 execution adapter can satisfy it.
+type PreRuntimeContinuation interface {
+	Run(context.Context) (PreRuntimeOrchestrationReceipt, error)
+}
+
 // FullRunOrchestration composes the exact Stage 1-7 prefix with one
 // receipt-bound Stage 8-12 continuation. BindPostRuntime may open private
 // runtime material but must not execute a stage; the returned binding is
 // independently checked before Run.
 type FullRunOrchestration struct {
-	PreRuntime      PreRuntimeOrchestration
+	PreRuntime      PreRuntimeContinuation
 	BindPostRuntime func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error)
 
 	mu   sync.Mutex
@@ -78,7 +84,7 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 	}
 	orchestration.used = true
 	orchestration.mu.Unlock()
-	if orchestration.BindPostRuntime == nil {
+	if orchestration.PreRuntime == nil || orchestration.BindPostRuntime == nil {
 		return stopFullRunOrchestration(receipt, fullRunOrchestrationInitialStoppedStage)
 	}
 	if err := ctx.Err(); err != nil {
