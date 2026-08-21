@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
 )
@@ -126,7 +128,7 @@ func (source *SignedObservabilityEvidenceFileSource) load(identity Observability
 	if err := jsonstrict.Decode(raw, &envelope); err != nil {
 		return ObservabilityIndependentEvidencePayload{}, errors.New("observability independent evidence envelope is invalid")
 	}
-	payloadRaw, err := json.Marshal(envelope.Payload)
+	payloadRaw, err := canonicalObservabilityIndependentEvidencePayload(envelope.Payload)
 	if err != nil || envelope.EvidenceDigest != digest.SHA256(payloadRaw) {
 		return ObservabilityIndependentEvidencePayload{}, errors.New("observability independent evidence digest is invalid")
 	}
@@ -149,6 +151,20 @@ func (source *SignedObservabilityEvidenceFileSource) load(identity Observability
 		return ObservabilityIndependentEvidencePayload{}, errors.New("observability independent evidence payload is invalid")
 	}
 	return payload, nil
+}
+
+func canonicalObservabilityIndependentEvidencePayload(payload ObservabilityIndependentEvidencePayload) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return contract.JCS(value)
 }
 
 func validateObservabilityEvidenceFile(path string, maximum int64, private bool) error {

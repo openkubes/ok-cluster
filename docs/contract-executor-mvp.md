@@ -2978,6 +2978,19 @@ a capability result; malformed or unauthoritative evidence is an error.
 Producing that signed delivery/autonomy evidence through bounded live probes
 and wiring the source into the full-run factory remain separate follow-ups.
 
+A separate single-use producer now closes the cryptographic issuance half of
+that boundary. It accepts only one typed collector result, the exact standard
+profile and an already correlated observation identity; then it canonicalizes,
+signs and writes one private envelope with `O_EXCL`, `0600`, `fsync` and byte
+pullback verification. Its private Ed25519 key must itself be a private regular
+file, while the runner-side consumer receives only the corresponding pinned
+public key. Pre-existing output, an invalid collector result or any write
+uncertainty consumes the producer and exposes no overwrite or retry path. This
+issuer is intended to run under a separate evidence authority; it is not wired
+into the lifecycle runner and cannot repair an observed platform. Concrete
+bounded collection of receiver delivery and external-dependency autonomy is
+still required before the issuer can produce live evidence.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
