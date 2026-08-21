@@ -3078,7 +3078,9 @@ ok cluster stage evidence observability produce \
   --output /private/observability-evidence.json \
   --private-key /private/observability-evidence.key \
   --identity-file /private/observability-evidence-identity.json \
-  --expected-identity-digest sha256:<exact derived identity> \
+  --identity-receipt-file /private/observability-evidence-identity-receipt.json \
+  --expected-manifest-digest sha256:<verified manifest identity> \
+  --identity-poll-interval 1s --identity-wait-timeout 30m \
   --collector-endpoint https://<authority> \
   --collector-token-file /private/collector-token \
   --collector-ca-file /private/collector-ca.crt \
@@ -3086,7 +3088,11 @@ ok cluster stage evidence observability produce \
   --valid-for 10m --timeout 2m --produce
 ```
 
-The command verifies the private canonical identity before opening the collector,
+The command may therefore start before the full runner. It waits boundedly for
+the redaction-safe receipt, obtains the dynamic identity digest from that
+receipt, correlates receipt and private identity back to the expected manifest,
+and only then opens the collector. An existing invalid receipt is terminal and
+is never polled past or retried. The command verifies the private canonical identity before opening the collector,
 uses the fixed HTTPS request path and standard profile, performs one bounded
 collection and delegates one create-only signed write to the existing
 single-use producer. It emits only the redaction-safe production receipt and

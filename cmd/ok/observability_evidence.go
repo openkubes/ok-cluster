@@ -15,14 +15,20 @@ const observabilityEvidenceProductionOverhead = 10 * time.Second
 
 type observabilityEvidenceProductionConfig struct {
 	OutputPath, PrivateKeyPath                     string
-	IdentityPath, ExpectedIdentityDigest           string
+	IdentityPath, IdentityReceiptPath              string
+	ExpectedManifestDigest                         string
 	CollectorEndpoint, CollectorToken, CollectorCA string
 	CollectorCADigest                              string
+	IdentityPollInterval, IdentityWaitTimeout      time.Duration
 	ValidFor, Timeout                              time.Duration
 }
 
 var produceIndependentObservabilityEvidence = func(ctx context.Context, config observabilityEvidenceProductionConfig) (runner.ObservabilityIndependentEvidenceReceipt, error) {
-	identity, err := runner.LoadObservabilityIndependentEvidenceIdentity(config.IdentityPath, config.ExpectedIdentityDigest)
+	identity, err := runner.WaitForObservabilityIndependentEvidenceIdentity(ctx, runner.ObservabilityIndependentEvidenceIdentityWaitConfig{
+		IdentityPath: config.IdentityPath, ReceiptPath: config.IdentityReceiptPath,
+		ExpectedManifestDigest: config.ExpectedManifestDigest, PollInterval: config.IdentityPollInterval,
+		Timeout: config.IdentityWaitTimeout, Wait: runner.WaitWithTimer,
+	})
 	if err != nil {
 		return runner.ObservabilityIndependentEvidenceReceipt{}, errors.New("load runtime-bound observability evidence identity")
 	}
@@ -87,7 +93,10 @@ func runClusterStageEvidenceObservabilityProduce(ctx context.Context, arguments 
 	outputPath := flags.String("output", "", "absent private 0600 evidence destination")
 	privateKeyPath := flags.String("private-key", "", "private Ed25519 evidence-authority key")
 	identityPath := flags.String("identity-file", "", "private runtime-bound evidence identity")
-	expectedIdentityDigest := flags.String("expected-identity-digest", "", "exact private evidence identity digest")
+	identityReceiptPath := flags.String("identity-receipt-file", "", "redaction-safe runtime-bound evidence identity receipt")
+	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact full-run manifest digest")
+	identityPollInterval := flags.Duration("identity-poll-interval", 0, "private identity receipt polling interval")
+	identityWaitTimeout := flags.Duration("identity-wait-timeout", 0, "bounded private identity receipt wait")
 	collectorEndpoint := flags.String("collector-endpoint", "", "exact HTTPS independent-evidence authority endpoint")
 	collectorToken := flags.String("collector-token-file", "", "bounded evidence-authority bearer token file")
 	collectorCA := flags.String("collector-ca-file", "", "bounded evidence-authority CA file")
@@ -104,7 +113,9 @@ func runClusterStageEvidenceObservabilityProduce(ctx context.Context, arguments 
 	if !*produce {
 		return errors.New("independent Observability evidence production requires explicit --produce")
 	}
-	if *outputPath == "" || *privateKeyPath == "" || *identityPath == "" || !sha256DigestPattern.MatchString(*expectedIdentityDigest) ||
+	if *outputPath == "" || *privateKeyPath == "" || *identityPath == "" || *identityReceiptPath == "" ||
+		!sha256DigestPattern.MatchString(*expectedManifestDigest) || *identityPollInterval < time.Millisecond || *identityPollInterval > 30*time.Second ||
+		*identityWaitTimeout < time.Second || *identityWaitTimeout > fullRunExecutionTimeout ||
 		*collectorEndpoint == "" || *collectorToken == "" || *collectorCA == "" ||
 		!sha256DigestPattern.MatchString(*collectorCADigest) || *validFor < time.Minute || *validFor > 30*time.Minute ||
 		*timeout < time.Second || *timeout > 30*time.Minute {
@@ -112,11 +123,12 @@ func runClusterStageEvidenceObservabilityProduce(ctx context.Context, arguments 
 	}
 	config := observabilityEvidenceProductionConfig{
 		OutputPath: *outputPath, PrivateKeyPath: *privateKeyPath,
-		IdentityPath: *identityPath, ExpectedIdentityDigest: *expectedIdentityDigest,
+		IdentityPath: *identityPath, IdentityReceiptPath: *identityReceiptPath, ExpectedManifestDigest: *expectedManifestDigest,
+		IdentityPollInterval: *identityPollInterval, IdentityWaitTimeout: *identityWaitTimeout,
 		CollectorEndpoint: *collectorEndpoint, CollectorToken: *collectorToken, CollectorCA: *collectorCA,
 		CollectorCADigest: *collectorCADigest, ValidFor: *validFor, Timeout: *timeout,
 	}
-	bounded, cancel := context.WithTimeout(ctx, *timeout+observabilityEvidenceProductionOverhead)
+	bounded, cancel := context.WithTimeout(ctx, *identityWaitTimeout+*timeout+observabilityEvidenceProductionOverhead)
 	defer cancel()
 	receipt, produceErr := produceIndependentObservabilityEvidence(bounded, config)
 	if receipt.Format != "" {

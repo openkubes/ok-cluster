@@ -1,10 +1,12 @@
 package runner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 )
@@ -78,6 +80,85 @@ func TestLoadObservabilityIndependentEvidenceIdentityIsPrivateCanonicalAndDigest
 	}
 	if _, err := LoadObservabilityIndependentEvidenceIdentity(link, digest.SHA256(raw)); err == nil {
 		t.Fatal("symlink identity was accepted")
+	}
+}
+
+func TestObservabilityIndependentEvidenceIdentityReceiptBindsDynamicIdentity(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(root, "identity.json")
+	receiptPath := filepath.Join(root, "identity-receipt.json")
+	material := evidenceIdentityMaterial()
+	receipt, err := persistObservabilityIndependentEvidenceIdentity(material, identityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptRaw, err := canonicalObservabilityIndependentEvidenceIdentityReceipt(receipt)
+	if err != nil || os.WriteFile(receiptPath, receiptRaw, 0o600) != nil {
+		t.Fatal("write identity receipt fixture")
+	}
+	identity, err := LoadObservabilityIndependentEvidenceIdentityFromReceipt(identityPath, receiptPath, material.ManifestDigest)
+	if err != nil || identity.RunID != material.RunID || identity.TargetClusterUID != material.TargetClusterUID {
+		t.Fatalf("receipt did not bind private identity: identity=%#v err=%v", identity, err)
+	}
+	if _, err := LoadObservabilityIndependentEvidenceIdentityFromReceipt(identityPath, receiptPath, evidenceIdentitySHA("9")); err == nil {
+		t.Fatal("foreign manifest identity was accepted")
+	}
+}
+
+func TestWaitForObservabilityIndependentEvidenceIdentityIsBoundedAndFailClosed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(root, "identity.json")
+	receiptPath := filepath.Join(root, "identity-receipt.json")
+	material := evidenceIdentityMaterial()
+	waits := 0
+	waiter := func(_ context.Context, duration time.Duration) error {
+		waits++
+		if duration != time.Millisecond || waits != 1 {
+			t.Fatalf("unexpected identity wait: duration=%s waits=%d", duration, waits)
+		}
+		receipt, err := persistObservabilityIndependentEvidenceIdentity(material, identityPath)
+		if err != nil {
+			return err
+		}
+		raw, err := canonicalObservabilityIndependentEvidenceIdentityReceipt(receipt)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(receiptPath, raw, 0o600)
+	}
+	identity, err := WaitForObservabilityIndependentEvidenceIdentity(context.Background(), ObservabilityIndependentEvidenceIdentityWaitConfig{
+		IdentityPath: identityPath, ReceiptPath: receiptPath, ExpectedManifestDigest: material.ManifestDigest,
+		PollInterval: time.Millisecond, Timeout: time.Second, Wait: waiter,
+	})
+	if err != nil || waits != 1 || identity.FixtureDigest != material.FixtureDigest {
+		t.Fatalf("bounded identity wait failed: identity=%#v waits=%d err=%v", identity, waits, err)
+	}
+	if err := os.WriteFile(receiptPath, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WaitForObservabilityIndependentEvidenceIdentity(context.Background(), ObservabilityIndependentEvidenceIdentityWaitConfig{
+		IdentityPath: identityPath, ReceiptPath: receiptPath, ExpectedManifestDigest: material.ManifestDigest,
+		PollInterval: time.Millisecond, Timeout: time.Second, Wait: func(context.Context, time.Duration) error {
+			t.Fatal("invalid existing receipt was retried")
+			return nil
+		},
+	}); err == nil {
+		t.Fatal("invalid existing receipt was accepted")
+	}
+}
+
+func evidenceIdentityMaterial() ObservabilityIndependentEvidenceIdentityMaterial {
+	return ObservabilityIndependentEvidenceIdentityMaterial{
+		Format: ObservabilityIndependentEvidenceIdentityFormat, State: "RUNTIME_BOUND",
+		ManifestDigest: evidenceIdentitySHA("1"), RuntimeBindingDigest: evidenceIdentitySHA("2"),
+		RunID: "ok147-0123456789abcdef01234567", TargetClusterUID: "cluster-uid-runtime-a",
+		FixtureDigest: evidenceIdentitySHA("3"), ProfileDigest: evidenceIdentitySHA("4"),
 	}
 }
 
