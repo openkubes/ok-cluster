@@ -164,6 +164,10 @@ func newIndependentCollectorServerMaterial(t *testing.T) independentCollectorSer
 	if err != nil {
 		t.Fatal(err)
 	}
+	receipt, err := server.Receipt()
+	if err != nil || receipt.State != "VERIFIED" || !receipt.SeparateAuthorities || receipt.MutationAllowed || receipt.ProfileDigest != profile.Digest() {
+		t.Fatalf("collector receipt differs: %#v err=%v", receipt, err)
+	}
 	run, _ := observabilityCapabilityRun(observabilityProbeRequest(), "ok-observability")
 	fixture, _ := BuildObservabilitySyntheticFixture(run, capabilityFixtureConfig())
 	identity := ObservabilityCapabilityObservationIdentity{

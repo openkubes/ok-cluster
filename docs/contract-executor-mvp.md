@@ -3073,6 +3073,16 @@ runtime service/endpoint topology; it does not claim outage testing or inspect
 an arbitrary application dependency graph. The observer has no mutation,
 discovery, watch, unrestricted list, redirect or retry surface.
 
+Both sources can now be composed into one TLS 1.3 process with
+`ok evidence observability serve`. Startup binds separate private webhook and
+query tokens, a private create-only state directory, one pinned workload API
+CA/token/Cluster-UID tuple, the standard profile, a maximum record age and a
+literal listen address. It emits a redaction-safe verified receipt before
+serving and performs no Kubernetes request while opening. The command exposes
+no receiver-name, profile, namespace, Service, EndpointSlice selector or
+arbitrary URL override. A Kubernetes runtime package and fresh image remain
+separate prerequisites before this process may be deployed.
+
 The separately operated issuer no longer accepts the run ID, target Cluster
 UID, fixture digest or profile digest as manually repeated command arguments.
 After Stage 6, a local-only materializer derives those values from the exact
