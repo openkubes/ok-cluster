@@ -17,10 +17,16 @@ type fakeConcretePreRuntimeExecution struct {
 	prefixCalls int
 	target      string
 	targetErr   error
+	workload    WorkloadAuthorityFileResolverConfig
+	workloadErr error
 }
 
 func (execution *fakeConcretePreRuntimeExecution) RuntimeTargetIdentity() (string, error) {
 	return execution.target, execution.targetErr
+}
+
+func (execution *fakeConcretePreRuntimeExecution) RuntimeWorkloadAuthority() (WorkloadAuthorityFileResolverConfig, error) {
+	return execution.workload, execution.workloadErr
 }
 
 func (execution *fakeConcretePreRuntimeExecution) Run(context.Context) (PreRuntimeExecutionReceipt, error) {
@@ -50,6 +56,11 @@ func TestFullRunExecutionComposesConcreteAdaptersWithExactPrivatePrefix(t *testi
 			if bound.TargetRegistration.Expected.TargetIdentityDigest == "" ||
 				bound.PlatformApplications.Expected.TargetIdentityDigest != bound.TargetRegistration.Expected.TargetIdentityDigest {
 				t.Fatalf("post-runtime suffix did not receive one lifecycle-derived target identity: %#v", bound)
+			}
+			if bound.TargetCredentialRun.Workload != preRuntime.workload ||
+				bound.AggregateEvidence.Runtime.WorkloadTokenFile != preRuntime.workload.TokenFile ||
+				bound.AggregateEvidence.Runtime.WorkloadCAFile != preRuntime.workload.CAFile {
+				t.Fatalf("post-runtime suffix did not receive one lifecycle-derived workload authority: %#v", bound)
 			}
 			return postRuntime, nil
 		},
@@ -178,6 +189,28 @@ func TestFullRunExecutionDoesNotOpenSuffixWithoutLifecycleTargetIdentity(t *test
 	}
 }
 
+func TestFullRunExecutionDoesNotOpenSuffixWithoutLifecycleWorkloadAuthority(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	preRuntime.workload = WorkloadAuthorityFileResolverConfig{}
+	preRuntime.workloadErr = errors.New("missing lifecycle workload authority")
+	postCalls := 0
+	execution, err := openFullRunExecution(testFullRunExecutionConfig(), fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		len(receipt.Checkpoints) != 7 || postCalls != 0 {
+		t.Fatalf("missing workload authority opened suffix: %#v post=%d err=%v", receipt, postCalls, err)
+	}
+}
+
 func TestOpenFullRunExecutionRejectsHistoricalSuffixState(t *testing.T) {
 	for name, mutate := range map[string]func(*FullRunExecutionConfig){
 		"prebound receipts": func(config *FullRunExecutionConfig) {
@@ -244,7 +277,13 @@ func successfulFakeConcretePreRuntimeExecution(t *testing.T) *fakeConcretePreRun
 	for index, checkpoint := range receipt.Checkpoints {
 		prefix[index] = StageReceiptSource{Path: "/private/" + checkpoint.StageID + ".json", Digest: checkpoint.StageReceiptDigest}
 	}
-	return &fakeConcretePreRuntimeExecution{receipt: receipt, prefix: prefix, target: runnerStageSHA("7")}
+	return &fakeConcretePreRuntimeExecution{
+		receipt: receipt, prefix: prefix, target: runnerStageSHA("7"),
+		workload: WorkloadAuthorityFileResolverConfig{
+			Path: "/private/workload-authority.json", ExpectedBindingDigest: runnerStageSHA("8"),
+			TokenFile: "/private/workload-token", CAFile: "/private/workload-ca.crt",
+		},
+	}
 }
 
 func testFullRunExecutionConfig() FullRunExecutionConfig {

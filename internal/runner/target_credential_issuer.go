@@ -32,12 +32,13 @@ type TargetCredentialIssuerConfig struct {
 }
 
 type targetCredentialIssuerClientConfig struct {
-	Endpoint       string
-	BearerToken    string
-	CABundle       []byte
-	TargetIdentity string
-	Client         *http.Client
-	Clock          func() time.Time
+	Endpoint          string
+	BearerToken       string
+	ClientCertificate bool
+	CABundle          []byte
+	TargetIdentity    string
+	Client            *http.Client
+	Clock             func() time.Time
 }
 
 type TargetCredentialIssueReceipt struct {
@@ -79,17 +80,18 @@ type targetCredentialPrivateBinding struct {
 }
 
 type KubernetesTargetCredentialIssuer struct {
-	mu             sync.Mutex
-	used           bool
-	endpoint       *url.URL
-	authorityToken string
-	caBundle       []byte
-	targetIdentity string
-	client         *http.Client
-	clock          func() time.Time
-	policy         targetCredentialPolicyDocument
-	bundleReceipt  TargetCredentialStageBundleReceipt
-	request        []byte
+	mu                sync.Mutex
+	used              bool
+	endpoint          *url.URL
+	authorityToken    string
+	clientCertificate bool
+	caBundle          []byte
+	targetIdentity    string
+	client            *http.Client
+	clock             func() time.Time
+	policy            targetCredentialPolicyDocument
+	bundleReceipt     TargetCredentialStageBundleReceipt
+	request           []byte
 }
 
 type targetCredentialTokenRequest struct {
@@ -135,16 +137,16 @@ func OpenTargetCredentialIssuer(bundle VerifiedTargetCredentialStageBundle, conf
 	if binding.IntentRevision != bundle.plan.IntentRevision || digest.SHA256([]byte(binding.TargetClusterUID)) != bundle.receipt.TargetIdentityDigest {
 		return nil, errors.New("target-credential workload authority differs from verified target")
 	}
-	token, ca, client, err := openBoundedKubernetesMaterial(authority.TokenFile, authority.CAFile)
+	transport, err := openBoundedKubernetesAuthorityTransport(authority)
 	if err != nil {
 		return nil, errors.New("open bounded target-credential authority")
 	}
-	if digest.SHA256(ca) != authority.CABundleDigest {
+	if digest.SHA256(transport.caData) != authority.CABundleDigest {
 		return nil, errors.New("target-credential CA differs from runtime binding")
 	}
 	return newKubernetesTargetCredentialIssuer(targetCredentialIssuerClientConfig{
-		Endpoint: authority.Endpoint, BearerToken: token, CABundle: ca,
-		TargetIdentity: bundle.receipt.TargetIdentityDigest, Client: client, Clock: config.Clock,
+		Endpoint: authority.Endpoint, BearerToken: transport.bearerToken, ClientCertificate: transport.clientCertificate,
+		CABundle: transport.caData, TargetIdentity: bundle.receipt.TargetIdentityDigest, Client: transport.client, Clock: config.Clock,
 	}, bundle)
 }
 
@@ -160,7 +162,8 @@ func newKubernetesTargetCredentialIssuer(config targetCredentialIssuerClientConf
 		return nil, errors.New("target-credential issuer endpoint must use HTTPS")
 	}
 	endpoint.Path, endpoint.RawPath = "", ""
-	if config.BearerToken == "" || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") || len(config.CABundle) == 0 || config.TargetIdentity != bundle.receipt.TargetIdentityDigest || config.Client == nil || config.Clock == nil {
+	tokenMode := config.BearerToken != ""
+	if tokenMode == config.ClientCertificate || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") || len(config.CABundle) == 0 || config.TargetIdentity != bundle.receipt.TargetIdentityDigest || config.Client == nil || config.Clock == nil {
 		return nil, errors.New("target-credential issuer authority is invalid")
 	}
 	request := targetCredentialTokenRequest{
@@ -177,7 +180,8 @@ func newKubernetesTargetCredentialIssuer(config targetCredentialIssuerClientConf
 		client.Timeout = 15 * time.Second
 	}
 	return &KubernetesTargetCredentialIssuer{
-		endpoint: endpoint, authorityToken: config.BearerToken, caBundle: append([]byte(nil), config.CABundle...),
+		endpoint: endpoint, authorityToken: config.BearerToken, clientCertificate: config.ClientCertificate,
+		caBundle:       append([]byte(nil), config.CABundle...),
 		targetIdentity: config.TargetIdentity, client: &client, clock: config.Clock,
 		policy: bundle.policy, bundleReceipt: bundle.receipt, request: requestRaw,
 	}, nil
@@ -207,7 +211,9 @@ func (issuer *KubernetesTargetCredentialIssuer) Issue(ctx context.Context) (Veri
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+issuer.authorityToken)
+	if !issuer.clientCertificate {
+		request.Header.Set("Authorization", "Bearer "+issuer.authorityToken)
+	}
 	response, err := issuer.client.Do(request)
 	if err != nil {
 		return VerifiedTargetCredentialMaterial{}, errors.New("target-credential request failed")

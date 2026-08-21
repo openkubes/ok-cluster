@@ -2833,6 +2833,18 @@ exposes the defensive private prefix required by the full-run seam. This adds
 no renderer, policy authority, retry, rollback, cleanup, CLI command or Job
 mutation surface.
 
+The same adapter now defers its workload-authority binding until the exact
+four-receipt prefix through Enablement is durable. A caller may bind only three
+future private destinations while opening the execution; it cannot preselect
+the workload-authority binding digest. One injected resolver must return those
+exact destinations plus the lifecycle-derived binding digest before Stage 5
+opens.
+That one result is reused unchanged by Network observation, runtime binding,
+target access and the Stage-8 credential suffix. A missing resolver result,
+changed path or prebound identity stops before Network observation and exposes
+no completed workload handoff. The resolver seam performs no implicit retry or
+fallback and is not itself an authority materializer.
+
 The private full-run execution manifest closes the fresh-run input contract
 without inventing runtime truth. It binds one empty Stage-1 Plan cursor, the
 verified Contract projection, all R/E/P profiles and renderer artifacts, one
@@ -2844,15 +2856,27 @@ Loading is offline and grants no mutation.
 The manifest deliberately cannot carry a selected target identity. After
 Stage 2 succeeds, the concrete execution adapter reloads the exact lifecycle
 receipt and injects its CAPI-UID digest into the Stage 8-12 registration and
-Application expectations. Workload endpoint, CA and token material are also
-future lifecycle-derived files, Stage-8 authorization remains predecessor-
-bound, and capability evidence is produced in memory at observation time.
+Application expectations. Workload endpoint, CA and the client-certificate
+kubeconfig are also future lifecycle-derived files, Stage-8 authorization
+remains predecessor-bound, and capability evidence is produced in memory at
+observation time.
 Pre-existing handoff or receipt files, mismatched authorities or ledgers,
 foreign profile/artifact digests, duplicate destinations and a non-empty
 resume cursor stop verification. The redaction-safe manifest receipt contains
-only semantic identities and execution modes. This checkpoint defines the
-private contract; the following activation checkpoint converts the verified
-document into the existing concrete adapters.
+only semantic identities and execution modes.
+
+The local manifest-to-executor activation now converts that verified document
+into the existing concrete Stage 1-12 adapters. It binds the lifecycle-owned
+client-certificate kubeconfig materializer to the exact three future private
+destinations, opens the predecessor-bound authorization resolver and maps all
+profiles, artifacts, authorities, polling limits and receipt destinations
+without an API request. The process-local Platform capability factory receives
+only namespace, timeout, R, P, fixture, contract and executable identities; it
+receives no credential, endpoint, target UID, command or arbitrary payload.
+Its lazy result executes at most once after the Application gate opens and is
+then reused unchanged by aggregate evaluation. A failed capability is cached
+as failure and is never retried by this seam. The direct
+`OpenFullRunExecutionManifest` entry point remains inert until `Run`.
 
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
@@ -3050,9 +3074,17 @@ durable receipts. This is not yet the OK-147 Definition of Done:
   [ADR-030 amendment proposal](ok147-adr-030-amendment-proposal.md) are defined
   and remain to be reviewed with the live evidence.
 
-The remaining implementation work is the manifest-to-executor activation and
-the shared local/Job activation surface for this concrete composition; it is
-not a new controller or reconciliation mechanism. After that, live closure must
+The concrete lifecycle-authority materializer now reads exactly the runtime
+CAPI Cluster and its CAPI-owned `<name>-kubeconfig` Secret after Stage 4. It
+verifies the lifecycle UID correlation, endpoint, CA and client-certificate
+kubeconfig, then writes the kubeconfig, CA and semantic binding create-only as
+private `0600` files with the binding last. It has no list, watch, discovery,
+Kubernetes mutation, retry or cleanup surface. The verified full-run manifest
+now opens that materializer, all concrete Stage 1-12 adapters and the shared
+single-execution Platform capability session without contacting a cluster.
+The remaining implementation work is the shared local/Job activation surface
+for this concrete composition; this is not a new controller or reconciliation
+mechanism. After that, live closure must
 publish the current image, construct fresh short-lived private inputs, run the
 exact bounded activation on `ok-mgmt`, preserve a stopped partial state without
 automatic retry, and separately repeat disposable-cluster and

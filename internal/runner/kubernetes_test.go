@@ -7,7 +7,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -99,6 +101,47 @@ func TestOpenKubernetesSubmissionClientBindsOneAuthority(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenKubernetesSubmissionClientAcceptsStrictClientCertificateKubeconfig(t *testing.T) {
+	root := t.TempDir()
+	ca, certificate, key := testClientCredential(t)
+	caPath := filepath.Join(root, "workload-ca.crt")
+	kubeconfigPath := filepath.Join(root, "workload.kubeconfig")
+	endpoint := "https://192.0.2.90:6443"
+	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kubeconfigPath, testClientKubeconfig(endpoint, ca, certificate, key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := KubernetesAuthorityConfig{
+		Endpoint: endpoint, AuthorityIdentity: "cluster-uid-disposable-ok147",
+		KubeconfigFile: kubeconfigPath, CAFile: caPath,
+	}
+	if _, identity, err := openKubernetesSubmissionClient(config); err != nil || !stageReceiptPrefixDigestPattern.MatchString(identity) {
+		t.Fatalf("strict client-certificate kubeconfig was not accepted: identity=%q err=%v", identity, err)
+	}
+
+	t.Run("token and kubeconfig fail closed", func(t *testing.T) {
+		candidate := config
+		candidate.TokenFile = kubeconfigPath
+		if _, err := OpenKubernetesSubmissionClient(candidate); err == nil || strings.Contains(err.Error(), root) {
+			t.Fatalf("ambiguous workload credential accepted or disclosed path: %v", err)
+		}
+	})
+
+	t.Run("different separately bound CA fails closed", func(t *testing.T) {
+		foreignCA := filepath.Join(root, "foreign-ca.crt")
+		if err := os.WriteFile(foreignCA, testCA(t), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		candidate := config
+		candidate.CAFile = foreignCA
+		if _, err := OpenKubernetesSubmissionClient(candidate); err == nil || strings.Contains(err.Error(), root) {
+			t.Fatalf("foreign workload CA accepted or disclosed path: %v", err)
+		}
+	})
 }
 
 func TestOpenKubernetesCAPILifecycleObserverBindsManagementAuthority(t *testing.T) {
@@ -245,4 +288,64 @@ func testCA(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: raw})
+}
+
+func testClientCredential(t *testing.T) ([]byte, []byte, []byte) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(101), Subject: pkix.Name{CommonName: "ok147-workload-test-ca"},
+		NotBefore: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC),
+		IsCA: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(102), Subject: pkix.Name{CommonName: "ok147-workload-client"},
+		NotBefore: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caTemplate, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(clientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+}
+
+func testClientKubeconfig(endpoint string, ca, certificate, key []byte) []byte {
+	return []byte(fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: workload
+  cluster:
+    server: %s
+    certificate-authority-data: %s
+contexts:
+- name: workload
+  context:
+    cluster: workload
+    user: workload
+current-context: workload
+preferences: {}
+users:
+- name: workload
+  user:
+    client-certificate-data: %s
+    client-key-data: %s
+`, endpoint, base64.StdEncoding.EncodeToString(ca), base64.StdEncoding.EncodeToString(certificate), base64.StdEncoding.EncodeToString(key)))
 }

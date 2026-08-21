@@ -34,13 +34,14 @@ type WorkloadAuthorityBinding struct {
 	CABundleDigest       string `json:"caBundleDigest"`
 }
 
-// WorkloadAuthorityFileResolverConfig binds the semantic record to separately
-// mounted short-lived credential material. Paths are execution inputs and are
-// deliberately excluded from the binding digest.
+// WorkloadAuthorityFileResolverConfig binds the semantic record to exactly one
+// separately mounted bearer token or client-certificate kubeconfig. Paths are
+// execution inputs and are deliberately excluded from the binding digest.
 type WorkloadAuthorityFileResolverConfig struct {
 	Path                  string
 	ExpectedBindingDigest string
 	TokenFile             string
+	KubeconfigFile        string
 	CAFile                string
 }
 
@@ -53,7 +54,7 @@ type WorkloadAuthorityFileResolver struct {
 // OpenWorkloadAuthorityFileResolver validates only the static configuration;
 // it performs no file read and no API request.
 func OpenWorkloadAuthorityFileResolver(config WorkloadAuthorityFileResolverConfig) (*WorkloadAuthorityFileResolver, error) {
-	if config.Path == "" || config.TokenFile == "" || config.CAFile == "" || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
+	if config.Path == "" || config.CAFile == "" || !validWorkloadTransportCredential(config) || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
 		return nil, errors.New("workload authority file resolver binding is invalid")
 	}
 	return &WorkloadAuthorityFileResolver{config: config}, nil
@@ -80,9 +81,9 @@ func (resolver *WorkloadAuthorityFileResolver) ResolveWorkloadAuthority(ctx cont
 }
 
 // loadWorkloadAuthorityFiles reads one strict private binding and its CA. It
-// does not read the bearer token or contact either API authority.
+// does not read the transport credential or contact either API authority.
 func loadWorkloadAuthorityFiles(config WorkloadAuthorityFileResolverConfig) (WorkloadAuthorityBinding, KubernetesAuthorityConfig, error) {
-	if config.Path == "" || config.TokenFile == "" || config.CAFile == "" || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
+	if config.Path == "" || config.CAFile == "" || !validWorkloadTransportCredential(config) || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
 		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("workload authority file resolver binding is invalid")
 	}
 	binding, err := loadWorkloadAuthorityBinding(config.Path, config.ExpectedBindingDigest)
@@ -98,8 +99,13 @@ func loadWorkloadAuthorityFiles(config WorkloadAuthorityFileResolverConfig) (Wor
 	}
 	return binding, KubernetesAuthorityConfig{
 		Endpoint: binding.Endpoint, AuthorityIdentity: binding.TargetClusterUID,
-		TokenFile: config.TokenFile, CAFile: config.CAFile, CABundleDigest: binding.CABundleDigest,
+		TokenFile: config.TokenFile, KubeconfigFile: config.KubeconfigFile,
+		CAFile: config.CAFile, CABundleDigest: binding.CABundleDigest,
 	}, nil
+}
+
+func validWorkloadTransportCredential(config WorkloadAuthorityFileResolverConfig) bool {
+	return (config.TokenFile != "") != (config.KubeconfigFile != "")
 }
 
 // loadWorkloadAuthorityBinding verifies only the strict private semantic
@@ -129,24 +135,28 @@ func loadWorkloadAuthorityBinding(path, expectedDigest string) (WorkloadAuthorit
 // WorkloadAuthorityBindingDigest identifies the canonical, secret-free
 // runtime correlation record.
 func WorkloadAuthorityBindingDigest(binding WorkloadAuthorityBinding) (string, error) {
-	if err := validateWorkloadAuthorityBinding(binding); err != nil {
+	canonical, err := canonicalWorkloadAuthorityBinding(binding)
+	if err != nil {
 		return "", err
+	}
+	return digest.SHA256(canonical), nil
+}
+
+func canonicalWorkloadAuthorityBinding(binding WorkloadAuthorityBinding) ([]byte, error) {
+	if err := validateWorkloadAuthorityBinding(binding); err != nil {
+		return nil, err
 	}
 	raw, err := json.Marshal(binding)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return "", err
+		return nil, err
 	}
-	canonical, err := contract.JCS(value)
-	if err != nil {
-		return "", err
-	}
-	return digest.SHA256(canonical), nil
+	return contract.JCS(value)
 }
 
 func validateWorkloadAuthorityBinding(binding WorkloadAuthorityBinding) error {

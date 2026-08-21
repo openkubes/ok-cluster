@@ -36,13 +36,15 @@ type PostRuntimePlatformApplicationsConfig struct {
 }
 
 type PostRuntimePlatformObservationConfig struct {
-	Profile observation.PlatformProfile
-	Runtime PlatformObservationStageFileRuntimeConfig
+	Profile    observation.PlatformProfile
+	Runtime    PlatformObservationStageFileRuntimeConfig
+	Capability PlatformCapabilityResolver
 }
 
 type PostRuntimeAggregateEvidenceConfig struct {
-	Profile AggregateEvidenceProfile
-	Runtime AggregateEvidenceStageFileRuntimeConfig
+	Profile    AggregateEvidenceProfile
+	Runtime    AggregateEvidenceStageFileRuntimeConfig
+	Capability PlatformCapabilityResolver
 }
 
 // PostRuntimeTargetCredentialRecoveryConfig selects the explicit crash-only
@@ -568,7 +570,12 @@ func defaultPostRuntimeExecutionFactories() postRuntimeExecutionFactories {
 			}
 			runtimeConfig := config.Runtime
 			runtimeConfig.Bundle, runtimeConfig.Profile = resume, config.Profile
-			runtime, err := LoadPlatformObservationStageFileRuntime(runtimeConfig)
+			var runtime PlatformObservationStageRuntimeConfig
+			if config.Capability == nil {
+				runtime, err = LoadPlatformObservationStageFileRuntime(runtimeConfig)
+			} else {
+				runtime, err = loadFirstRunPlatformObservationRuntime(runtimeConfig, config.Capability)
+			}
 			if err != nil {
 				return postRuntimeObservationInvocation{}, err
 			}
@@ -592,7 +599,12 @@ func defaultPostRuntimeExecutionFactories() postRuntimeExecutionFactories {
 			runtimeConfig := config.Runtime
 			runtimeConfig.Bundle = resume
 			runtimeConfig.ExpectedWorkloadEndpoint = runtimeBinding.material.Target.WorkloadAPIEndpoint
-			runtime, err := LoadAggregateEvidenceStageFileRuntime(runtimeConfig)
+			var runtime AggregateEvidenceStageRuntimeConfig
+			if config.Capability == nil {
+				runtime, err = LoadAggregateEvidenceStageFileRuntime(runtimeConfig)
+			} else {
+				runtime, err = loadFirstRunAggregateEvidenceRuntime(runtimeConfig, config.Capability)
+			}
 			if err != nil {
 				return postRuntimeEvaluationInvocation{}, err
 			}

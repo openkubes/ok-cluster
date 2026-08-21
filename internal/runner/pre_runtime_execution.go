@@ -36,6 +36,20 @@ type PreRuntimeTargetAccessExecutionConfig struct {
 	Runtime         TargetAccessStageRuntimeConfig
 }
 
+// PreRuntimeWorkloadAuthorityResolver materializes or resolves the one
+// lifecycle-derived workload authority only after the exact Stage-4 receipt
+// prefix is durable. The returned private paths must equal the future paths
+// bound while opening the execution; only the binding digest is dynamic.
+type PreRuntimeWorkloadAuthorityResolver interface {
+	ResolvePreRuntimeWorkloadAuthority(context.Context, StageResumeConfig) (WorkloadAuthorityFileResolverConfig, error)
+}
+
+type PreRuntimeWorkloadAuthorityResolverFunc func(context.Context, StageResumeConfig) (WorkloadAuthorityFileResolverConfig, error)
+
+func (resolver PreRuntimeWorkloadAuthorityResolverFunc) ResolvePreRuntimeWorkloadAuthority(ctx context.Context, resume StageResumeConfig) (WorkloadAuthorityFileResolverConfig, error) {
+	return resolver(ctx, resume)
+}
+
 // PreRuntimeExecutionConfig binds all immutable artifacts and private runtime
 // capabilities for Stage 1-7. Mutating grants are resolved only after the
 // exact direct predecessor receipt is durable.
@@ -49,6 +63,7 @@ type PreRuntimeExecutionConfig struct {
 	ClusterLifecycle          SubmissionStageRuntimeConfig
 	LifecycleObservation      LifecycleObservationStageRuntimeConfig
 	Enablement                PreRuntimeEnablementExecutionConfig
+	WorkloadAuthority         PreRuntimeWorkloadAuthorityResolver
 	NetworkObservation        NetworkObservationStageRuntimeConfig
 	RuntimeBinding            RuntimeBindingStageRuntimeConfig
 	RuntimeBindingReceiptPath string
@@ -100,6 +115,7 @@ type PreRuntimeExecution struct {
 	used      bool
 	completed bool
 	prefix    []StageReceiptSource
+	workload  WorkloadAuthorityFileResolverConfig
 }
 
 // OpenPreRuntimeExecution verifies the empty Stage-1 cursor and every future
@@ -110,7 +126,7 @@ func OpenPreRuntimeExecution(config PreRuntimeExecutionConfig) (*PreRuntimeExecu
 }
 
 func openPreRuntimeExecution(config PreRuntimeExecutionConfig, factories preRuntimeExecutionFactories) (*PreRuntimeExecution, error) {
-	if config.Authorization == nil || config.ReceiptDirectory == "" || config.PlanPath == "" ||
+	if config.Authorization == nil || config.WorkloadAuthority == nil || config.ReceiptDirectory == "" || config.PlanPath == "" ||
 		factories.submission == nil || factories.lifecycle == nil || factories.enablement == nil ||
 		factories.network == nil || factories.binding == nil || factories.target == nil || factories.persist == nil {
 		return nil, errors.New("pre-runtime execution configuration is incomplete")
@@ -130,6 +146,9 @@ func openPreRuntimeExecution(config PreRuntimeExecutionConfig, factories preRunt
 		validateRuntimeBindingOutputPath(config.RuntimeBinding.OutputPath) != nil ||
 		validateRuntimeBindingOutputPath(config.RuntimeBindingReceiptPath) != nil {
 		return nil, errors.New("pre-runtime binding handoff destination is invalid")
+	}
+	if err := validatePreRuntimeWorkloadAuthorityDestinations(config); err != nil {
+		return nil, err
 	}
 	config.TargetAccess.ExpectedObjects = append([]projection.ResourceIdentity(nil), config.TargetAccess.ExpectedObjects...)
 	return &PreRuntimeExecution{config: config, initial: initial, factories: factories}, nil
@@ -153,6 +172,8 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 	receipts := []StageReceiptSource{}
 	authorizations := []ResolvedStageAuthorizationReceipt{}
 	orchestration := PreRuntimeOrchestration{}
+	runtimeConfig := executor.config
+	var workloadAuthority WorkloadAuthorityFileResolverConfig
 
 	resolve := func(ctx context.Context) (StageAuthorizationSource, error) {
 		resolved, err := ResolveStageAuthorization(ctx, executor.resume(receipts), executor.config.Authorization)
@@ -240,7 +261,15 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 		return run, persist(ctx, invocation.store, StagedOperationReceiptReference(run))
 	}
 	orchestration.RunNetworkObservation = func(ctx context.Context, _ execution.StagedOperationReceipt) (execution.ObservationStageRunReceipt, error) {
-		invocation, err := executor.factories.network(executor.resume(receipts), executor.config)
+		resolved, err := executor.config.WorkloadAuthority.ResolvePreRuntimeWorkloadAuthority(ctx, executor.resume(receipts))
+		if err != nil {
+			return execution.ObservationStageRunReceipt{}, errors.New("resolve lifecycle-derived workload authority")
+		}
+		if err := bindPreRuntimeWorkloadAuthority(&runtimeConfig, resolved); err != nil {
+			return execution.ObservationStageRunReceipt{}, err
+		}
+		workloadAuthority = resolved
+		invocation, err := executor.factories.network(executor.resume(receipts), runtimeConfig)
 		if err != nil || invocation.run == nil || invocation.store == nil {
 			return execution.ObservationStageRunReceipt{}, errors.New("open network-observation stage")
 		}
@@ -251,7 +280,7 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 		return run, persist(ctx, invocation.store, ObservationStageReceiptReference(run))
 	}
 	orchestration.RunRuntimeBinding = func(ctx context.Context, _ execution.ObservationStageRunReceipt) (execution.BindingStageRunReceipt, error) {
-		invocation, err := executor.factories.binding(executor.resume(receipts), executor.config)
+		invocation, err := executor.factories.binding(executor.resume(receipts), runtimeConfig)
 		if err != nil || invocation.run == nil || invocation.materialReceipt == nil || invocation.store == nil {
 			return execution.BindingStageRunReceipt{}, errors.New("open runtime-binding stage")
 		}
@@ -278,7 +307,7 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 		if err != nil {
 			return execution.StagedOperationReceipt{}, err
 		}
-		invocation, err := executor.factories.target(executor.resume(receipts), source, executor.config)
+		invocation, err := executor.factories.target(executor.resume(receipts), source, runtimeConfig)
 		if err != nil || invocation.run == nil || invocation.store == nil {
 			return execution.StagedOperationReceipt{}, errors.New("open target-access stage")
 		}
@@ -299,10 +328,29 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 	if runErr == nil && result.State == "SUCCEEDED" && len(receipts) == len(preRuntimeStageOrder) {
 		executor.mu.Lock()
 		executor.prefix = append([]StageReceiptSource(nil), receipts...)
+		executor.workload = workloadAuthority
 		executor.completed = true
 		executor.mu.Unlock()
 	}
 	return result, runErr
+}
+
+// RuntimeWorkloadAuthority returns the exact lifecycle-derived private file
+// binding only after all seven stages completed. It is for in-process suffix
+// composition and must never be serialized into public evidence.
+func (executor *PreRuntimeExecution) RuntimeWorkloadAuthority() (WorkloadAuthorityFileResolverConfig, error) {
+	if executor == nil {
+		return WorkloadAuthorityFileResolverConfig{}, errors.New("pre-runtime execution is required")
+	}
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	if !executor.completed {
+		return WorkloadAuthorityFileResolverConfig{}, errors.New("pre-runtime workload authority is unavailable")
+	}
+	if _, err := OpenWorkloadAuthorityFileResolver(executor.workload); err != nil {
+		return WorkloadAuthorityFileResolverConfig{}, errors.New("pre-runtime workload authority is invalid")
+	}
+	return executor.workload, nil
 }
 
 // ReceiptPrefix returns the exact private receipt sources only after all seven
@@ -349,6 +397,45 @@ func (executor *PreRuntimeExecution) resume(receipts []StageReceiptSource) Stage
 		PlanPath: executor.initial.PlanPath, PlanExpected: executor.initial.PlanExpected,
 		Receipts: prefix,
 	}
+}
+
+func validatePreRuntimeWorkloadAuthorityDestinations(config PreRuntimeExecutionConfig) error {
+	expected := config.NetworkObservation.Workload
+	if expected != config.RuntimeBinding.Workload || expected != config.TargetAccess.Runtime.Workload ||
+		expected.ExpectedBindingDigest != "" || expected.Path == "" || expected.CAFile == "" || !validWorkloadTransportCredential(expected) {
+		return errors.New("pre-runtime workload authority destinations are invalid")
+	}
+	credentialPath := expected.TokenFile
+	if credentialPath == "" {
+		credentialPath = expected.KubeconfigFile
+	}
+	if expected.Path == credentialPath || expected.Path == expected.CAFile || credentialPath == expected.CAFile {
+		return errors.New("pre-runtime workload authority destinations are invalid")
+	}
+	for _, path := range []string{expected.Path, credentialPath, expected.CAFile} {
+		if validateRuntimeBindingOutputPath(path) != nil {
+			return errors.New("pre-runtime workload authority destination is invalid")
+		}
+	}
+	return nil
+}
+
+func bindPreRuntimeWorkloadAuthority(config *PreRuntimeExecutionConfig, resolved WorkloadAuthorityFileResolverConfig) error {
+	if config == nil {
+		return errors.New("pre-runtime execution configuration is required")
+	}
+	expected := config.NetworkObservation.Workload
+	if resolved.Path != expected.Path || resolved.TokenFile != expected.TokenFile ||
+		resolved.KubeconfigFile != expected.KubeconfigFile || resolved.CAFile != expected.CAFile {
+		return errors.New("resolved workload authority differs from bound destinations")
+	}
+	if _, err := OpenWorkloadAuthorityFileResolver(resolved); err != nil {
+		return errors.New("resolved workload authority is invalid")
+	}
+	config.NetworkObservation.Workload = resolved
+	config.RuntimeBinding.Workload = resolved
+	config.TargetAccess.Runtime.Workload = resolved
+	return nil
 }
 
 func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {

@@ -3,10 +3,11 @@
 package runner
 
 import (
+	"bytes"
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"github.com/openkubes/ok-cluster/internal/submission"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -43,8 +45,19 @@ type KubernetesAuthorityConfig struct {
 	Endpoint          string
 	AuthorityIdentity string
 	TokenFile         string
+	KubeconfigFile    string
 	CAFile            string
 	CABundleDigest    string
+}
+
+type boundedKubernetesTransport struct {
+	bearerToken        string
+	clientCertificate  bool
+	caData             []byte
+	certificateData    []byte
+	keyData            []byte
+	credentialIdentity string
+	client             *http.Client
 }
 
 // KubernetesNetworkObserverConfig binds distinct management and workload
@@ -127,24 +140,164 @@ func OpenKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submissi
 	return client, err
 }
 
-// openKubernetesSubmissionClient also returns the bounded token so operation
-// composition can prove that the two write authorities do not share one
-// credential. The token never leaves this package or enters an error/receipt.
+// openKubernetesSubmissionClient also returns a private credential identity so
+// operation composition can prove that two write authorities do not share one
+// credential. It never enters an error or receipt.
 func openKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submission.KubernetesClient, string, error) {
-	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.TokenFile == "" || config.CAFile == "" {
-		return nil, "", errors.New("Kubernetes authority endpoint, identity, token file, and CA file are required")
+	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.CAFile == "" {
+		return nil, "", errors.New("Kubernetes authority endpoint, identity, credential, and CA file are required")
 	}
-	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
+	transport, err := openBoundedKubernetesAuthorityTransport(config)
 	if err != nil {
 		return nil, "", err
 	}
 	submitter, err := submission.NewKubernetesClient(submission.KubernetesClientConfig{
-		Endpoint: config.Endpoint, AuthorityIdentity: config.AuthorityIdentity, BearerToken: token, Client: client,
+		Endpoint: config.Endpoint, AuthorityIdentity: config.AuthorityIdentity, BearerToken: transport.bearerToken,
+		ClientCertificate: transport.clientCertificate, Client: transport.client,
 	})
 	if err != nil {
 		return nil, "", err
 	}
-	return submitter, token, nil
+	return submitter, transport.credentialIdentity, nil
+}
+
+func openBoundedKubernetesAuthorityTransport(config KubernetesAuthorityConfig) (boundedKubernetesTransport, error) {
+	tokenMode := config.TokenFile != ""
+	kubeconfigMode := config.KubeconfigFile != ""
+	if config.Endpoint == "" || config.CAFile == "" || tokenMode == kubeconfigMode {
+		return boundedKubernetesTransport{}, errors.New("Kubernetes authority requires exactly one transport credential")
+	}
+	if tokenMode {
+		token, ca, client, err := openBoundedKubernetesMaterial(config.TokenFile, config.CAFile)
+		if err != nil {
+			return boundedKubernetesTransport{}, err
+		}
+		return boundedKubernetesTransport{
+			bearerToken: token, caData: ca, credentialIdentity: token, client: client,
+		}, nil
+	}
+	return openBoundedKubernetesKubeconfigTransport(config.KubeconfigFile, config.Endpoint, config.CAFile)
+}
+
+func openBoundedKubernetesKubeconfigTransport(kubeconfigFile, expectedEndpoint, caFile string) (boundedKubernetesTransport, error) {
+	raw, err := readBoundedRegular(kubeconfigFile, maximumCABytes)
+	if err != nil {
+		return boundedKubernetesTransport{}, errors.New("read temporary Kubernetes kubeconfig")
+	}
+	boundCA, err := readBoundedRegular(caFile, maximumCABytes)
+	if err != nil {
+		return boundedKubernetesTransport{}, errors.New("read runtime-bound Kubernetes API CA")
+	}
+	return parseBoundedKubernetesKubeconfig(raw, expectedEndpoint, boundCA)
+}
+
+func parseBoundedKubernetesKubeconfig(raw []byte, expectedEndpoint string, boundCA []byte) (boundedKubernetesTransport, error) {
+	type namedCluster struct {
+		Name    string `yaml:"name"`
+		Cluster struct {
+			Server                   string `yaml:"server"`
+			CertificateAuthorityData string `yaml:"certificate-authority-data"`
+		} `yaml:"cluster"`
+	}
+	type namedContext struct {
+		Name    string `yaml:"name"`
+		Context struct {
+			Cluster   string `yaml:"cluster"`
+			User      string `yaml:"user"`
+			Namespace string `yaml:"namespace,omitempty"`
+		} `yaml:"context"`
+	}
+	type namedUser struct {
+		Name string `yaml:"name"`
+		User struct {
+			ClientCertificateData string `yaml:"client-certificate-data"`
+			ClientKeyData         string `yaml:"client-key-data"`
+		} `yaml:"user"`
+	}
+	var document struct {
+		APIVersion     string         `yaml:"apiVersion"`
+		Kind           string         `yaml:"kind"`
+		CurrentContext string         `yaml:"current-context"`
+		Clusters       []namedCluster `yaml:"clusters"`
+		Contexts       []namedContext `yaml:"contexts"`
+		Preferences    map[string]any `yaml:"preferences,omitempty"`
+		Users          []namedUser    `yaml:"users"`
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&document); err != nil {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig is invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig has trailing content")
+	}
+	if document.APIVersion != "v1" || document.Kind != "Config" || document.CurrentContext == "" ||
+		len(document.Clusters) != 1 || len(document.Contexts) != 1 || len(document.Users) != 1 {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig shape is invalid")
+	}
+	cluster := document.Clusters[0]
+	contextEntry := document.Contexts[0]
+	user := document.Users[0]
+	if contextEntry.Name != document.CurrentContext || contextEntry.Context.Cluster != cluster.Name ||
+		contextEntry.Context.User != user.Name || cluster.Name == "" || user.Name == "" ||
+		cluster.Cluster.Server != expectedEndpoint || !validFullRunKubernetesEndpoint(expectedEndpoint) {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig differs from runtime authority")
+	}
+	decode := func(encoded string) ([]byte, error) {
+		if encoded == "" || strings.TrimSpace(encoded) != encoded || strings.ContainsAny(encoded, "\r\n") {
+			return nil, errors.New("empty or non-canonical base64")
+		}
+		return base64.StdEncoding.Strict().DecodeString(encoded)
+	}
+	caData, err := decode(cluster.Cluster.CertificateAuthorityData)
+	if err != nil {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes CA encoding is invalid")
+	}
+	certificateData, err := decode(user.User.ClientCertificateData)
+	if err != nil {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes certificate encoding is invalid")
+	}
+	keyData, err := decode(user.User.ClientKeyData)
+	if err != nil {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes key encoding is invalid")
+	}
+	if boundCA != nil && !bytes.Equal(caData, boundCA) {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig CA differs from runtime binding")
+	}
+	certificate, err := tls.X509KeyPair(certificateData, keyData)
+	if err != nil || len(certificate.Certificate) == 0 {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client credential is invalid")
+	}
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client certificate is invalid")
+	}
+	certificate.Leaf = leaf
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caData) {
+		return boundedKubernetesTransport{}, errors.New("runtime-bound Kubernetes API CA contains no certificate")
+	}
+	intermediates := x509.NewCertPool()
+	for _, rawCertificate := range certificate.Certificate[1:] {
+		intermediate, err := x509.ParseCertificate(rawCertificate)
+		if err != nil {
+			return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client certificate chain is invalid")
+		}
+		intermediates.AddCert(intermediate)
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client certificate is not trusted by the runtime-bound CA")
+	}
+	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{
+		Proxy: nil, DisableCompression: true, ForceAttemptHTTP2: true,
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{certificate}},
+	}}
+	identityMaterial := append(append([]byte(nil), certificateData...), keyData...)
+	return boundedKubernetesTransport{
+		clientCertificate: true, caData: append([]byte(nil), caData...), certificateData: certificateData,
+		keyData: keyData, credentialIdentity: digest.SHA256(identityMaterial), client: client,
+	}, nil
 }
 
 // OpenKubernetesCAPILifecycleObserver materializes a bounded management-plane
@@ -186,8 +339,8 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 	return collector, err
 }
 
-// openKubernetesNetworkSourceCollector returns token values only to private
-// stage composition so it can prove that capabilities remain separate.
+// openKubernetesNetworkSourceCollector returns credential identities only to
+// private stage composition so it can prove that capabilities remain separate.
 func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig) (*observation.NetworkSourceCollector, string, string, error) {
 	if config.ExpectedManagementAuthority == "" || config.Management.AuthorityIdentity != config.ExpectedManagementAuthority {
 		return nil, "", "", errors.New("network observer management authority differs from the verified management plane")
@@ -202,14 +355,14 @@ func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 	if err != nil {
 		return nil, "", "", errors.New("open bounded management network credential")
 	}
-	workloadToken, workloadCA, workloadClient, err := openBoundedKubernetesMaterial(config.Workload.TokenFile, config.Workload.CAFile)
+	workloadTransport, err := openBoundedKubernetesAuthorityTransport(config.Workload)
 	if err != nil {
 		return nil, "", "", errors.New("open bounded workload network credential")
 	}
-	if !platformInputDigestPattern.MatchString(config.Workload.CABundleDigest) || digest.SHA256(workloadCA) != config.Workload.CABundleDigest {
+	if !platformInputDigestPattern.MatchString(config.Workload.CABundleDigest) || digest.SHA256(workloadTransport.caData) != config.Workload.CABundleDigest {
 		return nil, "", "", errors.New("workload network CA differs from the runtime-bound authority")
 	}
-	if len(managementToken) == len(workloadToken) && subtle.ConstantTimeCompare([]byte(managementToken), []byte(workloadToken)) == 1 {
+	if sameSecret(managementToken, workloadTransport.credentialIdentity) {
 		return nil, "", "", errors.New("network observer management and workload credentials must be distinct")
 	}
 	management, err := observation.NewKubernetesManagementNetworkReader(observation.KubernetesNetworkReaderConfig{
@@ -219,12 +372,13 @@ func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 		return nil, "", "", err
 	}
 	workload, err := observation.NewKubernetesWorkloadNetworkReader(observation.KubernetesNetworkReaderConfig{
-		Endpoint: config.Workload.Endpoint, BearerToken: workloadToken, Client: workloadClient,
+		Endpoint: config.Workload.Endpoint, BearerToken: workloadTransport.bearerToken,
+		ClientCertificate: workloadTransport.clientCertificate, Client: workloadTransport.client,
 	})
 	if err != nil {
 		return nil, "", "", err
 	}
-	podExecutor, err := newKubernetesCiliumWebSocketExecutor(config.Workload.Endpoint, workloadToken, workloadCA, workloadClient)
+	podExecutor, err := newKubernetesCiliumWebSocketExecutorWithTransport(config.Workload.Endpoint, workloadTransport)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -239,7 +393,7 @@ func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 	if err != nil {
 		return nil, "", "", err
 	}
-	return collector, managementToken, workloadToken, nil
+	return collector, managementToken, workloadTransport.credentialIdentity, nil
 }
 
 // OpenKubernetesPlatformSourceCollector materializes one TLS client restricted

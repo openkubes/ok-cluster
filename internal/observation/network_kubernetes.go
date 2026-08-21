@@ -16,18 +16,20 @@ import (
 // configured TLS client to one Kubernetes API endpoint. The plane-specific
 // constructors derive their request allowlists internally.
 type KubernetesNetworkReaderConfig struct {
-	Endpoint    string
-	BearerToken string
-	Client      *http.Client
+	Endpoint          string
+	BearerToken       string
+	ClientCertificate bool
+	Client            *http.Client
 }
 
 // KubernetesNetworkReader implements NetworkRawGetter without exposing
 // discovery, arbitrary list paths, watch, mutation, retry, or redirects.
 type KubernetesNetworkReader struct {
-	endpoint *url.URL
-	token    string
-	client   *http.Client
-	allowed  map[string]struct{}
+	endpoint          *url.URL
+	token             string
+	clientCertificate bool
+	client            *http.Client
+	allowed           map[string]struct{}
 }
 
 func NewKubernetesManagementNetworkReader(config KubernetesNetworkReaderConfig, namespace, name, hcpName string) (*KubernetesNetworkReader, error) {
@@ -54,8 +56,9 @@ func newKubernetesNetworkReader(config KubernetesNetworkReaderConfig, allowed []
 	if endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (host == "127.0.0.1" || host == "::1" || host == "localhost")) {
 		return nil, errors.New("network reader Kubernetes endpoint must use HTTPS")
 	}
-	if config.BearerToken == "" || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") {
-		return nil, errors.New("network reader Kubernetes bearer token is invalid")
+	tokenMode := config.BearerToken != ""
+	if tokenMode == config.ClientCertificate || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") {
+		return nil, errors.New("network reader Kubernetes transport credential is invalid")
 	}
 	if config.Client == nil {
 		return nil, errors.New("network reader requires an explicitly configured HTTP client")
@@ -73,7 +76,10 @@ func newKubernetesNetworkReader(config KubernetesNetworkReaderConfig, allowed []
 		client.Timeout = 15 * time.Second
 	}
 	endpoint.Path, endpoint.RawPath = "", ""
-	return &KubernetesNetworkReader{endpoint: endpoint, token: config.BearerToken, client: &client, allowed: paths}, nil
+	return &KubernetesNetworkReader{
+		endpoint: endpoint, token: config.BearerToken, clientCertificate: config.ClientCertificate,
+		client: &client, allowed: paths,
+	}, nil
 }
 
 func (reader *KubernetesNetworkReader) Get(ctx context.Context, path string) ([]byte, error) {
@@ -91,7 +97,9 @@ func (reader *KubernetesNetworkReader) Get(ctx context.Context, path string) ([]
 		return nil, errors.New("construct bounded network source request")
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+reader.token)
+	if !reader.clientCertificate {
+		request.Header.Set("Authorization", "Bearer "+reader.token)
+	}
 	response, err := reader.client.Do(request)
 	if err != nil {
 		return nil, errors.New("bounded network source request failed")
