@@ -232,6 +232,13 @@ func buildSubmissionStageCredentialObject(stageID string, now time.Time, role, n
 }
 
 func verifyStageCredentialJWT(token []byte, source SubmissionStageCredentialSource, now time.Time) (submissionStageTokenClaims, error) {
+	return verifyStageCredentialJWTWithSubject(token, source, now, validStageCredentialSubject)
+}
+
+func verifyStageCredentialJWTWithSubject(token []byte, source SubmissionStageCredentialSource, now time.Time, subjectAllowed func(string) bool) (submissionStageTokenClaims, error) {
+	if subjectAllowed == nil {
+		return submissionStageTokenClaims{}, errors.New("stage credential subject policy is missing")
+	}
 	parts := strings.Split(string(token), ".")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return submissionStageTokenClaims{}, errors.New("stage credential token is not a signed JWT")
@@ -276,7 +283,7 @@ func verifyStageCredentialJWT(token []byte, source SubmissionStageCredentialSour
 	if err != nil {
 		return submissionStageTokenClaims{}, errors.New("stage credential JWT not-before claim is invalid")
 	}
-	if source.ExpectedIssuer == "" || claims.Issuer != source.ExpectedIssuer || source.ExpectedSubject == "" || claims.Subject != source.ExpectedSubject || !validStageCredentialSubject(claims.Subject) {
+	if source.ExpectedIssuer == "" || claims.Issuer != source.ExpectedIssuer || source.ExpectedSubject == "" || claims.Subject != source.ExpectedSubject || !subjectAllowed(claims.Subject) {
 		return submissionStageTokenClaims{}, errors.New("stage credential JWT issuer or subject differs from bound source")
 	}
 	audiences, err := tokenAudiences(claims.Audience)
