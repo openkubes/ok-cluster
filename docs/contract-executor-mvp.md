@@ -2977,17 +2977,30 @@ opening the installer credential. It then invokes the single-use three-create
 launcher in a bounded context. This completes the offline and fake-API
 activation implementation; it does not itself prove a live DEV Job run.
 
+The concrete Stage 6 to Stage 8 private handoff is now closed as well. Stage 6
+creates the canonical runtime material first, then the Stage 1-7 adapter reads
+the material receipt directly from that exact opened binding operation,
+re-verifies it against the canonical private bytes and current Plan, and writes
+the receipt create-only as a distinct `0600` file. Only after both private
+files exist does the adapter persist the public Stage-6 ledger receipt and
+open Stage 7. The full-run composition requires the Stage 8-12 material and
+receipt paths to equal those exact Stage 1-7 destinations. A missing,
+pre-existing, non-canonical, changed or foreign handoff stops at Stage 6; it
+cannot open target access or the post-runtime suffix. Neither private file is
+part of public evidence.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
 covered by unit, negative, local TLS integration and race tests. Stage 1-7 and
 Stage 8-12 each have an exact, fail-closed in-process orchestration order and a
 concrete single-use execution adapter. The Stage 1-7 adapter dynamically binds
-its four mutation grants and persists all seven ledger-backed receipts before
-exposing its exact prefix. The concrete full-run execution injects that prefix
-into a fresh Stage 8-12 adapter, and the full-run seam independently binds it
-through the exact Plan and seven predecessor receipt digests. The Stage 8-12 suffix
-additionally has a local
+its four mutation grants, persists the private runtime material and matching
+receipt, and persists all seven ledger-backed receipts before exposing its
+exact prefix. The concrete full-run execution injects that prefix into a fresh
+Stage 8-12 adapter, and the full-run seam independently binds it through the
+exact Plan, private runtime handoff paths and seven predecessor receipt
+digests. The Stage 8-12 suffix additionally has a local
 prepare/execute command, a bounded ephemeral Job, a deterministic private
 activation package, an exact installation plan and a single-use CLI launcher.
 Successful Stage-8 and Stage-9 crash boundaries can be reactivated through the

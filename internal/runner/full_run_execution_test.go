@@ -65,6 +65,8 @@ func TestFullRunExecutionRunsRealPreRuntimeAdapterBeforeOpeningSuffix(t *testing
 	config := FullRunExecutionConfig{PreRuntime: preConfig}
 	config.PostRuntime.TargetCredential.PlanPath = preConfig.PlanPath
 	config.PostRuntime.TargetCredential.PlanExpected = preConfig.PlanExpected
+	config.PostRuntime.RuntimeBinding.MaterialPath = preConfig.RuntimeBinding.OutputPath
+	config.PostRuntime.RuntimeBinding.ReceiptPath = preConfig.RuntimeBindingReceiptPath
 	postCalls := 0
 	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
 		preRuntime: func(config PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) {
@@ -157,6 +159,12 @@ func TestOpenFullRunExecutionRejectsHistoricalSuffixState(t *testing.T) {
 		"foreign plan": func(config *FullRunExecutionConfig) {
 			config.PostRuntime.TargetCredential.PlanPath = "/private/foreign-plan.json"
 		},
+		"foreign runtime material": func(config *FullRunExecutionConfig) {
+			config.PostRuntime.RuntimeBinding.MaterialPath = "/private/foreign-runtime.json"
+		},
+		"foreign runtime receipt": func(config *FullRunExecutionConfig) {
+			config.PostRuntime.RuntimeBinding.ReceiptPath = "/private/foreign-runtime-receipt.json"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := testFullRunExecutionConfig()
@@ -198,7 +206,11 @@ func successfulFakeConcretePreRuntimeExecution(t *testing.T) *fakeConcretePreRun
 func testFullRunExecutionConfig() FullRunExecutionConfig {
 	config := FullRunExecutionConfig{}
 	config.PreRuntime.PlanPath = "/private/ok147-plan.json"
+	config.PreRuntime.RuntimeBinding.OutputPath = "/private/runtime-binding.json"
+	config.PreRuntime.RuntimeBindingReceiptPath = "/private/runtime-binding-receipt.json"
 	config.PostRuntime.TargetCredential.PlanPath = config.PreRuntime.PlanPath
 	config.PostRuntime.TargetCredential.PlanExpected = config.PreRuntime.PlanExpected
+	config.PostRuntime.RuntimeBinding.MaterialPath = config.PreRuntime.RuntimeBinding.OutputPath
+	config.PostRuntime.RuntimeBinding.ReceiptPath = config.PreRuntime.RuntimeBindingReceiptPath
 	return config
 }

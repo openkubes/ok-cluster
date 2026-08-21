@@ -49,6 +49,18 @@ func TestPreRuntimeExecutionComposesExactPrefixWithDynamicAuthorization(t *testi
 			t.Fatalf("receipt %s was not persisted privately: %#v %v", stageID, info, statErr)
 		}
 	}
+	for _, path := range []string{config.RuntimeBinding.OutputPath, config.RuntimeBindingReceiptPath} {
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			t.Fatalf("runtime binding handoff was not persisted privately: %s %#v %v", path, info, statErr)
+		}
+	}
+	if _, err := LoadRuntimeBindingMaterialFiles(RuntimeBindingMaterialFileConfig{
+		Bundle:       StageResumeConfig{PlanPath: config.PlanPath, PlanExpected: config.PlanExpected, Receipts: mustReceiptPrefix(t, executor)},
+		MaterialPath: config.RuntimeBinding.OutputPath, ReceiptPath: config.RuntimeBindingReceiptPath,
+	}); err != nil {
+		t.Fatalf("completed runtime binding handoff is not replayable: %v", err)
+	}
 	prefix, err := executor.ReceiptPrefix()
 	if err != nil || len(prefix) != 7 {
 		t.Fatalf("completed private prefix is unavailable: %#v %v", prefix, err)
@@ -62,7 +74,10 @@ func TestPreRuntimeExecutionComposesExactPrefixWithDynamicAuthorization(t *testi
 		t.Fatalf("single-use executor ran twice: %#v calls=%v err=%v", second, *calls, err)
 	}
 	public := mustJSON(t, receipt)
-	for _, forbidden := range []string{config.ReceiptDirectory, "token", "endpoint", "kubeconfig"} {
+	for _, forbidden := range []string{
+		config.ReceiptDirectory, config.RuntimeBinding.OutputPath, config.RuntimeBindingReceiptPath,
+		"token", "endpoint", "kubeconfig",
+	} {
 		if strings.Contains(string(public), forbidden) {
 			t.Fatalf("public pre-runtime receipt exposed %q", forbidden)
 		}
@@ -116,6 +131,39 @@ func TestPreRuntimeExecutionStopsWithoutReplayWhenReceiptPersistenceFails(t *tes
 	}
 }
 
+func TestPreRuntimeExecutionStopsAfterStageSixWhenMaterialReceiptDiffers(t *testing.T) {
+	config, factories, calls, _ := preRuntimeExecutionFixture(t)
+	original := factories.binding
+	factories.binding = func(resume StageResumeConfig, config PreRuntimeExecutionConfig) (preRuntimeBindingInvocation, error) {
+		invocation, err := original(resume, config)
+		if err != nil {
+			return preRuntimeBindingInvocation{}, err
+		}
+		valid := invocation.materialReceipt
+		invocation.materialReceipt = func() (RuntimeBindingMaterialReceipt, error) {
+			receipt, receiptErr := valid()
+			receipt.PrivateMaterialDigest = runnerStageSHA("f")
+			return receipt, receiptErr
+		}
+		return invocation, nil
+	}
+	executor, err := openPreRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "runtime-binding" || len(receipt.Checkpoints) != 6 ||
+		!reflect.DeepEqual(*calls, preRuntimeStageOrder[:6]) {
+		t.Fatalf("material-receipt mismatch crossed Stage 6: %#v calls=%v err=%v", receipt, *calls, err)
+	}
+	if _, statErr := os.Lstat(config.RuntimeBindingReceiptPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid material receipt was persisted: %v", statErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(config.ReceiptDirectory, preRuntimeReceiptFiles["runtime-binding"])); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("public Stage-6 receipt crossed failed private handoff: %v", statErr)
+	}
+}
+
 func TestOpenPreRuntimeExecutionRejectsUnsafeReceiptDestination(t *testing.T) {
 	config, factories, calls, _ := preRuntimeExecutionFixture(t)
 	if err := os.Chmod(config.ReceiptDirectory, 0o755); err != nil {
@@ -160,6 +208,12 @@ func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRun
 		ProjectionManifestPath: base.config.ProjectionManifestPath, ProjectionRoot: base.config.ProjectionRoot,
 		Authorization: resolver, ReceiptDirectory: receiptDirectory,
 	}
+	runtimeDirectory := t.TempDir()
+	if err := os.Chmod(runtimeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config.RuntimeBinding.OutputPath = filepath.Join(runtimeDirectory, "runtime-binding.json")
+	config.RuntimeBindingReceiptPath = filepath.Join(runtimeDirectory, "runtime-binding-receipt.json")
 	store := &ledger.Ledger{}
 	verified := map[string]stagereceipt.Verified{}
 	makeReceipt := func(resume StageResumeConfig, stageID string) (stagereceipt.Verified, string) {
@@ -178,7 +232,7 @@ func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRun
 		at := time.Date(2026, 8, 18, 8, len(resume.Receipts), 0, 0, time.UTC)
 		var stageReceipt stagereceipt.Verified
 		if stageID == "cluster-lifecycle" {
-			stageReceipt, err = stagereceipt.NewWithTargetClusterUIDDigest(plan, stageID, predecessors, "SUCCEEDED", mutation, outcome, digest.SHA256([]byte("evidence-"+stageID)), runnerStageSHA("7"), at)
+			stageReceipt, err = stagereceipt.NewWithTargetClusterUIDDigest(plan, stageID, predecessors, "SUCCEEDED", mutation, outcome, digest.SHA256([]byte("evidence-"+stageID)), digest.SHA256([]byte("11111111-1111-4111-8111-111111111111")), at)
 		} else {
 			stageReceipt, err = stagereceipt.New(plan, stageID, predecessors, "SUCCEEDED", mutation, outcome, digest.SHA256([]byte("evidence-"+stageID)), at)
 		}
@@ -219,11 +273,53 @@ func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRun
 		network: func(resume StageResumeConfig, _ PreRuntimeExecutionConfig) (preRuntimeObservationInvocation, error) {
 			return observation(resume, "network-observation"), nil
 		},
-		binding: func(resume StageResumeConfig, _ PreRuntimeExecutionConfig) (preRuntimeBindingInvocation, error) {
+		binding: func(resume StageResumeConfig, config PreRuntimeExecutionConfig) (preRuntimeBindingInvocation, error) {
+			var materialReceipt RuntimeBindingMaterialReceipt
 			return preRuntimeBindingInvocation{store: store, run: func(context.Context) (execution.BindingStageRunReceipt, error) {
 				calls = append(calls, "runtime-binding")
+				plan, _, prefix, err := loadStageResumeWithPrefix(resume)
+				if err != nil {
+					return execution.BindingStageRunReceipt{}, err
+				}
+				lifecycle, err := prefix[1].Receipt()
+				if err != nil {
+					return execution.BindingStageRunReceipt{}, err
+				}
+				network, err := prefix[4].Receipt()
+				if err != nil {
+					return execution.BindingStageRunReceipt{}, err
+				}
+				material := RuntimeBindingMaterial{
+					Format: RuntimeBindingMaterialFormat, State: "CURRENT_RUNTIME_BOUND", PlanDigest: plan.PlanDigest,
+					IntentRevision: plan.IntentRevision, EnablementRevision: plan.EnablementRevision,
+					PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
+					Target: RuntimeBindingTarget{
+						Name: plan.ContractIdentity.Name, CAPIClusterUID: "11111111-1111-4111-8111-111111111111",
+						TargetIdentityScheme: "capi-cluster-uid", WorkloadAPIEndpoint: "https://runtime.invalid:6443",
+						WorkloadAPICAData: "Y2E=", WorkloadAPICADigest: runnerStageSHA("a"),
+						KubeSystemUID: "22222222-2222-4222-8222-222222222222",
+					},
+					Storage:  RuntimeBindingStorage{Name: "local-path", UID: "33333333-3333-4333-8333-333333333333", Provisioner: "rancher.io/local-path"},
+					Evidence: RuntimeBindingEvidence{LifecycleEvidenceDigest: lifecycle.EvidenceDigest, NetworkEvidenceDigest: network.EvidenceDigest},
+				}
+				raw, err := canonicalRuntimeBinding(material)
+				if err != nil {
+					return execution.BindingStageRunReceipt{}, err
+				}
+				if err := os.WriteFile(config.RuntimeBinding.OutputPath, raw, 0o600); err != nil {
+					return execution.BindingStageRunReceipt{}, err
+				}
+				materialReceipt = RuntimeBindingMaterialReceipt{
+					Format: RuntimeBindingMaterialFormat, State: "VERIFIED", StageID: "runtime-binding", PlanDigest: plan.PlanDigest,
+					IntentRevision: plan.IntentRevision, TargetClusterUIDDigest: digest.SHA256([]byte(material.Target.CAPIClusterUID)),
+					WorkloadAPICADigest: material.Target.WorkloadAPICADigest, KubeSystemUIDDigest: digest.SHA256([]byte(material.Target.KubeSystemUID)),
+					LocalPathStorageUIDDigest: digest.SHA256([]byte(material.Storage.UID)), LifecycleEvidenceDigest: lifecycle.EvidenceDigest,
+					NetworkEvidenceDigest: network.EvidenceDigest, PrivateMaterialDigest: digest.SHA256(raw), PersistentMutationAllowed: false,
+				}
 				_, receiptDigest := makeReceipt(resume, "runtime-binding")
 				return execution.BindingStageRunReceipt{Format: execution.BindingStageReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: base.plan.PlanDigest, StageID: "runtime-binding", StageReceiptDigest: receiptDigest}, nil
+			}, materialReceipt: func() (RuntimeBindingMaterialReceipt, error) {
+				return materialReceipt, nil
 			}}, nil
 		},
 		target: func(resume StageResumeConfig, _ StageAuthorizationSource, _ PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
@@ -253,6 +349,15 @@ func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRun
 		},
 	}
 	return config, factories, &calls, &requests
+}
+
+func mustReceiptPrefix(t *testing.T, executor *PreRuntimeExecution) []StageReceiptSource {
+	t.Helper()
+	prefix, err := executor.ReceiptPrefix()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prefix
 }
 
 func minInt(first, second int) int {
