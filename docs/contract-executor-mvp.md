@@ -3005,6 +3005,17 @@ new action surface and still performs no delivery/autonomy collection itself.
 Binding this factory and its private paths through the execution manifest is
 the remaining full-run activation step.
 
+The issuer can now obtain its typed input through one exact external-authority
+request. The TLS-only collector pins a CA digest and private bearer token,
+posts canonical JSON to the fixed
+`/v1/observability/independent-evidence` path, rejects redirects and requires a
+caller deadline. The response must be strict bounded JSON correlated to the
+request digest and may contain only the two booleans, dependency count and the
+receiver/autonomy identity digests. Foreign, malformed, oversized or
+non-JSON responses fail closed and there is no retry or arbitrary URL surface.
+The external service implementation remains a separate operational component;
+this client neither invents delivery evidence nor performs an outage test.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
