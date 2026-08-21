@@ -360,6 +360,10 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 	infrastructureAuthority.AuthorityIdentity = expected.InfrastructureAuthority
 	infrastructureAuthority.Endpoint = "https://192.0.2.13:6443"
 	infrastructureAuthority.TokenFile = writeBundleFile(t, root, "full-infrastructure-token", []byte("full-infrastructure-token"))
+	gitOpsAuthority := post.TargetRegistration.GitOps
+	gitOpsAuthority.TokenFile = writeBundleFile(t, root, "full-gitops-token", []byte("full-gitops-token"))
+	gitOpsAuthority.CAFile = ledger.CAFile
+	gitOpsAuthority.CABundleDigest = digest.SHA256(managementCA)
 	providerRuntime := fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: infrastructureAuthority}
 	managementRuntime := fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: managementAuthority}
 	document := fullRunExecutionManifestDocument{
@@ -384,15 +388,15 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 			ArtifactPath: post.TargetRegistration.ArtifactPath, ArgoNamespace: post.TargetRegistration.ArgoNamespace,
 			ProjectName: post.TargetRegistration.ProjectName, RegistrationName: post.TargetRegistration.RegistrationName,
 			TargetName: post.TargetRegistration.TargetName, SourceRepository: post.TargetRegistration.SourceRepository,
-			TargetNamespaces: append([]string(nil), post.TargetRegistration.TargetNamespaces...), Ledger: ledger, GitOps: post.TargetRegistration.GitOps,
+			TargetNamespaces: append([]string(nil), post.TargetRegistration.TargetNamespaces...), Ledger: ledger, GitOps: gitOpsAuthority,
 		},
 		PlatformApplications: fullRunPlatformApplicationsDocument{
 			ArtifactPath: post.PlatformApplications.ArtifactPath, ArgoNamespace: post.PlatformApplications.ArgoNamespace,
 			ProjectName: post.PlatformApplications.ProjectName, RegistrationName: post.PlatformApplications.RegistrationName,
-			SourceRepository: post.PlatformApplications.SourceRepository, Ledger: ledger, GitOps: post.PlatformApplications.GitOps,
+			SourceRepository: post.PlatformApplications.SourceRepository, Ledger: ledger, GitOps: gitOpsAuthority,
 		},
 		PlatformObservation: fullRunPlatformObservationDocument{
-			Ledger: ledger, Argo: post.PlatformObservation.Argo,
+			Ledger: ledger, Argo: gitOpsAuthority,
 			Capability: fullRunCapabilityDocument{
 				Namespace: "ok-observability", Timeout: "10m", CleanupTimeout: "1m", PollInterval: "1s",
 				PushgatewayImage: capabilityFixtureConfig().PushgatewayImage, LogEmitterImage: capabilityFixtureConfig().LogEmitterImage,
@@ -402,7 +406,7 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 			},
 			PollInterval: "1s", PollTimeout: "1m",
 		},
-		AggregateEvidence: fullRunAggregateEvidenceDocument{Ledger: ledger, Management: managementAuthority, Argo: post.AggregateEvidence.Argo, WorkloadKubeconfigFile: workload.KubeconfigFile, WorkloadCAFile: workload.CAFile},
+		AggregateEvidence: fullRunAggregateEvidenceDocument{Ledger: ledger, Management: managementAuthority, Argo: gitOpsAuthority, WorkloadKubeconfigFile: workload.KubeconfigFile, WorkloadCAFile: workload.CAFile},
 		ReceiptDirectory:  receiptDirectory,
 	}
 	return writeBundleFile(t, root, "full-run-manifest.json", mustJSON(t, document)), cleanup
