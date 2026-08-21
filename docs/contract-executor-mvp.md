@@ -2919,6 +2919,18 @@ execution-time parameter. A canonical profile digest makes any future change
 to this list explicit. This checkpoint defines identities only and still
 performs no Secret read, service-proxy request or cluster mutation.
 
+The five semantic checks now have one production evaluator over typed backend
+observations. Every observation must repeat the exact run ID, target Cluster
+UID, synthetic-fixture digest and check-profile digest before its result can
+count. Metrics require both target discovery and the exact synthetic sample;
+dashboards require reachability, the fixed provisioned dashboard and the
+synthetic sample through the named datasource; logs require the exact marker;
+alerts require both firing and delivery; autonomy requires all local services
+ready and zero cross-cluster dependencies. A wrong identity or tampered
+fixture is an error, while a correctly correlated unmet guarantee is `false`.
+The evaluator never repairs an observed mechanism. The Kubernetes backend that
+collects these typed observations remains the next adapter checkpoint.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
