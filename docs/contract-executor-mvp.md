@@ -2963,8 +2963,20 @@ source; autonomy likewise comes from a separate source that must report both
 local readiness and the number of external-cluster dependencies. Neither claim
 is inferred from ordinary reachability. The resulting typed observations feed
 the five-check evaluator without adding repair, retry authority or lifecycle
-ownership. Concrete delivery/autonomy evidence sources and the full-run factory
-wiring remain separate follow-ups.
+ownership.
+
+The two independent claims now have a concrete signed-file consumer. One
+strict JSON envelope carries receiver delivery and autonomy observations bound
+to the exact run ID, target Cluster UID, synthetic-fixture digest and closed
+check-profile digest. The canonical payload digest is signed by a separately
+pinned Ed25519 authority, and the verifier accepts only canonical UTC
+timestamps inside a maximum 30-minute observation window. It reloads the
+private `0600` evidence file for each claim, rejects symlinks, unknown JSON,
+tampering, stale evidence, foreign identities and key substitution, and never
+treats a file path or digest alone as authority. A correlated `false` remains
+a capability result; malformed or unauthoritative evidence is an error.
+Producing that signed delivery/autonomy evidence through bounded live probes
+and wiring the source into the full-run factory remain separate follow-ups.
 
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
