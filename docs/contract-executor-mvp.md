@@ -2943,6 +2943,17 @@ performs no request. There is no list, watch, discovery, arbitrary URL or
 command surface. Parsing these bounded responses into the typed observations
 is the remaining backend step.
 
+The bounded service responses now feed strict, side-effect-free parsers for
+Prometheus samples, the unique named Grafana datasource, the exact provisioned
+dashboard ConfigMap/UID, OpenSearch hit counts and active Alertmanager alerts.
+Malformed, oversized, trailing, ambiguous or foreign evidence errors; a valid
+response that simply lacks the required result evaluates to `false`. Alert
+parsing establishes only `firing` and deliberately cannot manufacture the
+separate `delivered` claim. Likewise, cluster-local service responses alone do
+not prove autonomy under loss of external connectivity. Wiring the parsed
+results together with explicit delivery and autonomy evidence remains the next
+backend-composition boundary.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
