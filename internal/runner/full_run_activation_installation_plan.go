@@ -11,20 +11,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const FullRunExecutionActivationInstallationPlanFormat = "ok147-full-run-execution-activation-installation-plan/v1"
+const FullRunExecutionActivationInstallationPlanFormat = "ok147-full-run-execution-activation-installation-plan/v2"
+
+type FullRunExecutionActivationPrerequisite struct {
+	Order       int    `json:"order"`
+	APIVersion  string `json:"apiVersion"`
+	Kind        string `json:"kind"`
+	Namespace   string `json:"namespace,omitempty"`
+	Name        string `json:"name"`
+	Method      string `json:"method"`
+	ObjectPath  string `json:"objectPath"`
+	ExpectState string `json:"expectState"`
+}
 
 // FullRunExecutionActivationInstallationPlan is the credential-free exact
 // absence/create sequence for the complete ephemeral Stage 1-12 execution.
 // It is evidence and grants no installation authority.
 type FullRunExecutionActivationInstallationPlan struct {
-	Format          string                      `json:"format"`
-	State           string                      `json:"state"`
-	RunID           string                      `json:"runId"`
-	PackageDigest   string                      `json:"packageDigest"`
-	PlanDigest      string                      `json:"planDigest"`
-	Authority       string                      `json:"authority"`
-	Creates         []SubmissionStageCreatePlan `json:"creates"`
-	MutationAllowed bool                        `json:"mutationAllowed"`
+	Format          string                                   `json:"format"`
+	State           string                                   `json:"state"`
+	RunID           string                                   `json:"runId"`
+	PackageDigest   string                                   `json:"packageDigest"`
+	PlanDigest      string                                   `json:"planDigest"`
+	Authority       string                                   `json:"authority"`
+	Prerequisites   []FullRunExecutionActivationPrerequisite `json:"prerequisites"`
+	Creates         []SubmissionStageCreatePlan              `json:"creates"`
+	MutationAllowed bool                                     `json:"mutationAllowed"`
 }
 
 // PlanFullRunExecutionActivationInstallation derives the exact
@@ -109,7 +121,14 @@ func PlanFullRunExecutionActivationInstallation(packaged VerifiedFullRunExecutio
 	return FullRunExecutionActivationInstallationPlan{
 		Format: FullRunExecutionActivationInstallationPlanFormat, State: "VERIFIED", RunID: runID,
 		PackageDigest: receipt.PackageDigest, PlanDigest: receipt.PlanDigest,
-		Authority: packaged.managementAuthority, Creates: creates, MutationAllowed: false,
+		Authority: packaged.managementAuthority,
+		Prerequisites: []FullRunExecutionActivationPrerequisite{
+			{Order: 1, APIVersion: "v1", Kind: "Namespace", Name: submissionStageInputNamespace, Method: http.MethodGet,
+				ObjectPath: "/api/v1/namespaces/" + submissionStageInputNamespace, ExpectState: "PRESENT"},
+			{Order: 2, APIVersion: "v1", Kind: "ServiceAccount", Namespace: submissionStageInputNamespace, Name: "ok147-contract-executor-runtime", Method: http.MethodGet,
+				ObjectPath: "/api/v1/namespaces/" + submissionStageInputNamespace + "/serviceaccounts/ok147-contract-executor-runtime", ExpectState: "PRESENT_EXACT_RUNTIME"},
+		},
+		Creates: creates, MutationAllowed: false,
 	}, nil
 }
 

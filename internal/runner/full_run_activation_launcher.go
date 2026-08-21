@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -107,7 +108,8 @@ func newKubernetesFullRunExecutionActivationLauncher(config submissionStageInsta
 	}, nil
 }
 
-// Launch completes all four exact-name GETs before its first POST, then
+// Launch verifies the exact Namespace and runtime ServiceAccount, completes
+// all four exact-name absence GETs before its first POST, then
 // creates executor Secret, Evidence Authority Secret, NetworkPolicy and Job in
 // that order. It exposes no retry, update, patch, apply, delete or cleanup.
 func (launcher *KubernetesFullRunExecutionActivationLauncher) Launch(ctx context.Context) (FullRunExecutionActivationLaunchReceipt, error) {
@@ -122,6 +124,19 @@ func (launcher *KubernetesFullRunExecutionActivationLauncher) Launch(ctx context
 	}
 	launcher.used = true
 	launcher.mu.Unlock()
+
+	for _, prerequisite := range launcher.plan.Prerequisites {
+		raw, status, err := launcher.request(ctx, http.MethodGet, prerequisite.ObjectPath, nil)
+		if err != nil {
+			return stopFullRunExecutionActivation(receipt, "STOPPED_ZERO_WRITE", err)
+		}
+		if status != http.StatusOK {
+			return stopFullRunExecutionActivation(receipt, "STOPPED_ZERO_WRITE", fullRunActivationStatusError(http.MethodGet, status))
+		}
+		if !fullRunActivationPrerequisiteMatches(raw, prerequisite) {
+			return stopFullRunExecutionActivation(receipt, "STOPPED_ZERO_WRITE", errors.New("full-run activation prerequisite differs; zero-write preflight stopped"))
+		}
+	}
 
 	for _, object := range launcher.objects {
 		_, status, err := launcher.request(ctx, http.MethodGet, object.plan.ObjectPath, nil)
@@ -161,6 +176,29 @@ func (launcher *KubernetesFullRunExecutionActivationLauncher) Launch(ctx context
 	}
 	receipt.State = "ACTIVATED"
 	return receipt, nil
+}
+
+func fullRunActivationPrerequisiteMatches(raw []byte, prerequisite FullRunExecutionActivationPrerequisite) bool {
+	var object map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil || object["apiVersion"] != prerequisite.APIVersion || object["kind"] != prerequisite.Kind {
+		return false
+	}
+	metadata, ok := object["metadata"].(map[string]any)
+	if !ok || metadata["name"] != prerequisite.Name {
+		return false
+	}
+	if prerequisite.Namespace != "" && metadata["namespace"] != prerequisite.Namespace {
+		return false
+	}
+	if prerequisite.ExpectState == "PRESENT_EXACT_RUNTIME" {
+		labels, _ := metadata["labels"].(map[string]any)
+		return object["automountServiceAccountToken"] == false &&
+			labels["app.kubernetes.io/name"] == "ok-cluster-contract-executor" &&
+			labels["openkubes.io/runtime-boundary"] == "submission-stage"
+	}
+	return prerequisite.ExpectState == "PRESENT"
 }
 
 func (launcher *KubernetesFullRunExecutionActivationLauncher) newReceipt() FullRunExecutionActivationLaunchReceipt {

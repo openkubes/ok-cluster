@@ -12,16 +12,19 @@ bounded post-runtime suffix. It is neither a long-running operator nor a
 lifecycle source of truth. CAPI/CAPK, the selected Enablement mechanism and
 GitOps remain the owners of convergence.
 
-The live activation installs exactly three objects on `ok-mgmt`, in this order:
+The live activation installs exactly four objects on `ok-mgmt`, in this order:
 
 ```text
-immutable activation Secret
+immutable executor activation Secret
+        -> immutable Evidence Authority Secret
         -> deny-by-default NetworkPolicy
         -> non-retrying Job
 ```
 
-The launcher first reads all three exact names. Any existing object or failed
-read stops before the first write. Once a write has been attempted, an error or
+The launcher first verifies the exact execution Namespace and tokenless runtime
+ServiceAccount, then reads all four activation-object names. A missing or
+changed prerequisite, existing activation object or failed read stops before
+the first write. Once a write has been attempted, an error or
 uncertain response is preserved as `STOPPED_PARTIAL_OR_UNKNOWN`; do not retry,
 update, patch, apply, delete or clean up under the same authorization.
 
@@ -37,8 +40,9 @@ Before preparation, record and independently review:
 - one current signed authorization for every externally authorized stage;
 - short-lived, isolated credentials for the ledger, management, workload,
   GitOps and authorization endpoints;
-- the four exact `/32` egress destinations and ports;
-- the activation namespace, Secret, NetworkPolicy and Job names;
+- the six exact `/32` egress destinations and ports: infrastructure,
+  management, workload, Argo, authorization and independent evidence collector;
+- the activation namespace, both Secret names, NetworkPolicy and Job names;
 - independent observers, stop authority, recovery authority and evidence
   destination; and
 - the tested recovery procedure for the DEV environment.
@@ -58,11 +62,14 @@ must never be copied into public receipts, logs, commits or pull requests.
 2. Re-run the complete test suite and the offline activation-package tests.
 3. Verify every private input is a regular `0600` file below an existing private
    directory and that every credential is current and narrowly scoped.
-4. Run `post-runtime launch prepare` without installer credentials. Retain only
-   its redaction-safe package receipt and exact three-object installation plan.
+4. Run `full launch prepare` without installer credentials. Retain only its
+   redaction-safe package receipt and exact four-object installation plan.
 5. Compare the prepared package digest with the independently reviewed digest.
-6. Verify by exact-name reads that the activation Secret, NetworkPolicy and Job
-   are all absent. A missing observer or ambiguous result is a failed preflight.
+6. Verify by exact-name reads that Namespace `openkubes-execution-system` and
+   the exact tokenless `ok147-contract-executor-runtime` ServiceAccount exist,
+   then verify that both activation Secrets, NetworkPolicy and Job are absent.
+   A missing prerequisite, missing observer or ambiguous result is a failed
+   preflight.
 7. Confirm that no unrelated lifecycle change or failure injection is active.
 
 Preparation must not contact a cluster or consume the execution authorization.
@@ -70,7 +77,7 @@ Preparation must not contact a cluster or consume the execution authorization.
 ## Single-use launch
 
 Only after the preflight and explicit run authorization may the operator invoke
-`post-runtime launch execute --execute` with:
+`full launch execute --execute` with:
 
 - the exact expected package digest copied from the reviewed preparation;
 - the bound `ok-mgmt` installer endpoint and CA digest;
@@ -78,8 +85,9 @@ Only after the preflight and explicit run authorization may the operator invoke
 - the same immutable private activation inputs used during preparation.
 
 The command rebuilds the package, verifies its identity before opening the
-installer credential, repeats the complete absence preflight and performs at
-most the three ordered creates. Preserve its public receipt even when it stops.
+installer credential, repeats the complete prerequisite and absence preflight
+and performs at most the four ordered creates. Preserve its public receipt even
+when it stops.
 
 ## Observation and completion
 
