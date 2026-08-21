@@ -21,6 +21,7 @@ type fullRunPreRuntimeExecution interface {
 	Run(context.Context) (PreRuntimeExecutionReceipt, error)
 	ReceiptPrefix() ([]StageReceiptSource, error)
 	RuntimeTargetIdentity() (string, error)
+	RuntimeWorkloadAuthority() (WorkloadAuthorityFileResolverConfig, error)
 }
 
 type fullRunExecutionFactories struct {
@@ -94,10 +95,21 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 			if targetErr != nil || !stageReceiptPrefixDigestPattern.MatchString(targetIdentity) {
 				return nil, errors.New("full-run lifecycle target identity is unavailable")
 			}
+			workloadAuthority, workloadErr := preRuntime.RuntimeWorkloadAuthority()
+			if workloadErr != nil {
+				return nil, errors.New("full-run lifecycle workload authority is unavailable")
+			}
 			bound := clonePostRuntimeExecutionConfigForFullRun(postRuntime)
 			bound.TargetCredential.Receipts = append([]StageReceiptSource(nil), privatePrefix...)
+			bound.TargetCredentialRun.Workload = workloadAuthority
+			bound.AggregateEvidence.Runtime.WorkloadTokenFile = workloadAuthority.TokenFile
+			bound.AggregateEvidence.Runtime.WorkloadKubeconfigFile = workloadAuthority.KubeconfigFile
+			bound.AggregateEvidence.Runtime.WorkloadCAFile = workloadAuthority.CAFile
 			bound.TargetRegistration.Expected.TargetIdentityDigest = targetIdentity
 			bound.PlatformApplications.Expected.TargetIdentityDigest = targetIdentity
+			if bound.TargetRegistration.Runtime.Clock != nil {
+				bound.TargetRegistration.Runtime.MaterializationTime = bound.TargetRegistration.Runtime.Clock().UTC()
+			}
 			continuation, openErr := factories.postRuntime(bound)
 			if openErr != nil || continuation == nil {
 				return nil, errors.New("open full-run post-runtime execution")

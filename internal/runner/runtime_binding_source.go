@@ -22,9 +22,10 @@ const (
 )
 
 type KubernetesRuntimeBindingSource struct {
-	endpoint *url.URL
-	token    string
-	client   *http.Client
+	endpoint          *url.URL
+	token             string
+	clientCertificate bool
+	client            *http.Client
 }
 
 // OpenKubernetesRuntimeBindingSource opens one short-lived, read-only workload
@@ -35,9 +36,9 @@ func OpenKubernetesRuntimeBindingSource(authority KubernetesAuthorityConfig, bin
 	return source, err
 }
 
-// openKubernetesRuntimeBindingSource also returns the bounded token so stage
-// composition can prove that workload reads and ledger writes use distinct
-// credentials. The token never leaves this package or enters evidence.
+// openKubernetesRuntimeBindingSource also returns a private credential
+// identity so stage composition can prove that workload reads and ledger
+// writes use distinct credentials. It never enters evidence.
 func openKubernetesRuntimeBindingSource(authority KubernetesAuthorityConfig, binding WorkloadAuthorityBinding) (*KubernetesRuntimeBindingSource, string, error) {
 	if err := validateWorkloadAuthorityBinding(binding); err != nil {
 		return nil, "", errors.New("runtime binding workload authority is invalid")
@@ -45,21 +46,27 @@ func openKubernetesRuntimeBindingSource(authority KubernetesAuthorityConfig, bin
 	if authority.Endpoint != binding.Endpoint || authority.AuthorityIdentity != binding.TargetClusterUID || authority.CABundleDigest != binding.CABundleDigest {
 		return nil, "", errors.New("runtime binding source differs from workload authority")
 	}
-	token, ca, client, err := openBoundedKubernetesMaterial(authority.TokenFile, authority.CAFile)
+	transport, err := openBoundedKubernetesAuthorityTransport(authority)
 	if err != nil {
 		return nil, "", errors.New("open bounded runtime binding credential")
 	}
-	if digest.SHA256(ca) != binding.CABundleDigest {
+	if digest.SHA256(transport.caData) != binding.CABundleDigest {
 		return nil, "", errors.New("runtime binding source CA differs from workload authority")
 	}
-	source, err := newKubernetesRuntimeBindingSource(authority.Endpoint, token, client)
+	source, err := newKubernetesRuntimeBindingSourceWithTransport(authority.Endpoint, transport)
 	if err != nil {
 		return nil, "", err
 	}
-	return source, token, nil
+	return source, transport.credentialIdentity, nil
 }
 
 func newKubernetesRuntimeBindingSource(endpoint, token string, client *http.Client) (*KubernetesRuntimeBindingSource, error) {
+	return newKubernetesRuntimeBindingSourceWithTransport(endpoint, boundedKubernetesTransport{
+		bearerToken: token, credentialIdentity: token, client: client,
+	})
+}
+
+func newKubernetesRuntimeBindingSourceWithTransport(endpoint string, transport boundedKubernetesTransport) (*KubernetesRuntimeBindingSource, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" && parsed.Path != "/" {
 		return nil, errors.New("runtime binding Kubernetes endpoint is invalid")
@@ -68,16 +75,20 @@ func newKubernetesRuntimeBindingSource(endpoint, token string, client *http.Clie
 	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && (host == "127.0.0.1" || host == "::1" || host == "localhost")) {
 		return nil, errors.New("runtime binding Kubernetes endpoint must use HTTPS")
 	}
-	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") || client == nil {
+	tokenMode := transport.bearerToken != ""
+	if tokenMode == transport.clientCertificate || strings.TrimSpace(transport.bearerToken) != transport.bearerToken ||
+		strings.ContainsAny(transport.bearerToken, "\r\n") || transport.client == nil {
 		return nil, errors.New("runtime binding credential or client is invalid")
 	}
-	bounded := *client
+	bounded := *transport.client
 	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if bounded.Timeout == 0 {
 		bounded.Timeout = 15 * time.Second
 	}
 	parsed.Path, parsed.RawPath = "", ""
-	return &KubernetesRuntimeBindingSource{endpoint: parsed, token: token, client: &bounded}, nil
+	return &KubernetesRuntimeBindingSource{
+		endpoint: parsed, token: transport.bearerToken, clientCertificate: transport.clientCertificate, client: &bounded,
+	}, nil
 }
 
 // Observe performs exactly the namespace GET followed by the StorageClass GET.
@@ -118,7 +129,9 @@ func (source *KubernetesRuntimeBindingSource) get(ctx context.Context, path stri
 		return nil, errors.New("construct bounded runtime binding request")
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+source.token)
+	if !source.clientCertificate {
+		request.Header.Set("Authorization", "Bearer "+source.token)
+	}
 	response, err := source.client.Do(request)
 	if err != nil {
 		return nil, errors.New("bounded runtime binding request failed")

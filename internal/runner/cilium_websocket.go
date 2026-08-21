@@ -30,25 +30,39 @@ type websocketExecutorFactory func(*rest.Config, string, string) (remotecommand.
 // command over Kubernetes RemoteCommand v5 WebSockets. It performs exact Pod
 // UID checks immediately before and after exec to reject name-reuse races.
 type KubernetesCiliumWebSocketExecutor struct {
-	endpoint       *url.URL
-	token          string
-	caData         []byte
-	identityClient *http.Client
-	timeout        time.Duration
-	factory        websocketExecutorFactory
+	endpoint          *url.URL
+	token             string
+	clientCertificate bool
+	caData            []byte
+	certificateData   []byte
+	keyData           []byte
+	identityClient    *http.Client
+	timeout           time.Duration
+	factory           websocketExecutorFactory
 }
 
 func newKubernetesCiliumWebSocketExecutor(endpoint, token string, caData []byte, client *http.Client) (*KubernetesCiliumWebSocketExecutor, error) {
+	return newKubernetesCiliumWebSocketExecutorWithTransport(endpoint, boundedKubernetesTransport{
+		bearerToken: token, caData: caData, credentialIdentity: token, client: client,
+	})
+}
+
+func newKubernetesCiliumWebSocketExecutorWithTransport(endpoint string, transport boundedKubernetesTransport) (*KubernetesCiliumWebSocketExecutor, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("Cilium WebSocket executor Kubernetes endpoint is invalid")
 	}
-	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") || len(caData) == 0 || client == nil {
+	tokenMode := transport.bearerToken != ""
+	if tokenMode == transport.clientCertificate || strings.TrimSpace(transport.bearerToken) != transport.bearerToken ||
+		strings.ContainsAny(transport.bearerToken, "\r\n") || len(transport.caData) == 0 || transport.client == nil ||
+		transport.clientCertificate && (len(transport.certificateData) == 0 || len(transport.keyData) == 0) {
 		return nil, errors.New("Cilium WebSocket executor credential material is invalid")
 	}
 	parsed.Path, parsed.RawPath = "", ""
 	return &KubernetesCiliumWebSocketExecutor{
-		endpoint: parsed, token: token, caData: append([]byte(nil), caData...), identityClient: client,
+		endpoint: parsed, token: transport.bearerToken, clientCertificate: transport.clientCertificate,
+		caData: append([]byte(nil), transport.caData...), certificateData: append([]byte(nil), transport.certificateData...),
+		keyData: append([]byte(nil), transport.keyData...), identityClient: transport.client,
 		timeout: defaultCiliumExecTimeout, factory: remotecommand.NewWebSocketExecutor,
 	}, nil
 }
@@ -83,6 +97,10 @@ func (executor *KubernetesCiliumWebSocketExecutor) Exec(ctx context.Context, req
 		BearerToken: executor.token, Timeout: executor.timeout, DisableCompression: true,
 		Proxy: func(*http.Request) (*url.URL, error) { return nil, nil },
 	}
+	if executor.clientCertificate {
+		restConfig.TLSClientConfig.CertData = append([]byte(nil), executor.certificateData...)
+		restConfig.TLSClientConfig.KeyData = append([]byte(nil), executor.keyData...)
+	}
 	stream, err := executor.factory(restConfig, http.MethodGet, execURL.String())
 	if err != nil {
 		return nil, errors.New("construct fixed Cilium WebSocket stream")
@@ -114,7 +132,9 @@ func (executor *KubernetesCiliumWebSocketExecutor) verifyPodUID(ctx context.Cont
 		return errors.New("construct exact Cilium Pod identity request")
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+executor.token)
+	if !executor.clientCertificate {
+		request.Header.Set("Authorization", "Bearer "+executor.token)
+	}
 	response, err := executor.identityClient.Do(request)
 	if err != nil {
 		return errors.New("exact Cilium Pod identity request failed")

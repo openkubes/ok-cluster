@@ -25,16 +25,18 @@ const (
 type KubernetesClientConfig struct {
 	Endpoint          string
 	BearerToken       string
+	ClientCertificate bool
 	AuthorityIdentity string
 	Client            *http.Client
 }
 
 // KubernetesClient performs only exact GET and collection POST operations.
 type KubernetesClient struct {
-	endpoint  *url.URL
-	token     string
-	authority string
-	client    *http.Client
+	endpoint          *url.URL
+	token             string
+	clientCertificate bool
+	authority         string
+	client            *http.Client
 }
 
 // ObjectResult records only redacted, immutable submission identity.
@@ -88,8 +90,9 @@ func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, erro
 	if endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (host == "127.0.0.1" || host == "::1" || host == "localhost")) {
 		return nil, errors.New("submission Kubernetes endpoint must use HTTPS")
 	}
-	if config.BearerToken == "" || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") {
-		return nil, errors.New("submission Kubernetes bearer token is invalid")
+	tokenMode := config.BearerToken != ""
+	if tokenMode == config.ClientCertificate || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") {
+		return nil, errors.New("submission Kubernetes transport credential is invalid")
 	}
 	if (!validName(config.AuthorityIdentity, 63) || strings.Contains(config.AuthorityIdentity, ".")) && !immutableDigestPattern.MatchString(config.AuthorityIdentity) {
 		return nil, errors.New("submission authority identity is invalid")
@@ -103,7 +106,10 @@ func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, erro
 		client.Timeout = 15 * time.Second
 	}
 	endpoint.Path = ""
-	return &KubernetesClient{endpoint: endpoint, token: config.BearerToken, authority: config.AuthorityIdentity, client: &client}, nil
+	return &KubernetesClient{
+		endpoint: endpoint, token: config.BearerToken, clientCertificate: config.ClientCertificate,
+		authority: config.AuthorityIdentity, client: &client,
+	}, nil
 }
 
 // Submit verifies existing objects or creates missing objects in projection
@@ -191,7 +197,9 @@ func (client *KubernetesClient) request(ctx context.Context, method, path string
 		return nil, 0, errors.New("construct bounded Kubernetes request")
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+client.token)
+	if !client.clientCertificate {
+		request.Header.Set("Authorization", "Bearer "+client.token)
+	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

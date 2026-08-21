@@ -18,6 +18,7 @@ type AggregateEvidenceStageFileRuntimeConfig struct {
 	Argo                     KubernetesAuthorityConfig
 	ExpectedWorkloadEndpoint string
 	WorkloadTokenFile        string
+	WorkloadKubeconfigFile   string
 	WorkloadCAFile           string
 	RuntimeMaterialPath      string
 	RuntimeReceiptPath       string
@@ -39,7 +40,7 @@ func LoadAggregateEvidenceStageFileRuntime(config AggregateEvidenceStageFileRunt
 	if config.ExpectedWorkloadEndpoint == "" || runtime.material.Target.WorkloadAPIEndpoint != config.ExpectedWorkloadEndpoint {
 		return AggregateEvidenceStageRuntimeConfig{}, errors.New("aggregate workload endpoint differs from runtime binding")
 	}
-	if config.WorkloadTokenFile == "" || config.WorkloadCAFile == "" {
+	if config.WorkloadCAFile == "" || (config.WorkloadTokenFile != "") == (config.WorkloadKubeconfigFile != "") {
 		return AggregateEvidenceStageRuntimeConfig{}, errors.New("aggregate workload credential files are required")
 	}
 	capability, err := OpenPlatformCapabilityFileResolver(PlatformCapabilityFileResolverConfig{
@@ -55,7 +56,8 @@ func LoadAggregateEvidenceStageFileRuntime(config AggregateEvidenceStageFileRunt
 	config.Argo.CABundleDigest = digest.SHA256(argoCA)
 	workload := &runtimeBindingWorkloadAuthorityResolver{
 		targetUID: runtime.material.Target.CAPIClusterUID, endpoint: runtime.material.Target.WorkloadAPIEndpoint,
-		caDigest: runtime.material.Target.WorkloadAPICADigest, tokenFile: config.WorkloadTokenFile, caFile: config.WorkloadCAFile,
+		caDigest: runtime.material.Target.WorkloadAPICADigest, tokenFile: config.WorkloadTokenFile,
+		kubeconfigFile: config.WorkloadKubeconfigFile, caFile: config.WorkloadCAFile,
 	}
 	return AggregateEvidenceStageRuntimeConfig{
 		Ledger: config.Ledger,
@@ -72,7 +74,7 @@ func LoadAggregateEvidenceStageFileRuntime(config AggregateEvidenceStageFileRunt
 }
 
 type runtimeBindingWorkloadAuthorityResolver struct {
-	targetUID, endpoint, caDigest, tokenFile, caFile string
+	targetUID, endpoint, caDigest, tokenFile, kubeconfigFile, caFile string
 }
 
 func (resolver *runtimeBindingWorkloadAuthorityResolver) ResolveWorkloadAuthority(ctx context.Context, policy observation.Policy) (KubernetesAuthorityConfig, error) {
@@ -87,7 +89,8 @@ func (resolver *runtimeBindingWorkloadAuthorityResolver) ResolveWorkloadAuthorit
 	}
 	return KubernetesAuthorityConfig{
 		Endpoint: resolver.endpoint, AuthorityIdentity: resolver.targetUID,
-		TokenFile: resolver.tokenFile, CAFile: resolver.caFile, CABundleDigest: resolver.caDigest,
+		TokenFile: resolver.tokenFile, KubeconfigFile: resolver.kubeconfigFile,
+		CAFile: resolver.caFile, CABundleDigest: resolver.caDigest,
 	}, nil
 }
 

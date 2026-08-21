@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/projection"
@@ -40,6 +41,74 @@ func TestLoadFullRunExecutionManifestBindsFreshPrivateContract(t *testing.T) {
 		if strings.Contains(strings.ToLower(string(public)), forbidden) {
 			t.Fatalf("public full-run manifest receipt disclosed %q", forbidden)
 		}
+	}
+}
+
+func TestVerifiedFullRunExecutionManifestBuildsConcreteConfiguration(t *testing.T) {
+	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	manifest, _, err := LoadFullRunExecutionManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := func() time.Time { return time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC) }
+	probe := &recordingPlatformCapabilityProbe{result: PlatformCapabilityProbeResult{Passed: true}}
+	capability, err := NewFirstRunPlatformCapabilityResolver(probe, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var capabilityBinding FullRunPlatformCapabilityBinding
+	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
+		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(binding FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
+			capabilityBinding = binding
+			return capability, nil
+		}),
+		Clock: clock, Wait: WaitWithTimer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := config.PreRuntime.WorkloadAuthority.(*KubernetesLifecycleWorkloadAuthorityMaterializer); !ok {
+		t.Fatalf("manifest did not select lifecycle workload materialization: %T", config.PreRuntime.WorkloadAuthority)
+	}
+	if config.PreRuntime.NetworkObservation.Workload.KubeconfigFile == "" || config.PreRuntime.NetworkObservation.Workload.TokenFile != "" ||
+		config.PostRuntime.TargetCredentialRun.Workload != config.PreRuntime.NetworkObservation.Workload ||
+		config.PostRuntime.PlatformObservation.Capability == nil || config.PostRuntime.AggregateEvidence.Capability == nil ||
+		config.PostRuntime.TargetRegistration.Expected.TargetIdentityDigest != "" ||
+		!config.PostRuntime.TargetRegistration.Runtime.MaterializationTime.IsZero() {
+		t.Fatalf("concrete full-run configuration widened a dynamic boundary: %#v", config)
+	}
+	if _, err := OpenFullRunExecution(config); err != nil {
+		t.Fatalf("verified manifest did not open concrete full-run execution: %v", err)
+	}
+	if probe.calls != 0 {
+		t.Fatal("opening the full-run manifest executed the Platform capability probe")
+	}
+	if capabilityBinding.Namespace != "ok-observability" || capabilityBinding.Timeout != 10*time.Minute ||
+		capabilityBinding.CleanupTimeout != time.Minute || capabilityBinding.IntentRevision == "" ||
+		capabilityBinding.PlatformRevision == "" || capabilityBinding.ExecutionFixture == "" ||
+		capabilityBinding.ContractDigest == "" || capabilityBinding.ExecutableDigest == "" {
+		t.Fatalf("capability factory did not receive the exact manifest binding: %#v", capabilityBinding)
+	}
+}
+
+func TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction(t *testing.T) {
+	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	clock := func() time.Time { return time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC) }
+	probe := &recordingPlatformCapabilityProbe{result: PlatformCapabilityProbeResult{Passed: true}}
+	capability, _ := NewFirstRunPlatformCapabilityResolver(probe, clock)
+	execution, receipt, err := OpenFullRunExecutionManifest(manifestPath, FullRunExecutionManifestRuntime{
+		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
+			return capability, nil
+		}),
+		Clock: clock, Wait: WaitWithTimer,
+	})
+	if err != nil || execution == nil || receipt.State != "VERIFIED" {
+		t.Fatalf("direct full-run manifest activation failed: receipt=%#v execution=%#v err=%v", receipt, execution, err)
+	}
+	if probe.calls != 0 {
+		t.Fatal("direct full-run activation executed a runtime capability")
 	}
 }
 
@@ -253,18 +322,24 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 		t.Fatal(err)
 	}
 	workload := fullRunWorkloadRuntimeDocument{
-		BindingPath: filepath.Join(privateRoot, "workload-authority.json"),
-		TokenFile:   filepath.Join(privateRoot, "workload-token"),
-		CAFile:      filepath.Join(privateRoot, "workload-ca.crt"),
+		BindingPath:    filepath.Join(privateRoot, "workload-authority.json"),
+		KubeconfigFile: filepath.Join(privateRoot, "workload-kubeconfig.yaml"),
+		CAFile:         filepath.Join(privateRoot, "workload-ca.crt"),
 	}
 	ledger := post.TargetCredential.Ledger
 	managementAuthority := post.AggregateEvidence.Management
+	managementAuthority.TokenFile = writeBundleFile(t, root, "full-management-token", []byte("full-management-token"))
+	managementAuthority.CAFile = ledger.CAFile
+	managementCA, err := os.ReadFile(ledger.CAFile)
+	if err != nil {
+		cleanup()
+		t.Fatal(err)
+	}
+	managementAuthority.CABundleDigest = digest.SHA256(managementCA)
 	infrastructureAuthority := managementAuthority
 	infrastructureAuthority.AuthorityIdentity = expected.InfrastructureAuthority
 	infrastructureAuthority.Endpoint = "https://192.0.2.13:6443"
-	infrastructureAuthority.TokenFile = "/private/tmp/infra-token"
-	infrastructureAuthority.CAFile = "/private/tmp/infra-ca"
-	infrastructureAuthority.CABundleDigest = runnerStageSHA("5")
+	infrastructureAuthority.TokenFile = writeBundleFile(t, root, "full-infrastructure-token", []byte("full-infrastructure-token"))
 	providerRuntime := fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: infrastructureAuthority}
 	managementRuntime := fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: managementAuthority}
 	document := fullRunExecutionManifestDocument{
@@ -301,7 +376,7 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 			Capability:   fullRunCapabilityDocument{Namespace: "ok-observability", Timeout: "10m", CleanupTimeout: "1m"},
 			PollInterval: "1s", PollTimeout: "1m",
 		},
-		AggregateEvidence: fullRunAggregateEvidenceDocument{Ledger: ledger, Management: managementAuthority, Argo: post.AggregateEvidence.Argo, WorkloadTokenFile: workload.TokenFile, WorkloadCAFile: workload.CAFile},
+		AggregateEvidence: fullRunAggregateEvidenceDocument{Ledger: ledger, Management: managementAuthority, Argo: post.AggregateEvidence.Argo, WorkloadKubeconfigFile: workload.KubeconfigFile, WorkloadCAFile: workload.CAFile},
 		ReceiptDirectory:  receiptDirectory,
 	}
 	return writeBundleFile(t, root, "full-run-manifest.json", mustJSON(t, document)), cleanup

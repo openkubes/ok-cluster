@@ -69,6 +69,12 @@ func TestPreRuntimeExecutionComposesExactPrefixWithDynamicAuthorization(t *testi
 	if err != nil || targetIdentity != digest.SHA256([]byte("11111111-1111-4111-8111-111111111111")) {
 		t.Fatalf("completed runtime target identity differs: %q %v", targetIdentity, err)
 	}
+	workloadAuthority, err := executor.RuntimeWorkloadAuthority()
+	if err != nil || workloadAuthority.Path != config.NetworkObservation.Workload.Path ||
+		workloadAuthority.TokenFile != config.NetworkObservation.Workload.TokenFile ||
+		workloadAuthority.CAFile != config.NetworkObservation.Workload.CAFile || workloadAuthority.ExpectedBindingDigest == "" {
+		t.Fatalf("completed workload authority differs: %#v %v", workloadAuthority, err)
+	}
 	prefix[0].Digest = runnerStageSHA("f")
 	again, err := executor.ReceiptPrefix()
 	if err != nil || again[0].Digest == prefix[0].Digest {
@@ -85,6 +91,45 @@ func TestPreRuntimeExecutionComposesExactPrefixWithDynamicAuthorization(t *testi
 		if strings.Contains(string(public), forbidden) {
 			t.Fatalf("public pre-runtime receipt exposed %q", forbidden)
 		}
+	}
+}
+
+func TestPreRuntimeExecutionStopsBeforeNetworkWhenWorkloadAuthorityIsUnavailable(t *testing.T) {
+	config, factories, calls, _ := preRuntimeExecutionFixture(t)
+	config.WorkloadAuthority = PreRuntimeWorkloadAuthorityResolverFunc(func(context.Context, StageResumeConfig) (WorkloadAuthorityFileResolverConfig, error) {
+		return WorkloadAuthorityFileResolverConfig{}, errors.New("private workload authority unavailable")
+	})
+	executor, err := openPreRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "network-observation" || len(receipt.Checkpoints) != 4 ||
+		!reflect.DeepEqual(*calls, preRuntimeStageOrder[:4]) {
+		t.Fatalf("missing workload authority crossed Stage 5: %#v calls=%v err=%v", receipt, *calls, err)
+	}
+	if _, err := executor.RuntimeWorkloadAuthority(); err == nil {
+		t.Fatal("partial execution exposed workload authority")
+	}
+}
+
+func TestPreRuntimeExecutionRejectsWorkloadAuthorityOutsideBoundDestinations(t *testing.T) {
+	config, factories, calls, _ := preRuntimeExecutionFixture(t)
+	config.WorkloadAuthority = PreRuntimeWorkloadAuthorityResolverFunc(func(context.Context, StageResumeConfig) (WorkloadAuthorityFileResolverConfig, error) {
+		return WorkloadAuthorityFileResolverConfig{
+			Path:                  filepath.Join(filepath.Dir(config.NetworkObservation.Workload.Path), "foreign-binding.json"),
+			ExpectedBindingDigest: runnerStageSHA("c"), TokenFile: config.NetworkObservation.Workload.TokenFile,
+			CAFile: config.NetworkObservation.Workload.CAFile,
+		}, nil
+	})
+	executor, err := openPreRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "network-observation" || len(receipt.Checkpoints) != 4 ||
+		!reflect.DeepEqual(*calls, preRuntimeStageOrder[:4]) {
+		t.Fatalf("foreign workload destination crossed Stage 5: %#v calls=%v err=%v", receipt, *calls, err)
 	}
 }
 
@@ -178,6 +223,18 @@ func TestOpenPreRuntimeExecutionRejectsUnsafeReceiptDestination(t *testing.T) {
 	}
 }
 
+func TestOpenPreRuntimeExecutionRejectsPreboundWorkloadIdentity(t *testing.T) {
+	config, factories, calls, _ := preRuntimeExecutionFixture(t)
+	prebound := config.NetworkObservation.Workload
+	prebound.ExpectedBindingDigest = runnerStageSHA("d")
+	config.NetworkObservation.Workload = prebound
+	config.RuntimeBinding.Workload = prebound
+	config.TargetAccess.Runtime.Workload = prebound
+	if _, err := openPreRuntimeExecution(config, factories); err == nil || len(*calls) != 0 {
+		t.Fatalf("caller-selected workload identity was accepted: calls=%v err=%v", *calls, err)
+	}
+}
+
 func TestBindingStageReceiptReferenceRetainsExactPublicIdentity(t *testing.T) {
 	receipt := execution.BindingStageRunReceipt{
 		Format: execution.BindingStageReceiptFormat, State: "COMPLETED_SUCCEEDED", PlanDigest: runnerStageSHA("a"),
@@ -218,6 +275,23 @@ func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRun
 	}
 	config.RuntimeBinding.OutputPath = filepath.Join(runtimeDirectory, "runtime-binding.json")
 	config.RuntimeBindingReceiptPath = filepath.Join(runtimeDirectory, "runtime-binding-receipt.json")
+	workloadAuthority := WorkloadAuthorityFileResolverConfig{
+		Path:      filepath.Join(runtimeDirectory, "workload-authority.json"),
+		TokenFile: filepath.Join(runtimeDirectory, "workload-token"),
+		CAFile:    filepath.Join(runtimeDirectory, "workload-ca.crt"),
+	}
+	config.NetworkObservation.Workload = workloadAuthority
+	config.RuntimeBinding.Workload = workloadAuthority
+	config.TargetAccess.Runtime.Workload = workloadAuthority
+	resolvedWorkloadAuthority := workloadAuthority
+	resolvedWorkloadAuthority.ExpectedBindingDigest = runnerStageSHA("b")
+	config.WorkloadAuthority = PreRuntimeWorkloadAuthorityResolverFunc(func(_ context.Context, resume StageResumeConfig) (WorkloadAuthorityFileResolverConfig, error) {
+		decision, err := InspectStageResume(resume)
+		if err != nil || decision.State != "NEXT" || decision.StageID != "network-observation" || len(resume.Receipts) != 4 {
+			return WorkloadAuthorityFileResolverConfig{}, errors.New("workload authority resolved outside exact Stage-5 cursor")
+		}
+		return resolvedWorkloadAuthority, nil
+	})
 	store := &ledger.Ledger{}
 	verified := map[string]stagereceipt.Verified{}
 	makeReceipt := func(resume StageResumeConfig, stageID string) (stagereceipt.Verified, string) {
@@ -274,10 +348,16 @@ func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRun
 		enablement: func(resume StageResumeConfig, _ StageAuthorizationSource, _ PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
 			return staged(resume, "enablement"), nil
 		},
-		network: func(resume StageResumeConfig, _ PreRuntimeExecutionConfig) (preRuntimeObservationInvocation, error) {
+		network: func(resume StageResumeConfig, config PreRuntimeExecutionConfig) (preRuntimeObservationInvocation, error) {
+			if config.NetworkObservation.Workload != resolvedWorkloadAuthority {
+				return preRuntimeObservationInvocation{}, errors.New("network stage lacks resolved workload authority")
+			}
 			return observation(resume, "network-observation"), nil
 		},
 		binding: func(resume StageResumeConfig, config PreRuntimeExecutionConfig) (preRuntimeBindingInvocation, error) {
+			if config.RuntimeBinding.Workload != resolvedWorkloadAuthority {
+				return preRuntimeBindingInvocation{}, errors.New("runtime binding stage lacks resolved workload authority")
+			}
 			var materialReceipt RuntimeBindingMaterialReceipt
 			return preRuntimeBindingInvocation{store: store, run: func(context.Context) (execution.BindingStageRunReceipt, error) {
 				calls = append(calls, "runtime-binding")
@@ -326,7 +406,10 @@ func preRuntimeExecutionFixture(t *testing.T) (PreRuntimeExecutionConfig, preRun
 				return materialReceipt, nil
 			}}, nil
 		},
-		target: func(resume StageResumeConfig, _ StageAuthorizationSource, _ PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
+		target: func(resume StageResumeConfig, _ StageAuthorizationSource, config PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
+			if config.TargetAccess.Runtime.Workload != resolvedWorkloadAuthority {
+				return preRuntimeStagedInvocation{}, errors.New("target access stage lacks resolved workload authority")
+			}
 			return staged(resume, "target-access"), nil
 		},
 		persist: func(_ context.Context, _ StageResumeConfig, _ *ledger.Ledger, reference StageRunReceiptReference, path string) (StageReceiptSource, error) {
