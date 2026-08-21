@@ -194,3 +194,50 @@ func TestObservabilityEvidenceIdentityMaterializeWritesOnlyRedactedReceipt(t *te
 		})
 	}
 }
+
+func TestObservabilityEvidenceAuthorityMaterializeBindsProjectedSecretIdentity(t *testing.T) {
+	previous := materializeObservabilityEvidenceAuthority
+	defer func() { materializeObservabilityEvidenceAuthority = previous }()
+	calls := 0
+	materializeObservabilityEvidenceAuthority = func(config runner.ObservabilityEvidenceAuthorityMaterializationConfig) (runner.ObservabilityEvidenceAuthorityMaterializationReceipt, error) {
+		calls++
+		if config.SourceDirectory != "/var/run/openkubes/evidence-source" || config.DestinationDirectory != "/var/run/openkubes/evidence-authority" ||
+			config.ExpectedActivationDigest != testSHA("1") || config.ExpectedEvidenceKeyID != testSHA("2") ||
+			config.ExpectedCollectorCADigest != testSHA("3") {
+			t.Fatalf("authority materialization differs: %#v", config)
+		}
+		return runner.ObservabilityEvidenceAuthorityMaterializationReceipt{
+			Format: runner.ObservabilityEvidenceAuthorityMaterializationReceiptFormat, State: "MATERIALIZED_VERIFIED",
+			ActivationDigest: testSHA("1"), ManifestDigest: testSHA("4"), EvidenceKeyID: testSHA("2"),
+			CollectorCADigest: testSHA("3"), FileCount: 4, TotalBytes: 1024,
+		}, nil
+	}
+	arguments := []string{
+		"cluster", "stage", "evidence", "observability", "authority", "materialize",
+		"--source", "/var/run/openkubes/evidence-source", "--destination", "/var/run/openkubes/evidence-authority",
+		"--expected-activation-digest", testSHA("1"), "--expected-evidence-key-id", testSHA("2"),
+		"--expected-collector-ca-digest", testSHA("3"), "--materialize",
+	}
+	var stdout bytes.Buffer
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || strings.Contains(stdout.String(), "/var/run/") || strings.Contains(strings.ToLower(stdout.String()), "token") {
+		t.Fatalf("unsafe authority materialization output: calls=%d output=%s", calls, stdout.String())
+	}
+	for name, invalid := range map[string][]string{
+		"missing activation": removeArgument(arguments, "--materialize"),
+		"missing source":     removeArgument(arguments, "/var/run/openkubes/evidence-source"),
+		"bad activation":     replaceArgument(arguments, "--expected-activation-digest", "bad"),
+		"bad key":            replaceArgument(arguments, "--expected-evidence-key-id", "bad"),
+		"bad CA":             replaceArgument(arguments, "--expected-collector-ca-digest", "bad"),
+		"positional":         append(append([]string(nil), arguments...), "extra"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			if err := run(invalid, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || calls != before {
+				t.Fatalf("unsafe authority input reached materializer: calls=%d before=%d err=%v", calls, before, err)
+			}
+		})
+	}
+}

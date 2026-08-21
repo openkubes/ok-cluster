@@ -64,6 +64,38 @@ var produceIndependentObservabilityEvidence = func(ctx context.Context, config o
 }
 
 var materializeObservabilityEvidenceIdentity = runner.MaterializeObservabilityIndependentEvidenceIdentity
+var materializeObservabilityEvidenceAuthority = runner.MaterializeObservabilityEvidenceAuthority
+
+func runClusterStageEvidenceObservabilityAuthorityMaterialize(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage evidence observability authority materialize", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	source := flags.String("source", "", "projected immutable evidence-authority Secret directory")
+	destination := flags.String("destination", "", "fixed private evidence-authority directory")
+	activationDigest := flags.String("expected-activation-digest", "", "exact canonical evidence-authority activation digest")
+	evidenceKeyID := flags.String("expected-evidence-key-id", "", "exact Ed25519 evidence public-key identity")
+	collectorCADigest := flags.String("expected-collector-ca-digest", "", "exact collector CA identity")
+	materialize := flags.Bool("materialize", false, "create the private regular-file authority directory")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || !*materialize || *source == "" || *destination == "" ||
+		!sha256DigestPattern.MatchString(*activationDigest) || !sha256DigestPattern.MatchString(*evidenceKeyID) ||
+		!sha256DigestPattern.MatchString(*collectorCADigest) {
+		return errors.New("observability evidence authority materialization input is incomplete")
+	}
+	receipt, err := materializeObservabilityEvidenceAuthority(runner.ObservabilityEvidenceAuthorityMaterializationConfig{
+		SourceDirectory: *source, DestinationDirectory: *destination,
+		ExpectedActivationDigest: *activationDigest, ExpectedEvidenceKeyID: *evidenceKeyID,
+		ExpectedCollectorCADigest: *collectorCADigest,
+	})
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if encodeErr := encoder.Encode(receipt); encodeErr != nil {
+		return encodeErr
+	}
+	return err
+}
 
 func runClusterStageEvidenceObservabilityIdentityMaterialize(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster stage evidence observability identity materialize", flag.ContinueOnError)
