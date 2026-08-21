@@ -36,16 +36,17 @@ type CapabilityObject struct {
 }
 
 type ObservabilitySyntheticFixture struct {
-	Format             string             `json:"format"`
-	RunID              string             `json:"runId"`
-	Namespace          string             `json:"namespace"`
-	MetricsWorkload    string             `json:"metricsWorkload"`
-	LogEmitter         string             `json:"logEmitter"`
-	MetricName         string             `json:"metricName"`
-	AlertTriggerMetric string             `json:"alertTriggerMetric"`
-	LogMarker          string             `json:"logMarker"`
-	Objects            []CapabilityObject `json:"objects"`
-	FixtureDigest      string             `json:"fixtureDigest"`
+	Format                 string             `json:"format"`
+	RunID                  string             `json:"runId"`
+	Namespace              string             `json:"namespace"`
+	MetricsWorkload        string             `json:"metricsWorkload"`
+	LogEmitter             string             `json:"logEmitter"`
+	MetricName             string             `json:"metricName"`
+	AlertTriggerMetric     string             `json:"alertTriggerMetric"`
+	AlertCorrelationLabels []string           `json:"alertCorrelationLabels"`
+	LogMarker              string             `json:"logMarker"`
+	Objects                []CapabilityObject `json:"objects"`
+	FixtureDigest          string             `json:"fixtureDigest"`
 }
 
 // BuildObservabilitySyntheticFixture is the only manifest constructor for the
@@ -62,9 +63,10 @@ func BuildObservabilitySyntheticFixture(run ObservabilityCapabilityRun, config O
 	fixture := ObservabilitySyntheticFixture{
 		Format: ObservabilitySyntheticFixtureFormat, RunID: run.RunID, Namespace: run.Namespace,
 		MetricsWorkload: "ok147-metrics-" + suffix, LogEmitter: "ok147-log-" + suffix,
-		MetricName:         "ok_observability_contract_metric_" + suffix,
-		AlertTriggerMetric: "ok_observability_synthetic_alert_trigger",
-		LogMarker:          "OK147_OBSERVABILITY_LOG_" + suffix,
+		MetricName:             "ok_observability_contract_metric_" + suffix,
+		AlertTriggerMetric:     "ok_observability_synthetic_alert_trigger",
+		AlertCorrelationLabels: []string{"fixture_digest", "run_id", "target_cluster_uid"},
+		LogMarker:              "OK147_OBSERVABILITY_LOG_" + suffix,
 	}
 	metadata := func(name string) map[string]any {
 		return map[string]any{
