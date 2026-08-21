@@ -16,6 +16,14 @@ type FullRunExecutionConfig struct {
 	PreRuntime              PreRuntimeExecutionConfig
 	PostRuntime             PostRuntimeExecutionConfig
 	WorkloadAuthorityBinder FullRunWorkloadAuthorityBinder
+	EvidenceIdentityBinder  FullRunEvidenceIdentityBinder
+}
+
+// FullRunEvidenceIdentityBinder publishes only the private, derived
+// independent-evidence identity after the exact Stage 1-6 prefix is durable.
+// It must not contact an API or produce capability evidence itself.
+type FullRunEvidenceIdentityBinder interface {
+	BindFullRunEvidenceIdentity([]StageReceiptSource) error
 }
 
 type fullRunPreRuntimeExecution interface {
@@ -103,6 +111,11 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 			if config.WorkloadAuthorityBinder != nil {
 				if bindErr := config.WorkloadAuthorityBinder.BindFullRunWorkloadAuthority(workloadAuthority); bindErr != nil {
 					return nil, errors.New("bind full-run capability workload authority")
+				}
+			}
+			if config.EvidenceIdentityBinder != nil {
+				if bindErr := config.EvidenceIdentityBinder.BindFullRunEvidenceIdentity(append([]StageReceiptSource(nil), privatePrefix[:6]...)); bindErr != nil {
+					return nil, errors.New("bind full-run independent evidence identity")
 				}
 			}
 			bound := clonePostRuntimeExecutionConfigForFullRun(postRuntime)

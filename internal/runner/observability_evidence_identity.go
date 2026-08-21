@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 
 	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/digest"
@@ -50,6 +51,62 @@ type ObservabilityIndependentEvidenceIdentityMaterialConfig struct {
 	OutputPath                  string
 }
 
+type fullRunObservabilityEvidenceIdentityBinder struct {
+	manifest     VerifiedFullRunExecutionManifest
+	identityPath string
+	receiptPath  string
+
+	mu   sync.Mutex
+	used bool
+}
+
+func newFullRunObservabilityEvidenceIdentityBinder(manifest VerifiedFullRunExecutionManifest, identityPath, receiptPath string) FullRunEvidenceIdentityBinder {
+	return &fullRunObservabilityEvidenceIdentityBinder{manifest: manifest, identityPath: identityPath, receiptPath: receiptPath}
+}
+
+// BindFullRunEvidenceIdentity is invoked by the concrete full-run exactly
+// after Stage 1-7 succeeds. It deliberately replays only Stage 1-6 because
+// runtime binding, not target-access mutation, is the identity authority.
+func (binder *fullRunObservabilityEvidenceIdentityBinder) BindFullRunEvidenceIdentity(prefix []StageReceiptSource) error {
+	if binder == nil || !binder.manifest.verified || len(prefix) != 6 || binder.identityPath == "" || binder.receiptPath == "" || binder.identityPath == binder.receiptPath {
+		return errors.New("full-run observability evidence identity binder is invalid")
+	}
+	binder.mu.Lock()
+	if binder.used {
+		binder.mu.Unlock()
+		return errors.New("full-run observability evidence identity binder is single-use")
+	}
+	binder.used = true
+	binder.mu.Unlock()
+	document := binder.manifest.document
+	runtime, err := LoadRuntimeBindingMaterialFiles(RuntimeBindingMaterialFileConfig{
+		Bundle: StageResumeConfig{
+			PlanPath: document.Plan.Path, PlanExpected: fullRunPlanExpected(document.Plan.Expected),
+			Receipts: append([]StageReceiptSource(nil), prefix...),
+		},
+		MaterialPath: document.RuntimeBinding.MaterialPath, ReceiptPath: document.RuntimeBinding.ReceiptPath,
+	})
+	if err != nil {
+		return errors.New("load full-run runtime binding for evidence identity")
+	}
+	material, err := deriveObservabilityIndependentEvidenceIdentity(binder.manifest, runtime)
+	if err != nil {
+		return err
+	}
+	receipt, err := persistObservabilityIndependentEvidenceIdentity(material, binder.identityPath)
+	if err != nil || receipt.State != "WRITTEN_VERIFIED" {
+		return errors.New("persist full-run observability evidence identity")
+	}
+	receiptRaw, err := canonicalObservabilityIndependentEvidenceIdentityReceipt(receipt)
+	if err != nil {
+		return errors.New("canonicalize full-run observability evidence identity receipt")
+	}
+	if err := writeExclusivePrivateMaterial(binder.receiptPath, receiptRaw); err != nil {
+		return errors.New("persist full-run observability evidence identity receipt")
+	}
+	return nil
+}
+
 // MaterializeObservabilityIndependentEvidenceIdentity derives the evidence
 // authority identity from the verified full-run contract and the durable
 // lifecycle-produced runtime binding. It performs local reads and one
@@ -86,15 +143,26 @@ func MaterializeObservabilityIndependentEvidenceIdentity(config ObservabilityInd
 	if err != nil {
 		return receipt, err
 	}
+	return persistObservabilityIndependentEvidenceIdentity(material, config.OutputPath)
+}
+
+func persistObservabilityIndependentEvidenceIdentity(material ObservabilityIndependentEvidenceIdentityMaterial, outputPath string) (ObservabilityIndependentEvidenceIdentityReceipt, error) {
+	receipt := ObservabilityIndependentEvidenceIdentityReceipt{
+		Format: ObservabilityIndependentEvidenceIdentityReceiptFormat, State: "STOPPED_ZERO_WRITE",
+		PersistentMutationAllowed: false,
+	}
+	if err := validateRuntimeBindingOutputPath(outputPath); err != nil {
+		return receipt, errors.New("observability evidence identity destination is invalid")
+	}
 	raw, err := canonicalObservabilityIndependentEvidenceIdentity(material)
 	if err != nil || len(raw) == 0 || len(raw) > maximumObservabilityEvidenceIdentityBytes {
 		return receipt, errors.New("canonicalize observability evidence identity")
 	}
 	receipt.State = "STOPPED_PARTIAL_OR_UNKNOWN"
-	if err := writeExclusivePrivateMaterial(config.OutputPath, raw); err != nil {
+	if err := writeExclusivePrivateMaterial(outputPath, raw); err != nil {
 		return receipt, errors.New("materialize private observability evidence identity")
 	}
-	info, err := os.Lstat(config.OutputPath)
+	info, err := os.Lstat(outputPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || info.Size() != int64(len(raw)) {
 		return receipt, errors.New("observability evidence identity metadata differs after write")
 	}
@@ -186,3 +254,19 @@ func canonicalObservabilityIndependentEvidenceIdentity(material ObservabilityInd
 	}
 	return contract.JCS(value)
 }
+
+func canonicalObservabilityIndependentEvidenceIdentityReceipt(receipt ObservabilityIndependentEvidenceIdentityReceipt) ([]byte, error) {
+	raw, err := json.Marshal(receipt)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return contract.JCS(value)
+}
+
+var _ FullRunEvidenceIdentityBinder = (*fullRunObservabilityEvidenceIdentityBinder)(nil)

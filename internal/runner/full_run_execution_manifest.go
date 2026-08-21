@@ -111,14 +111,16 @@ type fullRunPlatformApplicationsDocument struct {
 }
 
 type fullRunCapabilityDocument struct {
-	Namespace                string `json:"namespace"`
-	Timeout                  string `json:"timeout"`
-	CleanupTimeout           string `json:"cleanupTimeout"`
-	PollInterval             string `json:"pollInterval"`
-	PushgatewayImage         string `json:"pushgatewayImage"`
-	LogEmitterImage          string `json:"logEmitterImage"`
-	IndependentEvidencePath  string `json:"independentEvidencePath"`
-	IndependentEvidenceKeyID string `json:"independentEvidenceKeyId"`
+	Namespace                              string `json:"namespace"`
+	Timeout                                string `json:"timeout"`
+	CleanupTimeout                         string `json:"cleanupTimeout"`
+	PollInterval                           string `json:"pollInterval"`
+	PushgatewayImage                       string `json:"pushgatewayImage"`
+	LogEmitterImage                        string `json:"logEmitterImage"`
+	IndependentEvidenceIdentityPath        string `json:"independentEvidenceIdentityPath"`
+	IndependentEvidenceIdentityReceiptPath string `json:"independentEvidenceIdentityReceiptPath"`
+	IndependentEvidencePath                string `json:"independentEvidencePath"`
+	IndependentEvidenceKeyID               string `json:"independentEvidenceKeyId"`
 }
 
 type fullRunPlatformObservationDocument struct {
@@ -328,6 +330,11 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 		SourceRepository: document.PlatformApplications.SourceRepository, Profile: clonePlatformProfile(manifest.platform),
 	}
 	config := FullRunExecutionConfig{
+		EvidenceIdentityBinder: newFullRunObservabilityEvidenceIdentityBinder(
+			manifest,
+			document.PlatformObservation.Capability.IndependentEvidenceIdentityPath,
+			document.PlatformObservation.Capability.IndependentEvidenceIdentityReceiptPath,
+		),
 		PreRuntime: PreRuntimeExecutionConfig{
 			PlanPath: document.Plan.Path, PlanExpected: expected,
 			ProjectionManifestPath: document.Projection.ManifestPath, ProjectionRoot: document.Projection.Root,
@@ -685,7 +692,12 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 		return errors.New("full-run workload runtime binding differs between stages")
 	}
 	workloadCredentialPath := workload.KubeconfigFile
-	runtimeOutputs := []string{workload.BindingPath, workloadCredentialPath, workload.CAFile, document.RuntimeBinding.MaterialPath, document.RuntimeBinding.ReceiptPath}
+	runtimeOutputs := []string{
+		workload.BindingPath, workloadCredentialPath, workload.CAFile,
+		document.RuntimeBinding.MaterialPath, document.RuntimeBinding.ReceiptPath,
+		document.PlatformObservation.Capability.IndependentEvidenceIdentityPath,
+		document.PlatformObservation.Capability.IndependentEvidenceIdentityReceiptPath,
+	}
 	seenOutputs := make(map[string]struct{}, len(runtimeOutputs)+len(preRuntimeStageOrder)+4)
 	for _, path := range runtimeOutputs {
 		if !validFullRunAbsolutePath(path) {
