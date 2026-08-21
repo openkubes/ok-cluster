@@ -615,7 +615,7 @@ func verifyFullRunStaticArtifacts(document fullRunExecutionManifestDocument, pla
 		TargetIdentityDigest: targetIdentity, WorkloadAuthority: targetIdentity,
 		Objects: append([]projection.ResourceIdentity(nil), document.TargetAccess.ExpectedObjects...),
 	})
-	if err != nil || len(access.Workload.Objects) != 8 || access.Workload.Objects[1].Identity.Kind != "ServiceAccount" {
+	if err != nil || len(access.Workload.Objects) != 11 || access.Workload.Objects[1].Identity.Kind != "ServiceAccount" || access.Workload.Objects[8].Identity.Kind != "ServiceAccount" {
 		return errors.New("verify full-run target-access artifact")
 	}
 	targetCredentialStage, _, err := plan.Stage("target-credential")

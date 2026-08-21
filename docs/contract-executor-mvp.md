@@ -2469,15 +2469,19 @@ the launcher after receiving the exact candidate digest and explicit
 ## Target-access verified projection
 
 The first `target-access` boundary is again side-effect free. One externally
-rendered artifact is accepted only when its digest and exact eight-object
+rendered artifact is accepted only when its digest and exact eleven-object
 identity list are independently supplied by the staged experiment. The plan
 binds `R`, `P`, `FixtureDigest` and the immutable workload target identity to a
 single workload authority plane.
 
 The allowlist fixes this order: Namespace, manager ServiceAccount,
 ClusterRole/ClusterRoleBinding, one namespaced Role/RoleBinding pair for the
-Platform namespace and one Role/RoleBinding pair for `kube-system`. Every
-binding must refer to the exact manager ServiceAccount and corresponding role.
+Platform namespace, one Role/RoleBinding pair for `kube-system`, and a
+dedicated autonomy-observer ServiceAccount/Role/RoleBinding in the Platform
+namespace. The observer ServiceAccount disables automatic token mounting and
+its Role is fixed to exactly `get` Services and `list` EndpointSlices. Manager
+bindings must refer to the exact manager ServiceAccount; the observer binding
+must refer only to the exact observer ServiceAccount and Role.
 Wildcard permissions, non-resource URLs, user/group subjects, runtime metadata,
 status, aliases, symlinks, additional or reordered objects fail closed. The
 verified output is `ok147-bounded-target-access-plan/v1` with
@@ -2496,14 +2500,14 @@ only plan, authorization, artifact, target and object digests and remains
 `mutationAllowed: false`.
 
 Bundle loading still does not claim the grant, open the durable ledger, read a
-workload credential or submit any of the eight objects.
+workload credential or submit any of the eleven objects.
 
 ## Target-access Job launch boundary
 
 The verified Target Access bundle can now be materialized as one immutable
 ConfigMap plus a deny-all NetworkPolicy and non-retrying Job. The package binds
 the exact six-receipt predecessor chain, signed `CreateTargetAccess` grant,
-eight-object workload artifact, private runtime-binding digest, immutable
+eleven-object workload artifact, private runtime-binding digest, immutable
 target identity, runner image and the distinct ledger/workload API endpoints.
 The private runtime binding, CA bundles and credentials are never embedded in
 the ConfigMap or exposed by its receipt.

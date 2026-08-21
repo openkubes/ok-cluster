@@ -11,7 +11,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/projection"
 )
 
-func TestLoadTargetAccessBindsExactEightObjectSet(t *testing.T) {
+func TestLoadTargetAccessBindsExactElevenObjectSet(t *testing.T) {
 	raw := targetAccessYAML()
 	path := writeTargetAccessArtifact(t, raw)
 	expected := targetAccessExpected(raw)
@@ -22,7 +22,7 @@ func TestLoadTargetAccessBindsExactEightObjectSet(t *testing.T) {
 	if plan.Format != TargetAccessPlanFormat || plan.IntentRevision != expected.IntentRevision || plan.PlatformRevision != expected.PlatformRevision || plan.TargetIdentityDigest != expected.TargetIdentityDigest || plan.MutationAllowed {
 		t.Fatalf("unexpected target-access plan: %#v", plan)
 	}
-	if plan.Workload.Identity != expected.TargetIdentityDigest || plan.Workload.Role != "target-access-writer" || len(plan.Workload.Objects) != 8 {
+	if plan.Workload.Identity != expected.TargetIdentityDigest || plan.Workload.Role != "target-access-writer" || len(plan.Workload.Objects) != 11 {
 		t.Fatalf("unexpected target-access authority plane: %#v", plan.Workload)
 	}
 	for index, object := range plan.Workload.Objects {
@@ -32,7 +32,7 @@ func TestLoadTargetAccessBindsExactEightObjectSet(t *testing.T) {
 	}
 
 	again, err := LoadTargetAccess(path, expected)
-	if err != nil || again.ArtifactDigest != plan.ArtifactDigest || again.Workload.Objects[7].Digest != plan.Workload.Objects[7].Digest {
+	if err != nil || again.ArtifactDigest != plan.ArtifactDigest || again.Workload.Objects[10].Digest != plan.Workload.Objects[10].Digest {
 		t.Fatalf("target-access plan is not reproducible: %#v %v", again, err)
 	}
 }
@@ -61,6 +61,15 @@ func TestLoadTargetAccessFailsClosed(t *testing.T) {
 		},
 		"unknown rule field": func(raw []byte) []byte {
 			return []byte(strings.Replace(string(raw), "resources: [customresourcedefinitions]\n    verbs:", "resources: [customresourcedefinitions]\n    arbitrary: true\n    verbs:", 1))
+		},
+		"observer write permission": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "resources: [services]\n    verbs: [get]\n  - apiGroups: [discovery.k8s.io]", "resources: [services]\n    verbs: [get, create]\n  - apiGroups: [discovery.k8s.io]", 1))
+		},
+		"observer automatic token": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "name: ok147-observability-autonomy\n  namespace: ok-observability\nautomountServiceAccountToken: false", "name: ok147-observability-autonomy\n  namespace: ok-observability\nautomountServiceAccountToken: true", 1))
+		},
+		"observer bound to manager": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "{kind: ServiceAccount, name: ok147-observability-autonomy, namespace: ok-observability}", "{kind: ServiceAccount, name: ok147-argocd-manager, namespace: kube-system}", 1))
 		},
 		"status": func(raw []byte) []byte { return append(raw, []byte("status: {}\n")...) },
 	} {
@@ -109,6 +118,9 @@ func targetAccessExpected(raw []byte) TargetAccessExpected {
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-argocd-platform"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "kube-system", Name: "ok147-argocd-kube-system"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "kube-system", Name: "ok147-argocd-kube-system"},
+			{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 		},
 	}
 }
@@ -202,6 +214,38 @@ roleRef:
   name: ok147-argocd-kube-system
 subjects:
   - {kind: ServiceAccount, name: ok147-argocd-manager, namespace: kube-system}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ok147-observability-autonomy
+  namespace: ok-observability
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ok147-observability-autonomy
+  namespace: ok-observability
+rules:
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ok147-observability-autonomy
+  namespace: ok-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ok147-observability-autonomy
+subjects:
+  - {kind: ServiceAccount, name: ok147-observability-autonomy, namespace: ok-observability}
 `)
 }
 

@@ -27,6 +27,9 @@ type TargetAccessStagePackageConfig struct {
 	PlatformRoleBinding           string
 	KubeSystemRole                string
 	KubeSystemRoleBinding         string
+	ObserverServiceAccount        string
+	ObserverRole                  string
+	ObserverRoleBinding           string
 	LedgerAPIURL                  string
 	LedgerAPICIDR                 string
 	LedgerCredentialSecret        string
@@ -38,7 +41,7 @@ type TargetAccessStagePackageConfig struct {
 }
 
 // TargetAccessStagePackageReceipt is a redaction-safe offline composition
-// proof. TargetAccessDigest covers the eight rendered target objects while
+// proof. TargetAccessDigest covers the eleven rendered target objects while
 // TargetIdentityDigest correlates the package to the CAPI-created workload.
 type TargetAccessStagePackageReceipt struct {
 	Format                string   `json:"format"`
@@ -84,6 +87,9 @@ func BuildTargetAccessStagePackage(config TargetAccessStagePackageConfig) (Verif
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: config.ObservabilityNamespace, Name: config.PlatformRoleBinding},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "kube-system", Name: config.KubeSystemRole},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "kube-system", Name: config.KubeSystemRoleBinding},
+		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: config.ObservabilityNamespace, Name: config.ObserverServiceAccount},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: config.ObservabilityNamespace, Name: config.ObserverRole},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: config.ObservabilityNamespace, Name: config.ObserverRoleBinding},
 	}
 	if len(config.Bundle.ExpectedObjects) != len(jobObjects) {
 		return VerifiedTargetAccessStagePackage{}, errors.New("target-access Job object identities differ from verified bundle")
@@ -129,6 +135,7 @@ func BuildTargetAccessStagePackage(config TargetAccessStagePackageConfig) (Verif
 		ClusterRole: config.ClusterRole, ClusterRoleBinding: config.ClusterRoleBinding,
 		PlatformRole: config.PlatformRole, PlatformRoleBinding: config.PlatformRoleBinding,
 		KubeSystemRole: config.KubeSystemRole, KubeSystemRoleBinding: config.KubeSystemRoleBinding,
+		ObserverServiceAccount: config.ObserverServiceAccount, ObserverRole: config.ObserverRole, ObserverRoleBinding: config.ObserverRoleBinding,
 		LedgerAPIURL: config.LedgerAPIURL, LedgerAPICIDR: config.LedgerAPICIDR, LedgerCredentialSecret: config.LedgerCredentialSecret,
 		WorkloadAPIURL: config.WorkloadAPIURL, WorkloadAPICIDR: config.WorkloadAPICIDR, WorkloadCredentialSecret: config.WorkloadCredentialSecret,
 		WorkloadBindingDigest: config.ExpectedWorkloadBindingDigest,

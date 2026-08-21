@@ -24,10 +24,10 @@ func TestLoadTargetAccessStageBundleBindsPrefixGrantArtifactAndTarget(t *testing
 		t.Fatalf("unexpected target-access decision: %#v %v", decision, err)
 	}
 	receipt, err := bundle.Receipt()
-	if err != nil || receipt.Format != TargetAccessStageBundleReceiptFormat || receipt.State != "VERIFIED" || receipt.PlanDigest != fixture.plan.PlanDigest || receipt.TargetIdentityDigest != digest.SHA256([]byte(targetAccessRuntimeUID)) || receipt.AuthorizationDigest == "" || len(receipt.ObjectDigests) != 8 || receipt.MutationAllowed {
+	if err != nil || receipt.Format != TargetAccessStageBundleReceiptFormat || receipt.State != "VERIFIED" || receipt.PlanDigest != fixture.plan.PlanDigest || receipt.TargetIdentityDigest != digest.SHA256([]byte(targetAccessRuntimeUID)) || receipt.AuthorizationDigest == "" || len(receipt.ObjectDigests) != 11 || receipt.MutationAllowed {
 		t.Fatalf("unexpected target-access bundle receipt: %#v %v", receipt, err)
 	}
-	if bundle.projection.Workload.Identity != digest.SHA256([]byte(targetAccessRuntimeUID)) || len(bundle.projection.Workload.Objects) != 8 {
+	if bundle.projection.Workload.Identity != digest.SHA256([]byte(targetAccessRuntimeUID)) || len(bundle.projection.Workload.Objects) != 11 {
 		t.Fatalf("target-access projection differs: %#v", bundle.projection)
 	}
 }
@@ -223,6 +223,9 @@ func runnerTargetAccessIdentities() []projection.ResourceIdentity {
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-argocd-platform"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "kube-system", Name: "ok147-argocd-kube-system"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "kube-system", Name: "ok147-argocd-kube-system"},
+		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 	}
 }
 
@@ -273,5 +276,23 @@ kind: RoleBinding
 metadata: {name: ok147-argocd-kube-system, namespace: kube-system}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ok147-argocd-kube-system}
 subjects: [{kind: ServiceAccount, name: ok147-argocd-manager, namespace: kube-system}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: ok147-observability-autonomy, namespace: ok-observability}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ok147-observability-autonomy, namespace: ok-observability}
+rules:
+  - {apiGroups: [""], resources: [services], verbs: [get]}
+  - {apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: ok147-observability-autonomy, namespace: ok-observability}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ok147-observability-autonomy}
+subjects: [{kind: ServiceAccount, name: ok147-observability-autonomy, namespace: ok-observability}]
 `)
 }

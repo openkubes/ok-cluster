@@ -121,6 +121,12 @@ spec:
             - "${OK147_KUBE_SYSTEM_ROLE}"
             - --kube-system-rolebinding
             - "${OK147_KUBE_SYSTEM_ROLEBINDING}"
+            - --observer-serviceaccount
+            - "${OK147_OBSERVER_SERVICEACCOUNT}"
+            - --observer-role
+            - "${OK147_OBSERVER_ROLE}"
+            - --observer-rolebinding
+            - "${OK147_OBSERVER_ROLEBINDING}"
             - --ledger-api-endpoint
             - "${OK147_LEDGER_API_URL}"
             - --ledger-token-file
