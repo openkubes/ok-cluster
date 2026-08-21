@@ -21,10 +21,11 @@ immutable executor activation Secret
         -> non-retrying Job
 ```
 
-The launcher first verifies the exact execution Namespace and tokenless runtime
-ServiceAccount, then reads all four activation-object names. A missing or
-changed prerequisite, existing activation object or failed read stops before
-the first write. Once a write has been attempted, an error or
+The launcher first verifies the exact execution Namespace, tokenless runtime
+ServiceAccount and complete Ledger writer/admission boundary, then reads all
+four activation-object names. A missing or changed prerequisite, existing
+activation object or failed read stops before the first write. Once a write has
+been attempted, an error or
 uncertain response is preserved as `STOPPED_PARTIAL_OR_UNKNOWN`; do not retry,
 update, patch, apply, delete or clean up under the same authorization.
 
@@ -65,11 +66,12 @@ must never be copied into public receipts, logs, commits or pull requests.
 4. Run `full launch prepare` without installer credentials. Retain only its
    redaction-safe package receipt and exact four-object installation plan.
 5. Compare the prepared package digest with the independently reviewed digest.
-6. Verify by exact-name reads that Namespace `openkubes-execution-system` and
-   the exact tokenless `ok147-contract-executor-runtime` ServiceAccount exist,
-   then verify that both activation Secrets, NetworkPolicy and Job are absent.
-   A missing prerequisite, missing observer or ambiguous result is a failed
-   preflight.
+6. Verify by exact-name reads that Namespace `openkubes-execution-system`, the
+   exact tokenless `ok147-contract-executor-runtime` ServiceAccount, Ledger
+   writer ServiceAccount/Role/RoleBinding and fail-closed Ledger admission
+   policy/binding exist. Then verify that both activation Secrets,
+   NetworkPolicy and Job are absent. A missing prerequisite, missing observer
+   or ambiguous result is a failed preflight.
 7. Confirm that no unrelated lifecycle change or failure injection is active.
 
 Preparation must not contact a cluster or consume the execution authorization.

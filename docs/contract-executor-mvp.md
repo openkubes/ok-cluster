@@ -3337,12 +3337,13 @@ does not open a Kubernetes credential, contact an API or grant installation
 authority.
 
 The corresponding bounded installer derives a credential-free plan from that
-same verified package. It first requires the exact execution Namespace and
-tokenless runtime ServiceAccount, then four exact absence GETs before its
-first write and permits only this order:
+same verified package. It first requires the exact execution Namespace,
+tokenless runtime ServiceAccount and Ledger writer/admission boundary, then
+four exact absence GETs before its first write and permits only this order:
 
 ```text
-GET Namespace and runtime ServiceAccount (both must match)
+GET Namespace, runtime ServiceAccount and Ledger writer/admission prerequisites
+        ↓ all seven prerequisites match
 GET executor Secret, Evidence Authority Secret, NetworkPolicy, Job
         ↓ all four absent
 POST executor Secret

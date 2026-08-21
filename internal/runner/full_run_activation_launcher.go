@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -198,7 +199,119 @@ func fullRunActivationPrerequisiteMatches(raw []byte, prerequisite FullRunExecut
 			labels["app.kubernetes.io/name"] == "ok-cluster-contract-executor" &&
 			labels["openkubes.io/runtime-boundary"] == "submission-stage"
 	}
-	return prerequisite.ExpectState == "PRESENT"
+	switch prerequisite.ExpectState {
+	case "PRESENT":
+		return true
+	case "PRESENT_EXACT_LEDGER_WRITER":
+		return object["automountServiceAccountToken"] == false
+	case "PRESENT_EXACT_LEDGER_WRITER_ROLE":
+		return fullRunLedgerWriterRoleMatches(object)
+	case "PRESENT_EXACT_LEDGER_WRITER_BINDING":
+		return fullRunLedgerWriterBindingMatches(object)
+	case "PRESENT_EXACT_LEDGER_POLICY":
+		return fullRunLedgerPolicyMatches(object)
+	case "PRESENT_EXACT_LEDGER_POLICY_BINDING":
+		return fullRunLedgerPolicyBindingMatches(object)
+	default:
+		return false
+	}
+}
+
+func fullRunLedgerWriterRoleMatches(object map[string]any) bool {
+	rules, ok := object["rules"].([]any)
+	if !ok || len(rules) != 1 {
+		return false
+	}
+	rule, ok := rules[0].(map[string]any)
+	return ok && exactStringSet(rule["apiGroups"], "") && exactStringSet(rule["resources"], "configmaps") &&
+		exactStringSet(rule["verbs"], "create", "get") && rule["resourceNames"] == nil && rule["nonResourceURLs"] == nil
+}
+
+func fullRunLedgerWriterBindingMatches(object map[string]any) bool {
+	roleRef, _ := object["roleRef"].(map[string]any)
+	subjects, ok := object["subjects"].([]any)
+	if !ok || len(subjects) != 1 || roleRef["apiGroup"] != "rbac.authorization.k8s.io" || roleRef["kind"] != "Role" || roleRef["name"] != "ok147-ledger-writer" {
+		return false
+	}
+	subject, _ := subjects[0].(map[string]any)
+	return subject["kind"] == "ServiceAccount" && subject["name"] == "ok147-contract-executor" && subject["namespace"] == submissionStageInputNamespace
+}
+
+func fullRunLedgerPolicyMatches(object map[string]any) bool {
+	spec, _ := object["spec"].(map[string]any)
+	constraints, _ := spec["matchConstraints"].(map[string]any)
+	rules, ok := constraints["resourceRules"].([]any)
+	if spec["failurePolicy"] != "Fail" || !ok || len(rules) != 1 {
+		return false
+	}
+	rule, _ := rules[0].(map[string]any)
+	if !exactStringSet(rule["apiGroups"], "") || !exactStringSet(rule["apiVersions"], "v1") ||
+		!exactStringSet(rule["operations"], "CREATE") || !exactStringSet(rule["resources"], "configmaps") || rule["scope"] != "Namespaced" {
+		return false
+	}
+	conditions, ok := spec["matchConditions"].([]any)
+	if !ok || len(conditions) != 1 {
+		return false
+	}
+	condition, _ := conditions[0].(map[string]any)
+	if condition["name"] != "exact-ledger-namespace" || strings.Join(strings.Fields(textValue(condition["expression"])), " ") != "request.namespace == 'openkubes-execution-system'" {
+		return false
+	}
+	validations, ok := spec["validations"].([]any)
+	if !ok || len(validations) != len(fullRunLedgerValidationExpressions) {
+		return false
+	}
+	actual := make([]string, 0, len(validations))
+	for _, value := range validations {
+		validation, _ := value.(map[string]any)
+		actual = append(actual, strings.Join(strings.Fields(textValue(validation["expression"])), " "))
+	}
+	sort.Strings(actual)
+	expected := append([]string(nil), fullRunLedgerValidationExpressions...)
+	sort.Strings(expected)
+	return equalStringList(actual, expected)
+}
+
+var fullRunLedgerValidationExpressions = []string{
+	"request.userInfo.username == 'system:serviceaccount:openkubes-execution-system:ok147-contract-executor'",
+	"object.metadata.name.matches('^ok147-(claim|outcome|receipt)-[0-9a-f]{48}$')",
+	"has(object.immutable) && object.immutable == true",
+	"has(object.data) && size(object.data) == 1 && 'receipt.json' in object.data && (!has(object.binaryData) || size(object.binaryData) == 0)",
+	"has(object.metadata.labels) && size(object.metadata.labels) == 2 && object.metadata.labels['app.kubernetes.io/managed-by'] == 'ok-cluster-contract-executor' && object.metadata.labels['openkubes.io/ledger-record'] in ['claim', 'outcome', 'stage-receipt']",
+	"(object.metadata.name.startsWith('ok147-claim-') && object.metadata.labels['openkubes.io/ledger-record'] == 'claim') || (object.metadata.name.startsWith('ok147-outcome-') && object.metadata.labels['openkubes.io/ledger-record'] == 'outcome') || (object.metadata.name.startsWith('ok147-receipt-') && object.metadata.labels['openkubes.io/ledger-record'] == 'stage-receipt')",
+	"has(object.metadata.annotations) && size(object.metadata.annotations) == 2 && object.metadata.annotations['openkubes.io/record-key'].matches('^[0-9a-f]{64}$') && object.metadata.annotations['openkubes.io/content-digest'].matches('^sha256:[0-9a-f]{64}$')",
+}
+
+func fullRunLedgerPolicyBindingMatches(object map[string]any) bool {
+	spec, _ := object["spec"].(map[string]any)
+	resources, _ := spec["matchResources"].(map[string]any)
+	selector, _ := resources["namespaceSelector"].(map[string]any)
+	labels, _ := selector["matchLabels"].(map[string]any)
+	return spec["policyName"] == "ok147-contract-executor-ledger" && exactStringSet(spec["validationActions"], "Deny") &&
+		len(labels) == 1 && labels["kubernetes.io/metadata.name"] == submissionStageInputNamespace
+}
+
+func exactStringSet(value any, expected ...string) bool {
+	values, ok := value.([]any)
+	if !ok || len(values) != len(expected) {
+		return false
+	}
+	actual := make([]string, 0, len(values))
+	for _, item := range values {
+		text, ok := item.(string)
+		if !ok {
+			return false
+		}
+		actual = append(actual, text)
+	}
+	sort.Strings(actual)
+	sort.Strings(expected)
+	return equalStringList(actual, expected)
+}
+
+func textValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func (launcher *KubernetesFullRunExecutionActivationLauncher) newReceipt() FullRunExecutionActivationLaunchReceipt {
