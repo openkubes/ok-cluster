@@ -2908,6 +2908,15 @@ closes the credential-mode mismatch between the full-run lifecycle authority
 and the existing fixed synthetic fixture client; the five concrete
 observability checks remain the next separate adapter boundary.
 
+The full-run executor now also exposes a single-assignment in-process bridge
+from that lifecycle handoff to the concrete capability factory. The bridge is
+unresolvable before Stage 5, accepts exactly one already validated
+`WorkloadAuthorityFileResolverConfig` after the complete Stage 1-7 prefix and
+is bound before the Stage 8-12 suffix opens. A missing, invalid or second
+binding stops before Stage 8. No endpoint, credential path or target UID is
+added to the manifest or public activation receipt, and opening the bridge
+does not read a private file or contact an API.
+
 The first part of that adapter boundary is now a closed, deterministic
 `ok-observability-standard` check profile. It freezes the four Service names,
 ports and schemes; the credential Secret and exact key names; the platform

@@ -82,6 +82,65 @@ func TestFullRunExecutionComposesConcreteAdaptersWithExactPrivatePrefix(t *testi
 	}
 }
 
+func TestFullRunExecutionBindsCapabilityAuthorityBeforeOpeningSuffix(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	binder := &recordingFullRunWorkloadAuthorityBinder{}
+	config := testFullRunExecutionConfig()
+	config.WorkloadAuthorityBinder = binder
+	postCalls := 0
+	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			if binder.calls != 1 || binder.bound != preRuntime.workload {
+				t.Fatalf("suffix opened before exact capability authority binding: %#v", binder)
+			}
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || binder.calls != 1 || postCalls != 1 {
+		t.Fatalf("full run did not bind capability authority once: receipt=%#v binder=%#v post=%d err=%v", receipt, binder, postCalls, err)
+	}
+}
+
+func TestFullRunExecutionStopsBeforeSuffixWhenCapabilityAuthorityBindingFails(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	binder := &recordingFullRunWorkloadAuthorityBinder{err: errors.New("binding rejected")}
+	config := testFullRunExecutionConfig()
+	config.WorkloadAuthorityBinder = binder
+	postCalls := 0
+	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" || len(receipt.Checkpoints) != 7 || binder.calls != 1 || postCalls != 0 {
+		t.Fatalf("failed capability binding opened suffix: receipt=%#v binder=%#v post=%d err=%v", receipt, binder, postCalls, err)
+	}
+}
+
+type recordingFullRunWorkloadAuthorityBinder struct {
+	bound WorkloadAuthorityFileResolverConfig
+	calls int
+	err   error
+}
+
+func (binder *recordingFullRunWorkloadAuthorityBinder) BindFullRunWorkloadAuthority(config WorkloadAuthorityFileResolverConfig) error {
+	binder.calls++
+	binder.bound = config
+	return binder.err
+}
+
 func TestFullRunExecutionRunsRealPreRuntimeAdapterBeforeOpeningSuffix(t *testing.T) {
 	preConfig, preFactories, calls, _ := preRuntimeExecutionFixture(t)
 	config := FullRunExecutionConfig{PreRuntime: preConfig}
