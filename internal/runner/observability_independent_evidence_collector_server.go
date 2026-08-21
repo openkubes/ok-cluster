@@ -19,12 +19,24 @@ import (
 )
 
 const (
-	ObservabilityAlertDeliveryRecordFormat = "ok147-observability-alert-delivery-record/v1"
-	observabilityAlertmanagerWebhookPath   = "/v1/observability/alertmanager-webhook"
-	maximumAlertmanagerWebhookBytes        = 256 * 1024
-	maximumAlertDeliveryRecordBytes        = 32 * 1024
-	maximumCollectorTokenBytes             = 8 * 1024
+	ObservabilityAlertDeliveryRecordFormat                       = "ok147-observability-alert-delivery-record/v1"
+	ObservabilityIndependentEvidenceCollectorServerReceiptFormat = "ok147-observability-independent-evidence-collector-server-receipt/v1"
+	observabilityAlertmanagerWebhookPath                         = "/v1/observability/alertmanager-webhook"
+	maximumAlertmanagerWebhookBytes                              = 256 * 1024
+	maximumAlertDeliveryRecordBytes                              = 32 * 1024
+	maximumCollectorTokenBytes                                   = 8 * 1024
 )
+
+type ObservabilityIndependentEvidenceCollectorServerReceipt struct {
+	Format                 string `json:"format"`
+	State                  string `json:"state"`
+	ProfileDigest          string `json:"profileDigest"`
+	ReceiverIdentityDigest string `json:"receiverIdentityDigest"`
+	MaximumRecordAge       string `json:"maximumRecordAge"`
+	DurableDeliveryState   string `json:"durableDeliveryState"`
+	SeparateAuthorities    bool   `json:"separateAuthorities"`
+	MutationAllowed        bool   `json:"mutationAllowed"`
+}
 
 type ObservabilityCollectorAutonomyObservation struct {
 	ClusterLocalServicesReady   bool
@@ -124,6 +136,19 @@ func OpenObservabilityIndependentEvidenceCollectorServer(config ObservabilityInd
 		receiverName: config.ReceiverName, receiverIdentity: receiverIdentity,
 		profileDigest: config.Profile.Digest(), alertName: config.Profile.alertName,
 		maximumRecordAge: config.MaximumRecordAge, clock: config.Clock, autonomy: config.AutonomyObserver,
+	}, nil
+}
+
+func (server *ObservabilityIndependentEvidenceCollectorServer) Receipt() (ObservabilityIndependentEvidenceCollectorServerReceipt, error) {
+	if server == nil || server.clock == nil || server.autonomy == nil || !platformInputDigestPattern.MatchString(server.profileDigest) ||
+		!platformInputDigestPattern.MatchString(server.receiverIdentity) || server.maximumRecordAge < time.Minute {
+		return ObservabilityIndependentEvidenceCollectorServerReceipt{}, errors.New("observability independent evidence collector server is invalid")
+	}
+	return ObservabilityIndependentEvidenceCollectorServerReceipt{
+		Format: ObservabilityIndependentEvidenceCollectorServerReceiptFormat, State: "VERIFIED",
+		ProfileDigest: server.profileDigest, ReceiverIdentityDigest: server.receiverIdentity,
+		MaximumRecordAge: server.maximumRecordAge.String(), DurableDeliveryState: "create-only-local/v1",
+		SeparateAuthorities: true, MutationAllowed: false,
 	}, nil
 }
 
