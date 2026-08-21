@@ -2,15 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/runner"
 )
 
-func TestFullRunPrepareVerifiesWithoutExecutionSurface(t *testing.T) {
+func TestFullRunPrepareVerifiesWithoutOpeningExecution(t *testing.T) {
 	previous := prepareFullRunExecutionManifest
 	defer func() { prepareFullRunExecutionManifest = previous }()
 	calls := 0
@@ -34,6 +36,119 @@ func TestFullRunPrepareVerifiesWithoutExecutionSurface(t *testing.T) {
 			t.Fatalf("full-run preparation disclosed %q: %s", forbidden, stdout.String())
 		}
 	}
+}
+
+func TestFullRunExecuteRequiresPreparedIdentityAndRunsOnce(t *testing.T) {
+	previous := openKubernetesObservabilityFullRunActivation
+	previousPrepare := prepareFullRunExecutionManifest
+	defer func() {
+		openKubernetesObservabilityFullRunActivation = previous
+		prepareFullRunExecutionManifest = previousPrepare
+	}()
+	prepareFullRunExecutionManifest = func(string) (runner.FullRunExecutionManifestReceipt, error) {
+		return fullRunCLITestManifestReceipt("VERIFIED"), nil
+	}
+	runs := 0
+	openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+		if path != "/private/full-run.json" || publicKeyPath != "/private/evidence.pub" {
+			t.Fatalf("concrete activation input differs: path=%q key=%q", path, publicKeyPath)
+		}
+		return fullRunActivationRunnerFunc(func(ctx context.Context) (runner.FullRunExecutionActivationReceipt, error) {
+				runs++
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > fullRunExecutionTimeout {
+					t.Fatalf("full-run execution was not bounded: %v %v", deadline, ok)
+				}
+				return runner.FullRunExecutionActivationReceipt{
+					Format: runner.FullRunExecutionActivationReceiptFormat, State: "SUCCEEDED",
+					Manifest: fullRunCLITestManifestReceipt("VERIFIED"),
+				}, nil
+			}), runner.FullRunExecutionActivationReceipt{
+				Format: runner.FullRunExecutionActivationReceiptFormat, State: "PREPARED",
+				Manifest: fullRunCLITestManifestReceipt("VERIFIED"),
+			}, nil
+	}
+	arguments := []string{
+		"cluster", "stage", "run", "full", "execute", "--manifest", "/private/full-run.json",
+		"--expected-manifest-digest", testSHA("1"), "--independent-evidence-public-key", "/private/evidence.pub", "--execute",
+	}
+	var stdout bytes.Buffer
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt runner.FullRunExecutionActivationReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "SUCCEEDED" || runs != 1 {
+		t.Fatalf("unexpected full-run execution receipt: %#v runs=%d err=%v", receipt, runs, err)
+	}
+	for _, forbidden := range []string{"/private/", "token", "endpoint", "kubeconfig", "certificate", "targetidentity"} {
+		if strings.Contains(strings.ToLower(stdout.String()), forbidden) {
+			t.Fatalf("full-run execution disclosed %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestFullRunExecuteFailsClosedBeforeRun(t *testing.T) {
+	previous := openKubernetesObservabilityFullRunActivation
+	previousPrepare := prepareFullRunExecutionManifest
+	defer func() {
+		openKubernetesObservabilityFullRunActivation = previous
+		prepareFullRunExecutionManifest = previousPrepare
+	}()
+	prepareFullRunExecutionManifest = func(string) (runner.FullRunExecutionManifestReceipt, error) {
+		return fullRunCLITestManifestReceipt("VERIFIED"), nil
+	}
+	opens, runs := 0, 0
+	openKubernetesObservabilityFullRunActivation = func(string, string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+		opens++
+		return fullRunActivationRunnerFunc(func(context.Context) (runner.FullRunExecutionActivationReceipt, error) {
+				runs++
+				return runner.FullRunExecutionActivationReceipt{}, nil
+			}), runner.FullRunExecutionActivationReceipt{
+				Format: runner.FullRunExecutionActivationReceiptFormat, State: "PREPARED",
+				Manifest: fullRunCLITestManifestReceipt("VERIFIED"),
+			}, nil
+	}
+	valid := []string{
+		"cluster", "stage", "run", "full", "execute", "--manifest", "/private/full-run.json",
+		"--expected-manifest-digest", testSHA("1"), "--independent-evidence-public-key", "/private/evidence.pub", "--execute",
+	}
+	for name, arguments := range map[string][]string{
+		"missing execute":    removeArgument(valid, "--execute"),
+		"missing manifest":   removeArgument(valid, "/private/full-run.json"),
+		"bad digest":         replaceArgument(valid, "--expected-manifest-digest", "sha256:bad"),
+		"wrong digest":       replaceArgument(valid, "--expected-manifest-digest", testSHA("2")),
+		"missing public key": removeArgument(valid, "/private/evidence.pub"),
+		"positional":         append(append([]string(nil), valid...), "extra"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := opens
+			if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+				t.Fatal("unsafe full-run execution was accepted")
+			}
+			if opens != before || runs != 0 {
+				t.Fatalf("invalid CLI input reached activation: opens=%d before=%d runs=%d", opens, before, runs)
+			}
+		})
+	}
+
+	openKubernetesObservabilityFullRunActivation = func(string, string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+		opens++
+		foreign := fullRunCLITestManifestReceipt("VERIFIED")
+		foreign.ManifestDigest = testSHA("2")
+		return fullRunActivationRunnerFunc(func(context.Context) (runner.FullRunExecutionActivationReceipt, error) {
+			runs++
+			return runner.FullRunExecutionActivationReceipt{}, nil
+		}), runner.FullRunExecutionActivationReceipt{Format: runner.FullRunExecutionActivationReceiptFormat, State: "PREPARED", Manifest: foreign}, nil
+	}
+	if err := run(valid, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || runs != 0 {
+		t.Fatalf("foreign prepared identity reached execution: opens=%d runs=%d err=%v", opens, runs, err)
+	}
+}
+
+type fullRunActivationRunnerFunc func(context.Context) (runner.FullRunExecutionActivationReceipt, error)
+
+func (run fullRunActivationRunnerFunc) Run(ctx context.Context) (runner.FullRunExecutionActivationReceipt, error) {
+	return run(ctx)
 }
 
 func TestFullRunPrepareFailsClosed(t *testing.T) {
