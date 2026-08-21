@@ -3059,6 +3059,17 @@ Cluster UID, and writes one canonical private `0600` identity with `O_EXCL`,
 `fsync` and pullback verification. Its public receipt contains only source and
 identity digests, the target-UID digest and file metadata.
 
+The concrete full-run manifest now binds distinct destinations for that
+private identity and its redaction-safe receipt. Once the exact Stage 1-7
+prefix has succeeded, the in-process composition replays only the Stage 1-6
+prefix, verifies the runtime-binding material and persists both files before
+opening Stage 8. A missing, foreign or already occupied destination stops the
+run before the post-runtime suffix. Stage 7 is deliberately excluded from the
+identity derivation: target-access mutation is not a source of runtime target
+authority. The handoff does not contact the collector, sign evidence or wait
+for an external process; bounded evidence-authority coordination remains the
+next packaging step.
+
 The issuer consumes that private identity through an explicit one-shot CLI
 boundary:
 

@@ -129,10 +129,70 @@ func TestFullRunExecutionStopsBeforeSuffixWhenCapabilityAuthorityBindingFails(t 
 	}
 }
 
+func TestFullRunExecutionBindsEvidenceIdentityFromExactSixStagePrefix(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	binder := &recordingFullRunEvidenceIdentityBinder{}
+	config := testFullRunExecutionConfig()
+	config.EvidenceIdentityBinder = binder
+	postCalls := 0
+	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			if binder.calls != 1 || !reflect.DeepEqual(binder.prefix, preRuntime.prefix[:6]) {
+				t.Fatalf("suffix opened before exact evidence identity binding: %#v", binder)
+			}
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || binder.calls != 1 || postCalls != 1 {
+		t.Fatalf("full run did not bind evidence identity once: receipt=%#v binder=%#v post=%d err=%v", receipt, binder, postCalls, err)
+	}
+}
+
+func TestFullRunExecutionStopsBeforeSuffixWhenEvidenceIdentityBindingFails(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	binder := &recordingFullRunEvidenceIdentityBinder{err: errors.New("identity rejected")}
+	config := testFullRunExecutionConfig()
+	config.EvidenceIdentityBinder = binder
+	postCalls := 0
+	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		len(receipt.Checkpoints) != 7 || binder.calls != 1 || postCalls != 0 {
+		t.Fatalf("failed evidence identity binding opened suffix: receipt=%#v binder=%#v post=%d err=%v", receipt, binder, postCalls, err)
+	}
+}
+
 type recordingFullRunWorkloadAuthorityBinder struct {
 	bound WorkloadAuthorityFileResolverConfig
 	calls int
 	err   error
+}
+
+type recordingFullRunEvidenceIdentityBinder struct {
+	prefix []StageReceiptSource
+	calls  int
+	err    error
+}
+
+func (binder *recordingFullRunEvidenceIdentityBinder) BindFullRunEvidenceIdentity(prefix []StageReceiptSource) error {
+	binder.calls++
+	binder.prefix = append([]StageReceiptSource(nil), prefix...)
+	return binder.err
 }
 
 func (binder *recordingFullRunWorkloadAuthorityBinder) BindFullRunWorkloadAuthority(config WorkloadAuthorityFileResolverConfig) error {

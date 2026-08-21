@@ -73,6 +73,7 @@ func TestVerifiedFullRunExecutionManifestBuildsConcreteConfiguration(t *testing.
 	}
 	if config.PreRuntime.NetworkObservation.Workload.KubeconfigFile == "" || config.PreRuntime.NetworkObservation.Workload.TokenFile != "" ||
 		config.PostRuntime.TargetCredentialRun.Workload != config.PreRuntime.NetworkObservation.Workload ||
+		config.EvidenceIdentityBinder == nil ||
 		config.PostRuntime.PlatformObservation.Capability == nil || config.PostRuntime.AggregateEvidence.Capability == nil ||
 		config.PostRuntime.TargetRegistration.Expected.TargetIdentityDigest != "" ||
 		!config.PostRuntime.TargetRegistration.Runtime.MaterializationTime.IsZero() {
@@ -158,6 +159,10 @@ func TestFullRunExecutionManifestFailsClosed(t *testing.T) {
 		"evidence path collides with runtime output": func(value map[string]any) {
 			binding := value["networkObservation"].(map[string]any)["workload"].(map[string]any)["bindingPath"]
 			value["platformObservation"].(map[string]any)["capability"].(map[string]any)["independentEvidencePath"] = binding
+		},
+		"identity receipt collides with identity": func(value map[string]any) {
+			capability := value["platformObservation"].(map[string]any)["capability"].(map[string]any)
+			capability["independentEvidenceIdentityReceiptPath"] = capability["independentEvidenceIdentityPath"]
 		},
 		"relative runtime output": func(value map[string]any) {
 			value["runtimeBinding"].(map[string]any)["materialPath"] = "runtime-binding.json"
@@ -391,7 +396,9 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 			Capability: fullRunCapabilityDocument{
 				Namespace: "ok-observability", Timeout: "10m", CleanupTimeout: "1m", PollInterval: "1s",
 				PushgatewayImage: capabilityFixtureConfig().PushgatewayImage, LogEmitterImage: capabilityFixtureConfig().LogEmitterImage,
-				IndependentEvidencePath: filepath.Join(privateRoot, "observability-independent-evidence.json"), IndependentEvidenceKeyID: digestOf("d"),
+				IndependentEvidenceIdentityPath:        filepath.Join(privateRoot, "observability-independent-evidence-identity.json"),
+				IndependentEvidenceIdentityReceiptPath: filepath.Join(privateRoot, "observability-independent-evidence-identity-receipt.json"),
+				IndependentEvidencePath:                filepath.Join(privateRoot, "observability-independent-evidence.json"), IndependentEvidenceKeyID: digestOf("d"),
 			},
 			PollInterval: "1s", PollTimeout: "1m",
 		},
