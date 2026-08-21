@@ -3296,6 +3296,46 @@ pre-existing, non-canonical, changed or foreign handoff stops at Stage 6; it
 cannot open target access or the post-runtime suffix. Neither private file is
 part of public evidence.
 
+The complete ephemeral full-run installation package now has a local-only CLI
+boundary:
+
+```text
+ok cluster stage run full package \
+  --manifest /private/full-run.json \
+  --independent-evidence-public-key /private/evidence.pub \
+  --activation-secret ok147-full-run-activation-01 \
+  --evidence-authority-secret ok147-evidence-authority-01 \
+  --evidence-private-key /private/evidence.key \
+  --collector-endpoint https://<collector>:<port> \
+  --collector-token-file /private/collector.token \
+  --collector-ca-file /private/collector-ca.crt \
+  --collector-ca-digest sha256:<identity> \
+  --identity-poll-interval 1s \
+  --identity-wait-timeout 30m \
+  --evidence-valid-for 10m \
+  --collection-timeout 2m \
+  --job-template deploy/contract-executor-full-run-job.yaml.tpl \
+  --job-template-digest sha256:<identity> \
+  --run-id ok147-full-run-01 \
+  --image ghcr.io/openkubes/ok-cluster@sha256:<identity> \
+  --infrastructure-api-cidr <single-address CIDR> \
+  --management-api-cidr <single-address CIDR> \
+  --workload-api-url https://<workload>:6443 \
+  --workload-api-cidr <single-address CIDR> \
+  --argo-api-cidr <single-address CIDR> \
+  --authorization-api-cidr <single-address CIDR> \
+  --collector-api-cidr <single-address CIDR> \
+  --output /private/full-run-package.yaml
+```
+
+It rebuilds and verifies the full-run executor Secret, independently
+credentialed Evidence Authority Secret, NetworkPolicy and Job as one exact
+private installation unit. Every authority, timing bound, immutable image and
+single-address egress target is explicit. The output is create-only with mode
+`0600`; stdout contains only the redaction-safe package receipt. The command
+does not open a Kubernetes credential, contact an API or grant installation
+authority.
+
 ## Current OK-147 implementation boundary
 
 The twelve-stage Go library and its durable replay semantics are complete and
@@ -3320,9 +3360,10 @@ durable receipts. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
 - the joined concrete Stage 1-7 and Stage 8-12 adapters have a shared
-  activation boundary plus concrete local prepare/execute commands; an
-  ephemeral full-run Job package and launcher do not select that same
-  production capability transport yet;
+  activation boundary plus concrete local prepare/execute commands; the
+  ephemeral full-run Job and private activation package select that same
+  production capability transport, while their bounded installer launcher
+  remains to be implemented;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform

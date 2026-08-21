@@ -5,12 +5,120 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/runner"
 )
+
+func TestFullRunPackageMaterializesPrivateInstallationUnit(t *testing.T) {
+	previous := materializeFullRunExecutionActivationPackage
+	defer func() { materializeFullRunExecutionActivationPackage = previous }()
+	directory := t.TempDir()
+	templatePath := filepath.Join(directory, "full-run-job.yaml.tpl")
+	if err := os.WriteFile(templatePath, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(directory, "full-run-package.yaml")
+	calls := 0
+	materializeFullRunExecutionActivationPackage = func(config runner.FullRunExecutionActivationPackageConfig) ([]byte, runner.FullRunExecutionActivationPackageReceipt, error) {
+		calls++
+		if config.ManifestPath != "/private/full-run.json" || config.IndependentEvidencePublicKey != "/private/evidence.pub" ||
+			config.ActivationSecret != "ok147-full-run-activation-01" || config.EvidenceAuthority.ActivationSecret != "ok147-evidence-authority-01" ||
+			config.EvidenceAuthority.PrivateKeyPath != "/private/evidence.key" || config.EvidenceAuthority.CollectorEndpoint != "https://192.0.2.40:8443" ||
+			config.EvidenceAuthority.RuntimeAuthorityRoot != "/var/run/openkubes/evidence-authority" || config.EvidenceAuthority.RuntimeHandoffRoot != "/var/run/openkubes/handoff" ||
+			config.EvidenceAuthority.IdentityPollInterval != time.Second || config.EvidenceAuthority.IdentityWaitTimeout != 30*time.Minute ||
+			config.EvidenceAuthority.EvidenceValidFor != 10*time.Minute || config.EvidenceAuthority.CollectionTimeout != 2*time.Minute ||
+			string(config.JobTemplate) != "bounded-template" || config.JobTemplateDigest != testSHA("1") ||
+			config.Job.RunID != "ok147-full-run-01" || config.Job.ImageDigest != "ghcr.io/openkubes/ok-cluster@"+testSHA("2") ||
+			config.Job.InfrastructureAPICIDR != "192.0.2.13/32" || config.Job.ManagementAPICIDR != "192.0.2.12/32" ||
+			config.Job.WorkloadAPIURL != "https://192.0.2.30:6443" || config.Job.WorkloadAPICIDR != "192.0.2.30/32" ||
+			config.Job.ArgoAPICIDR != "192.0.2.11/32" || config.Job.AuthorizationAPICIDR != "192.0.2.10/32" ||
+			config.Job.CollectorAPICIDR != "192.0.2.40/32" {
+			t.Fatalf("full-run package config differs: %#v", config)
+		}
+		return []byte("private-package"), runner.FullRunExecutionActivationPackageReceipt{
+			Format: runner.FullRunExecutionActivationPackageFormat, State: "VERIFIED", PackageDigest: testSHA("3"),
+			ActivationSecret: config.ActivationSecret, EvidenceAuthoritySecret: config.EvidenceAuthority.ActivationSecret,
+			ObjectKinds: []string{"Secret", "Secret", "NetworkPolicy", "Job"}, PrivateFileCount: 30,
+		}, nil
+	}
+	arguments := fullRunPackageCLIArguments(templatePath, outputPath)
+	var stdout bytes.Buffer
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(outputPath)
+	info, statErr := os.Stat(outputPath)
+	if err != nil || statErr != nil || string(raw) != "private-package" || info.Mode().Perm() != 0o600 || calls != 1 {
+		t.Fatalf("private package differs: raw=%q mode=%v calls=%d err=%v stat=%v", raw, info.Mode().Perm(), calls, err, statErr)
+	}
+	var receipt runner.FullRunExecutionActivationPackageReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "VERIFIED" || receipt.MutationAllowed {
+		t.Fatalf("unexpected public receipt: %#v err=%v", receipt, err)
+	}
+	for _, forbidden := range []string{"/private/", outputPath, "collector-endpoint", "token", "kubeconfig", "private-key"} {
+		if strings.Contains(strings.ToLower(stdout.String()), strings.ToLower(forbidden)) {
+			t.Fatalf("public receipt disclosed %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestFullRunPackageFailsClosedBeforeMaterialization(t *testing.T) {
+	previous := materializeFullRunExecutionActivationPackage
+	defer func() { materializeFullRunExecutionActivationPackage = previous }()
+	directory := t.TempDir()
+	templatePath := filepath.Join(directory, "full-run-job.yaml.tpl")
+	if err := os.WriteFile(templatePath, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	valid := fullRunPackageCLIArguments(templatePath, filepath.Join(directory, "package.yaml"))
+	calls := 0
+	materializeFullRunExecutionActivationPackage = func(runner.FullRunExecutionActivationPackageConfig) ([]byte, runner.FullRunExecutionActivationPackageReceipt, error) {
+		calls++
+		return []byte("private-package"), runner.FullRunExecutionActivationPackageReceipt{State: "VERIFIED"}, nil
+	}
+	for name, arguments := range map[string][]string{
+		"missing output":       removeArgument(valid, filepath.Join(directory, "package.yaml")),
+		"missing manifest":     removeArgument(valid, "/private/full-run.json"),
+		"bad template digest":  replaceArgument(valid, "--job-template-digest", "sha256:bad"),
+		"bad collector digest": replaceArgument(valid, "--collector-ca-digest", "sha256:bad"),
+		"missing timing":       removeArgument(valid, "1s"),
+		"unbounded timing":     replaceArgument(valid, "--identity-wait-timeout", "4h"),
+		"positional":           append(append([]string(nil), valid...), "extra"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+				t.Fatal("unsafe full-run package input was accepted")
+			}
+			if calls != before {
+				t.Fatalf("invalid input reached package materializer: calls=%d before=%d", calls, before)
+			}
+		})
+	}
+}
+
+func fullRunPackageCLIArguments(templatePath, outputPath string) []string {
+	return []string{
+		"cluster", "stage", "run", "full", "package",
+		"--manifest", "/private/full-run.json", "--independent-evidence-public-key", "/private/evidence.pub",
+		"--activation-secret", "ok147-full-run-activation-01", "--evidence-authority-secret", "ok147-evidence-authority-01",
+		"--evidence-private-key", "/private/evidence.key", "--collector-endpoint", "https://192.0.2.40:8443",
+		"--collector-token-file", "/private/collector.token", "--collector-ca-file", "/private/collector-ca.crt",
+		"--collector-ca-digest", testSHA("4"), "--identity-poll-interval", "1s", "--identity-wait-timeout", "30m",
+		"--evidence-valid-for", "10m", "--collection-timeout", "2m", "--job-template", templatePath,
+		"--job-template-digest", testSHA("1"), "--run-id", "ok147-full-run-01",
+		"--image", "ghcr.io/openkubes/ok-cluster@" + testSHA("2"), "--infrastructure-api-cidr", "192.0.2.13/32",
+		"--management-api-cidr", "192.0.2.12/32", "--workload-api-url", "https://192.0.2.30:6443",
+		"--workload-api-cidr", "192.0.2.30/32", "--argo-api-cidr", "192.0.2.11/32",
+		"--authorization-api-cidr", "192.0.2.10/32", "--collector-api-cidr", "192.0.2.40/32",
+		"--output", outputPath,
+	}
+}
 
 func TestFullRunPrepareVerifiesWithoutOpeningExecution(t *testing.T) {
 	previous := prepareFullRunExecutionManifest

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"time"
 
@@ -24,10 +25,146 @@ var prepareFullRunExecutionManifest = func(path string) (runner.FullRunExecution
 
 var materializeFullRunExecutionBundle = runner.MaterializeFullRunExecutionBundle
 
+var materializeFullRunExecutionActivationPackage = func(config runner.FullRunExecutionActivationPackageConfig) ([]byte, runner.FullRunExecutionActivationPackageReceipt, error) {
+	packaged, err := runner.BuildFullRunExecutionActivationPackage(config)
+	if err != nil {
+		return nil, runner.FullRunExecutionActivationPackageReceipt{}, err
+	}
+	raw, err := packaged.PrivateBytes()
+	if err != nil {
+		return nil, runner.FullRunExecutionActivationPackageReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	return raw, receipt, err
+}
+
 var openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
 	return runner.OpenKubernetesObservabilityFullRunActivation(path, runner.KubernetesObservabilityFullRunActivationConfig{
 		IndependentEvidencePublicKeyPath: publicKeyPath, Clock: time.Now, Wait: runner.WaitWithTimer,
 	})
+}
+
+type fullRunActivationPackageFlags struct {
+	manifest, evidencePublicKey, activationSecret                 *string
+	evidenceAuthoritySecret, evidencePrivateKey                   *string
+	collectorEndpoint, collectorToken, collectorCA, collectorCAID *string
+	jobTemplate, jobTemplateDigest, runID, imageDigest            *string
+	infrastructureCIDR, managementCIDR, workloadURL, workloadCIDR *string
+	argoCIDR, authorizationCIDR, collectorCIDR                    *string
+	identityPollInterval, identityWaitTimeout                     *time.Duration
+	evidenceValidFor, collectionTimeout                           *time.Duration
+}
+
+func addFullRunActivationPackageFlags(flags *flag.FlagSet) *fullRunActivationPackageFlags {
+	values := &fullRunActivationPackageFlags{}
+	values.manifest = flags.String("manifest", "", "path to the verified private full-run manifest")
+	values.evidencePublicKey = flags.String("independent-evidence-public-key", "", "pinned independent evidence public key")
+	values.activationSecret = flags.String("activation-secret", "", "immutable private executor activation Secret name")
+	values.evidenceAuthoritySecret = flags.String("evidence-authority-secret", "", "immutable private evidence-authority Secret name")
+	values.evidencePrivateKey = flags.String("evidence-private-key", "", "private Ed25519 evidence-authority key")
+	values.collectorEndpoint = flags.String("collector-endpoint", "", "exact HTTPS independent-evidence collector endpoint")
+	values.collectorToken = flags.String("collector-token-file", "", "bounded evidence collector bearer-token file")
+	values.collectorCA = flags.String("collector-ca-file", "", "bounded evidence collector CA file")
+	values.collectorCAID = flags.String("collector-ca-digest", "", "expected evidence collector CA identity")
+	values.identityPollInterval = flags.Duration("identity-poll-interval", 0, "private identity polling interval")
+	values.identityWaitTimeout = flags.Duration("identity-wait-timeout", 0, "bounded private identity wait")
+	values.evidenceValidFor = flags.Duration("evidence-valid-for", 0, "signed evidence validity")
+	values.collectionTimeout = flags.Duration("collection-timeout", 0, "single evidence collection timeout")
+	values.jobTemplate = flags.String("job-template", "", "path to the bounded full-run Job template")
+	values.jobTemplateDigest = flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
+	values.runID = flags.String("run-id", "", "bounded OK-147 full-run Job identity")
+	values.imageDigest = flags.String("image", "", "digest-pinned ok image")
+	values.infrastructureCIDR = flags.String("infrastructure-api-cidr", "", "single-address infrastructure API CIDR")
+	values.managementCIDR = flags.String("management-api-cidr", "", "single-address management API CIDR")
+	values.workloadURL = flags.String("workload-api-url", "", "exact disposable workload API URL")
+	values.workloadCIDR = flags.String("workload-api-cidr", "", "single-address workload API CIDR")
+	values.argoCIDR = flags.String("argo-api-cidr", "", "single-address Argo API CIDR")
+	values.authorizationCIDR = flags.String("authorization-api-cidr", "", "single-address authorization API CIDR")
+	values.collectorCIDR = flags.String("collector-api-cidr", "", "single-address evidence collector API CIDR")
+	return values
+}
+
+func (values *fullRunActivationPackageFlags) config() (runner.FullRunExecutionActivationPackageConfig, error) {
+	for _, input := range []struct{ name, value string }{
+		{"--manifest", *values.manifest}, {"--independent-evidence-public-key", *values.evidencePublicKey},
+		{"--activation-secret", *values.activationSecret}, {"--evidence-authority-secret", *values.evidenceAuthoritySecret},
+		{"--evidence-private-key", *values.evidencePrivateKey}, {"--collector-endpoint", *values.collectorEndpoint},
+		{"--collector-token-file", *values.collectorToken}, {"--collector-ca-file", *values.collectorCA},
+		{"--collector-ca-digest", *values.collectorCAID}, {"--job-template", *values.jobTemplate},
+		{"--job-template-digest", *values.jobTemplateDigest}, {"--run-id", *values.runID}, {"--image", *values.imageDigest},
+		{"--infrastructure-api-cidr", *values.infrastructureCIDR}, {"--management-api-cidr", *values.managementCIDR},
+		{"--workload-api-url", *values.workloadURL}, {"--workload-api-cidr", *values.workloadCIDR},
+		{"--argo-api-cidr", *values.argoCIDR}, {"--authorization-api-cidr", *values.authorizationCIDR},
+		{"--collector-api-cidr", *values.collectorCIDR},
+	} {
+		if input.value == "" {
+			return runner.FullRunExecutionActivationPackageConfig{}, fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*values.jobTemplateDigest) || !sha256DigestPattern.MatchString(*values.collectorCAID) {
+		return runner.FullRunExecutionActivationPackageConfig{}, errors.New("full-run package digests must be lowercase SHA-256 identities")
+	}
+	if *values.identityPollInterval < time.Millisecond || *values.identityPollInterval > 30*time.Second ||
+		*values.identityWaitTimeout < time.Second || *values.identityWaitTimeout > fullRunExecutionTimeout ||
+		*values.evidenceValidFor < time.Minute || *values.evidenceValidFor > 30*time.Minute ||
+		*values.collectionTimeout < time.Second || *values.collectionTimeout > 30*time.Minute {
+		return runner.FullRunExecutionActivationPackageConfig{}, errors.New("full-run evidence timing bounds are invalid")
+	}
+	template, err := readBoundedLocalFile(*values.jobTemplate, 1024*1024)
+	if err != nil {
+		return runner.FullRunExecutionActivationPackageConfig{}, errors.New("read bounded full-run Job template")
+	}
+	return runner.FullRunExecutionActivationPackageConfig{
+		ManifestPath: *values.manifest, IndependentEvidencePublicKey: *values.evidencePublicKey,
+		ActivationSecret: *values.activationSecret,
+		EvidenceAuthority: runner.ObservabilityEvidenceAuthorityPackageConfig{
+			ActivationSecret: *values.evidenceAuthoritySecret, PrivateKeyPath: *values.evidencePrivateKey,
+			CollectorEndpoint: *values.collectorEndpoint, CollectorTokenPath: *values.collectorToken,
+			CollectorCAPath: *values.collectorCA, CollectorCADigest: *values.collectorCAID,
+			RuntimeAuthorityRoot: "/var/run/openkubes/evidence-authority", RuntimeHandoffRoot: "/var/run/openkubes/handoff",
+			IdentityPollInterval: *values.identityPollInterval, IdentityWaitTimeout: *values.identityWaitTimeout,
+			EvidenceValidFor: *values.evidenceValidFor, CollectionTimeout: *values.collectionTimeout,
+		},
+		JobTemplate: template, JobTemplateDigest: *values.jobTemplateDigest,
+		Job: runner.FullRunExecutionJobValues{
+			RunID: *values.runID, ImageDigest: *values.imageDigest,
+			InfrastructureAPICIDR: *values.infrastructureCIDR, ManagementAPICIDR: *values.managementCIDR,
+			WorkloadAPIURL: *values.workloadURL, WorkloadAPICIDR: *values.workloadCIDR,
+			ArgoAPICIDR: *values.argoCIDR, AuthorizationAPICIDR: *values.authorizationCIDR,
+			CollectorAPICIDR: *values.collectorCIDR,
+		},
+	}, nil
+}
+
+func runClusterStageRunFullPackage(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run full package", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	packageFlags := addFullRunActivationPackageFlags(flags)
+	output := flags.String("output", "", "new private 0600 full-run activation package file")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if *output == "" {
+		return errors.New("--output is required")
+	}
+	config, err := packageFlags.config()
+	if err != nil {
+		return err
+	}
+	raw, receipt, err := materializeFullRunExecutionActivationPackage(config)
+	if err != nil {
+		return err
+	}
+	if err := writeNewLocalFile(*output, raw); err != nil {
+		return errors.New("write private full-run activation package")
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(receipt)
 }
 
 // runClusterStageRunFullPrepare verifies the complete private first-run
