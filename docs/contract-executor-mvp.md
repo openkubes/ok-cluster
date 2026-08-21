@@ -2931,6 +2931,18 @@ fixture is an error, while a correctly correlated unmet guarantee is `false`.
 The evaluator never repairs an observed mechanism. The Kubernetes backend that
 collects these typed observations remains the next adapter checkpoint.
 
+That backend now has an mTLS-only, redirect-denying Kubernetes client with a
+closed request surface. It can read exactly the standard profile's credential
+Secret and dashboard ConfigMap, push the two generated metrics through the
+fixture Service, and query only the fixed Prometheus, Grafana, OpenSearch and
+Alertmanager Service proxies. The runtime Cluster UID and complete fixture
+digest are checked before every fixture-derived request. Basic-auth values are
+decoded only from the exact three-key Secret and are never placed in returned
+errors. Response sizes and JSON media types are bounded, and opening the client
+performs no request. There is no list, watch, discovery, arbitrary URL or
+command surface. Parsing these bounded responses into the typed observations
+is the remaining backend step.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
