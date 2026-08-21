@@ -45,6 +45,22 @@ func TestPostRuntimePrepareVerifiesWithoutExecution(t *testing.T) {
 	}
 }
 
+func TestPostRuntimePrepareReportsRecoveryBoundaryWithoutExecution(t *testing.T) {
+	fake := &fakePostRuntimeExecutor{}
+	manifestReceipt := testPostRuntimeManifestReceipt(testSHA("1"))
+	manifestReceipt.RecoveryMode = "target-registration"
+	restore := stubPostRuntimeExecutor(t, fake, manifestReceipt)
+	defer restore()
+	var stdout bytes.Buffer
+	if err := run([]string{"cluster", "stage", "run", "post-runtime", "prepare", "--manifest", "/private/tmp/post-runtime.json"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt postRuntimeCLIReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.Manifest.RecoveryMode != "target-registration" || fake.calls != 0 {
+		t.Fatalf("recovery prepare crossed the mutation boundary: %#v calls=%d err=%v", receipt, fake.calls, err)
+	}
+}
+
 func TestPostRuntimeMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
 	previous := materializePostRuntimeBundle
 	defer func() { materializePostRuntimeBundle = previous }()

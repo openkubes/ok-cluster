@@ -82,6 +82,26 @@ func TestRenderPostRuntimeExecutionJobTemplateBindsPrivateInitAndSingleExecution
 	}
 }
 
+func TestRenderPostRuntimeExecutionJobTemplateProjectsRecoveryReceipts(t *testing.T) {
+	values := validPostRuntimeExecutionJobValues()
+	values.RecoveryMode = "target-registration"
+	raw, err := RenderPostRuntimeExecutionJobTemplate(postRuntimeExecutionJobTemplate(t), values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := decodeJobObjects(t, raw)["Job"]
+	podSpec := objectAt(t, objectAt(t, objectAt(t, job, "spec"), "template"), "spec")
+	secret := objectAt(t, arrayAt(t, podSpec, "volumes")[0].(map[string]any), "secret")
+	paths := make(map[string]bool)
+	for _, item := range arrayAt(t, secret, "items") {
+		paths[item.(map[string]any)["path"].(string)] = true
+	}
+	if len(paths) != len(postRuntimeExecutionBundleFiles)+len(postRuntimeExecutionRecoveryReceiptFiles)+1 ||
+		!paths[postRuntimeExecutionRecoveryReceiptFiles[0]] || !paths[postRuntimeExecutionRecoveryReceiptFiles[1]] {
+		t.Fatalf("recovery receipts are not projected exactly: %#v", paths)
+	}
+}
+
 func TestRenderPostRuntimeExecutionJobTemplateFailsClosed(t *testing.T) {
 	valid := validPostRuntimeExecutionJobValues()
 	for name, mutate := range map[string]func(*PostRuntimeExecutionJobValues){
@@ -96,6 +116,7 @@ func TestRenderPostRuntimeExecutionJobTemplateFailsClosed(t *testing.T) {
 			values.ArgoAPIURL, values.ArgoAPICIDR = values.WorkloadAPIURL, values.WorkloadAPICIDR
 		},
 		"authority without path": func(values *PostRuntimeExecutionJobValues) { values.AuthorizationAPIURL = "https://192.0.2.40:8443" },
+		"unknown recovery mode":  func(values *PostRuntimeExecutionJobValues) { values.RecoveryMode = "retry-everything" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid

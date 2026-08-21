@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	PostRuntimeExecutionManifestFormat        = "ok147-post-runtime-execution-manifest/v1"
-	PostRuntimeExecutionManifestReceiptFormat = "ok147-post-runtime-execution-manifest-receipt/v1"
-	maximumPostRuntimeExecutionManifestBytes  = 512 * 1024
+	PostRuntimeExecutionManifestFormat         = "ok147-post-runtime-execution-manifest/v1"
+	PostRuntimeExecutionRecoveryManifestFormat = "ok147-post-runtime-execution-manifest/v2"
+	PostRuntimeExecutionManifestReceiptFormat  = "ok147-post-runtime-execution-manifest-receipt/v1"
+	maximumPostRuntimeExecutionManifestBytes   = 512 * 1024
 )
 
 type postRuntimePlanExpectedDocument struct {
@@ -120,6 +121,16 @@ type postRuntimeBindingDocument struct {
 	ReceiptPath  string `json:"receiptPath"`
 }
 
+type postRuntimeRecoveryReceiptDocument struct {
+	Path   string `json:"path"`
+	Digest string `json:"digest"`
+}
+
+type postRuntimeRecoveryDocument struct {
+	TargetCredential   *postRuntimeRecoveryReceiptDocument `json:"targetCredential,omitempty"`
+	TargetRegistration *postRuntimeRecoveryReceiptDocument `json:"targetRegistration,omitempty"`
+}
+
 type postRuntimePlatformObservationDocument struct {
 	Ledger                   postRuntimeLedgerDocument    `json:"ledger"`
 	Argo                     postRuntimeAuthorityDocument `json:"argo"`
@@ -150,6 +161,7 @@ type postRuntimeExecutionManifestDocument struct {
 	RuntimeBinding       postRuntimeBindingDocument              `json:"runtimeBinding"`
 	PlatformObservation  postRuntimePlatformObservationDocument  `json:"platformObservation"`
 	AggregateEvidence    postRuntimeAggregateEvidenceDocument    `json:"aggregateEvidence"`
+	Recovery             *postRuntimeRecoveryDocument            `json:"recovery,omitempty"`
 	ReceiptDirectory     string                                  `json:"receiptDirectory"`
 }
 
@@ -164,6 +176,7 @@ type PostRuntimeExecutionManifestReceipt struct {
 	PlatformProfileDigest  string `json:"platformProfileDigest"`
 	AggregateProfileDigest string `json:"aggregateProfileDigest"`
 	AuthorizationMode      string `json:"authorizationMode"`
+	RecoveryMode           string `json:"recoveryMode,omitempty"`
 	MutationAllowed        bool   `json:"mutationAllowed"`
 }
 
@@ -258,6 +271,13 @@ func openPostRuntimeExecutionManifest(path string, factories postRuntimeExecutio
 		return nil, receipt, errors.New("open post-runtime authorization resolver")
 	}
 	receipt.AuthorizationMode = "predecessor-bound-tls/v1"
+	if document.Recovery == nil {
+		receipt.RecoveryMode = "none"
+	} else if document.Recovery.TargetRegistration == nil {
+		receipt.RecoveryMode = "target-credential"
+	} else {
+		receipt.RecoveryMode = "target-registration"
+	}
 
 	targetRegistrationStage, _, err := plan.Stage("target-registration")
 	if err != nil || len(targetRegistrationStage.Inputs) != 1 {
@@ -366,6 +386,16 @@ func openPostRuntimeExecutionManifest(path string, factories postRuntimeExecutio
 		},
 		RuntimeBinding: runtimeBinding, ReceiptDirectory: document.ReceiptDirectory,
 	}
+	if document.Recovery != nil {
+		config.TargetCredentialRecovery = &PostRuntimeTargetCredentialRecoveryConfig{
+			StageReceipt: recoveryStageReceiptSource(document.Recovery.TargetCredential), Authorization: authorization,
+		}
+		if document.Recovery.TargetRegistration != nil {
+			config.TargetRegistrationRecovery = &PostRuntimeTargetRegistrationRecoveryConfig{
+				StageReceipt: recoveryStageReceiptSource(document.Recovery.TargetRegistration), Authorization: authorization,
+			}
+		}
+	}
 	executor, err := openPostRuntimeExecution(config, factories)
 	if err != nil {
 		return nil, receipt, errors.New("open verified post-runtime execution")
@@ -386,12 +416,19 @@ func loadPostRuntimeExecutionManifest(path string) (postRuntimeExecutionManifest
 	if err != nil {
 		return postRuntimeExecutionManifestDocument{}, "", errors.New("read bounded post-runtime execution manifest")
 	}
+	return decodePostRuntimeExecutionManifest(raw)
+}
+
+func decodePostRuntimeExecutionManifest(raw []byte) (postRuntimeExecutionManifestDocument, string, error) {
 	var document postRuntimeExecutionManifestDocument
 	if err := jsonstrict.Decode(raw, &document); err != nil {
 		return postRuntimeExecutionManifestDocument{}, "", errors.New("decode strict post-runtime execution manifest")
 	}
-	if document.Format != PostRuntimeExecutionManifestFormat {
+	if document.Format != PostRuntimeExecutionManifestFormat && document.Format != PostRuntimeExecutionRecoveryManifestFormat {
 		return postRuntimeExecutionManifestDocument{}, "", errors.New("post-runtime execution manifest format is not supported")
+	}
+	if err := validatePostRuntimeRecoveryDocument(document); err != nil {
+		return postRuntimeExecutionManifestDocument{}, "", err
 	}
 	encoded, err := json.Marshal(document)
 	if err != nil {
@@ -408,6 +445,35 @@ func loadPostRuntimeExecutionManifest(path string) (postRuntimeExecutionManifest
 		return postRuntimeExecutionManifestDocument{}, "", errors.New("canonicalize post-runtime execution manifest")
 	}
 	return document, digest.SHA256(canonical), nil
+}
+
+func validatePostRuntimeRecoveryDocument(document postRuntimeExecutionManifestDocument) error {
+	if document.Recovery == nil {
+		if document.Format != PostRuntimeExecutionManifestFormat {
+			return errors.New("post-runtime recovery manifest requires recovery receipts")
+		}
+		return nil
+	}
+	if document.Format != PostRuntimeExecutionRecoveryManifestFormat || document.Recovery.TargetCredential == nil {
+		return errors.New("post-runtime recovery manifest requires a target-credential receipt")
+	}
+	for _, source := range []*postRuntimeRecoveryReceiptDocument{document.Recovery.TargetCredential, document.Recovery.TargetRegistration} {
+		if source == nil {
+			continue
+		}
+		if source.Path == "" || !filepath.IsAbs(source.Path) || filepath.Clean(source.Path) != source.Path ||
+			!stageReceiptPrefixDigestPattern.MatchString(source.Digest) {
+			return errors.New("post-runtime recovery receipt source is invalid")
+		}
+	}
+	return nil
+}
+
+func recoveryStageReceiptSource(document *postRuntimeRecoveryReceiptDocument) StageReceiptSource {
+	if document == nil {
+		return StageReceiptSource{}
+	}
+	return StageReceiptSource{Path: document.Path, Digest: document.Digest}
 }
 
 func bindPostRuntimeProfileInputs(plan stageplan.Binding, receipt PostRuntimeExecutionManifestReceipt) error {

@@ -24,6 +24,7 @@ type PostRuntimeExecutionJobValues struct {
 	ArgoAPICIDR          string
 	AuthorizationAPIURL  string
 	AuthorizationAPICIDR string
+	RecoveryMode         string
 }
 
 // RenderPostRuntimeExecutionJobTemplate binds the complete Stage 8-12 process
@@ -72,6 +73,16 @@ func RenderPostRuntimeExecutionJobTemplate(template []byte, values PostRuntimeEx
 		"${OK147_WORKLOAD_API_CIDR}": values.WorkloadAPICIDR, "${OK147_WORKLOAD_API_PORT}": workloadPort,
 		"${OK147_ARGO_API_CIDR}": values.ArgoAPICIDR, "${OK147_ARGO_API_PORT}": argoPort,
 		"${OK147_AUTHORIZATION_API_CIDR}": values.AuthorizationAPICIDR, "${OK147_AUTHORIZATION_API_PORT}": authorizationPort,
+	}
+	switch values.RecoveryMode {
+	case "":
+		replacements["${OK147_RECOVERY_RECEIPT_ITEMS}"] = ""
+	case "target-credential":
+		replacements["${OK147_RECOVERY_RECEIPT_ITEMS}"] = "              - {key: input.08-target-credential.json, path: input/08-target-credential.json}"
+	case "target-registration":
+		replacements["${OK147_RECOVERY_RECEIPT_ITEMS}"] = "              - {key: input.08-target-credential.json, path: input/08-target-credential.json}\n              - {key: input.09-target-registration.json, path: input/09-target-registration.json}"
+	default:
+		return nil, errors.New("post-runtime Job recovery mode is invalid")
 	}
 	result := string(template)
 	for placeholder, value := range replacements {

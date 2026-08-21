@@ -115,6 +115,124 @@ func TestPostRuntimeExecutionManifestDigestIsFormattingIndependent(t *testing.T)
 	}
 }
 
+func TestOpenPostRuntimeExecutionRecoveryManifestResumesFromDurableReceipts(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		registrationReceipt bool
+		wantMode            string
+	}{
+		{name: "target credential", wantMode: "target-credential"},
+		{name: "target registration", registrationReceipt: true, wantMode: "target-registration"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manifest, factories, cleanup := postRuntimeManifestFixture(t)
+			defer cleanup()
+			manifest = postRuntimeRecoveryManifestFixture(t, manifest, test.registrationReceipt)
+			if test.registrationReceipt {
+				factories.registrationRecovery = func(context.Context, TargetRegistrationRecoveryConfig) (TargetRegistrationRecoveryReceipt, error) {
+					return TargetRegistrationRecoveryReceipt{}, errors.New("not executed")
+				}
+			}
+
+			executor, receipt, err := openPostRuntimeExecutionManifest(manifest, factories)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if executor == nil || receipt.State != "VERIFIED" || receipt.RecoveryMode != test.wantMode ||
+				executor.config.TargetCredentialRecovery == nil ||
+				(executor.config.TargetRegistrationRecovery != nil) != test.registrationReceipt {
+				t.Fatalf("unexpected recovery activation: receipt=%#v executor=%#v", receipt, executor)
+			}
+		})
+	}
+}
+
+func TestPostRuntimeExecutionRecoveryManifestFailsClosed(t *testing.T) {
+	manifest, factories, cleanup := postRuntimeManifestFixture(t)
+	defer cleanup()
+	recoveryManifest := postRuntimeRecoveryManifestFixture(t, manifest, true)
+	raw, err := os.ReadFile(recoveryManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(manifest)
+	for name, mutate := range map[string]func(map[string]any){
+		"v1 carries recovery": func(value map[string]any) {
+			value["format"] = PostRuntimeExecutionManifestFormat
+		},
+		"v2 omits recovery": func(value map[string]any) {
+			delete(value, "recovery")
+		},
+		"registration without credential": func(value map[string]any) {
+			delete(value["recovery"].(map[string]any), "targetCredential")
+		},
+		"wrong receipt digest": func(value map[string]any) {
+			value["recovery"].(map[string]any)["targetCredential"].(map[string]any)["digest"] = runnerStageSHA("f")
+		},
+		"relative receipt path": func(value map[string]any) {
+			value["recovery"].(map[string]any)["targetCredential"].(map[string]any)["path"] = "08-target-credential.json"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var value map[string]any
+			if err := json.Unmarshal(raw, &value); err != nil {
+				t.Fatal(err)
+			}
+			mutate(value)
+			path := writeBundleFile(t, root, "unsafe-recovery-"+strings.ReplaceAll(name, " ", "-")+".json", mustJSON(t, value))
+			if _, _, err := openPostRuntimeExecutionManifest(path, factories); err == nil {
+				t.Fatal("unsafe recovery manifest was accepted")
+			}
+		})
+	}
+}
+
+func postRuntimeRecoveryManifestFixture(t *testing.T, manifest string, includeRegistration bool) string {
+	t.Helper()
+	document, _, err := loadPostRuntimeExecutionManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := stageplan.Expected{
+		ContractIdentity: document.Plan.Expected.ContractIdentity,
+		IntentRevision:   document.Plan.Expected.IntentRevision, EnablementRevision: document.Plan.Expected.EnablementRevision,
+		PlatformRevision: document.Plan.Expected.PlatformRevision, ExecutionFixture: document.Plan.Expected.ExecutionFixture,
+		InfrastructureAuthority: document.Plan.Expected.InfrastructureAuthority, ManagementAuthority: document.Plan.Expected.ManagementAuthority,
+		GitOpsAuthority: document.Plan.Expected.GitOpsAuthority,
+	}
+	receipts, err := LoadStageReceiptPrefix(document.Plan.ReceiptPrefixPath, document.Plan.ReceiptPrefixDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, cursor, prefix, err := loadStageResumeWithPrefix(StageResumeConfig{PlanPath: document.Plan.Path, PlanExpected: expected, Receipts: receipts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessors, err := cursor.Predecessors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 18, 8, 2, 0, 0, time.UTC)
+	stageEight, err := stagereceipt.New(plan, "target-credential", predecessors, "SUCCEEDED", "ATTEMPTED", runnerStageSHA("a"), runnerStageSHA("b"), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(manifest)
+	stageEightSource := appendStageReceipt(t, root, nil, stageEight, "08-target-credential.json")[0]
+	document.Format = PostRuntimeExecutionRecoveryManifestFormat
+	document.Recovery = &postRuntimeRecoveryDocument{TargetCredential: &postRuntimeRecoveryReceiptDocument{Path: stageEightSource.Path, Digest: stageEightSource.Digest}}
+	if includeRegistration {
+		stageNine, err := stagereceipt.New(plan, "target-registration", []stagereceipt.Verified{stageEight}, "SUCCEEDED", "ATTEMPTED", runnerStageSHA("c"), runnerStageSHA("d"), at.Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stageNineSource := appendStageReceipt(t, root, nil, stageNine, "09-target-registration.json")[0]
+		document.Recovery.TargetRegistration = &postRuntimeRecoveryReceiptDocument{Path: stageNineSource.Path, Digest: stageNineSource.Digest}
+	}
+	_ = prefix // retained here to make the exact seven-receipt recovery boundary explicit.
+	return writeBundleFile(t, root, "post-runtime-recovery-manifest.json", mustJSON(t, document))
+}
+
 func postRuntimeManifestFixture(t *testing.T) (string, postRuntimeExecutionFactories, func()) {
 	t.Helper()
 	root := t.TempDir()
