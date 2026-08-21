@@ -3100,6 +3100,25 @@ has no Kubernetes credential, arbitrary probe, overwrite or retry surface.
 Operating the external collector and securely injecting its short-lived token
 and Ed25519 private key remain separate evidence-authority responsibilities.
 
+The evidence-authority inputs now also have a deterministic private activation
+package. Its offline builder verifies the exact full-run manifest, proves that
+the private Ed25519 key matches the public key ID pinned by that manifest,
+opens the fixed TLS collector binding without making a request, and binds the
+CA digest plus collection, validity and identity-wait bounds. It emits exactly
+one immutable opaque Secret object containing a canonical activation document,
+the private signing key, collector token and collector CA. Its public receipt
+contains only object, activation, manifest, key, collector-authority and CA
+digests; it contains no endpoint, credential or private path.
+
+The activation document fixes three paths in a private shared in-Pod handoff:
+the runtime-derived identity, its redaction-safe receipt and the signed evidence
+output. The remaining authority files live under a separate evidence-authority
+mount. This permits a future two-container full-run Pod in which the executor
+and issuer share only the handoff `emptyDir`: the executor receives no signing
+key or collector token, while the issuer receives no Kubernetes lifecycle or
+GitOps credential. Package construction remains offline, creates no Kubernetes
+object and grants no launch, retry, repair or reconciliation authority.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
