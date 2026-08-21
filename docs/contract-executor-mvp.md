@@ -3084,7 +3084,25 @@ CA/token/Cluster-UID tuple, the standard profile, a maximum record age and a
 literal listen address. It emits a redaction-safe verified receipt before
 serving and performs no Kubernetes request while opening. The command exposes
 no receiver-name, profile, namespace, Service, EndpointSlice selector or
-arbitrary URL override. A Kubernetes runtime package and fresh image remain
+arbitrary URL override.
+
+The collector now also has a deterministic private activation package. Its
+offline builder replays the exact verified full-run manifest receipt and Plan,
+then requires the lifecycle-produced runtime binding before accepting an
+observer credential. It emits one immutable Secret containing exactly seven
+files: canonical activation, distinct webhook and query authorities, a
+short-lived workload-observer token, the pinned workload CA and a matching TLS
+certificate/private key pair. The activation binds the raw target Cluster UID
+and workload endpoint privately; its public receipt retains only their safe
+digests, including separate manifest-receipt and public-endpoint identities.
+The three token authorities must be pairwise distinct, the server certificate
+must cover the literal public endpoint, and the observer must be the dedicated
+tokenless `ok147-observability-autonomy` ServiceAccount with the default
+Kubernetes audience. Construction performs no API request or mutation.
+
+This closes the post-runtime authority materialization boundary without
+turning the collector into a lifecycle owner. A Kubernetes Job/Service/
+NetworkPolicy envelope, CLI materialization boundary and fresh image remain
 separate prerequisites before this process may be deployed.
 
 The separately operated issuer no longer accepts the run ID, target Cluster

@@ -173,6 +173,12 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   ServiceAccount, an exact read-only Role (`get` Services and `list`
   EndpointSlices), and its RoleBinding. They are not shared with Argo CD and
   cannot write workload resources.
+  After runtime binding, an offline collector-activation builder can package
+  that exact observer identity into one immutable private Secret together with
+  separate webhook/query authorities, a short-lived observer token, pinned
+  workload CA and TLS key pair. Its public receipt exposes only correlated
+  digests; package construction performs no cluster request or mutation. The
+  CLI and Kubernetes runtime envelope remain separate activation steps.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
