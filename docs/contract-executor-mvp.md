@@ -2991,6 +2991,20 @@ into the lifecycle runner and cannot repair an observed platform. Concrete
 bounded collection of receiver delivery and external-dependency autonomy is
 still required before the issuer can produce live evidence.
 
+The production capability factory now composes the complete typed adapter
+lazily. Its inert open binds the immutable images, standard check profile,
+signed independent-evidence source, polling limit and workload-authority
+resolver without reading a workload credential or contacting Kubernetes. Only
+after the runtime observation policy supplies the CAPI Cluster UID does the
+single-use resolver open the lifecycle-derived client-certificate authority,
+verify its CA digest, and compose the exact fixture client, four service-proxy
+readers, strict parsers, signed evidence consumer, semantic checks and bounded
+probe. Token-mode workload authority, a foreign Platform profile, changed
+revision or second resolution fails before an API request. The factory adds no
+new action surface and still performs no delivery/autonomy collection itself.
+Binding this factory and its private paths through the execution manifest is
+the remaining full-run activation step.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
