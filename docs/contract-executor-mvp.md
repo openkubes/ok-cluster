@@ -3045,6 +3045,20 @@ non-JSON responses fail closed and there is no retry or arbitrary URL surface.
 The external service implementation remains a separate operational component;
 this client neither invents delivery evidence nor performs an outage test.
 
+The delivery half of that external service now also has a bounded server
+implementation. It accepts only the fixed Alertmanager webhook path under a
+dedicated bearer authority, extracts exactly one firing synthetic alert and
+requires the correlated `fixture_digest`, `run_id` and `target_cluster_uid`
+labels plus the standard profile and receiver identity. Successful delivery is
+stored create-only in a private directory and survives process restart;
+duplicate notification is idempotent, while ambiguity, truncation, malformed
+identity and historical records fail closed. A separate query token protects
+the canonical evidence endpoint. The server deliberately requires an injected
+independent autonomy observer and returns no collection result when that source
+is unavailable. It therefore cannot turn webhook receipt or API reachability
+into an autonomy claim. Packaging this receiver and implementing the real
+cluster-local autonomy observer remain the next checkpoints.
+
 The separately operated issuer no longer accepts the run ID, target Cluster
 UID, fixture digest or profile digest as manually repeated command arguments.
 After Stage 6, a local-only materializer derives those values from the exact
