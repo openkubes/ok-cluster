@@ -2878,6 +2878,15 @@ then reused unchanged by aggregate evaluation. A failed capability is cached
 as failure and is never retried by this seam. The direct
 `OpenFullRunExecutionManifest` entry point remains inert until `Run`.
 
+The shared full-run activation boundary now wraps that exact operation for
+both a local adapter and a future ephemeral Job adapter. Opening produces one
+redaction-safe `PREPARED` receipt and performs no stage action. `Run` consumes
+the activation before delegating exactly once to the concrete Stage 1-12
+executor, preserves a stopped orchestration receipt unchanged and exposes no
+retry, rollback or cleanup method. The Platform capability factory remains an
+explicit process-local dependency; this boundary does not invent a production
+observability transport or widen the private execution manifest.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
@@ -3050,7 +3059,9 @@ receipt, and persists all seven ledger-backed receipts before exposing its
 exact prefix. The concrete full-run execution injects that prefix into a fresh
 Stage 8-12 adapter, and the full-run seam independently binds it through the
 exact Plan, private runtime handoff paths and seven predecessor receipt
-digests. The Stage 8-12 suffix additionally has a local
+digests. A shared single-use activation type now provides the common inert-open
+and exact-run entry for future local and Job adapters without selecting a
+concrete capability transport. The Stage 8-12 suffix additionally has a local
 prepare/execute command, a bounded ephemeral Job, a deterministic private
 activation package, an exact installation plan and a single-use CLI launcher.
 Successful Stage-8 and Stage-9 crash boundaries can be reactivated through the
@@ -3058,8 +3069,9 @@ same manifest, authority, package, Job and CLI chain without rewriting their
 durable receipts. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
-- the joined concrete Stage 1-7 and Stage 8-12 adapters have no shared
-  local/Job CreateCluster activation surface yet;
+- the joined concrete Stage 1-7 and Stage 8-12 adapters have a shared
+  activation boundary, but no concrete local command or ephemeral Job adapter
+  selects its production capability transport yet;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
