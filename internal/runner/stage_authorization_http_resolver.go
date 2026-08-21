@@ -18,6 +18,13 @@ import (
 
 const maximumStageAuthorizationHTTPResponseBytes = 128 * 1024
 
+const (
+	stageAuthorizationRequestMediaType                      = "application/vnd.openkubes.stage-authorization-request+json"
+	targetCredentialRecoveryAuthorizationRequestMediaType   = "application/vnd.openkubes.target-credential-recovery-authorization-request+json"
+	targetRegistrationRecoveryAuthorizationRequestMediaType = "application/vnd.openkubes.target-registration-recovery-authorization-request+json"
+	stageAuthorizationResponseMediaType                     = "application/vnd.openkubes.stage-authorization+json"
+)
+
 type StageAuthorizationHTTPResolverConfig struct {
 	Endpoint        string
 	TokenFile       string
@@ -86,21 +93,41 @@ func newStageAuthorizationHTTPResolver(config StageAuthorizationHTTPResolverConf
 // that independent verification against the current cursor immediately after
 // this method returns.
 func (resolver *StageAuthorizationHTTPResolver) ResolveStageAuthorization(ctx context.Context, request StageAuthorizationRequest) (StageAuthorizationSource, error) {
-	if resolver == nil || resolver.client == nil || resolver.clock == nil {
-		return StageAuthorizationSource{}, errors.New("stage authorization HTTP resolver is required")
-	}
 	requestRaw, err := request.Bytes()
 	if err != nil {
 		return StageAuthorizationSource{}, err
 	}
+	return resolver.resolve(ctx, request.RequestDigest, requestRaw, stageAuthorizationRequestMediaType)
+}
+
+func (resolver *StageAuthorizationHTTPResolver) ResolveTargetCredentialRecoveryAuthorization(ctx context.Context, request TargetCredentialRecoveryAuthorizationRequest) (StageAuthorizationSource, error) {
+	requestRaw, err := request.Bytes()
+	if err != nil {
+		return StageAuthorizationSource{}, err
+	}
+	return resolver.resolve(ctx, request.RequestDigest, requestRaw, targetCredentialRecoveryAuthorizationRequestMediaType)
+}
+
+func (resolver *StageAuthorizationHTTPResolver) ResolveTargetRegistrationRecoveryAuthorization(ctx context.Context, request TargetRegistrationRecoveryAuthorizationRequest) (StageAuthorizationSource, error) {
+	requestRaw, err := request.Bytes()
+	if err != nil {
+		return StageAuthorizationSource{}, err
+	}
+	return resolver.resolve(ctx, request.RequestDigest, requestRaw, targetRegistrationRecoveryAuthorizationRequestMediaType)
+}
+
+func (resolver *StageAuthorizationHTTPResolver) resolve(ctx context.Context, requestDigest string, requestRaw []byte, contentType string) (StageAuthorizationSource, error) {
+	if resolver == nil || resolver.client == nil || resolver.clock == nil {
+		return StageAuthorizationSource{}, errors.New("stage authorization HTTP resolver is required")
+	}
 	resolver.mu.Lock()
-	if _, exists := resolver.used[request.RequestDigest]; exists {
+	if _, exists := resolver.used[requestDigest]; exists {
 		resolver.mu.Unlock()
 		return StageAuthorizationSource{}, errors.New("stage authorization request is single-use")
 	}
-	resolver.used[request.RequestDigest] = struct{}{}
+	resolver.used[requestDigest] = struct{}{}
 	resolver.mu.Unlock()
-	outputPath := filepath.Join(resolver.outputDirectory, strings.TrimPrefix(request.RequestDigest, "sha256:")+".json")
+	outputPath := filepath.Join(resolver.outputDirectory, strings.TrimPrefix(requestDigest, "sha256:")+".json")
 	if err := validateRuntimeBindingOutputPath(outputPath); err != nil {
 		return StageAuthorizationSource{}, errors.New("stage authorization grant destination is invalid")
 	}
@@ -109,8 +136,8 @@ func (resolver *StageAuthorizationHTTPResolver) ResolveStageAuthorization(ctx co
 		return StageAuthorizationSource{}, errors.New("create stage authorization request")
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+resolver.token)
-	httpRequest.Header.Set("Content-Type", "application/vnd.openkubes.stage-authorization-request+json")
-	httpRequest.Header.Set("Accept", "application/vnd.openkubes.stage-authorization+json")
+	httpRequest.Header.Set("Content-Type", contentType)
+	httpRequest.Header.Set("Accept", stageAuthorizationResponseMediaType)
 	response, err := resolver.client.Do(httpRequest)
 	if err != nil {
 		return StageAuthorizationSource{}, errors.New("perform stage authorization request")
@@ -118,7 +145,7 @@ func (resolver *StageAuthorizationHTTPResolver) ResolveStageAuthorization(ctx co
 	defer response.Body.Close()
 	grantRaw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumStageAuthorizationHTTPResponseBytes+1))
 	if readErr != nil || len(grantRaw) == 0 || len(grantRaw) > maximumStageAuthorizationHTTPResponseBytes ||
-		response.StatusCode != http.StatusCreated || response.Header.Get("Content-Type") != "application/vnd.openkubes.stage-authorization+json" {
+		response.StatusCode != http.StatusCreated || response.Header.Get("Content-Type") != stageAuthorizationResponseMediaType {
 		return StageAuthorizationSource{}, errors.New("stage authorization authority response is not accepted")
 	}
 	file, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -154,3 +181,5 @@ func (resolver *StageAuthorizationHTTPResolver) ResolveStageAuthorization(ctx co
 }
 
 var _ StageAuthorizationResolver = (*StageAuthorizationHTTPResolver)(nil)
+var _ TargetCredentialRecoveryAuthorizationResolver = (*StageAuthorizationHTTPResolver)(nil)
+var _ TargetRegistrationRecoveryAuthorizationResolver = (*StageAuthorizationHTTPResolver)(nil)

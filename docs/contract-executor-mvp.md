@@ -2781,7 +2781,9 @@ and pinned public key. A failed request, invalid response or invalid grant is
 preserved as a stopped single-use attempt; the resolver exposes no automatic
 retry or overwrite path. This client is not the policy authority or grant
 issuer: deployment and operation of that external authority remain outside
-this checkpoint.
+this checkpoint. Credential and registration crash recovery use the same
+bounded endpoint but distinct canonical request media types, so the authority
+cannot confuse a normal stage grant with either recovery decision.
 
 The concrete post-runtime execution adapter now composes those boundaries into
 one single-use Stage 8-12 library path. It normally starts from the exact
@@ -2805,7 +2807,7 @@ cleanup. The adapter itself does not own a CLI or Job activation surface; the
 activation layer composes it without widening this library boundary.
 
 The private post-runtime execution manifest now provides the local activation
-boundary for that adapter. One strict `0600` JSON document binds the verified
+boundary for that adapter. The baseline v1 form binds the verified
 Plan and seven-receipt prefix, Stage-8 grant and policy, predecessor-bound TLS
 authority, runtime binding, exact registration and Application projections,
 Network/Platform/Aggregate profiles, one shared capability assertion, isolated
@@ -2815,6 +2817,15 @@ artifact or capability divergence before opening the execution suffix. Its
 redaction-safe receipt exposes only semantic digests and explicitly grants no
 mutation. Loading remains verification-only; every activation surface must
 bind that verified identity separately.
+
+The additive v2 form activates crash recovery without changing historical
+evidence. It requires the exact successful Stage-8 receipt and may additionally
+bind the exact successful Stage-9 receipt. Both paths and digests are strict,
+private inputs. Stage 8 selects credential recovery; Stage 8 plus Stage 9
+selects registration refresh and continuation at Stage 10. A v1 manifest that
+carries recovery state, a v2 manifest without Stage 8, a relative path, a
+changed digest or a failed historical receipt stops before authority or
+Kubernetes contact.
 
 The local post-runtime CLI now keeps verification and mutation as two explicit
 operations. `post-runtime prepare` opens and verifies the private manifest and
@@ -2831,11 +2842,13 @@ The first ephemeral post-runtime Job envelope binds that same command to one
 immutable activation Secret, one canonical bundle-index digest and one
 semantic manifest digest. Because Kubernetes projected Secret entries are
 symlinks while the runner deliberately accepts only regular private files, a
-non-networked init invocation copies exactly 34 allowlisted, individually
-hashed inputs into one new `0700` memory-backed workspace as `0600` files. It
-also creates the private create-only authorization and receipt directories.
-The executor container can see only that workspace, not the original Secret
-projection.
+non-networked init invocation copies exactly 34 baseline inputs, plus the one
+or two recovery receipts selected by the v2 manifest, into one new `0700`
+memory-backed workspace as individually hashed `0600` files. The bundle index,
+Secret projection and rewritten manifest all bind the same recovery mode. The
+initializer also creates the private create-only authorization and receipt
+directories. The executor container can see only that workspace, not the
+original Secret projection.
 
 The Job has no automounted ServiceAccount token, no retry and a deadline around
 the CLI's three-hour bound. Its deny-all NetworkPolicy permits only four exact
@@ -2855,12 +2868,13 @@ therefore receives its own digest without changing R, E, P or the execution
 fixture.
 
 The builder emits exactly one immutable opaque Secret followed by the already
-verified NetworkPolicy and Job. The Secret's 34 private files and canonical
-index are individually digest-bound. The CLI writes this credential-bearing
-package create-only as `0600` and emits only a redaction-safe package receipt
-containing component digests. Source and rewritten manifest identities are
-both retained. Package construction remains offline and grants no installation
-or launch authority.
+verified NetworkPolicy and Job. Its 34 baseline files and any selected
+historical recovery receipts are individually digest-bound by a canonical
+index. The CLI writes this credential-bearing package create-only as `0600`
+and emits only a redaction-safe package receipt containing component digests
+and the recovery mode. Source and rewritten manifest identities are both
+retained. Package construction remains offline and grants no installation or
+launch authority.
 
 The final activation boundary derives an exact credential-free installation
 plan from that private package. It permits only this order:
@@ -2901,7 +2915,10 @@ The twelve-stage Go library and its durable replay semantics are complete and
 covered by unit, negative, local TLS integration and race tests. The complete
 Stage 8-12 suffix now has a local prepare/execute command, a bounded ephemeral
 Job, a deterministic private activation package, an exact installation plan
-and a single-use CLI launcher. This is not yet the OK-147 Definition of Done:
+and a single-use CLI launcher. Successful Stage-8 and Stage-9 crash boundaries
+can be reactivated through the same manifest, authority, package, Job and CLI
+chain without rewriting their durable receipts. This is not yet the OK-147
+Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
 - the standalone Stage-12 launcher has not yet been executed as part of the

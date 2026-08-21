@@ -137,6 +137,7 @@ spec:
               - {key: input.05-network-observation.json, path: input/05-network-observation.json}
               - {key: input.06-runtime-binding.json, path: input/06-runtime-binding.json}
               - {key: input.07-target-access.json, path: input/07-target-access.json}
+${OK147_RECOVERY_RECEIPT_ITEMS}
               - {key: input.aggregate-profile.json, path: input/aggregate-profile.json}
               - {key: input.authorization-authority.pub, path: input/authorization-authority.pub}
               - {key: input.network-profile.json, path: input/network-profile.json}

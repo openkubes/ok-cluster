@@ -56,6 +56,7 @@ type PostRuntimeExecutionActivationPackageReceipt struct {
 	ManagementAuthority  string   `json:"managementAuthority"`
 	PlanDigest           string   `json:"planDigest"`
 	TargetIdentityDigest string   `json:"targetIdentityDigest"`
+	RecoveryMode         string   `json:"recoveryMode,omitempty"`
 	PrivateFileCount     int      `json:"privateFileCount"`
 	ObjectKinds          []string `json:"objectKinds"`
 	MutationAllowed      bool     `json:"mutationAllowed"`
@@ -117,15 +118,23 @@ func BuildPostRuntimeExecutionActivationPackage(config PostRuntimeExecutionActiv
 	if err != nil {
 		return VerifiedPostRuntimeExecutionActivationPackage{}, err
 	}
-	index := postRuntimeExecutionBundleIndex{Format: PostRuntimeExecutionBundleFormat, ManifestDigest: manifestDigest}
-	for _, path := range postRuntimeExecutionBundleFiles {
+	bundleFormat, recoveryMode, err := postRuntimeExecutionBundleIdentity(document)
+	if err != nil || (sourceReceipt.RecoveryMode != "none" && sourceReceipt.RecoveryMode != recoveryMode) {
+		return VerifiedPostRuntimeExecutionActivationPackage{}, errors.New("post-runtime activation recovery identity differs")
+	}
+	bundleFiles, err := postRuntimeExecutionBundleFilesFor(bundleFormat, recoveryMode)
+	if err != nil {
+		return VerifiedPostRuntimeExecutionActivationPackage{}, err
+	}
+	index := postRuntimeExecutionBundleIndex{Format: bundleFormat, ManifestDigest: manifestDigest, RecoveryMode: recoveryMode}
+	for _, path := range bundleFiles {
 		raw, ok := files[path]
 		if !ok || len(raw) == 0 {
 			return VerifiedPostRuntimeExecutionActivationPackage{}, errors.New("post-runtime activation file set is incomplete")
 		}
 		index.Files = append(index.Files, postRuntimeExecutionBundleIndexFile{Path: path, Digest: digest.SHA256(raw)})
 	}
-	if err := validatePostRuntimeExecutionBundleFiles(index.Files); err != nil {
+	if err := validatePostRuntimeExecutionBundleFiles(index.Files, bundleFiles); err != nil {
 		return VerifiedPostRuntimeExecutionActivationPackage{}, err
 	}
 	bundleDigest, err := canonicalPostRuntimeExecutionBundleIndexDigest(index)
@@ -137,7 +146,7 @@ func BuildPostRuntimeExecutionActivationPackage(config PostRuntimeExecutionActiv
 		return VerifiedPostRuntimeExecutionActivationPackage{}, errors.New("encode post-runtime activation bundle index")
 	}
 	binaryData := map[string]string{postRuntimeExecutionBundleIndexName: base64.StdEncoding.EncodeToString(indexRaw)}
-	for _, path := range postRuntimeExecutionBundleFiles {
+	for _, path := range bundleFiles {
 		binaryData[strings.ReplaceAll(path, "/", ".")] = base64.StdEncoding.EncodeToString(files[path])
 	}
 	secret := postRuntimeActivationSecret{
@@ -163,6 +172,7 @@ func BuildPostRuntimeExecutionActivationPackage(config PostRuntimeExecutionActiv
 		WorkloadAPIURL: executor.runtime.material.Target.WorkloadAPIEndpoint, WorkloadAPICIDR: config.WorkloadAPICIDR,
 		ArgoAPIURL: document.TargetRegistration.GitOps.Endpoint, ArgoAPICIDR: config.ArgoAPICIDR,
 		AuthorizationAPIURL: document.Authorization.Endpoint, AuthorizationAPICIDR: config.AuthorizationAPICIDR,
+		RecoveryMode: recoveryMode,
 	})
 	if err != nil {
 		return VerifiedPostRuntimeExecutionActivationPackage{}, err
@@ -178,7 +188,7 @@ func BuildPostRuntimeExecutionActivationPackage(config PostRuntimeExecutionActiv
 		ManifestDigest:       manifestDigest, JobTemplateDigest: config.JobTemplateDigest, JobEnvelopeDigest: digest.SHA256(jobRaw),
 		ManagementAuthority: document.Plan.Expected.ManagementAuthority, PlanDigest: sourceReceipt.PlanDigest,
 		TargetIdentityDigest: sourceReceipt.TargetIdentityDigest,
-		PrivateFileCount:     len(postRuntimeExecutionBundleFiles), ObjectKinds: []string{"Secret", "NetworkPolicy", "Job"}, MutationAllowed: false,
+		RecoveryMode:         recoveryMode, PrivateFileCount: len(bundleFiles), ObjectKinds: []string{"Secret", "NetworkPolicy", "Job"}, MutationAllowed: false,
 	}
 	return VerifiedPostRuntimeExecutionActivationPackage{
 		raw: packageRaw, receipt: receipt, managementAuthority: document.Plan.Expected.ManagementAuthority, verified: true,
@@ -210,9 +220,16 @@ func verifyPostRuntimeExecutionActivationPackage(packaged VerifiedPostRuntimeExe
 		!stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.SourceManifestDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.SecretObjectDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.JobEnvelopeDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.PlanDigest) || !stageReceiptPrefixDigestPattern.MatchString(packaged.receipt.TargetIdentityDigest) ||
-		packaged.receipt.ManagementAuthority == "" || packaged.receipt.ManagementAuthority != packaged.managementAuthority ||
-		packaged.receipt.PrivateFileCount != len(postRuntimeExecutionBundleFiles) {
+		packaged.receipt.ManagementAuthority == "" || packaged.receipt.ManagementAuthority != packaged.managementAuthority {
 		return errors.New("post-runtime activation package identity is incomplete")
+	}
+	bundleFormat := PostRuntimeExecutionBundleFormat
+	if packaged.receipt.RecoveryMode != "" {
+		bundleFormat = PostRuntimeExecutionRecoveryBundleFormat
+	}
+	expectedFiles, err := postRuntimeExecutionBundleFilesFor(bundleFormat, packaged.receipt.RecoveryMode)
+	if err != nil || packaged.receipt.PrivateFileCount != len(expectedFiles) {
+		return errors.New("post-runtime activation package file identity is incomplete")
 	}
 	parts := bytes.SplitN(packaged.raw, []byte("\n---\n"), 2)
 	if len(parts) != 2 || digest.SHA256(parts[0]) != packaged.receipt.SecretObjectDigest || digest.SHA256(parts[1]) != packaged.receipt.JobEnvelopeDigest {
@@ -267,6 +284,12 @@ func collectPostRuntimeActivationSources(document postRuntimeExecutionManifestDo
 	for index, receipt := range receipts {
 		paths[postRuntimeReceiptBundlePaths[index]] = receipt.Path
 	}
+	if document.Recovery != nil {
+		paths[postRuntimeExecutionRecoveryReceiptFiles[0]] = document.Recovery.TargetCredential.Path
+		if document.Recovery.TargetRegistration != nil {
+			paths[postRuntimeExecutionRecoveryReceiptFiles[1]] = document.Recovery.TargetRegistration.Path
+		}
+	}
 	result := make(map[string][]byte, len(paths))
 	total := 0
 	for relative, source := range paths {
@@ -319,7 +342,7 @@ func collectPostRuntimeActivationSources(document postRuntimeExecutionManifestDo
 }
 
 func rewritePostRuntimeActivation(document postRuntimeExecutionManifestDocument, sources map[string][]byte) (map[string][]byte, string, error) {
-	files := make(map[string][]byte, len(postRuntimeExecutionBundleFiles))
+	files := make(map[string][]byte, len(sources)+2)
 	for path, raw := range sources {
 		files[path] = append([]byte(nil), raw...)
 	}
@@ -353,6 +376,14 @@ func rewritePostRuntimeActivation(document postRuntimeExecutionManifestDocument,
 	document.AggregateEvidence.Ledger, document.AggregateEvidence.Management, document.AggregateEvidence.Argo = ledger, management, gitOps
 	document.AggregateEvidence.WorkloadTokenFile, document.AggregateEvidence.WorkloadCAFile = path("credentials/workload-token"), path("credentials/workload-ca.crt")
 	document.AggregateEvidence.CapabilityPath = path("input/platform-capability.json")
+	if document.Recovery != nil {
+		document.Recovery.TargetCredential.Path = path(postRuntimeExecutionRecoveryReceiptFiles[0])
+		document.Recovery.TargetCredential.Digest = digest.SHA256(files[postRuntimeExecutionRecoveryReceiptFiles[0]])
+		if document.Recovery.TargetRegistration != nil {
+			document.Recovery.TargetRegistration.Path = path(postRuntimeExecutionRecoveryReceiptFiles[1])
+			document.Recovery.TargetRegistration.Digest = digest.SHA256(files[postRuntimeExecutionRecoveryReceiptFiles[1]])
+		}
+	}
 	document.ReceiptDirectory = path("work/receipts")
 	manifestRaw, err := json.Marshal(document)
 	if err != nil {
@@ -370,7 +401,14 @@ func rewritePostRuntimeActivation(document postRuntimeExecutionManifestDocument,
 	}
 	manifestDigest := digest.SHA256(canonical)
 	files[postRuntimeExecutionManifestRelativePath] = manifestRaw
-	if len(files) != len(postRuntimeExecutionBundleFiles) {
+	expectedCount := len(postRuntimeExecutionBundleFiles)
+	if document.Recovery != nil {
+		expectedCount++
+		if document.Recovery.TargetRegistration != nil {
+			expectedCount++
+		}
+	}
+	if len(files) != expectedCount {
 		return nil, "", errors.New("rewritten post-runtime activation file set differs")
 	}
 	return files, manifestDigest, nil

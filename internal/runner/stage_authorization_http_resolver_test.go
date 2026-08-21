@@ -142,6 +142,124 @@ func TestStageAuthorizationHTTPResolverRejectsRedirectAndUnsafeConfiguration(t *
 	}
 }
 
+func TestStageAuthorizationHTTPResolverCarriesRecoveryEvidenceToAuthority(t *testing.T) {
+	credentialFixture := targetCredentialBundleFixture(t)
+	plan, cursor, _, err := loadStageResumeWithPrefix(StageResumeConfig{
+		PlanPath: credentialFixture.config.PlanPath, PlanExpected: credentialFixture.config.PlanExpected, Receipts: credentialFixture.config.Receipts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := cursor.Decision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialStage, err := newStageAuthorizationRequest(plan, decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialRequest := TargetCredentialRecoveryAuthorizationRequest{
+		Format: TargetCredentialRecoveryAuthorizationRequestFormat, Stage: credentialStage,
+		PriorStageReceiptDigest: runnerStageSHA("1"), OriginalAuthorizationDigest: runnerStageSHA("2"),
+	}
+	credentialRequest.RequestDigest, err = targetCredentialRecoveryAuthorizationRequestDigest(credentialRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	registrationFixture := targetRegistrationRecoveryFixture(t)
+	registrationPlan, registrationCursor, _, err := registrationFixture.handoff.registrationContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationDecision, err := registrationCursor.Decision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationStage, err := newStageAuthorizationRequest(registrationPlan, registrationDecision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationRequest := TargetRegistrationRecoveryAuthorizationRequest{
+		Format: TargetRegistrationRecoveryAuthorizationRequestFormat, Stage: registrationStage,
+		PriorStageReceiptDigest:         registrationFixture.prior.Digest,
+		CredentialRecoveryRequestDigest: registrationFixture.recoveryRequest,
+		CredentialIssueReceiptDigest:    registrationFixture.credentialEvidence,
+	}
+	registrationRequest.RequestDigest, err = targetRegistrationRecoveryAuthorizationRequestDigest(registrationRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	mediaTypes := []string{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var stage StageAuthorizationRequest
+		switch mediaType := request.Header.Get("Content-Type"); mediaType {
+		case targetCredentialRecoveryAuthorizationRequestMediaType:
+			var recovery TargetCredentialRecoveryAuthorizationRequest
+			if json.NewDecoder(request.Body).Decode(&recovery) != nil || recovery.RequestDigest != credentialRequest.RequestDigest {
+				response.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			stage = recovery.Stage
+		case targetRegistrationRecoveryAuthorizationRequestMediaType:
+			var recovery TargetRegistrationRecoveryAuthorizationRequest
+			if json.NewDecoder(request.Body).Decode(&recovery) != nil || recovery.RequestDigest != registrationRequest.RequestDigest {
+				response.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			stage = recovery.Stage
+		default:
+			response.WriteHeader(http.StatusUnsupportedMediaType)
+			return
+		}
+		mu.Lock()
+		mediaTypes = append(mediaTypes, request.Header.Get("Content-Type"))
+		mu.Unlock()
+		response.Header().Set("Content-Type", stageAuthorizationResponseMediaType)
+		response.WriteHeader(http.StatusCreated)
+		_, _ = response.Write(stageAuthorizationEnvelopeForRequest(t, stage, publicKey, privateKey))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
+		Endpoint: server.URL + "/v1/stage-authorizations", TokenFile: writeBundleFile(t, root, "token", []byte("authority-token")),
+		CAFile:          writeRuntimeBindingServerCA(t, root, "ca.crt", server),
+		PublicKeyPath:   writeBundleFile(t, root, "authority.pub", []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n")),
+		OutputDirectory: root, Clock: func() time.Time { return time.Date(2026, 8, 18, 8, 5, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialSource, err := resolver.ResolveTargetCredentialRecoveryAuthorization(context.Background(), credentialRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationSource, err := resolver.ResolveTargetRegistrationRecoveryAuthorization(context.Background(), registrationRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentialSource.GrantPath == registrationSource.GrantPath || credentialSource.PublicKeyPath != registrationSource.PublicKeyPath {
+		t.Fatalf("recovery grant sources are not independently persisted: %#v %#v", credentialSource, registrationSource)
+	}
+	if _, err := resolver.ResolveTargetCredentialRecoveryAuthorization(context.Background(), credentialRequest); err == nil {
+		t.Fatal("same credential-recovery request was sent twice")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(mediaTypes) != 2 || mediaTypes[0] != targetCredentialRecoveryAuthorizationRequestMediaType || mediaTypes[1] != targetRegistrationRecoveryAuthorizationRequestMediaType {
+		t.Fatalf("recovery request media types differ: %v", mediaTypes)
+	}
+}
+
 func stageAuthorizationEnvelopeForRequest(t *testing.T, request StageAuthorizationRequest, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey) []byte {
 	t.Helper()
 	payload := authorization.StagePayload{

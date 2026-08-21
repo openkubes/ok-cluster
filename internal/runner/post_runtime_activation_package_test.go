@@ -117,6 +117,79 @@ func TestPostRuntimeExecutionActivationPackageMaterializesExactSecret(t *testing
 	}
 }
 
+func TestPostRuntimeExecutionRecoveryActivationCarriesHistoricalReceipts(t *testing.T) {
+	config, cleanup := postRuntimeActivationPackageFixture(t)
+	defer cleanup()
+	config.ManifestPath = postRuntimeRecoveryManifestFixture(t, config.ManifestPath, true)
+	packaged, err := BuildPostRuntimeExecutionActivationPackage(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := packaged.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.RecoveryMode != "target-registration" || receipt.PrivateFileCount != len(postRuntimeExecutionBundleFiles)+2 {
+		t.Fatalf("recovery activation identity is incomplete: %#v", receipt)
+	}
+	raw, err := packaged.PrivateBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := bytes.SplitN(raw, []byte("\n---\n"), 2)
+	var secret postRuntimeActivationSecret
+	if len(parts) != 2 || json.Unmarshal(parts[0], &secret) != nil {
+		t.Fatal("decode recovery activation Secret")
+	}
+	indexRaw, err := base64.StdEncoding.DecodeString(secret.BinaryData[postRuntimeExecutionBundleIndexName])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index postRuntimeExecutionBundleIndex
+	if json.Unmarshal(indexRaw, &index) != nil || index.Format != PostRuntimeExecutionRecoveryBundleFormat ||
+		index.RecoveryMode != "target-registration" || len(index.Files) != receipt.PrivateFileCount {
+		t.Fatalf("unexpected recovery bundle index: %#v", index)
+	}
+	for _, relative := range postRuntimeExecutionRecoveryReceiptFiles {
+		if secret.BinaryData[strings.ReplaceAll(relative, "/", ".")] == "" {
+			t.Fatalf("recovery receipt %s is absent from private activation", relative)
+		}
+	}
+	plan, err := PlanPostRuntimeExecutionActivationInstallation(packaged)
+	if err != nil || plan.State != "VERIFIED" || plan.MutationAllowed {
+		t.Fatalf("recovery activation installation plan failed: %#v %v", plan, err)
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "projection")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, postRuntimeExecutionBundleIndexName), indexRaw, 0o440); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range index.Files {
+		encoded := secret.BinaryData[strings.ReplaceAll(file.Path, "/", ".")]
+		content, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(source, file.Path)
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, content, 0o440); err != nil {
+			t.Fatal(err)
+		}
+	}
+	materialized, err := MaterializePostRuntimeExecutionBundle(PostRuntimeExecutionBundleMaterializationConfig{
+		SourceDirectory: source, DestinationDirectory: filepath.Join(root, "workspace"), ExpectedBundleDigest: receipt.BundleDigest,
+	})
+	if err != nil || materialized.State != "MATERIALIZED_VERIFIED" || materialized.FileCount != receipt.PrivateFileCount {
+		t.Fatalf("recovery activation did not materialize exactly: %#v %v", materialized, err)
+	}
+}
+
 func TestBuildPostRuntimeExecutionActivationPackageFailsClosed(t *testing.T) {
 	for name, mutate := range map[string]func(*testing.T, *PostRuntimeExecutionActivationPackageConfig){
 		"wrong template digest": func(_ *testing.T, config *PostRuntimeExecutionActivationPackageConfig) {

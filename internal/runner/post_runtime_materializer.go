@@ -17,6 +17,7 @@ import (
 
 const (
 	PostRuntimeExecutionBundleFormat         = "ok147-post-runtime-execution-bundle/v1"
+	PostRuntimeExecutionRecoveryBundleFormat = "ok147-post-runtime-execution-bundle/v2"
 	PostRuntimeExecutionBundleReceiptFormat  = "ok147-post-runtime-execution-bundle-receipt/v1"
 	postRuntimeExecutionBundleIndexName      = "bundle-index.json"
 	postRuntimeExecutionManifestRelativePath = "activation/post-runtime-manifest.json"
@@ -61,6 +62,11 @@ var postRuntimeExecutionBundleFiles = []string{
 	"input/workload-authority.json",
 }
 
+var postRuntimeExecutionRecoveryReceiptFiles = []string{
+	"input/08-target-credential.json",
+	"input/09-target-registration.json",
+}
+
 type postRuntimeExecutionBundleIndexFile struct {
 	Path   string `json:"path"`
 	Digest string `json:"digest"`
@@ -69,6 +75,7 @@ type postRuntimeExecutionBundleIndexFile struct {
 type postRuntimeExecutionBundleIndex struct {
 	Format         string                                `json:"format"`
 	ManifestDigest string                                `json:"manifestDigest"`
+	RecoveryMode   string                                `json:"recoveryMode,omitempty"`
 	Files          []postRuntimeExecutionBundleIndexFile `json:"files"`
 }
 
@@ -109,7 +116,7 @@ func MaterializePostRuntimeExecutionBundle(config PostRuntimeExecutionBundleMate
 		return receipt, errors.New("read post-runtime bundle index")
 	}
 	var index postRuntimeExecutionBundleIndex
-	if err := jsonstrict.Decode(indexRaw, &index); err != nil || index.Format != PostRuntimeExecutionBundleFormat ||
+	if err := jsonstrict.Decode(indexRaw, &index); err != nil ||
 		!stageReceiptPrefixDigestPattern.MatchString(index.ManifestDigest) {
 		return receipt, errors.New("post-runtime bundle index is invalid")
 	}
@@ -118,7 +125,11 @@ func MaterializePostRuntimeExecutionBundle(config PostRuntimeExecutionBundleMate
 		return receipt, errors.New("post-runtime bundle index differs from expected identity")
 	}
 	receipt.BundleDigest, receipt.ManifestDigest = indexDigest, index.ManifestDigest
-	if err := validatePostRuntimeExecutionBundleFiles(index.Files); err != nil {
+	expectedFiles, err := postRuntimeExecutionBundleFilesFor(index.Format, index.RecoveryMode)
+	if err != nil {
+		return receipt, err
+	}
+	if err := validatePostRuntimeExecutionBundleFiles(index.Files, expectedFiles); err != nil {
 		return receipt, err
 	}
 
@@ -133,6 +144,14 @@ func MaterializePostRuntimeExecutionBundle(config PostRuntimeExecutionBundleMate
 			return receipt, errors.New("post-runtime bundle exceeds size limit")
 		}
 		contents[file.Path] = raw
+	}
+	sourceDocument, sourceManifestDigest, err := decodePostRuntimeExecutionManifest(contents[postRuntimeExecutionManifestRelativePath])
+	if err != nil || sourceManifestDigest != index.ManifestDigest {
+		return receipt, errors.New("projected post-runtime manifest differs from bundle identity")
+	}
+	sourceBundleFormat, sourceRecoveryMode, err := postRuntimeExecutionBundleIdentity(sourceDocument)
+	if err != nil || sourceBundleFormat != index.Format || sourceRecoveryMode != index.RecoveryMode {
+		return receipt, errors.New("projected post-runtime recovery identity differs from bundle index")
 	}
 
 	parentInfo, err := os.Lstat(filepath.Dir(config.DestinationDirectory))
@@ -154,9 +173,13 @@ func MaterializePostRuntimeExecutionBundle(config PostRuntimeExecutionBundleMate
 		}
 	}
 	manifestPath := filepath.Join(config.DestinationDirectory, postRuntimeExecutionManifestRelativePath)
-	_, manifestDigest, err := loadPostRuntimeExecutionManifest(manifestPath)
+	document, manifestDigest, err := loadPostRuntimeExecutionManifest(manifestPath)
 	if err != nil || manifestDigest != index.ManifestDigest {
 		return receipt, errors.New("materialized post-runtime manifest differs from bundle identity")
+	}
+	manifestBundleFormat, manifestRecoveryMode, err := postRuntimeExecutionBundleIdentity(document)
+	if err != nil || manifestBundleFormat != index.Format || manifestRecoveryMode != index.RecoveryMode {
+		return receipt, errors.New("materialized post-runtime recovery identity differs from bundle index")
 	}
 	receipt.State, receipt.FileCount = "MATERIALIZED_VERIFIED", len(index.Files)
 	return receipt, nil
@@ -180,11 +203,11 @@ func canonicalPostRuntimeExecutionBundleIndexDigest(index postRuntimeExecutionBu
 	return digest.SHA256(canonical), nil
 }
 
-func validatePostRuntimeExecutionBundleFiles(files []postRuntimeExecutionBundleIndexFile) error {
-	if len(files) != len(postRuntimeExecutionBundleFiles) || len(files) > maximumPostRuntimeExecutionBundleFiles {
+func validatePostRuntimeExecutionBundleFiles(files []postRuntimeExecutionBundleIndexFile, expected []string) error {
+	if len(files) != len(expected) || len(files) > maximumPostRuntimeExecutionBundleFiles {
 		return errors.New("post-runtime bundle file set is incomplete")
 	}
-	want := append([]string(nil), postRuntimeExecutionBundleFiles...)
+	want := append([]string(nil), expected...)
 	sort.Strings(want)
 	for index, file := range files {
 		if file.Path != want[index] || !stageReceiptPrefixDigestPattern.MatchString(file.Digest) {
@@ -192,6 +215,34 @@ func validatePostRuntimeExecutionBundleFiles(files []postRuntimeExecutionBundleI
 		}
 	}
 	return nil
+}
+
+func postRuntimeExecutionBundleFilesFor(format, recoveryMode string) ([]string, error) {
+	files := append([]string(nil), postRuntimeExecutionBundleFiles...)
+	switch {
+	case format == PostRuntimeExecutionBundleFormat && recoveryMode == "":
+	case format == PostRuntimeExecutionRecoveryBundleFormat && recoveryMode == "target-credential":
+		files = append(files, postRuntimeExecutionRecoveryReceiptFiles[0])
+	case format == PostRuntimeExecutionRecoveryBundleFormat && recoveryMode == "target-registration":
+		files = append(files, postRuntimeExecutionRecoveryReceiptFiles...)
+	default:
+		return nil, errors.New("post-runtime bundle recovery schema is invalid")
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func postRuntimeExecutionBundleIdentity(document postRuntimeExecutionManifestDocument) (string, string, error) {
+	switch {
+	case document.Format == PostRuntimeExecutionManifestFormat && document.Recovery == nil:
+		return PostRuntimeExecutionBundleFormat, "", nil
+	case document.Format == PostRuntimeExecutionRecoveryManifestFormat && document.Recovery != nil && document.Recovery.TargetCredential != nil && document.Recovery.TargetRegistration == nil:
+		return PostRuntimeExecutionRecoveryBundleFormat, "target-credential", nil
+	case document.Format == PostRuntimeExecutionRecoveryManifestFormat && document.Recovery != nil && document.Recovery.TargetCredential != nil && document.Recovery.TargetRegistration != nil:
+		return PostRuntimeExecutionRecoveryBundleFormat, "target-registration", nil
+	default:
+		return "", "", errors.New("post-runtime execution manifest recovery identity is invalid")
+	}
 }
 
 func readProjectedPostRuntimeBundleFile(root, relative string, maximum int64) ([]byte, error) {

@@ -111,7 +111,7 @@ func PlanPostRuntimeExecutionActivationInstallation(packaged VerifiedPostRuntime
 			annotations, _ := metadata["annotations"].(map[string]any)
 			if name != runID || spec["backoffLimit"] != 0 || podSpec["serviceAccountName"] != "ok147-contract-executor-runtime" ||
 				podSpec["automountServiceAccountToken"] != false || annotations["openkubes.io/bundle-digest"] != receipt.BundleDigest ||
-				annotations["openkubes.io/manifest-digest"] != receipt.ManifestDigest || !postRuntimeJobMountsActivationSecret(podSpec, receipt.ActivationSecret) {
+				annotations["openkubes.io/manifest-digest"] != receipt.ManifestDigest || !postRuntimeJobMountsActivationSecret(podSpec, receipt.ActivationSecret, receipt.PrivateFileCount) {
 				return PostRuntimeExecutionActivationInstallationPlan{}, errors.New("post-runtime activation Job binding differs")
 			}
 		}
@@ -131,7 +131,7 @@ func postRuntimeActivationCreatePaths(apiVersion, kind, namespace, name string) 
 	return submissionStageCreatePaths(apiVersion, kind, namespace, name)
 }
 
-func postRuntimeJobMountsActivationSecret(podSpec map[string]any, name string) bool {
+func postRuntimeJobMountsActivationSecret(podSpec map[string]any, name string, fileCount int) bool {
 	volumes, ok := podSpec["volumes"].([]any)
 	if !ok {
 		return false
@@ -143,7 +143,7 @@ func postRuntimeJobMountsActivationSecret(podSpec map[string]any, name string) b
 		}
 		secret, _ := volume["secret"].(map[string]any)
 		items, _ := secret["items"].([]any)
-		return secret["secretName"] == name && len(items) == len(postRuntimeExecutionBundleFiles)+1
+		return secret["secretName"] == name && len(items) == fileCount+1
 	}
 	return false
 }
