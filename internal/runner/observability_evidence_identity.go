@@ -2,10 +2,13 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/digest"
@@ -49,6 +52,15 @@ type ObservabilityIndependentEvidenceIdentityMaterialConfig struct {
 	ReceiptPrefixPath           string
 	ExpectedReceiptPrefixDigest string
 	OutputPath                  string
+}
+
+type ObservabilityIndependentEvidenceIdentityWaitConfig struct {
+	IdentityPath           string
+	ReceiptPath            string
+	ExpectedManifestDigest string
+	PollInterval           time.Duration
+	Timeout                time.Duration
+	Wait                   ObservationWaiter
 }
 
 type fullRunObservabilityEvidenceIdentityBinder struct {
@@ -215,22 +227,110 @@ func deriveObservabilityIndependentEvidenceIdentity(manifest VerifiedFullRunExec
 // LoadObservabilityIndependentEvidenceIdentity reads one private identity and
 // returns only the typed producer input after canonical digest verification.
 func LoadObservabilityIndependentEvidenceIdentity(path, expectedDigest string) (ObservabilityCapabilityObservationIdentity, error) {
+	material, _, err := loadObservabilityIndependentEvidenceIdentityMaterial(path, expectedDigest)
+	if err != nil {
+		return ObservabilityCapabilityObservationIdentity{}, err
+	}
+	return observabilityObservationIdentity(material)
+}
+
+// WaitForObservabilityIndependentEvidenceIdentity lets a separately operated
+// authority start before the full runner. It waits only for the redaction-safe
+// receipt, then verifies the private identity through that receipt. Once a
+// receipt exists, any invalidity is terminal rather than retryable.
+func WaitForObservabilityIndependentEvidenceIdentity(ctx context.Context, config ObservabilityIndependentEvidenceIdentityWaitConfig) (ObservabilityCapabilityObservationIdentity, error) {
+	if config.Wait == nil || !stageReceiptPrefixDigestPattern.MatchString(config.ExpectedManifestDigest) ||
+		config.PollInterval < time.Millisecond || config.PollInterval > 30*time.Second ||
+		config.Timeout < time.Second || config.Timeout > 3*time.Hour || config.IdentityPath == config.ReceiptPath ||
+		validateObservabilityIdentityWaitPath(config.IdentityPath) != nil || validateObservabilityIdentityWaitPath(config.ReceiptPath) != nil {
+		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity wait binding is invalid")
+	}
+	bounded, cancel := context.WithTimeout(ctx, config.Timeout)
+	defer cancel()
+	for {
+		_, err := os.Lstat(config.ReceiptPath)
+		if err == nil {
+			return LoadObservabilityIndependentEvidenceIdentityFromReceipt(config.IdentityPath, config.ReceiptPath, config.ExpectedManifestDigest)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return ObservabilityCapabilityObservationIdentity{}, errors.New("inspect observability evidence identity receipt")
+		}
+		if err := config.Wait(bounded, config.PollInterval); err != nil {
+			return ObservabilityCapabilityObservationIdentity{}, errors.New("wait for observability evidence identity receipt")
+		}
+	}
+}
+
+func validateObservabilityIdentityWaitPath(path string) error {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) == "." || filepath.Base(path) == string(filepath.Separator) {
+		return errors.New("observability evidence identity wait path is invalid")
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 || parent.Mode().Perm()&0o077 != 0 {
+		return errors.New("observability evidence identity wait directory is not private")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("observability evidence identity wait file is unsafe")
+	}
+	return nil
+}
+
+// LoadObservabilityIndependentEvidenceIdentityFromReceipt verifies the
+// dynamic identity digest and source bindings without accepting them as CLI
+// values. Both files are local private handoff artifacts.
+func LoadObservabilityIndependentEvidenceIdentityFromReceipt(identityPath, receiptPath, expectedManifestDigest string) (ObservabilityCapabilityObservationIdentity, error) {
+	if !stageReceiptPrefixDigestPattern.MatchString(expectedManifestDigest) ||
+		validateObservabilityEvidenceFile(receiptPath, maximumObservabilityEvidenceIdentityBytes, true) != nil {
+		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity receipt is invalid")
+	}
+	receiptRaw, err := readBoundedRegular(receiptPath, maximumObservabilityEvidenceIdentityBytes)
+	if err != nil {
+		return ObservabilityCapabilityObservationIdentity{}, errors.New("read observability evidence identity receipt")
+	}
+	var receipt ObservabilityIndependentEvidenceIdentityReceipt
+	if err := jsonstrict.Decode(receiptRaw, &receipt); err != nil {
+		return ObservabilityCapabilityObservationIdentity{}, errors.New("decode strict observability evidence identity receipt")
+	}
+	canonicalReceipt, err := canonicalObservabilityIndependentEvidenceIdentityReceipt(receipt)
+	if err != nil || !bytes.Equal(canonicalReceipt, receiptRaw) || receipt.Format != ObservabilityIndependentEvidenceIdentityReceiptFormat ||
+		receipt.State != "WRITTEN_VERIFIED" || receipt.ManifestDigest != expectedManifestDigest || receipt.PersistentMutationAllowed ||
+		receipt.FileMode != "0600" || receipt.FileSize <= 0 || !stageReceiptPrefixDigestPattern.MatchString(receipt.RuntimeBindingDigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(receipt.TargetClusterUIDDigest) || !stageReceiptPrefixDigestPattern.MatchString(receipt.IdentityDigest) {
+		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity receipt is not canonical and bound")
+	}
+	material, raw, err := loadObservabilityIndependentEvidenceIdentityMaterial(identityPath, receipt.IdentityDigest)
+	if err != nil || len(raw) != receipt.FileSize || material.ManifestDigest != receipt.ManifestDigest ||
+		material.RuntimeBindingDigest != receipt.RuntimeBindingDigest || digest.SHA256([]byte(material.TargetClusterUID)) != receipt.TargetClusterUIDDigest {
+		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity differs from receipt")
+	}
+	return observabilityObservationIdentity(material)
+}
+
+func loadObservabilityIndependentEvidenceIdentityMaterial(path, expectedDigest string) (ObservabilityIndependentEvidenceIdentityMaterial, []byte, error) {
 	if !stageReceiptPrefixDigestPattern.MatchString(expectedDigest) || validateObservabilityEvidenceFile(path, maximumObservabilityEvidenceIdentityBytes, true) != nil {
-		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity file is invalid")
+		return ObservabilityIndependentEvidenceIdentityMaterial{}, nil, errors.New("observability evidence identity file is invalid")
 	}
 	raw, err := readBoundedRegular(path, maximumObservabilityEvidenceIdentityBytes)
 	if err != nil || digest.SHA256(raw) != expectedDigest {
-		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity digest differs")
+		return ObservabilityIndependentEvidenceIdentityMaterial{}, nil, errors.New("observability evidence identity digest differs")
 	}
 	var material ObservabilityIndependentEvidenceIdentityMaterial
 	if err := jsonstrict.Decode(raw, &material); err != nil {
-		return ObservabilityCapabilityObservationIdentity{}, errors.New("decode strict observability evidence identity")
+		return ObservabilityIndependentEvidenceIdentityMaterial{}, nil, errors.New("decode strict observability evidence identity")
 	}
 	canonical, err := canonicalObservabilityIndependentEvidenceIdentity(material)
 	if err != nil || !bytes.Equal(canonical, raw) || material.Format != ObservabilityIndependentEvidenceIdentityFormat || material.State != "RUNTIME_BOUND" ||
 		!stageReceiptPrefixDigestPattern.MatchString(material.ManifestDigest) || !stageReceiptPrefixDigestPattern.MatchString(material.RuntimeBindingDigest) {
-		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity is not canonical and bound")
+		return ObservabilityIndependentEvidenceIdentityMaterial{}, nil, errors.New("observability evidence identity is not canonical and bound")
 	}
+	return material, raw, nil
+}
+
+func observabilityObservationIdentity(material ObservabilityIndependentEvidenceIdentityMaterial) (ObservabilityCapabilityObservationIdentity, error) {
 	identity := ObservabilityCapabilityObservationIdentity{
 		RunID: material.RunID, TargetClusterUID: material.TargetClusterUID,
 		FixtureDigest: material.FixtureDigest, ProfileDigest: material.ProfileDigest,
