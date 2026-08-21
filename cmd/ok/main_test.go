@@ -980,10 +980,10 @@ func TestTargetAccessStageRunBindsExactArtifactAndWorkloadRuntime(t *testing.T) 
 		if !bounded || time.Until(deadline) > stageRunTimeout || time.Until(deadline) < stageRunTimeout-time.Minute {
 			t.Fatalf("target-access context is not bounded: %s %t", deadline, bounded)
 		}
-		if bundle.PlanPath != "/tmp/plan.json" || len(bundle.Receipts) != 6 || bundle.ArtifactPath != "/tmp/target-access.yaml" || len(bundle.ExpectedObjects) != 8 {
+		if bundle.PlanPath != "/tmp/plan.json" || len(bundle.Receipts) != 6 || bundle.ArtifactPath != "/tmp/target-access.yaml" || len(bundle.ExpectedObjects) != 11 {
 			t.Fatalf("target-access bundle differs: %#v", bundle)
 		}
-		wantKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding"}
+		wantKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding"}
 		for index, object := range bundle.ExpectedObjects {
 			if object.Kind != wantKinds[index] {
 				t.Fatalf("target-access identity %d differs: %#v", index, object)
@@ -1680,6 +1680,8 @@ func targetAccessStageRunArguments() []string {
 		"--cluster-role", "ok147-argocd-platform-cluster", "--cluster-rolebinding", "ok147-argocd-platform-cluster",
 		"--platform-role", "ok147-argocd-platform", "--platform-rolebinding", "ok147-argocd-platform",
 		"--kube-system-role", "ok147-argocd-kube-system", "--kube-system-rolebinding", "ok147-argocd-kube-system",
+		"--observer-serviceaccount", "ok147-observability-autonomy", "--observer-role", "ok147-observability-autonomy",
+		"--observer-rolebinding", "ok147-observability-autonomy",
 		"--execute",
 		"--ledger-api-endpoint", "https://192.0.2.12:6443", "--ledger-token-file", "/private/tmp/ledger-token", "--ledger-ca-file", "/private/tmp/ledger-ca",
 		"--workload-binding", "/private/tmp/runtime-binding.json", "--workload-binding-digest", testSHA("5"),

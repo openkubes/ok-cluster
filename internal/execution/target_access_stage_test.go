@@ -23,7 +23,7 @@ func TestTargetAccessMutatorBindsExactWorkloadAccessSet(t *testing.T) {
 	if err != nil || result.Outcome != "SUCCEEDED" || result.MutationState != "ATTEMPTED" || result.EvidenceDigest == "" || submitter.calls != 1 {
 		t.Fatalf("target-access mutation did not complete: %#v calls=%d err=%v", result, submitter.calls, err)
 	}
-	if submitter.plane.Identity != stagedSHA("e") || len(submitter.plane.Objects) != 8 || submitter.plane.Objects[0].Identity.Kind != "Namespace" || string(submitter.plane.Objects[0].Raw) != `{"apiVersion":"v1","kind":"Namespace"}` {
+	if submitter.plane.Identity != stagedSHA("e") || len(submitter.plane.Objects) != 11 || submitter.plane.Objects[0].Identity.Kind != "Namespace" || string(submitter.plane.Objects[0].Raw) != `{"apiVersion":"v1","kind":"Namespace"}` {
 		t.Fatalf("mutator did not retain the verified workload plane: %#v", submitter.plane)
 	}
 }
@@ -47,12 +47,12 @@ func TestTargetAccessMutatorRejectsForeignProjectionAndRequest(t *testing.T) {
 	plan := stagedPlan(t)
 	valid := stagedTargetAccessPlan(plan.IntentRevision, plan.PlatformRevision, plan.ExecutionFixture, stagedSHA("e"))
 	tests := map[string]func(*submission.TargetAccessPlan){
-		"authorizing input": func(value *submission.TargetAccessPlan) { value.MutationAllowed = true },
-		"wrong P":           func(value *submission.TargetAccessPlan) { value.PlatformRevision = stagedSHA("1") },
-		"wrong artifact":    func(value *submission.TargetAccessPlan) { value.ArtifactDigest = stagedSHA("1") },
-		"wrong authority":   func(value *submission.TargetAccessPlan) { value.Workload.Identity = stagedSHA("1") },
-		"seventh object":    func(value *submission.TargetAccessPlan) { value.Workload.Objects = value.Workload.Objects[:7] },
-		"wrong kind":        func(value *submission.TargetAccessPlan) { value.Workload.Objects[0].Identity.Kind = "ConfigMap" },
+		"authorizing input":     func(value *submission.TargetAccessPlan) { value.MutationAllowed = true },
+		"wrong P":               func(value *submission.TargetAccessPlan) { value.PlatformRevision = stagedSHA("1") },
+		"wrong artifact":        func(value *submission.TargetAccessPlan) { value.ArtifactDigest = stagedSHA("1") },
+		"wrong authority":       func(value *submission.TargetAccessPlan) { value.Workload.Identity = stagedSHA("1") },
+		"incomplete object set": func(value *submission.TargetAccessPlan) { value.Workload.Objects = value.Workload.Objects[:10] },
+		"wrong kind":            func(value *submission.TargetAccessPlan) { value.Workload.Objects[0].Identity.Kind = "ConfigMap" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -72,12 +72,12 @@ func TestTargetAccessMutatorRejectsForeignProjectionAndRequest(t *testing.T) {
 }
 
 func stagedTargetAccessPlan(r, p, fixture, targetDigest string) submission.TargetAccessPlan {
-	kinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding"}
+	kinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding"}
 	objects := make([]submission.Object, len(kinds))
 	for index, kind := range kinds {
 		objects[index] = submission.Object{
 			Identity: projection.ResourceIdentity{APIVersion: "v1", Kind: kind, Name: "object"},
-			Digest:   stagedSHA(string("12345678"[index])), CollectionPath: "/api/v1/resources", ObjectPath: "/api/v1/resources/object",
+			Digest:   stagedSHA(string("123456789ab"[index])), CollectionPath: "/api/v1/resources", ObjectPath: "/api/v1/resources/object",
 			Raw: json.RawMessage(`{"apiVersion":"v1","kind":"` + kind + `"}`),
 		}
 	}

@@ -9,7 +9,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
-// TargetAccessMutator is bound to the exact eight-object workload access set.
+// TargetAccessMutator is bound to the exact eleven-object workload access set.
 // It neither issues credentials nor registers the target with GitOps.
 type TargetAccessMutator struct {
 	binding   StageMutationBinding
@@ -37,13 +37,13 @@ func NewTargetAccessMutator(plan stageplan.Binding, projected submission.TargetA
 		return nil, err
 	}
 	plane := projected.Workload
-	if !stagedDigestPattern.MatchString(projected.TargetIdentityDigest) || plane.Identity != projected.TargetIdentityDigest || plane.Role != "target-access-writer" || len(plane.Objects) != 8 {
+	if !stagedDigestPattern.MatchString(projected.TargetIdentityDigest) || plane.Identity != projected.TargetIdentityDigest || plane.Role != "target-access-writer" || len(plane.Objects) != 11 {
 		return nil, errors.New("target-access projection authority or content differs from the selected stage")
 	}
-	expectedKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding"}
+	expectedKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding"}
 	for index, object := range plane.Objects {
 		if object.Identity.Kind != expectedKinds[index] || !stagedDigestPattern.MatchString(object.Digest) || object.CollectionPath == "" || object.ObjectPath == "" || len(object.Raw) == 0 {
-			return nil, errors.New("target-access projection lacks the exact eight-object set")
+			return nil, errors.New("target-access projection lacks the exact eleven-object set")
 		}
 	}
 	return &TargetAccessMutator{

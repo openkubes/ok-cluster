@@ -59,7 +59,7 @@ type targetAccessLaunchPreparation struct {
 	MutationAllowed bool                                           `json:"mutationAllowed"`
 }
 
-func targetAccessExpectedObjects(observabilityNamespace, managerServiceAccount, clusterRole, clusterRoleBinding, platformRole, platformRoleBinding, kubeSystemRole, kubeSystemRoleBinding string) []projection.ResourceIdentity {
+func targetAccessExpectedObjects(observabilityNamespace, managerServiceAccount, clusterRole, clusterRoleBinding, platformRole, platformRoleBinding, kubeSystemRole, kubeSystemRoleBinding, observerServiceAccount, observerRole, observerRoleBinding string) []projection.ResourceIdentity {
 	return []projection.ResourceIdentity{
 		{APIVersion: "v1", Kind: "Namespace", Name: observabilityNamespace},
 		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "kube-system", Name: managerServiceAccount},
@@ -69,6 +69,9 @@ func targetAccessExpectedObjects(observabilityNamespace, managerServiceAccount, 
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: observabilityNamespace, Name: platformRoleBinding},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "kube-system", Name: kubeSystemRole},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "kube-system", Name: kubeSystemRoleBinding},
+		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: observabilityNamespace, Name: observerServiceAccount},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: observabilityNamespace, Name: observerRole},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: observabilityNamespace, Name: observerRoleBinding},
 	}
 }
 
@@ -79,7 +82,7 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
 	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
 	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
-	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered eight-object target-access set")
+	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered eleven-object target-access set")
 	observabilityNamespace := flags.String("observability-namespace", "", "independently expected observability namespace")
 	managerServiceAccount := flags.String("manager-serviceaccount", "", "independently expected kube-system manager ServiceAccount")
 	clusterRole := flags.String("cluster-role", "", "independently expected cluster role")
@@ -88,6 +91,9 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 	platformRoleBinding := flags.String("platform-rolebinding", "", "independently expected observability namespace role binding")
 	kubeSystemRole := flags.String("kube-system-role", "", "independently expected kube-system role")
 	kubeSystemRoleBinding := flags.String("kube-system-rolebinding", "", "independently expected kube-system role binding")
+	observerServiceAccount := flags.String("observer-serviceaccount", "", "independently expected observability autonomy observer ServiceAccount")
+	observerRole := flags.String("observer-role", "", "independently expected observability autonomy observer Role")
+	observerRoleBinding := flags.String("observer-rolebinding", "", "independently expected observability autonomy observer RoleBinding")
 	jobTemplate := flags.String("job-template", "", "path to the bounded target-access Job template")
 	jobTemplateDigest := flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
 	output := flags.String("output", "", "new local file for the verified target-access package")
@@ -118,6 +124,7 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 		{"--cluster-role", *clusterRole}, {"--cluster-rolebinding", *clusterRoleBinding},
 		{"--platform-role", *platformRole}, {"--platform-rolebinding", *platformRoleBinding},
 		{"--kube-system-role", *kubeSystemRole}, {"--kube-system-rolebinding", *kubeSystemRoleBinding},
+		{"--observer-serviceaccount", *observerServiceAccount}, {"--observer-role", *observerRole}, {"--observer-rolebinding", *observerRoleBinding},
 		{"--job-template", *jobTemplate}, {"--job-template-digest", *jobTemplateDigest}, {"--output", *output},
 		{"--run-id", *runID}, {"--image", *imageDigest}, {"--input-configmap", *inputConfigMap},
 		{"--ledger-api-url", *ledgerAPIURL}, {"--ledger-api-cidr", *ledgerAPICIDR}, {"--ledger-credential-secret", *ledgerCredentialSecret},
@@ -136,7 +143,7 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 	if err != nil {
 		return fmt.Errorf("read target-access Job template: %w", err)
 	}
-	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding)
+	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
 	raw, receipt, err := materializeTargetAccessStagePackage(runner.TargetAccessStagePackageConfig{
 		Bundle: runner.TargetAccessStageBundleConfig{
 			PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
@@ -149,6 +156,7 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 		ClusterRole: *clusterRole, ClusterRoleBinding: *clusterRoleBinding,
 		PlatformRole: *platformRole, PlatformRoleBinding: *platformRoleBinding,
 		KubeSystemRole: *kubeSystemRole, KubeSystemRoleBinding: *kubeSystemRoleBinding,
+		ObserverServiceAccount: *observerServiceAccount, ObserverRole: *observerRole, ObserverRoleBinding: *observerRoleBinding,
 		LedgerAPIURL: *ledgerAPIURL, LedgerAPICIDR: *ledgerAPICIDR, LedgerCredentialSecret: *ledgerCredentialSecret,
 		WorkloadAPIURL: *workloadAPIURL, WorkloadAPICIDR: *workloadAPICIDR, WorkloadCredentialSecret: *workloadCredentialSecret,
 		WorkloadBindingPath: *workloadBinding, ExpectedWorkloadBindingDigest: *workloadBindingDigest,
@@ -171,6 +179,7 @@ type targetAccessLaunchMaterialFlags struct {
 	observabilityNamespace, managerServiceAccount                                                     *string
 	clusterRole, clusterRoleBinding, platformRole, platformRoleBinding                                *string
 	kubeSystemRole, kubeSystemRoleBinding                                                             *string
+	observerServiceAccount, observerRole, observerRoleBinding                                         *string
 	jobTemplate, jobTemplateDigest, runID, imageDigest, inputConfigMap                                *string
 	ledgerAPIURL, ledgerAPICIDR, ledgerCredentialSecret                                               *string
 	workloadAPIURL, workloadAPICIDR, workloadCredentialSecret, workloadBinding, workloadBindingDigest *string
@@ -184,7 +193,7 @@ func addTargetAccessLaunchMaterialFlags(flags *flag.FlagSet) *targetAccessLaunch
 	values.grantPath = flags.String("grant", "", "path to the signed single-stage grant")
 	values.grantKeyPath = flags.String("grant-key", "", "path to the trusted stage-authority public key")
 	values.evaluationTime = flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
-	values.artifactPath = flags.String("target-access-artifact", "", "path to the exact externally rendered eight-object target-access set")
+	values.artifactPath = flags.String("target-access-artifact", "", "path to the exact externally rendered eleven-object target-access set")
 	values.observabilityNamespace = flags.String("observability-namespace", "", "independently expected observability namespace")
 	values.managerServiceAccount = flags.String("manager-serviceaccount", "", "independently expected kube-system manager ServiceAccount")
 	values.clusterRole = flags.String("cluster-role", "", "independently expected cluster role")
@@ -193,6 +202,9 @@ func addTargetAccessLaunchMaterialFlags(flags *flag.FlagSet) *targetAccessLaunch
 	values.platformRoleBinding = flags.String("platform-rolebinding", "", "independently expected observability namespace role binding")
 	values.kubeSystemRole = flags.String("kube-system-role", "", "independently expected kube-system role")
 	values.kubeSystemRoleBinding = flags.String("kube-system-rolebinding", "", "independently expected kube-system role binding")
+	values.observerServiceAccount = flags.String("observer-serviceaccount", "", "independently expected observability autonomy observer ServiceAccount")
+	values.observerRole = flags.String("observer-role", "", "independently expected observability autonomy observer Role")
+	values.observerRoleBinding = flags.String("observer-rolebinding", "", "independently expected observability autonomy observer RoleBinding")
 	values.jobTemplate = flags.String("job-template", "", "path to the bounded target-access Job template")
 	values.jobTemplateDigest = flags.String("job-template-digest", "", "expected SHA-256 identity of the Job template")
 	values.runID = flags.String("run-id", "", "bounded OK-147 target-access Job identity")
@@ -230,6 +242,7 @@ func (values *targetAccessLaunchMaterialFlags) config() (runner.TargetAccessStag
 		{"--cluster-role", *values.clusterRole}, {"--cluster-rolebinding", *values.clusterRoleBinding},
 		{"--platform-role", *values.platformRole}, {"--platform-rolebinding", *values.platformRoleBinding},
 		{"--kube-system-role", *values.kubeSystemRole}, {"--kube-system-rolebinding", *values.kubeSystemRoleBinding},
+		{"--observer-serviceaccount", *values.observerServiceAccount}, {"--observer-role", *values.observerRole}, {"--observer-rolebinding", *values.observerRoleBinding},
 		{"--job-template", *values.jobTemplate}, {"--job-template-digest", *values.jobTemplateDigest}, {"--run-id", *values.runID}, {"--image", *values.imageDigest},
 		{"--input-configmap", *values.inputConfigMap}, {"--ledger-api-url", *values.ledgerAPIURL}, {"--ledger-api-cidr", *values.ledgerAPICIDR},
 		{"--ledger-credential-secret", *values.ledgerCredentialSecret}, {"--workload-api-url", *values.workloadAPIURL},
@@ -272,7 +285,7 @@ func (values *targetAccessLaunchMaterialFlags) config() (runner.TargetAccessStag
 	if err != nil {
 		return runner.TargetAccessStageLaunchMaterialConfig{}, fmt.Errorf("read runtime manifest: %w", err)
 	}
-	expectedObjects := targetAccessExpectedObjects(*values.observabilityNamespace, *values.managerServiceAccount, *values.clusterRole, *values.clusterRoleBinding, *values.platformRole, *values.platformRoleBinding, *values.kubeSystemRole, *values.kubeSystemRoleBinding)
+	expectedObjects := targetAccessExpectedObjects(*values.observabilityNamespace, *values.managerServiceAccount, *values.clusterRole, *values.clusterRoleBinding, *values.platformRole, *values.platformRoleBinding, *values.kubeSystemRole, *values.kubeSystemRoleBinding, *values.observerServiceAccount, *values.observerRole, *values.observerRoleBinding)
 	return runner.TargetAccessStageLaunchMaterialConfig{
 		Package: runner.TargetAccessStagePackageConfig{
 			Bundle: runner.TargetAccessStageBundleConfig{
@@ -286,6 +299,7 @@ func (values *targetAccessLaunchMaterialFlags) config() (runner.TargetAccessStag
 			ClusterRole: *values.clusterRole, ClusterRoleBinding: *values.clusterRoleBinding,
 			PlatformRole: *values.platformRole, PlatformRoleBinding: *values.platformRoleBinding,
 			KubeSystemRole: *values.kubeSystemRole, KubeSystemRoleBinding: *values.kubeSystemRoleBinding,
+			ObserverServiceAccount: *values.observerServiceAccount, ObserverRole: *values.observerRole, ObserverRoleBinding: *values.observerRoleBinding,
 			LedgerAPIURL: *values.ledgerAPIURL, LedgerAPICIDR: *values.ledgerAPICIDR, LedgerCredentialSecret: *values.ledgerCredentialSecret,
 			WorkloadAPIURL: *values.workloadAPIURL, WorkloadAPICIDR: *values.workloadAPICIDR, WorkloadCredentialSecret: *values.workloadCredentialSecret,
 			WorkloadBindingPath: *values.workloadBinding, ExpectedWorkloadBindingDigest: *values.workloadBindingDigest,

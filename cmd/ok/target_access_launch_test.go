@@ -38,10 +38,10 @@ func TestTargetAccessStagePackageWritesVerifiedOfflineArtifact(t *testing.T) {
 	if err := run(arguments, &stdout, &stderr); err != nil {
 		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
 	}
-	if captured.Bundle.PlanPath != "/tmp/plan.json" || len(captured.Bundle.Receipts) != 6 || len(captured.Bundle.ExpectedObjects) != 8 || captured.RunID != "ok147-target-access-20260817-01" {
+	if captured.Bundle.PlanPath != "/tmp/plan.json" || len(captured.Bundle.Receipts) != 6 || len(captured.Bundle.ExpectedObjects) != 11 || captured.RunID != "ok147-target-access-20260817-01" {
 		t.Fatalf("unexpected target-access package config: %#v", captured)
 	}
-	if captured.Bundle.ExpectedObjects[0].Name != "ok-observability" || captured.Bundle.ExpectedObjects[7].Namespace != "kube-system" || captured.Bundle.PlanExpected.GitOpsAuthority != "ok-shared" {
+	if captured.Bundle.ExpectedObjects[0].Name != "ok-observability" || captured.Bundle.ExpectedObjects[7].Namespace != "kube-system" || captured.Bundle.ExpectedObjects[10].Name != "ok147-observability-autonomy" || captured.Bundle.PlanExpected.GitOpsAuthority != "ok-shared" {
 		t.Fatalf("target-access authority or object identities differ: %#v", captured.Bundle)
 	}
 	if string(captured.JobTemplate) != "bounded-target-access-template" || captured.JobTemplateDigest != digest.SHA256([]byte("bounded-target-access-template")) || captured.LedgerCredentialSecret == captured.WorkloadCredentialSecret || captured.WorkloadBindingPath != "/private/tmp/runtime-binding.json" {
@@ -98,7 +98,7 @@ func TestTargetAccessLaunchPrepareBuildsOneNonMutatingCandidate(t *testing.T) {
 	if err := run(targetAccessLaunchPrepareArguments(template, runtimeManifest), &stdout, &stderr); err != nil {
 		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
 	}
-	if captured.Package.Bundle.PlanExpected.GitOpsAuthority != "ok-shared" || len(captured.Package.Bundle.ExpectedObjects) != 8 || captured.Package.RunID != "ok147-target-access-20260817-01" {
+	if captured.Package.Bundle.PlanExpected.GitOpsAuthority != "ok-shared" || len(captured.Package.Bundle.ExpectedObjects) != 11 || captured.Package.RunID != "ok147-target-access-20260817-01" {
 		t.Fatalf("target-access package identity differs: %#v", captured.Package)
 	}
 	if string(captured.Package.JobTemplate) != "bounded-target-access-template" || string(captured.RuntimeManifest) != "bounded-runtime" {

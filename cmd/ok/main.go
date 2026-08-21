@@ -2003,7 +2003,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
 	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
 	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
-	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered eight-object target-access set")
+	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered eleven-object target-access set")
 	observabilityNamespace := flags.String("observability-namespace", "", "independently expected observability namespace")
 	managerServiceAccount := flags.String("manager-serviceaccount", "", "independently expected kube-system manager ServiceAccount")
 	clusterRole := flags.String("cluster-role", "", "independently expected cluster role")
@@ -2012,6 +2012,9 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	platformRoleBinding := flags.String("platform-rolebinding", "", "independently expected observability namespace role binding")
 	kubeSystemRole := flags.String("kube-system-role", "", "independently expected kube-system role")
 	kubeSystemRoleBinding := flags.String("kube-system-rolebinding", "", "independently expected kube-system role binding")
+	observerServiceAccount := flags.String("observer-serviceaccount", "", "independently expected observability autonomy observer ServiceAccount")
+	observerRole := flags.String("observer-role", "", "independently expected observability autonomy observer Role")
+	observerRoleBinding := flags.String("observer-rolebinding", "", "independently expected observability autonomy observer RoleBinding")
 	execute := flags.Bool("execute", false, "claim and execute exactly the selected target-access stage")
 	ledgerAPIEndpoint := flags.String("ledger-api-endpoint", "", "TLS Kubernetes API endpoint for the durable ledger")
 	ledgerTokenFile := flags.String("ledger-token-file", "", "path to the short-lived ledger token")
@@ -2039,6 +2042,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 		{"--cluster-role", *clusterRole}, {"--cluster-rolebinding", *clusterRoleBinding},
 		{"--platform-role", *platformRole}, {"--platform-rolebinding", *platformRoleBinding},
 		{"--kube-system-role", *kubeSystemRole}, {"--kube-system-rolebinding", *kubeSystemRoleBinding},
+		{"--observer-serviceaccount", *observerServiceAccount}, {"--observer-role", *observerRole}, {"--observer-rolebinding", *observerRoleBinding},
 		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
 		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
 		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile},
@@ -2051,7 +2055,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	if err != nil {
 		return fmt.Errorf("parse evaluation time: %w", err)
 	}
-	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding)
+	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
 	bundleConfig := runner.TargetAccessStageBundleConfig{
 		PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
 		GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at,

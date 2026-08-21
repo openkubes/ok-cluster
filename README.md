@@ -135,7 +135,7 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   path. The boundary is covered only by local and fake-API tests at this
   checkpoint; no DEV runtime-binding Job has been launched.
   The next `target-access` stage now starts with a separate offline verifier
-  for one externally rendered eight-object workload RBAC set. It binds the
+  for one externally rendered eleven-object workload RBAC set. It binds the
   artifact to `R`, `P`, the execution fixture and immutable target identity,
   fixes object order and REST routes, rejects wildcard/non-resource access,
   foreign subjects and runtime metadata, and returns only a non-authorizing
@@ -144,18 +144,18 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   signed `CreateTargetAccess` grant before exposing a redacted verified bundle
   receipt. A typed runtime opener now correlates the private raw CAPI UID with
   that public target digest, requires distinct ledger and short-lived workload
-  credentials, and preconstructs exactly one eight-object create-only mutator.
+  credentials, and preconstructs exactly one eleven-object create-only mutator.
   Opening performs no API request or grant claim; only the returned crash-safe
   staged operation can claim and submit. The local
   `ok cluster stage run target-access --execute` boundary now requires the
-  exact six-receipt prefix, signed grant, eight independently named object
+  exact six-receipt prefix, signed grant, eleven independently named object
   identities, private runtime-binding digest and distinct ledger/workload
   files before it can invoke that operation. A separated TLS fake-API proof
-  covers the complete claim-to-submit path: exactly eight ordered
+  covers the complete claim-to-submit path: exactly eleven ordered
   `GET`/conditional-`POST` pairs, durable success replay without another write,
   and a durably stopped partial prefix without retry. Its first Job-package
   boundary is offline: one immutable ConfigMap binds the plan,
-  signed grant, exact six-receipt prefix and eight-object artifact while
+  signed grant, exact six-receipt prefix and eleven-object artifact while
   excluding the private runtime binding, CA and both credentials. A hardened
   NetworkPolicy and non-retrying Job bind only the exact management-ledger and
   workload API endpoints. Two distinct short-lived immutable Secrets carry the
@@ -169,6 +169,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   only `... launch execute --execute` can open the exact expiry-bound installer
   candidate. These activation paths are covered by local and fake-API tests;
   no DEV Target Access Job has been launched by the MVP.
+  The last three workload objects are a separate tokenless autonomy-observer
+  ServiceAccount, an exact read-only Role (`get` Services and `list`
+  EndpointSlices), and its RoleBinding. They are not shared with Argo CD and
+  cannot write workload resources.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered

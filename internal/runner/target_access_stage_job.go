@@ -28,6 +28,9 @@ type TargetAccessStageJobValues struct {
 	PlatformRoleBinding      string
 	KubeSystemRole           string
 	KubeSystemRoleBinding    string
+	ObserverServiceAccount   string
+	ObserverRole             string
+	ObserverRoleBinding      string
 	LedgerAPIURL             string
 	LedgerAPICIDR            string
 	LedgerCredentialSecret   string
@@ -52,6 +55,7 @@ func RenderTargetAccessStageJobTemplate(template []byte, values TargetAccessStag
 		values.InputConfigMap, values.ObservabilityNamespace, values.ManagerServiceAccount,
 		values.ClusterRole, values.ClusterRoleBinding, values.PlatformRole,
 		values.PlatformRoleBinding, values.KubeSystemRole, values.KubeSystemRoleBinding,
+		values.ObserverServiceAccount, values.ObserverRole, values.ObserverRoleBinding,
 		values.LedgerCredentialSecret, values.WorkloadCredentialSecret,
 	}
 	for _, value := range names {
@@ -100,7 +104,9 @@ func RenderTargetAccessStageJobTemplate(template []byte, values TargetAccessStag
 		"${OK147_CLUSTER_ROLE}": values.ClusterRole, "${OK147_CLUSTER_ROLEBINDING}": values.ClusterRoleBinding,
 		"${OK147_PLATFORM_ROLE}": values.PlatformRole, "${OK147_PLATFORM_ROLEBINDING}": values.PlatformRoleBinding,
 		"${OK147_KUBE_SYSTEM_ROLE}": values.KubeSystemRole, "${OK147_KUBE_SYSTEM_ROLEBINDING}": values.KubeSystemRoleBinding,
-		"${OK147_LEDGER_API_URL}": values.LedgerAPIURL, "${OK147_LEDGER_API_CIDR}": values.LedgerAPICIDR,
+		"${OK147_OBSERVER_SERVICEACCOUNT}": values.ObserverServiceAccount, "${OK147_OBSERVER_ROLE}": values.ObserverRole,
+		"${OK147_OBSERVER_ROLEBINDING}": values.ObserverRoleBinding,
+		"${OK147_LEDGER_API_URL}":       values.LedgerAPIURL, "${OK147_LEDGER_API_CIDR}": values.LedgerAPICIDR,
 		"${OK147_LEDGER_API_PORT}": ledgerPort, "${OK147_LEDGER_CREDENTIAL_SECRET}": values.LedgerCredentialSecret,
 		"${OK147_WORKLOAD_API_CIDR}": values.WorkloadAPICIDR, "${OK147_WORKLOAD_API_PORT}": workloadPort,
 		"${OK147_WORKLOAD_CREDENTIAL_SECRET}": values.WorkloadCredentialSecret, "${OK147_WORKLOAD_BINDING_DIGEST}": values.WorkloadBindingDigest,

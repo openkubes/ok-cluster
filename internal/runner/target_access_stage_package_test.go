@@ -101,6 +101,7 @@ func targetAccessStagePackageConfig(t *testing.T) TargetAccessStagePackageConfig
 		ClusterRole: values.ClusterRole, ClusterRoleBinding: values.ClusterRoleBinding,
 		PlatformRole: values.PlatformRole, PlatformRoleBinding: values.PlatformRoleBinding,
 		KubeSystemRole: values.KubeSystemRole, KubeSystemRoleBinding: values.KubeSystemRoleBinding,
+		ObserverServiceAccount: values.ObserverServiceAccount, ObserverRole: values.ObserverRole, ObserverRoleBinding: values.ObserverRoleBinding,
 		LedgerAPIURL: values.LedgerAPIURL, LedgerAPICIDR: values.LedgerAPICIDR, LedgerCredentialSecret: values.LedgerCredentialSecret,
 		WorkloadAPIURL: "https://192.0.2.147:6443", WorkloadAPICIDR: "192.0.2.147/32", WorkloadCredentialSecret: values.WorkloadCredentialSecret,
 		WorkloadBindingPath: runtimeConfig.Workload.Path, ExpectedWorkloadBindingDigest: runtimeConfig.Workload.ExpectedBindingDigest,

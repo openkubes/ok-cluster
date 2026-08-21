@@ -56,6 +56,9 @@ func TestRenderTargetAccessStageJobBindsExactEnvelope(t *testing.T) {
 		"--platform-rolebinding":    values.PlatformRoleBinding,
 		"--kube-system-role":        values.KubeSystemRole,
 		"--kube-system-rolebinding": values.KubeSystemRoleBinding,
+		"--observer-serviceaccount": values.ObserverServiceAccount,
+		"--observer-role":           values.ObserverRole,
+		"--observer-rolebinding":    values.ObserverRoleBinding,
 	} {
 		if got := argumentValue(args, argument); got != want {
 			t.Fatalf("target-access Job %s=%q, want %q", argument, got, want)
@@ -127,6 +130,7 @@ func validTargetAccessStageJobValues() TargetAccessStageJobValues {
 		ClusterRole: "ok147-argocd-platform-cluster", ClusterRoleBinding: "ok147-argocd-platform-cluster",
 		PlatformRole: "ok147-argocd-platform", PlatformRoleBinding: "ok147-argocd-platform",
 		KubeSystemRole: "ok147-argocd-kube-system", KubeSystemRoleBinding: "ok147-argocd-kube-system",
+		ObserverServiceAccount: "ok147-observability-autonomy", ObserverRole: "ok147-observability-autonomy", ObserverRoleBinding: "ok147-observability-autonomy",
 		LedgerAPIURL: "https://192.0.2.12:6443", LedgerAPICIDR: "192.0.2.12/32", LedgerCredentialSecret: "ok147-ledger-credential",
 		WorkloadAPIURL: "https://192.0.2.13:6443", WorkloadAPICIDR: "192.0.2.13/32", WorkloadCredentialSecret: "ok147-workload-credential",
 		WorkloadBindingDigest: prefixSHA("f"),

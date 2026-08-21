@@ -84,10 +84,10 @@ func validateTargetAccessExpected(expected TargetAccessExpected) error {
 	if expected.WorkloadAuthority != expected.TargetIdentityDigest {
 		return errors.New("target-access workload authority must equal the immutable target identity")
 	}
-	if len(expected.Objects) != 8 {
-		return errors.New("target-access requires exactly eight object identities")
+	if len(expected.Objects) != 11 {
+		return errors.New("target-access requires exactly eleven object identities")
 	}
-	expectedKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding"}
+	expectedKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding"}
 	for index, identity := range expected.Objects {
 		if identity.Kind != expectedKinds[index] || !validName(identity.Name, 253) {
 			return errors.New("target-access expected object order or identity is invalid")
@@ -344,12 +344,12 @@ func rejectTargetAccessUnknownKeys(value map[string]any, description string, all
 }
 
 func validateTargetAccessRelationships(values []map[string]any, identities []projection.ResourceIdentity) error {
-	serviceAccount := identities[1]
+	managerServiceAccount := identities[1]
 	clusterRole := identities[2]
 	for _, index := range []int{3, 5, 7} {
 		roleRef := values[index]["roleRef"].(map[string]any)
 		subject := values[index]["subjects"].([]any)[0].(map[string]any)
-		if text(subject["name"]) != serviceAccount.Name || text(subject["namespace"]) != serviceAccount.Namespace {
+		if text(subject["name"]) != managerServiceAccount.Name || text(subject["namespace"]) != managerServiceAccount.Namespace {
 			return errors.New("target-access binding subject differs from the exact manager ServiceAccount")
 		}
 		wantKind, wantName := identities[index-1].Kind, identities[index-1].Name
@@ -360,7 +360,60 @@ func validateTargetAccessRelationships(values []map[string]any, identities []pro
 			return errors.New("target-access binding roleRef differs from its exact role")
 		}
 	}
+	observerServiceAccount := identities[8]
+	if automount, exists := values[8]["automountServiceAccountToken"]; !exists || automount != false {
+		return errors.New("target-access observer ServiceAccount must disable automatic token mounting")
+	}
+	if err := validateTargetAccessObserverRules(values[9]["rules"]); err != nil {
+		return err
+	}
+	roleRef := values[10]["roleRef"].(map[string]any)
+	subject := values[10]["subjects"].([]any)[0].(map[string]any)
+	if text(subject["name"]) != observerServiceAccount.Name || text(subject["namespace"]) != observerServiceAccount.Namespace {
+		return errors.New("target-access observer binding subject differs from the exact observer ServiceAccount")
+	}
+	if text(roleRef["kind"]) != identities[9].Kind || text(roleRef["name"]) != identities[9].Name {
+		return errors.New("target-access observer binding roleRef differs from its exact role")
+	}
 	return nil
+}
+
+func validateTargetAccessObserverRules(raw any) error {
+	rules, ok := raw.([]any)
+	if !ok || len(rules) != 2 {
+		return errors.New("target-access observer role must contain exactly two rules")
+	}
+	expected := []struct {
+		apiGroups []string
+		resources []string
+		verbs     []string
+	}{
+		{apiGroups: []string{""}, resources: []string{"services"}, verbs: []string{"get"}},
+		{apiGroups: []string{"discovery.k8s.io"}, resources: []string{"endpointslices"}, verbs: []string{"list"}},
+	}
+	for index, want := range expected {
+		rule, ok := rules[index].(map[string]any)
+		if !ok || !targetAccessStringListEquals(rule["apiGroups"], want.apiGroups) || !targetAccessStringListEquals(rule["resources"], want.resources) || !targetAccessStringListEquals(rule["verbs"], want.verbs) {
+			return errors.New("target-access observer role exceeds the exact read-only permission profile")
+		}
+		if _, exists := rule["resourceNames"]; exists {
+			return errors.New("target-access observer role must not contain resourceNames")
+		}
+	}
+	return nil
+}
+
+func targetAccessStringListEquals(raw any, expected []string) bool {
+	values, ok := raw.([]any)
+	if !ok || len(values) != len(expected) {
+		return false
+	}
+	for index := range expected {
+		if text(values[index]) != expected[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func targetAccessCollectionPath(identity projection.ResourceIdentity) (string, error) {

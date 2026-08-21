@@ -17,7 +17,7 @@ import (
 const TargetAccessStageBundleReceiptFormat = "ok147-target-access-stage-bundle/v1"
 
 // TargetAccessStageBundleConfig binds the complete successful prefix, one
-// CreateTargetAccess grant and one externally rendered eight-object artifact.
+// CreateTargetAccess grant and one externally rendered eleven-object artifact.
 // Loading remains entirely offline.
 type TargetAccessStageBundleConfig struct {
 	PlanPath           string
@@ -144,7 +144,7 @@ func (bundle VerifiedTargetAccessStageBundle) Decision() (stagecursor.Decision, 
 }
 
 func (bundle VerifiedTargetAccessStageBundle) Receipt() (TargetAccessStageBundleReceipt, error) {
-	if !bundle.verified || bundle.receipt.Format != TargetAccessStageBundleReceiptFormat || bundle.receipt.State != "VERIFIED" || bundle.receipt.StageID != "target-access" || bundle.receipt.MutationAllowed || len(bundle.receipt.ObjectDigests) != 8 {
+	if !bundle.verified || bundle.receipt.Format != TargetAccessStageBundleReceiptFormat || bundle.receipt.State != "VERIFIED" || bundle.receipt.StageID != "target-access" || bundle.receipt.MutationAllowed || len(bundle.receipt.ObjectDigests) != 11 {
 		return TargetAccessStageBundleReceipt{}, errors.New("target-access stage bundle was not produced by verification")
 	}
 	receipt := bundle.receipt

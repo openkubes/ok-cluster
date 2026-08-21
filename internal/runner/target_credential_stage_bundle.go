@@ -146,7 +146,7 @@ func LoadTargetCredentialStageBundle(config TargetCredentialStageBundleConfig) (
 	if err != nil {
 		return VerifiedTargetCredentialStageBundle{}, err
 	}
-	if len(access.Workload.Objects) != 8 || access.Workload.Objects[1].Identity.Kind != "ServiceAccount" {
+	if len(access.Workload.Objects) != 11 || access.Workload.Objects[1].Identity.Kind != "ServiceAccount" || access.Workload.Objects[8].Identity.Kind != "ServiceAccount" {
 		return VerifiedTargetCredentialStageBundle{}, errors.New("target-access artifact lacks the credential ServiceAccount")
 	}
 	credentialStage, _, err := plan.Stage("target-credential")
