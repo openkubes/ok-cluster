@@ -1,22 +1,36 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"io"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/runner"
 )
+
+const fullRunExecutionTimeout = 3 * time.Hour
+
+type fullRunActivationRunner interface {
+	Run(context.Context) (runner.FullRunExecutionActivationReceipt, error)
+}
 
 var prepareFullRunExecutionManifest = func(path string) (runner.FullRunExecutionManifestReceipt, error) {
 	_, receipt, err := runner.LoadFullRunExecutionManifest(path)
 	return receipt, err
 }
 
+var openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+	return runner.OpenKubernetesObservabilityFullRunActivation(path, runner.KubernetesObservabilityFullRunActivationConfig{
+		IndependentEvidencePublicKeyPath: publicKeyPath, Clock: time.Now, Wait: runner.WaitWithTimer,
+	})
+}
+
 // runClusterStageRunFullPrepare verifies the complete private first-run
-// contract offline. It deliberately has no execute sibling until the binary
-// contains one concrete, fixed Platform capability adapter.
+// contract offline and emits the identity required by the separate execute
+// command. It opens no credential or runtime dependency.
 func runClusterStageRunFullPrepare(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster stage run full prepare", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -44,4 +58,49 @@ func runClusterStageRunFullPrepare(arguments []string, stdout, stderr io.Writer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(receipt)
+}
+
+func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run full execute", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	manifestPath := flags.String("manifest", "", "path to the private 0600 full-run execution manifest")
+	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact semantic digest emitted by prepare")
+	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent Observability evidence public key")
+	execute := flags.Bool("execute", false, "perform the exact single-use Stage 1-12 full run")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("full-run mutation requires explicit --execute")
+	}
+	if *manifestPath == "" || *evidencePublicKey == "" || !sha256DigestPattern.MatchString(*expectedManifestDigest) {
+		return errors.New("--manifest, --independent-evidence-public-key and a lowercase SHA-256 --expected-manifest-digest are required")
+	}
+	verified, err := prepareFullRunExecutionManifest(*manifestPath)
+	if err != nil || verified.Format != runner.FullRunExecutionManifestReceiptFormat || verified.State != "VERIFIED" ||
+		verified.MutationAllowed || verified.ManifestDigest != *expectedManifestDigest {
+		return errors.New("full-run manifest differs from the prepared identity")
+	}
+	activation, prepared, err := openKubernetesObservabilityFullRunActivation(*manifestPath, *evidencePublicKey)
+	if err != nil {
+		return err
+	}
+	if activation == nil || prepared.Format != runner.FullRunExecutionActivationReceiptFormat || prepared.State != "PREPARED" ||
+		prepared.Execution != nil || prepared.Manifest.State != "VERIFIED" || prepared.Manifest.MutationAllowed ||
+		prepared.Manifest != verified {
+		return errors.New("full-run manifest differs from the prepared identity")
+	}
+	bounded, cancel := context.WithTimeout(ctx, fullRunExecutionTimeout)
+	defer cancel()
+	receipt, runErr := activation.Run(bounded)
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(receipt); err != nil {
+		return err
+	}
+	return runErr
 }

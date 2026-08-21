@@ -2878,27 +2878,33 @@ then reused unchanged by aggregate evaluation. A failed capability is cached
 as failure and is never retried by this seam. The direct
 `OpenFullRunExecutionManifest` entry point remains inert until `Run`.
 
-The shared full-run activation boundary now wraps that exact operation for
-both a local adapter and a future ephemeral Job adapter. Opening produces one
+The shared full-run activation boundary now wraps that exact operation for a
+local adapter and a future ephemeral Job adapter. Opening produces one
 redaction-safe `PREPARED` receipt and performs no stage action. `Run` consumes
 the activation before delegating exactly once to the concrete Stage 1-12
 executor, preserves a stopped orchestration receipt unchanged and exposes no
-retry, rollback or cleanup method. The Platform capability factory remains an
-explicit process-local dependency; this boundary does not invent a production
-observability transport or widen the private execution manifest.
+retry, rollback or cleanup method.
 
-The first concrete local adapter exposes only the offline half of that
-boundary:
+The local adapter keeps offline preparation and live activation separate:
 
 ```text
 ok cluster stage run full prepare --manifest /private/full-run.json
+
+ok cluster stage run full execute \
+  --manifest /private/full-run.json \
+  --expected-manifest-digest sha256:<prepared identity> \
+  --independent-evidence-public-key /private/observability-evidence.pub \
+  --execute
 ```
 
-It loads the complete private manifest, emits only the redaction-safe
-activation receipt and never opens a credential or runtime dependency. There
-is deliberately no `full execute` command yet: registering one before the
-binary has a fixed production Observability capability adapter would create an
-incomplete mutation surface.
+`prepare` loads the complete private manifest, emits only the redaction-safe
+activation receipt and never opens a credential or runtime dependency.
+`execute` reopens that exact manifest, requires the prepared digest and the
+literal mutation gate, pins the independent-evidence public key, composes the
+fixed Kubernetes Observability adapter and then consumes the activation once.
+The command has no retry, rollback, cleanup or arbitrary capability-command
+surface. A stopped Stage 1-12 receipt is emitted unchanged. The ephemeral Job
+adapter remains a separate packaging boundary.
 
 The capability fixture transport now accepts either one bounded bearer token
 or the strict client-certificate kubeconfig produced by the lifecycle handoff,
