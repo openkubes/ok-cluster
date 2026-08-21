@@ -53,6 +53,11 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 		config.PostRuntime.TargetCredential.PlanExpected != config.PreRuntime.PlanExpected {
 		return nil, errors.New("full-run execution plan binding differs")
 	}
+	if config.PreRuntime.RuntimeBinding.OutputPath == "" || config.PreRuntime.RuntimeBindingReceiptPath == "" ||
+		config.PostRuntime.RuntimeBinding.MaterialPath != config.PreRuntime.RuntimeBinding.OutputPath ||
+		config.PostRuntime.RuntimeBinding.ReceiptPath != config.PreRuntime.RuntimeBindingReceiptPath {
+		return nil, errors.New("full-run runtime binding handoff differs")
+	}
 	if len(config.PostRuntime.TargetCredential.Receipts) != 0 || config.PostRuntime.TargetCredentialRecovery != nil ||
 		config.PostRuntime.TargetRegistrationRecovery != nil {
 		return nil, errors.New("full-run execution requires a fresh unbound post-runtime suffix")

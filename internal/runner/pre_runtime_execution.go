@@ -40,19 +40,20 @@ type PreRuntimeTargetAccessExecutionConfig struct {
 // capabilities for Stage 1-7. Mutating grants are resolved only after the
 // exact direct predecessor receipt is durable.
 type PreRuntimeExecutionConfig struct {
-	PlanPath               string
-	PlanExpected           stageplan.Expected
-	ProjectionManifestPath string
-	ProjectionRoot         string
-	Authorization          StageAuthorizationResolver
-	ProviderPrerequisites  SubmissionStageRuntimeConfig
-	ClusterLifecycle       SubmissionStageRuntimeConfig
-	LifecycleObservation   LifecycleObservationStageRuntimeConfig
-	Enablement             PreRuntimeEnablementExecutionConfig
-	NetworkObservation     NetworkObservationStageRuntimeConfig
-	RuntimeBinding         RuntimeBindingStageRuntimeConfig
-	TargetAccess           PreRuntimeTargetAccessExecutionConfig
-	ReceiptDirectory       string
+	PlanPath                  string
+	PlanExpected              stageplan.Expected
+	ProjectionManifestPath    string
+	ProjectionRoot            string
+	Authorization             StageAuthorizationResolver
+	ProviderPrerequisites     SubmissionStageRuntimeConfig
+	ClusterLifecycle          SubmissionStageRuntimeConfig
+	LifecycleObservation      LifecycleObservationStageRuntimeConfig
+	Enablement                PreRuntimeEnablementExecutionConfig
+	NetworkObservation        NetworkObservationStageRuntimeConfig
+	RuntimeBinding            RuntimeBindingStageRuntimeConfig
+	RuntimeBindingReceiptPath string
+	TargetAccess              PreRuntimeTargetAccessExecutionConfig
+	ReceiptDirectory          string
 }
 
 type PreRuntimeExecutionReceipt struct {
@@ -75,8 +76,9 @@ type preRuntimeObservationInvocation struct {
 }
 
 type preRuntimeBindingInvocation struct {
-	run   func(context.Context) (execution.BindingStageRunReceipt, error)
-	store *ledger.Ledger
+	run             func(context.Context) (execution.BindingStageRunReceipt, error)
+	materialReceipt func() (RuntimeBindingMaterialReceipt, error)
+	store           *ledger.Ledger
 }
 
 type preRuntimeExecutionFactories struct {
@@ -123,6 +125,11 @@ func openPreRuntimeExecution(config PreRuntimeExecutionConfig, factories preRunt
 		if !ok || validateRuntimeBindingOutputPath(filepath.Join(config.ReceiptDirectory, name)) != nil {
 			return nil, errors.New("pre-runtime receipt destination is invalid")
 		}
+	}
+	if config.RuntimeBinding.OutputPath == config.RuntimeBindingReceiptPath ||
+		validateRuntimeBindingOutputPath(config.RuntimeBinding.OutputPath) != nil ||
+		validateRuntimeBindingOutputPath(config.RuntimeBindingReceiptPath) != nil {
+		return nil, errors.New("pre-runtime binding handoff destination is invalid")
 	}
 	config.TargetAccess.ExpectedObjects = append([]projection.ResourceIdentity(nil), config.TargetAccess.ExpectedObjects...)
 	return &PreRuntimeExecution{config: config, initial: initial, factories: factories}, nil
@@ -245,12 +252,24 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 	}
 	orchestration.RunRuntimeBinding = func(ctx context.Context, _ execution.ObservationStageRunReceipt) (execution.BindingStageRunReceipt, error) {
 		invocation, err := executor.factories.binding(executor.resume(receipts), executor.config)
-		if err != nil || invocation.run == nil || invocation.store == nil {
+		if err != nil || invocation.run == nil || invocation.materialReceipt == nil || invocation.store == nil {
 			return execution.BindingStageRunReceipt{}, errors.New("open runtime-binding stage")
 		}
 		run, err := invocation.run(ctx)
 		if err != nil {
 			return run, err
+		}
+		materialReceipt, err := invocation.materialReceipt()
+		if err != nil {
+			return run, errors.New("read runtime-binding material receipt")
+		}
+		if err := persistRuntimeBindingMaterialReceipt(
+			materialReceipt,
+			executor.config.RuntimeBinding.OutputPath,
+			executor.config.RuntimeBindingReceiptPath,
+			run.PlanDigest,
+		); err != nil {
+			return run, errors.New("persist runtime-binding material receipt")
 		}
 		return run, persist(ctx, invocation.store, BindingStageReceiptReference(run))
 	}
@@ -377,7 +396,16 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 			if err != nil {
 				return preRuntimeBindingInvocation{}, err
 			}
-			return preRuntimeBindingInvocation{run: opened.Run, store: opened.operation.Ledger}, nil
+			return preRuntimeBindingInvocation{
+				run: opened.Run, materialReceipt: func() (RuntimeBindingMaterialReceipt, error) {
+					evidence, evidenceErr := opened.EvidenceReceipt()
+					if evidenceErr != nil || evidence.State != "SUCCEEDED" || evidence.Material == nil {
+						return RuntimeBindingMaterialReceipt{}, errors.New("runtime-binding material evidence is unavailable")
+					}
+					return *evidence.Material, nil
+				},
+				store: opened.operation.Ledger,
+			}, nil
 		},
 		target: func(resume StageResumeConfig, grant StageAuthorizationSource, config PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
 			bundle, err := LoadTargetAccessStageBundle(TargetAccessStageBundleConfig{
