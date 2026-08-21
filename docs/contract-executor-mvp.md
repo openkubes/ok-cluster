@@ -3159,6 +3159,18 @@ this checkpoint. Credential and registration crash recovery use the same
 bounded endpoint but distinct canonical request media types, so the authority
 cannot confuse a normal stage grant with either recovery decision.
 
+The additive bounded DEV authority closes the server half of the normal-stage
+protocol without changing runner ownership. Its canonical allowlist is derived
+only from a verified Plan, includes only mutating stages and binds the exact
+Plan, R, E, P, FixtureDigest, stage digest, operation, authority and
+predecessor shape. It authenticates one bearer-token caller, signs with a
+pinned Ed25519 key and claims each request digest create-only before returning
+the grant. Replay remains rejected across process restarts when the private
+claim directory is retained. Recovery media types remain unsupported and need
+separate policy. The authority never renders, submits, observes or repairs
+Cluster resources. Its CLI provides offline policy derivation and a TLS 1.3
+serve mode; live deployment is a later explicitly authorized checkpoint.
+
 The concrete post-runtime execution adapter now composes those boundaries into
 one single-use Stage 8-12 library path. It normally starts from the exact
 seven-receipt cursor, reuses one verified runtime binding, resolves the fresh

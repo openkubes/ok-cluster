@@ -39,6 +39,9 @@ Before preparation, record and independently review:
 - the private activation manifest and all seven predecessor receipts;
 - the exact R, E, P, execution-fixture, Plan and target-identity digests;
 - one current signed authorization for every externally authorized stage;
+- one policy generated from the verified Plan by the
+  [bounded DEV stage authority](ok147-bounded-stage-authority.md), plus its
+  pinned public-key identity and durable create-only claim state;
 - short-lived, isolated credentials for the ledger, management, workload,
   GitOps and authorization endpoints;
 - the six exact `/32` egress destinations and ports: infrastructure,
@@ -55,6 +58,11 @@ reused.
 
 Secrets, tokens, Kubeconfigs, private keys, endpoints and private local paths
 must never be copied into public receipts, logs, commits or pull requests.
+
+The stage authority and independent evidence collector are different trust
+domains. The former may sign an exact mutation decision; the latter must prove
+real receiver delivery and autonomy. Neither may substitute static success for
+the other's evidence.
 
 ## Preflight
 
