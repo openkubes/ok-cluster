@@ -6,7 +6,7 @@ Contract planning and now models the complete twelve-stage bounded execution
 path, including separately authorized mutations, a durable ledger, bounded
 observation and evaluation components and offline Kubernetes workload
 packaging. The stages are now composed into a typed in-process Stage 1-7 prefix,
-a Stage 8-12 suffix and a receipt-bound, single-use full-run library seam. The
+a Stage 8-12 suffix and a receipt-bound, single-use full-run execution seam. The
 Stage 1-7 prefix and Stage 8-12 suffix both have concrete single-use execution
 adapters; only the post-runtime suffix currently has a bounded ephemeral Job
 activation path.
@@ -2798,6 +2798,16 @@ only the twelve ordered stage identities. A second invocation is rejected.
 This is an in-process composition seam only: it adds no renderer, dynamic
 writer, retry, rollback, cleanup, CLI command or Job mutation surface.
 
+The concrete full-run execution adapter now opens Stage 1-7 first and defers
+opening Stage 8-12 until all seven receipts are successful and durable. It
+loads the private prefix from the completed adapter, checks every private
+digest against the redaction-safe checkpoints and injects only that exact
+prefix into a fresh PostRuntimeExecution. A suffix carrying historical
+receipts or either recovery mode is rejected before the prefix opens. The
+existing full-run binding then independently compares the PostRuntimeExecution
+continuation identity before Stage 8 can run. The adapter is single-use and
+still has no manifest, CLI or Job activation surface.
+
 The accompanying receipt bridge can reload only the independently
 digest-bound, already durable public receipt selected by the current cursor.
 It writes canonical receipt bytes create-only as `0600` below an existing
@@ -2974,8 +2984,9 @@ covered by unit, negative, local TLS integration and race tests. Stage 1-7 and
 Stage 8-12 each have an exact, fail-closed in-process orchestration order and a
 concrete single-use execution adapter. The Stage 1-7 adapter dynamically binds
 its four mutation grants and persists all seven ledger-backed receipts before
-exposing its exact prefix. The full-run seam binds that prefix through the
-exact Plan and seven predecessor receipt digests. The Stage 8-12 suffix
+exposing its exact prefix. The concrete full-run execution injects that prefix
+into a fresh Stage 8-12 adapter, and the full-run seam independently binds it
+through the exact Plan and seven predecessor receipt digests. The Stage 8-12 suffix
 additionally has a local
 prepare/execute command, a bounded ephemeral Job, a deterministic private
 activation package, an exact installation plan and a single-use CLI launcher.
@@ -3000,8 +3011,8 @@ durable receipts. This is not yet the OK-147 Definition of Done:
   [ADR-030 amendment proposal](ok147-adr-030-amendment-proposal.md) are defined
   and remain to be reviewed with the live evidence.
 
-The remaining implementation work is to compose the concrete Stage 1-7 and
-Stage 8-12 adapters behind one shared local/Job activation surface; it is not a
+The remaining implementation work is a private full-run manifest plus the
+shared local/Job activation surface for this concrete composition; it is not a
 new controller or reconciliation mechanism. After that, live closure must
 publish the current image, construct fresh short-lived private inputs, run the
 exact bounded activation on `ok-mgmt`, preserve a stopped partial state without
