@@ -135,6 +135,34 @@ func TestOpenKubernetesObservabilityTransportBindsCredentialAndCA(t *testing.T) 
 	}
 }
 
+func TestOpenKubernetesObservabilityTransportAcceptsLifecycleClientCertificate(t *testing.T) {
+	root := t.TempDir()
+	ca, certificate, key := testClientCredential(t)
+	caPath := filepath.Join(root, "workload-ca.crt")
+	kubeconfigPath := filepath.Join(root, "workload.kubeconfig")
+	endpoint := "https://192.0.2.90:6443"
+	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kubeconfigPath, testClientKubeconfig(endpoint, ca, certificate, key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run, _ := observabilityCapabilityRun(observabilityProbeRequest(), "ok-observability")
+	transport, err := OpenKubernetesObservabilityTransport(KubernetesObservabilityTransportConfig{
+		Workload: KubernetesAuthorityConfig{
+			Endpoint: endpoint, AuthorityIdentity: run.TargetClusterUID, KubeconfigFile: kubeconfigPath,
+			CAFile: caPath, CABundleDigest: digest.SHA256(ca),
+		},
+		Run: run, Fixture: capabilityFixtureConfig(), Checks: &recordingCapabilityChecks{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transport.client == nil || !transport.client.clientCertificate || transport.client.token != "" {
+		t.Fatalf("lifecycle client-certificate authority was not retained: %#v", transport.client)
+	}
+}
+
 type recordingCapabilityChecks struct {
 	calls    []string
 	fixtures []ObservabilitySyntheticFixture

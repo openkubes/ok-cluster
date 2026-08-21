@@ -2900,6 +2900,14 @@ is deliberately no `full execute` command yet: registering one before the
 binary has a fixed production Observability capability adapter would create an
 incomplete mutation surface.
 
+The capability fixture transport now accepts either one bounded bearer token
+or the strict client-certificate kubeconfig produced by the lifecycle handoff,
+never both. The latter reuses the already verified endpoint and CA binding,
+adds no synthetic bearer header and performs no request while opening. This
+closes the credential-mode mismatch between the full-run lifecycle authority
+and the existing fixed synthetic fixture client; the five concrete
+observability checks remain the next separate adapter boundary.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,

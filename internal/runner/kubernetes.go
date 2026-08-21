@@ -440,15 +440,16 @@ func OpenKubernetesObservabilityTransport(config KubernetesObservabilityTranspor
 	if config.Workload.AuthorityIdentity != config.Run.TargetClusterUID || !platformInputDigestPattern.MatchString(config.Workload.CABundleDigest) {
 		return nil, errors.New("observability transport workload authority differs from runtime target")
 	}
-	token, ca, client, err := openBoundedKubernetesMaterial(config.Workload.TokenFile, config.Workload.CAFile)
+	transport, err := openBoundedKubernetesAuthorityTransport(config.Workload)
 	if err != nil {
 		return nil, errors.New("open bounded observability transport credential")
 	}
-	if digest.SHA256(ca) != config.Workload.CABundleDigest {
+	if digest.SHA256(transport.caData) != config.Workload.CABundleDigest {
 		return nil, errors.New("observability transport CA differs from runtime-bound authority")
 	}
 	fixtureClient, err := NewKubernetesCapabilityFixtureClient(KubernetesCapabilityFixtureClientConfig{
-		Endpoint: config.Workload.Endpoint, BearerToken: token, AuthorityIdentity: config.Workload.AuthorityIdentity, Client: client,
+		Endpoint: config.Workload.Endpoint, BearerToken: transport.bearerToken, ClientCertificate: transport.clientCertificate,
+		AuthorityIdentity: config.Workload.AuthorityIdentity, Client: transport.client,
 	}, config.Run, config.Fixture)
 	if err != nil {
 		return nil, errors.New("open bounded observability fixture client")

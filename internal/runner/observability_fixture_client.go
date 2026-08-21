@@ -23,6 +23,7 @@ const (
 type KubernetesCapabilityFixtureClientConfig struct {
 	Endpoint          string
 	BearerToken       string
+	ClientCertificate bool
 	AuthorityIdentity string
 	Client            *http.Client
 }
@@ -45,10 +46,11 @@ type CapabilityFixtureReceipt struct {
 // KubernetesCapabilityFixtureClient freezes one generated fixture and one
 // workload authority. Create and cleanup accept no manifests, names or paths.
 type KubernetesCapabilityFixtureClient struct {
-	endpoint *url.URL
-	token    string
-	client   *http.Client
-	fixture  ObservabilitySyntheticFixture
+	endpoint          *url.URL
+	token             string
+	clientCertificate bool
+	client            *http.Client
+	fixture           ObservabilitySyntheticFixture
 }
 
 func NewKubernetesCapabilityFixtureClient(config KubernetesCapabilityFixtureClientConfig, run ObservabilityCapabilityRun, fixtureConfig ObservabilitySyntheticFixtureConfig) (*KubernetesCapabilityFixtureClient, error) {
@@ -63,7 +65,11 @@ func NewKubernetesCapabilityFixtureClient(config KubernetesCapabilityFixtureClie
 	if endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (host == "127.0.0.1" || host == "::1" || host == "localhost")) {
 		return nil, errors.New("capability fixture Kubernetes endpoint must use HTTPS")
 	}
-	if config.BearerToken == "" || strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n") || config.Client == nil {
+	tokenMode := config.BearerToken != ""
+	if tokenMode == config.ClientCertificate || config.Client == nil {
+		return nil, errors.New("capability fixture Kubernetes credential or client is invalid")
+	}
+	if tokenMode && (strings.TrimSpace(config.BearerToken) != config.BearerToken || strings.ContainsAny(config.BearerToken, "\r\n")) {
 		return nil, errors.New("capability fixture Kubernetes credential or client is invalid")
 	}
 	fixture, err := BuildObservabilitySyntheticFixture(run, fixtureConfig)
@@ -76,7 +82,10 @@ func NewKubernetesCapabilityFixtureClient(config KubernetesCapabilityFixtureClie
 		client.Timeout = 15 * time.Second
 	}
 	endpoint.Path, endpoint.RawPath = "", ""
-	return &KubernetesCapabilityFixtureClient{endpoint: endpoint, token: config.BearerToken, client: &client, fixture: cloneSyntheticFixture(fixture)}, nil
+	return &KubernetesCapabilityFixtureClient{
+		endpoint: endpoint, token: config.BearerToken, clientCertificate: config.ClientCertificate,
+		client: &client, fixture: cloneSyntheticFixture(fixture),
+	}, nil
 }
 
 func (client *KubernetesCapabilityFixtureClient) FixtureDigest() string {
@@ -198,7 +207,9 @@ func (client *KubernetesCapabilityFixtureClient) request(ctx context.Context, me
 		return nil, 0, errors.New("construct bounded capability fixture request")
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+client.token)
+	if client.token != "" {
+		request.Header.Set("Authorization", "Bearer "+client.token)
+	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
