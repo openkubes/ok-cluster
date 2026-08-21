@@ -3059,6 +3059,20 @@ is unavailable. It therefore cannot turn webhook receipt or API reachability
 into an autonomy claim. Packaging this receiver and implementing the real
 cluster-local autonomy observer remain the next checkpoints.
 
+The autonomy source now has a concrete read-only Kubernetes observer. It is
+bound to one runtime Cluster UID, pinned CA and the standard profile and can
+issue only eight requests: exact GETs for Prometheus, Grafana, OpenSearch and
+Alertmanager Services plus four EndpointSlice collections constrained by the
+corresponding fixed service-name label. A service counts as local only when it
+is a non-headless `ClusterIP` with the expected port and no ExternalName,
+external IP or load-balancer ingress. A ready endpoint counts only when its
+target is a Pod in `ok-observability`; foreign or unowned endpoints increment
+the explicit dependency count. The resulting autonomy-profile digest binds
+these rules independently of the capability profile. This proves the bounded
+runtime service/endpoint topology; it does not claim outage testing or inspect
+an arbitrary application dependency graph. The observer has no mutation,
+discovery, watch, unrestricted list, redirect or retry surface.
+
 The separately operated issuer no longer accepts the run ID, target Cluster
 UID, fixture digest or profile digest as manually repeated command arguments.
 After Stage 6, a local-only materializer derives those values from the exact
