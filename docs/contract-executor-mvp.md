@@ -3354,8 +3354,25 @@ opened. A pre-existing object stops with zero writes. Any failure or uncertain
 response after the first POST is retained as partial/unknown state; the
 single-use launcher exposes no retry, update, patch, apply, delete, rollback or
 cleanup path. Raw UIDs and resourceVersions are reduced to digests in its
-public receipt. Wiring this launcher to a separate prepare/execute CLI remains
-the next activation checkpoint.
+public receipt. The CLI keeps verification and mutation separate:
+
+```text
+ok cluster stage run full launch prepare <all package flags>
+
+ok cluster stage run full launch execute \
+  <all package flags> \
+  --expected-package-digest sha256:<prepared package identity> \
+  --installer-api-endpoint https://<management IP>:6443 \
+  --installer-ca-digest sha256:<management CA identity> \
+  --installer-token-file /private/installer.token \
+  --installer-ca-file /private/installer-ca.crt \
+  --execute
+```
+
+`prepare` rebuilds the package and emits only the redaction-safe receipt and
+four-create plan. `execute` rebuilds it again, requires the separately copied
+package digest and literal mutation gate, and runs the single-use launcher in
+a bounded context. Neither command exposes retry, rollback or cleanup.
 
 ## Current OK-147 implementation boundary
 
@@ -3383,8 +3400,8 @@ durable receipts. This is not yet the OK-147 Definition of Done:
 - the joined concrete Stage 1-7 and Stage 8-12 adapters have a shared
   activation boundary plus concrete local prepare/execute commands; the
   ephemeral full-run Job and private activation package select that same
-  production capability transport and have a bounded installer library, while
-  the installer prepare/execute CLI remains to be implemented;
+  production capability transport and have a bounded installer plus its
+  separate prepare/execute CLI;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform

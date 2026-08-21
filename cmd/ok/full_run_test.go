@@ -120,6 +120,105 @@ func fullRunPackageCLIArguments(templatePath, outputPath string) []string {
 	}
 }
 
+func TestFullRunLaunchPrepareEmitsCredentialFreePlan(t *testing.T) {
+	previous := prepareFullRunExecutionActivationLaunch
+	defer func() { prepareFullRunExecutionActivationLaunch = previous }()
+	directory := t.TempDir()
+	templatePath := filepath.Join(directory, "full-run-job.yaml.tpl")
+	if err := os.WriteFile(templatePath, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	prepareFullRunExecutionActivationLaunch = func(config runner.FullRunExecutionActivationPackageConfig) (fullRunActivationLaunchPreparation, error) {
+		calls++
+		if config.Job.RunID != "ok147-full-run-01" || config.ActivationSecret != "ok147-full-run-activation-01" {
+			t.Fatalf("full-run launch preparation differs: %#v", config)
+		}
+		return fullRunActivationLaunchPreparation{
+			Format: "ok147-full-run-activation-launch-preparation/v1", State: "PREPARED",
+			Package: runner.FullRunExecutionActivationPackageReceipt{
+				Format: runner.FullRunExecutionActivationPackageFormat, State: "VERIFIED", PackageDigest: testSHA("3"),
+				ManagementAuthority: "ok-mgmt", ObjectKinds: []string{"Secret", "Secret", "NetworkPolicy", "Job"},
+			},
+			Plan: runner.FullRunExecutionActivationInstallationPlan{
+				Format: runner.FullRunExecutionActivationInstallationPlanFormat, State: "VERIFIED", RunID: config.Job.RunID,
+				PackageDigest: testSHA("3"), Authority: "ok-mgmt", Creates: []runner.SubmissionStageCreatePlan{},
+			},
+		}, nil
+	}
+	var stdout bytes.Buffer
+	if err := run(fullRunLaunchCLIArguments("prepare", templatePath), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt fullRunActivationLaunchPreparation
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "PREPARED" || receipt.MutationAllowed || calls != 1 {
+		t.Fatalf("unexpected launch preparation: %#v calls=%d err=%v", receipt, calls, err)
+	}
+	for _, forbidden := range []string{"/private/", "token", "kubeconfig", "certificate", "endpoint"} {
+		if strings.Contains(strings.ToLower(stdout.String()), forbidden) {
+			t.Fatalf("launch preparation disclosed %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestFullRunLaunchExecuteRequiresExplicitBoundIdentity(t *testing.T) {
+	previous := executeFullRunExecutionActivationLaunch
+	defer func() { executeFullRunExecutionActivationLaunch = previous }()
+	directory := t.TempDir()
+	templatePath := filepath.Join(directory, "full-run-job.yaml.tpl")
+	if err := os.WriteFile(templatePath, []byte("bounded-template"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	executeFullRunExecutionActivationLaunch = func(ctx context.Context, config runner.FullRunExecutionActivationPackageConfig, authority runner.KubernetesAuthorityConfig, expected string) (runner.FullRunExecutionActivationLaunchReceipt, error) {
+		calls++
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > stageLaunchTimeout || config.Job.RunID != "ok147-full-run-01" ||
+			authority.Endpoint != "https://192.0.2.12:6443" || authority.TokenFile != "/private/installer.token" ||
+			authority.CAFile != "/private/installer-ca.crt" || authority.CABundleDigest != testSHA("5") || expected != testSHA("3") {
+			t.Fatalf("full-run launch execution differs: config=%#v authority=%#v expected=%q", config, authority, expected)
+		}
+		return runner.FullRunExecutionActivationLaunchReceipt{
+			Format: runner.FullRunExecutionActivationLaunchReceiptFormat, State: "ACTIVATED", MutationState: "ATTEMPTED",
+			RunID: config.Job.RunID, PackageDigest: expected, Authority: "ok-mgmt", Results: []runner.SubmissionStageInstalledObject{},
+		}, nil
+	}
+	valid := append(fullRunLaunchCLIArguments("execute", templatePath),
+		"--expected-package-digest", testSHA("3"), "--installer-api-endpoint", "https://192.0.2.12:6443",
+		"--installer-ca-digest", testSHA("5"), "--installer-token-file", "/private/installer.token",
+		"--installer-ca-file", "/private/installer-ca.crt", "--execute")
+	var stdout bytes.Buffer
+	if err := run(valid, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt runner.FullRunExecutionActivationLaunchReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "ACTIVATED" || calls != 1 {
+		t.Fatalf("unexpected launch receipt: %#v calls=%d err=%v", receipt, calls, err)
+	}
+	for name, arguments := range map[string][]string{
+		"missing execute":    removeArgument(valid, "--execute"),
+		"bad package digest": replaceArgument(valid, "--expected-package-digest", "sha256:bad"),
+		"bad CA digest":      replaceArgument(valid, "--installer-ca-digest", "sha256:bad"),
+		"positional":         append(append([]string(nil), valid...), "extra"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+				t.Fatal("unsafe full-run launch was accepted")
+			}
+			if calls != before {
+				t.Fatalf("invalid launch input reached executor: calls=%d before=%d", calls, before)
+			}
+		})
+	}
+}
+
+func fullRunLaunchCLIArguments(action, templatePath string) []string {
+	packageArguments := fullRunPackageCLIArguments(templatePath, "/unused/private-package.yaml")
+	arguments := []string{"cluster", "stage", "run", "full", "launch", action}
+	return append(arguments, packageArguments[5:len(packageArguments)-2]...)
+}
+
 func TestFullRunPrepareVerifiesWithoutOpeningExecution(t *testing.T) {
 	previous := prepareFullRunExecutionManifest
 	defer func() { prepareFullRunExecutionManifest = previous }()

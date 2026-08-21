@@ -18,6 +18,14 @@ type fullRunActivationRunner interface {
 	Run(context.Context) (runner.FullRunExecutionActivationReceipt, error)
 }
 
+type fullRunActivationLaunchPreparation struct {
+	Format          string                                            `json:"format"`
+	State           string                                            `json:"state"`
+	Package         runner.FullRunExecutionActivationPackageReceipt   `json:"package"`
+	Plan            runner.FullRunExecutionActivationInstallationPlan `json:"plan"`
+	MutationAllowed bool                                              `json:"mutationAllowed"`
+}
+
 var prepareFullRunExecutionManifest = func(path string) (runner.FullRunExecutionManifestReceipt, error) {
 	_, receipt, err := runner.LoadFullRunExecutionManifest(path)
 	return receipt, err
@@ -36,6 +44,44 @@ var materializeFullRunExecutionActivationPackage = func(config runner.FullRunExe
 	}
 	receipt, err := packaged.Receipt()
 	return raw, receipt, err
+}
+
+var prepareFullRunExecutionActivationLaunch = func(config runner.FullRunExecutionActivationPackageConfig) (fullRunActivationLaunchPreparation, error) {
+	packaged, err := runner.BuildFullRunExecutionActivationPackage(config)
+	if err != nil {
+		return fullRunActivationLaunchPreparation{}, err
+	}
+	packageReceipt, err := packaged.Receipt()
+	if err != nil {
+		return fullRunActivationLaunchPreparation{}, err
+	}
+	plan, err := runner.PlanFullRunExecutionActivationInstallation(packaged)
+	if err != nil {
+		return fullRunActivationLaunchPreparation{}, err
+	}
+	return fullRunActivationLaunchPreparation{
+		Format: "ok147-full-run-activation-launch-preparation/v1", State: "PREPARED",
+		Package: packageReceipt, Plan: plan, MutationAllowed: false,
+	}, nil
+}
+
+var executeFullRunExecutionActivationLaunch = func(ctx context.Context, config runner.FullRunExecutionActivationPackageConfig, authority runner.KubernetesAuthorityConfig, expectedPackageDigest string) (runner.FullRunExecutionActivationLaunchReceipt, error) {
+	packaged, err := runner.BuildFullRunExecutionActivationPackage(config)
+	if err != nil {
+		return runner.FullRunExecutionActivationLaunchReceipt{}, err
+	}
+	receipt, err := packaged.Receipt()
+	if err != nil {
+		return runner.FullRunExecutionActivationLaunchReceipt{}, err
+	}
+	authority.AuthorityIdentity = receipt.ManagementAuthority
+	launcher, err := runner.OpenKubernetesFullRunExecutionActivationLauncher(runner.FullRunExecutionActivationLauncherConfig{
+		Authority: authority, ExpectedPackageDigest: expectedPackageDigest,
+	}, packaged)
+	if err != nil {
+		return runner.FullRunExecutionActivationLaunchReceipt{}, err
+	}
+	return launcher.Launch(ctx)
 }
 
 var openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
@@ -165,6 +211,80 @@ func runClusterStageRunFullPackage(arguments []string, stdout, stderr io.Writer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(receipt)
+}
+
+func runClusterStageRunFullLaunchPrepare(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run full launch prepare", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	packageFlags := addFullRunActivationPackageFlags(flags)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	config, err := packageFlags.config()
+	if err != nil {
+		return err
+	}
+	preparation, err := prepareFullRunExecutionActivationLaunch(config)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(preparation)
+}
+
+func runClusterStageRunFullLaunchExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run full launch execute", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	packageFlags := addFullRunActivationPackageFlags(flags)
+	expectedPackageDigest := flags.String("expected-package-digest", "", "exact private package digest emitted by launch prepare")
+	installerEndpoint := flags.String("installer-api-endpoint", "", "exact management Kubernetes HTTPS IP endpoint")
+	installerCADigest := flags.String("installer-ca-digest", "", "expected management installer CA digest")
+	installerTokenFile := flags.String("installer-token-file", "", "bounded management installer token file")
+	installerCAFile := flags.String("installer-ca-file", "", "bounded management installer CA file")
+	execute := flags.Bool("execute", false, "perform the exact single-use four-create full-run activation")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*execute {
+		return errors.New("full-run activation mutation requires explicit --execute")
+	}
+	for _, input := range []struct{ name, value string }{
+		{"--expected-package-digest", *expectedPackageDigest}, {"--installer-api-endpoint", *installerEndpoint},
+		{"--installer-ca-digest", *installerCADigest}, {"--installer-token-file", *installerTokenFile}, {"--installer-ca-file", *installerCAFile},
+	} {
+		if input.value == "" {
+			return fmt.Errorf("%s is required", input.name)
+		}
+	}
+	if !sha256DigestPattern.MatchString(*expectedPackageDigest) || !sha256DigestPattern.MatchString(*installerCADigest) {
+		return errors.New("full-run launch digests must be lowercase SHA-256 identities")
+	}
+	config, err := packageFlags.config()
+	if err != nil {
+		return err
+	}
+	bounded, cancel := context.WithTimeout(ctx, stageLaunchTimeout)
+	defer cancel()
+	receipt, launchErr := executeFullRunExecutionActivationLaunch(bounded, config, runner.KubernetesAuthorityConfig{
+		Endpoint: *installerEndpoint, TokenFile: *installerTokenFile, CAFile: *installerCAFile, CABundleDigest: *installerCADigest,
+	}, *expectedPackageDigest)
+	if receipt.Format != "" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(receipt); err != nil {
+			return err
+		}
+	}
+	return launchErr
 }
 
 // runClusterStageRunFullPrepare verifies the complete private first-run
