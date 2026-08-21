@@ -63,9 +63,10 @@ type PostRuntimeTargetRegistrationRecoveryConfig struct {
 }
 
 // PostRuntimeExecutionConfig supplies immutable artifacts and private runtime
-// bindings for exactly Stage 8-12. The Stage-8 grant is already part of its
-// verified bundle; later mutating grants are resolved only after their direct
-// predecessor receipt is durable.
+// bindings for exactly Stage 8-12. A fresh execution may leave the Stage-8
+// grant fields empty so authorization is resolved only after the exact seven
+// predecessor receipts are durable. Recovery still requires the historical,
+// prebound Stage-8 bundle it is proving and continuing.
 type PostRuntimeExecutionConfig struct {
 	TargetCredential           TargetCredentialStageBundleConfig
 	TargetCredentialRun        TargetCredentialStageRuntimeConfig
@@ -127,6 +128,7 @@ type PostRuntimeExecution struct {
 	continuation         PostRuntimeContinuationBinding
 	runtime              VerifiedRuntimeBindingMaterial
 	credential           postRuntimeCredentialInvocation
+	dynamicCredential    bool
 	recoveryBundle       *VerifiedTargetCredentialStageBundle
 	recovery             *PostRuntimeTargetCredentialRecoveryConfig
 	registrationRecovery *PostRuntimeTargetRegistrationRecoveryConfig
@@ -183,12 +185,21 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 	}
 	var credential postRuntimeCredentialInvocation
 	var recoveryBundle *VerifiedTargetCredentialStageBundle
+	dynamicCredential, err := targetCredentialAuthorizationIsDynamic(config.TargetCredential)
+	if err != nil {
+		return nil, err
+	}
 	if config.TargetCredentialRecovery == nil {
-		credential, err = factories.credential(config.TargetCredential, config.TargetCredentialRun)
-		if err != nil || credential.run == nil || credential.ledger == nil {
-			return nil, errors.New("open post-runtime target credential stage")
+		if !dynamicCredential {
+			credential, err = factories.credential(config.TargetCredential, config.TargetCredentialRun)
+			if err != nil || credential.run == nil || credential.ledger == nil {
+				return nil, errors.New("open post-runtime target credential stage")
+			}
 		}
 	} else {
+		if dynamicCredential {
+			return nil, errors.New("post-runtime target-credential recovery requires a prebound Stage-8 authorization")
+		}
 		retainedRecovery := *config.TargetCredentialRecovery
 		config.TargetCredentialRecovery = &retainedRecovery
 		if config.TargetCredentialRecovery.Authorization == nil {
@@ -233,7 +244,8 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 	config.AggregateEvidence.Runtime.RuntimeReceiptPath = config.RuntimeBinding.ReceiptPath
 	return &PostRuntimeExecution{
 		config: config, initial: initial, continuation: continuation, runtime: runtime, credential: credential,
-		recoveryBundle: recoveryBundle, recovery: config.TargetCredentialRecovery, factories: factories,
+		dynamicCredential: dynamicCredential,
+		recoveryBundle:    recoveryBundle, recovery: config.TargetCredentialRecovery, factories: factories,
 		registrationRecovery: registrationRecovery,
 	}, nil
 }
@@ -300,13 +312,38 @@ func (executor *PostRuntimeExecution) Run(ctx context.Context) (PostRuntimeExecu
 			receipts = append(receipts, executor.recovery.StageReceipt)
 			return runReceipt, handoff, nil
 		}
-		runReceipt, handoff, err := executor.credential.run(ctx)
+		credential := executor.credential
+		var resolved *ResolvedStageAuthorization
+		if executor.dynamicCredential {
+			resolvedAuthorization, err := ResolveStageAuthorization(ctx, executor.resume(receipts), executor.config.Authorization)
+			if err != nil {
+				return execution.StagedOperationReceipt{}, nil, err
+			}
+			source, err := resolvedAuthorization.Source()
+			if err != nil {
+				return execution.StagedOperationReceipt{}, nil, err
+			}
+			bundle := executor.config.TargetCredential
+			bundle.GrantPath = source.GrantPath
+			bundle.GrantPublicKeyPath = source.PublicKeyPath
+			bundle.EvaluationTime = source.EvaluationTime
+			credential, err = executor.factories.credential(bundle, executor.config.TargetCredentialRun)
+			if err != nil || credential.run == nil || credential.ledger == nil {
+				return execution.StagedOperationReceipt{}, nil, errors.New("open post-runtime target credential stage")
+			}
+			resolved = &resolvedAuthorization
+		}
+		runReceipt, handoff, err := credential.run(ctx)
 		if err != nil {
 			return runReceipt, handoff, err
 		}
-		source, err := executor.bridgeStagedReceipt(ctx, receipts, executor.credential.ledger, runReceipt)
+		source, err := executor.bridgeStagedReceipt(ctx, receipts, credential.ledger, runReceipt)
 		if err != nil {
 			return runReceipt, handoff, err
+		}
+		if resolved != nil {
+			receipt, _ := resolved.Receipt()
+			authorizations = append(authorizations, receipt)
 		}
 		receipts = append(receipts, source)
 		return runReceipt, handoff, nil
@@ -425,6 +462,18 @@ func (executor *PostRuntimeExecution) Run(ctx context.Context) (PostRuntimeExecu
 		TargetRegistrationRecovery:                registrationRecoveryReceipt,
 	}
 	return result, err
+}
+
+func targetCredentialAuthorizationIsDynamic(config TargetCredentialStageBundleConfig) (bool, error) {
+	pathsAbsent := config.GrantPath == "" && config.GrantPublicKeyPath == ""
+	pathsPresent := config.GrantPath != "" && config.GrantPublicKeyPath != ""
+	if pathsAbsent && config.EvaluationTime.IsZero() {
+		return true, nil
+	}
+	if pathsPresent && !config.EvaluationTime.IsZero() {
+		return false, nil
+	}
+	return false, errors.New("post-runtime Stage-8 authorization must be either fully dynamic or fully prebound")
 }
 
 func (executor *PostRuntimeExecution) resume(receipts []StageReceiptSource) StageResumeConfig {

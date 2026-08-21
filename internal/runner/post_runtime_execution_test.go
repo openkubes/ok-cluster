@@ -24,6 +24,9 @@ import (
 
 func TestPostRuntimeExecutionComposesExactSuffixWithDynamicAuthorization(t *testing.T) {
 	config, factories, calls, requests := postRuntimeExecutionFixture(t)
+	config.TargetCredential.GrantPath = ""
+	config.TargetCredential.GrantPublicKeyPath = ""
+	config.TargetCredential.EvaluationTime = time.Time{}
 	executor, err := openPostRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
@@ -33,15 +36,16 @@ func TestPostRuntimeExecutionComposesExactSuffixWithDynamicAuthorization(t *test
 		t.Fatal(err)
 	}
 	if receipt.Format != PostRuntimeExecutionReceiptFormat || receipt.State != "SUCCEEDED" || receipt.StoppedAt != "" ||
-		len(receipt.Checkpoints) != 5 || len(receipt.ResolvedAuthorizations) != 2 {
+		len(receipt.Checkpoints) != 5 || len(receipt.ResolvedAuthorizations) != 3 {
 		t.Fatalf("unexpected post-runtime execution receipt: %#v", receipt)
 	}
 	if !reflect.DeepEqual(*calls, postRuntimeStageOrder) {
 		t.Fatalf("post-runtime execution order differs: %v", *calls)
 	}
-	if len(*requests) != 2 || (*requests)[0].StageID != "target-registration" || (*requests)[1].StageID != "platform-applications" ||
-		(*requests)[0].Predecessors[0].StageID != "target-credential" || (*requests)[1].Predecessors[0].StageID != "target-registration" ||
-		(*requests)[0].RequestDigest == (*requests)[1].RequestDigest {
+	if len(*requests) != 3 || (*requests)[0].StageID != "target-credential" || (*requests)[1].StageID != "target-registration" ||
+		(*requests)[2].StageID != "platform-applications" || (*requests)[0].Predecessors[0].StageID != "target-access" ||
+		(*requests)[1].Predecessors[0].StageID != "target-credential" || (*requests)[2].Predecessors[0].StageID != "target-registration" ||
+		(*requests)[0].RequestDigest == (*requests)[1].RequestDigest || (*requests)[1].RequestDigest == (*requests)[2].RequestDigest {
 		t.Fatalf("unexpected dynamic authorization sequence: %#v", *requests)
 	}
 	for index, stageID := range postRuntimeStageOrder[:4] {
@@ -62,6 +66,55 @@ func TestPostRuntimeExecutionComposesExactSuffixWithDynamicAuthorization(t *test
 		if strings.Contains(string(public), forbidden) {
 			t.Fatalf("public execution receipt exposed %q", forbidden)
 		}
+	}
+}
+
+func TestPostRuntimeExecutionStopsBeforeStageEightWhenDynamicGrantIsUnavailable(t *testing.T) {
+	config, factories, calls, _ := postRuntimeExecutionFixture(t)
+	config.TargetCredential.GrantPath = ""
+	config.TargetCredential.GrantPublicKeyPath = ""
+	config.TargetCredential.EvaluationTime = time.Time{}
+	resolverCalls := 0
+	config.Authorization = StageAuthorizationResolverFunc(func(context.Context, StageAuthorizationRequest) (StageAuthorizationSource, error) {
+		resolverCalls++
+		return StageAuthorizationSource{}, errors.New("authority unavailable with private details")
+	})
+	executor, err := openPostRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" || len(receipt.Checkpoints) != 0 ||
+		len(receipt.ResolvedAuthorizations) != 0 || resolverCalls != 1 || len(*calls) != 0 {
+		t.Fatalf("unavailable Stage-8 authority was not fail-closed: %#v resolver=%d calls=%v err=%v", receipt, resolverCalls, *calls, err)
+	}
+	for _, stageID := range postRuntimeStageOrder[:4] {
+		if _, statErr := os.Lstat(filepath.Join(config.ReceiptDirectory, postRuntimeReceiptFiles[stageID])); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("receipt %s exists after Stage-8 authorization stop: %v", stageID, statErr)
+		}
+	}
+}
+
+func TestPostRuntimeExecutionRejectsPartialStageEightAuthorization(t *testing.T) {
+	for name, mutate := range map[string]func(*TargetCredentialStageBundleConfig){
+		"grant only": func(config *TargetCredentialStageBundleConfig) {
+			config.GrantPublicKeyPath = ""
+		},
+		"evaluation only": func(config *TargetCredentialStageBundleConfig) {
+			config.GrantPath = ""
+			config.GrantPublicKeyPath = ""
+		},
+		"paths without evaluation": func(config *TargetCredentialStageBundleConfig) {
+			config.EvaluationTime = time.Time{}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config, factories, calls, requests := postRuntimeExecutionFixture(t)
+			mutate(&config.TargetCredential)
+			if _, err := openPostRuntimeExecution(config, factories); err == nil || len(*calls) != 0 || len(*requests) != 0 {
+				t.Fatalf("partial Stage-8 authorization was accepted: calls=%v requests=%v err=%v", *calls, *requests, err)
+			}
+		})
 	}
 }
 

@@ -2805,7 +2805,9 @@ opening Stage 8-12 until all seven receipts are successful and durable. It
 loads the private prefix from the completed adapter, checks every private
 digest against the redaction-safe checkpoints and injects only that exact
 prefix into a fresh PostRuntimeExecution. A suffix carrying historical
-receipts or either recovery mode is rejected before the prefix opens. The
+receipts, a prebound Stage-8 grant or either recovery mode is rejected before
+the prefix opens. Stage-8 authorization is instead resolved through the same
+external authority boundary after the completed seven-receipt prefix. The
 existing full-run binding then independently compares the PostRuntimeExecution
 continuation identity before Stage 8 can run. The adapter is single-use and
 still has no manifest, CLI or Job activation surface.
@@ -2878,10 +2880,11 @@ cannot confuse a normal stage grant with either recovery decision.
 
 The concrete post-runtime execution adapter now composes those boundaries into
 one single-use Stage 8-12 library path. It normally starts from the exact
-seven-receipt cursor, reuses one verified runtime binding, executes the
-memory-only credential handoff, resolves Stage 9 and Stage 10 authorization
-only after the current predecessor receipt is durable, and opens the existing
-registration, Application, observation and aggregate operations. An explicit
+seven-receipt cursor, reuses one verified runtime binding, resolves the fresh
+Stage 8 grant only after that exact prefix is durable, executes the memory-only
+credential handoff, then resolves Stage 9 and Stage 10 authorization only
+after each current direct predecessor receipt is durable. The three resolved
+authorization receipts are ordered with those stages. An explicit
 recovery configuration may instead supply the exact successful Stage-8 receipt
 and the separate recovery authority described above; after the new grant is
 durably consumed, execution continues at Stage 9 using that unchanged receipt
