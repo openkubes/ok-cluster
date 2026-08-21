@@ -23,6 +23,16 @@ type observabilityEvidenceProductionConfig struct {
 	ValidFor, Timeout                              time.Duration
 }
 
+type observabilityEvidenceAuthorityRunner interface {
+	Run(context.Context) (runner.ObservabilityIndependentEvidenceReceipt, error)
+}
+
+var openObservabilityEvidenceAuthorityActivation = func(path string) (observabilityEvidenceAuthorityRunner, error) {
+	return runner.OpenObservabilityEvidenceAuthorityActivation(path, runner.ObservabilityEvidenceAuthorityActivationRuntime{
+		Clock: time.Now, Wait: runner.WaitWithTimer,
+	})
+}
+
 var produceIndependentObservabilityEvidence = func(ctx context.Context, config observabilityEvidenceProductionConfig) (runner.ObservabilityIndependentEvidenceReceipt, error) {
 	identity, err := runner.WaitForObservabilityIndependentEvidenceIdentity(ctx, runner.ObservabilityIndependentEvidenceIdentityWaitConfig{
 		IdentityPath: config.IdentityPath, ReceiptPath: config.IdentityReceiptPath,
@@ -103,6 +113,7 @@ func runClusterStageEvidenceObservabilityProduce(ctx context.Context, arguments 
 	collectorCADigest := flags.String("collector-ca-digest", "", "expected evidence-authority CA digest")
 	validFor := flags.Duration("valid-for", 0, "signed evidence validity, from 1m through 30m")
 	timeout := flags.Duration("timeout", 0, "single collection timeout, from 1s through 30m")
+	activationPath := flags.String("activation", "", "canonical private evidence-authority activation")
 	produce := flags.Bool("produce", false, "perform one independent collection and create-only signed evidence write")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -112,6 +123,27 @@ func runClusterStageEvidenceObservabilityProduce(ctx context.Context, arguments 
 	}
 	if !*produce {
 		return errors.New("independent Observability evidence production requires explicit --produce")
+	}
+	if *activationPath != "" {
+		if *outputPath != "" || *privateKeyPath != "" || *identityPath != "" || *identityReceiptPath != "" || *expectedManifestDigest != "" ||
+			*identityPollInterval != 0 || *identityWaitTimeout != 0 || *collectorEndpoint != "" || *collectorToken != "" || *collectorCA != "" ||
+			*collectorCADigest != "" || *validFor != 0 || *timeout != 0 {
+			return errors.New("evidence-authority activation cannot be combined with individual production flags")
+		}
+		execution, err := openObservabilityEvidenceAuthorityActivation(*activationPath)
+		if err != nil {
+			return err
+		}
+		receipt, runErr := execution.Run(ctx)
+		if receipt.Format != "" {
+			encoder := json.NewEncoder(stdout)
+			encoder.SetEscapeHTML(false)
+			encoder.SetIndent("", "  ")
+			if err := encoder.Encode(receipt); err != nil {
+				return err
+			}
+		}
+		return runErr
 	}
 	if *outputPath == "" || *privateKeyPath == "" || *identityPath == "" || *identityReceiptPath == "" ||
 		!sha256DigestPattern.MatchString(*expectedManifestDigest) || *identityPollInterval < time.Millisecond || *identityPollInterval > 30*time.Second ||

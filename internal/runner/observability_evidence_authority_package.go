@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ type ObservabilityEvidenceAuthorityPackageConfig struct {
 	CollectorTokenPath   string
 	CollectorCAPath      string
 	CollectorCADigest    string
+	RuntimeAuthorityRoot string
+	RuntimeHandoffRoot   string
 	IdentityPollInterval time.Duration
 	IdentityWaitTimeout  time.Duration
 	EvidenceValidFor     time.Duration
@@ -95,6 +98,10 @@ func BuildObservabilityEvidenceAuthorityPackage(config ObservabilityEvidenceAuth
 		!strings.HasPrefix(config.ActivationSecret, "ok147-") {
 		return VerifiedObservabilityEvidenceAuthorityPackage{}, errors.New("observability evidence authority Secret name is invalid")
 	}
+	if !absoluteCleanDirectory(config.RuntimeAuthorityRoot) || !absoluteCleanDirectory(config.RuntimeHandoffRoot) ||
+		directoriesOverlap(config.RuntimeAuthorityRoot, config.RuntimeHandoffRoot) {
+		return VerifiedObservabilityEvidenceAuthorityPackage{}, errors.New("observability evidence authority runtime roots are invalid")
+	}
 	if config.IdentityPollInterval < time.Millisecond || config.IdentityPollInterval > 30*time.Second ||
 		config.IdentityWaitTimeout < time.Second || config.IdentityWaitTimeout > 3*time.Hour ||
 		config.EvidenceValidFor < minimumObservabilityIndependentEvidenceValidity || config.EvidenceValidFor > maximumObservabilityIndependentEvidenceWindow ||
@@ -129,13 +136,13 @@ func BuildObservabilityEvidenceAuthorityPackage(config ObservabilityEvidenceAuth
 	activation := ObservabilityEvidenceAuthorityActivation{
 		Format: ObservabilityEvidenceAuthorityActivationFormat, State: "BOUND",
 		ExpectedManifestDigest: manifestReceipt.ManifestDigest,
-		IdentityPath:           observabilityEvidenceAuthorityHandoffRoot + "/observability-evidence-identity.json",
-		IdentityReceiptPath:    observabilityEvidenceAuthorityHandoffRoot + "/observability-evidence-identity-receipt.json",
-		EvidenceOutputPath:     observabilityEvidenceAuthorityHandoffRoot + "/observability-evidence.json",
-		PrivateKeyPath:         observabilityEvidenceAuthorityRoot + "/" + observabilityEvidenceAuthorityPrivateKeyKey,
+		IdentityPath:           config.RuntimeHandoffRoot + "/observability-evidence-identity.json",
+		IdentityReceiptPath:    config.RuntimeHandoffRoot + "/observability-evidence-identity-receipt.json",
+		EvidenceOutputPath:     config.RuntimeHandoffRoot + "/observability-evidence.json",
+		PrivateKeyPath:         config.RuntimeAuthorityRoot + "/" + observabilityEvidenceAuthorityPrivateKeyKey,
 		CollectorEndpoint:      config.CollectorEndpoint,
-		CollectorTokenPath:     observabilityEvidenceAuthorityRoot + "/" + observabilityEvidenceAuthorityCollectorToken,
-		CollectorCAPath:        observabilityEvidenceAuthorityRoot + "/" + observabilityEvidenceAuthorityCollectorCA,
+		CollectorTokenPath:     config.RuntimeAuthorityRoot + "/" + observabilityEvidenceAuthorityCollectorToken,
+		CollectorCAPath:        config.RuntimeAuthorityRoot + "/" + observabilityEvidenceAuthorityCollectorCA,
 		CollectorCADigest:      config.CollectorCADigest,
 		IdentityPollInterval:   config.IdentityPollInterval.String(), IdentityWaitTimeout: config.IdentityWaitTimeout.String(),
 		EvidenceValidity: config.EvidenceValidFor.String(), CollectionTimeout: config.CollectionTimeout.String(),
@@ -263,15 +270,18 @@ func loadObservabilityEvidenceAuthorityPrivateKey(path string) ([]byte, string, 
 }
 
 func canonicalObservabilityEvidenceAuthorityActivation(activation ObservabilityEvidenceAuthorityActivation) ([]byte, error) {
+	handoffRoot := filepath.Dir(activation.IdentityPath)
+	authorityRoot := filepath.Dir(activation.PrivateKeyPath)
 	if activation.Format != ObservabilityEvidenceAuthorityActivationFormat || activation.State != "BOUND" ||
 		!stageReceiptPrefixDigestPattern.MatchString(activation.ExpectedManifestDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(activation.CollectorCADigest) ||
-		activation.IdentityPath != observabilityEvidenceAuthorityHandoffRoot+"/observability-evidence-identity.json" ||
-		activation.IdentityReceiptPath != observabilityEvidenceAuthorityHandoffRoot+"/observability-evidence-identity-receipt.json" ||
-		activation.EvidenceOutputPath != observabilityEvidenceAuthorityHandoffRoot+"/observability-evidence.json" ||
-		activation.PrivateKeyPath != observabilityEvidenceAuthorityRoot+"/"+observabilityEvidenceAuthorityPrivateKeyKey ||
-		activation.CollectorTokenPath != observabilityEvidenceAuthorityRoot+"/"+observabilityEvidenceAuthorityCollectorToken ||
-		activation.CollectorCAPath != observabilityEvidenceAuthorityRoot+"/"+observabilityEvidenceAuthorityCollectorCA ||
+		!absoluteCleanDirectory(handoffRoot) || !absoluteCleanDirectory(authorityRoot) || directoriesOverlap(handoffRoot, authorityRoot) ||
+		activation.IdentityPath != handoffRoot+"/observability-evidence-identity.json" ||
+		activation.IdentityReceiptPath != handoffRoot+"/observability-evidence-identity-receipt.json" ||
+		activation.EvidenceOutputPath != handoffRoot+"/observability-evidence.json" ||
+		activation.PrivateKeyPath != authorityRoot+"/"+observabilityEvidenceAuthorityPrivateKeyKey ||
+		activation.CollectorTokenPath != authorityRoot+"/"+observabilityEvidenceAuthorityCollectorToken ||
+		activation.CollectorCAPath != authorityRoot+"/"+observabilityEvidenceAuthorityCollectorCA ||
 		activation.CollectorEndpoint == "" {
 		return nil, errors.New("observability evidence authority activation identity is invalid")
 	}
