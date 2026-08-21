@@ -3037,6 +3037,31 @@ non-JSON responses fail closed and there is no retry or arbitrary URL surface.
 The external service implementation remains a separate operational component;
 this client neither invents delivery evidence nor performs an outage test.
 
+The separately operated issuer now has an explicit one-shot CLI boundary:
+
+```text
+ok cluster stage evidence observability produce \
+  --output /private/observability-evidence.json \
+  --private-key /private/observability-evidence.key \
+  --run-id ok147-<24 hex> \
+  --target-cluster-uid <exact CAPI Cluster UID> \
+  --fixture-digest sha256:<exact fixture identity> \
+  --profile-digest sha256:<standard profile identity> \
+  --collector-endpoint https://<authority> \
+  --collector-token-file /private/collector-token \
+  --collector-ca-file /private/collector-ca.crt \
+  --collector-ca-digest sha256:<pinned CA identity> \
+  --valid-for 10m --timeout 2m --produce
+```
+
+The command validates all correlation identities before opening the collector,
+uses the fixed HTTPS request path and standard profile, performs one bounded
+collection and delegates one create-only signed write to the existing
+single-use producer. It emits only the redaction-safe production receipt and
+has no Kubernetes credential, arbitrary probe, overwrite or retry surface.
+Operating the external collector and securely injecting its short-lived token
+and Ed25519 private key remain separate evidence-authority responsibilities.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
@@ -3210,19 +3235,21 @@ exact prefix. The concrete full-run execution injects that prefix into a fresh
 Stage 8-12 adapter, and the full-run seam independently binds it through the
 exact Plan, private runtime handoff paths and seven predecessor receipt
 digests. A shared single-use activation type now provides the common inert-open
-and exact-run entry for future local and Job adapters without selecting a
-concrete capability transport. The Stage 8-12 suffix additionally has a local
-prepare/execute command, a bounded ephemeral Job, a deterministic private
-activation package, an exact installation plan and a single-use CLI launcher.
+and exact-run entry. The local adapter selects the fixed Kubernetes
+Observability transport, pins its independent-evidence public key and requires
+the exact prepared manifest digest before execution. The Stage 8-12 suffix
+additionally has a local prepare/execute command, a bounded ephemeral Job, a
+deterministic private activation package, an exact installation plan and a
+single-use CLI launcher.
 Successful Stage-8 and Stage-9 crash boundaries can be reactivated through the
 same manifest, authority, package, Job and CLI chain without rewriting their
 durable receipts. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
 - the joined concrete Stage 1-7 and Stage 8-12 adapters have a shared
-  activation boundary and offline local preparation command, but no concrete
-  local execute command or ephemeral Job adapter selects its production
-  capability transport yet;
+  activation boundary plus concrete local prepare/execute commands; an
+  ephemeral full-run Job package and launcher do not select that same
+  production capability transport yet;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform

@@ -1,0 +1,111 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/openkubes/ok-cluster/internal/runner"
+)
+
+func TestObservabilityEvidenceProduceRunsOneBoundedIndependentCollection(t *testing.T) {
+	previous := produceIndependentObservabilityEvidence
+	defer func() { produceIndependentObservabilityEvidence = previous }()
+	calls := 0
+	produceIndependentObservabilityEvidence = func(ctx context.Context, config observabilityEvidenceProductionConfig) (runner.ObservabilityIndependentEvidenceReceipt, error) {
+		calls++
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > config.Timeout+observabilityEvidenceProductionOverhead {
+			t.Fatalf("evidence production was not bounded: deadline=%v config=%#v", deadline, config)
+		}
+		if config.OutputPath != "/private/evidence.json" || config.PrivateKeyPath != "/private/evidence.key" ||
+			config.RunID != "ok147-0123456789abcdef01234567" || config.TargetClusterUID != "cluster-uid-ok147" ||
+			config.FixtureDigest != testSHA("1") || config.ProfileDigest != testSHA("2") ||
+			config.CollectorEndpoint != "https://192.0.2.50:8443" || config.CollectorToken != "/private/collector-token" ||
+			config.CollectorCA != "/private/collector-ca" || config.CollectorCADigest != testSHA("3") ||
+			config.ValidFor != 10*time.Minute || config.Timeout != 2*time.Minute {
+			t.Fatalf("independent evidence production binding differs: %#v", config)
+		}
+		return runner.ObservabilityIndependentEvidenceReceipt{
+			Format: runner.ObservabilityIndependentEvidenceReceiptFormat, State: "WRITTEN_VERIFIED",
+			EvidenceDigest: testSHA("4"), KeyID: testSHA("5"), ObservedAt: "2026-08-21T12:00:00Z",
+			ExpiresAt: "2026-08-21T12:10:00Z", FileMode: "0600", FileSize: 512,
+		}, nil
+	}
+	var stdout bytes.Buffer
+	if err := run(observabilityEvidenceProduceArguments(), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt runner.ObservabilityIndependentEvidenceReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "WRITTEN_VERIFIED" || calls != 1 {
+		t.Fatalf("unexpected evidence production receipt: %#v calls=%d err=%v", receipt, calls, err)
+	}
+	for _, forbidden := range []string{"/private/", "192.0.2.50", "collector-token", "cluster-uid-ok147"} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Fatalf("evidence production disclosed %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestObservabilityEvidenceProduceFailsClosedBeforeCollector(t *testing.T) {
+	previous := produceIndependentObservabilityEvidence
+	defer func() { produceIndependentObservabilityEvidence = previous }()
+	calls := 0
+	produceIndependentObservabilityEvidence = func(context.Context, observabilityEvidenceProductionConfig) (runner.ObservabilityIndependentEvidenceReceipt, error) {
+		calls++
+		return runner.ObservabilityIndependentEvidenceReceipt{}, errors.New("unexpected collector call")
+	}
+	valid := observabilityEvidenceProduceArguments()
+	for name, arguments := range map[string][]string{
+		"missing produce": removeArgument(valid, "--produce"),
+		"bad run id":      replaceArgument(valid, "--run-id", "foreign-run"),
+		"bad target UID":  replaceArgument(valid, "--target-cluster-uid", "contains whitespace"),
+		"bad fixture":     replaceArgument(valid, "--fixture-digest", "sha256:bad"),
+		"bad profile":     replaceArgument(valid, "--profile-digest", "sha256:bad"),
+		"bad CA digest":   replaceArgument(valid, "--collector-ca-digest", "sha256:bad"),
+		"short validity":  replaceArgument(valid, "--valid-for", "30s"),
+		"long collection": replaceArgument(valid, "--timeout", "31m"),
+		"positional":      append(append([]string(nil), valid...), "extra"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+				t.Fatal("unsafe evidence production input was accepted")
+			}
+			if calls != 0 {
+				t.Fatalf("unsafe input reached evidence collector: calls=%d", calls)
+			}
+		})
+	}
+}
+
+func TestObservabilityEvidenceProducePreservesStoppedReceipt(t *testing.T) {
+	previous := produceIndependentObservabilityEvidence
+	defer func() { produceIndependentObservabilityEvidence = previous }()
+	produceIndependentObservabilityEvidence = func(context.Context, observabilityEvidenceProductionConfig) (runner.ObservabilityIndependentEvidenceReceipt, error) {
+		return runner.ObservabilityIndependentEvidenceReceipt{
+			Format: runner.ObservabilityIndependentEvidenceReceiptFormat, State: "STOPPED_ZERO_WRITE",
+		}, errors.New("independent authority unavailable")
+	}
+	var stdout bytes.Buffer
+	err := run(observabilityEvidenceProduceArguments(), &stdout, &bytes.Buffer{})
+	var receipt runner.ObservabilityIndependentEvidenceReceipt
+	if err == nil || json.Unmarshal(stdout.Bytes(), &receipt) != nil || receipt.State != "STOPPED_ZERO_WRITE" {
+		t.Fatalf("stopped evidence receipt was not preserved: receipt=%#v err=%v", receipt, err)
+	}
+}
+
+func observabilityEvidenceProduceArguments() []string {
+	return []string{
+		"cluster", "stage", "evidence", "observability", "produce",
+		"--output", "/private/evidence.json", "--private-key", "/private/evidence.key",
+		"--run-id", "ok147-0123456789abcdef01234567", "--target-cluster-uid", "cluster-uid-ok147",
+		"--fixture-digest", testSHA("1"), "--profile-digest", testSHA("2"),
+		"--collector-endpoint", "https://192.0.2.50:8443", "--collector-token-file", "/private/collector-token",
+		"--collector-ca-file", "/private/collector-ca", "--collector-ca-digest", testSHA("3"),
+		"--valid-for", "10m", "--timeout", "2m", "--produce",
+	}
+}
