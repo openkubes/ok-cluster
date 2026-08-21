@@ -34,6 +34,9 @@ type ObservabilityCollectorRuntimePackageReceipt struct {
 	ManifestDigest            string   `json:"manifestDigest"`
 	RuntimeBindingDigest      string   `json:"runtimeBindingDigest"`
 	PublicEndpointDigest      string   `json:"publicEndpointDigest"`
+	TLSCertificateDigest      string   `json:"tlsCertificateDigest"`
+	ReceiverIdentityDigest    string   `json:"receiverIdentityDigest"`
+	ProfileDigest             string   `json:"profileDigest"`
 	ServiceObjectDigest       string   `json:"serviceObjectDigest"`
 	NetworkPolicyObjectDigest string   `json:"networkPolicyObjectDigest"`
 	JobObjectDigest           string   `json:"jobObjectDigest"`
@@ -99,8 +102,9 @@ func BuildObservabilityCollectorRuntimePackage(config ObservabilityCollectorRunt
 		PackageDigest: digest.SHA256(packageRaw), ActivationSecret: activationReceipt.ActivationSecret,
 		ActivationObjectDigest: digest.SHA256(activationObject), ActivationDigest: activationReceipt.ActivationDigest,
 		ManifestDigest: activationReceipt.ManifestDigest, RuntimeBindingDigest: activationReceipt.RuntimeBindingDigest,
-		PublicEndpointDigest: activationReceipt.PublicEndpointDigest,
-		ServiceObjectDigest:  digest.SHA256(jobObjects[0]), NetworkPolicyObjectDigest: digest.SHA256(jobObjects[1]),
+		PublicEndpointDigest: activationReceipt.PublicEndpointDigest, TLSCertificateDigest: activationReceipt.TLSCertificateDigest,
+		ReceiverIdentityDigest: activationReceipt.ReceiverIdentityDigest, ProfileDigest: activationReceipt.ProfileDigest,
+		ServiceObjectDigest: digest.SHA256(jobObjects[0]), NetworkPolicyObjectDigest: digest.SHA256(jobObjects[1]),
 		JobObjectDigest: digest.SHA256(jobObjects[2]), JobEnvelopeDigest: digest.SHA256(jobEnvelope),
 		JobTemplateDigest: config.JobTemplateDigest, ImageDigest: config.ImageDigest,
 		ObjectKinds: []string{"Secret", "Service", "NetworkPolicy", "Job"}, MutationAllowed: false,
@@ -138,7 +142,8 @@ func verifyObservabilityCollectorRuntimePackage(packaged VerifiedObservabilityCo
 	}
 	for _, identity := range []string{
 		receipt.PackageDigest, receipt.ActivationObjectDigest, receipt.ActivationDigest, receipt.ManifestDigest,
-		receipt.RuntimeBindingDigest, receipt.PublicEndpointDigest, receipt.ServiceObjectDigest,
+		receipt.RuntimeBindingDigest, receipt.PublicEndpointDigest, receipt.TLSCertificateDigest,
+		receipt.ReceiverIdentityDigest, receipt.ProfileDigest, receipt.ServiceObjectDigest,
 		receipt.NetworkPolicyObjectDigest, receipt.JobObjectDigest, receipt.JobEnvelopeDigest, receipt.JobTemplateDigest,
 	} {
 		if !stageReceiptPrefixDigestPattern.MatchString(identity) {
