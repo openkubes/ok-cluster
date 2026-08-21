@@ -205,7 +205,7 @@ func testMaterial(t *testing.T) testMaterialValue {
 	}
 	policyPath := writeFile(t, root, "policy.json", policyRaw, 0o600)
 	privatePath := writeFile(t, root, "authority.key", []byte(base64.StdEncoding.EncodeToString(privateKey)), 0o600)
-	token := "bounded-authority-token"
+	token := "bounded-authority-token-0123456789abcdef"
 	tokenPath := writeFile(t, root, "token", []byte(token), 0o600)
 	now := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
 	canonicalPolicy, err := canonicalJSON(policy)

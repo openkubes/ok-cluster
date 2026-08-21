@@ -44,7 +44,7 @@ func TestAuthorityStageServeOpensBoundedRuntime(t *testing.T) {
 	}
 	policyPath := cliAuthorityWrite(t, root, "policy.json", policyRaw, 0o600)
 	privatePath := cliAuthorityWrite(t, root, "authority.key", []byte(base64.StdEncoding.EncodeToString(privateKey)), 0o600)
-	tokenPath := cliAuthorityWrite(t, root, "token", []byte("private-token"), 0o600)
+	tokenPath := cliAuthorityWrite(t, root, "token", []byte("private-token-0123456789abcdefghijkl"), 0o600)
 	certPath := cliAuthorityWrite(t, root, "tls.crt", []byte("certificate-placeholder"), 0o644)
 	tlsKeyPath := cliAuthorityWrite(t, root, "tls.key", []byte("private-key-placeholder"), 0o600)
 

@@ -93,13 +93,56 @@ ok authority stage serve \
 ```
 
 The signing key, bearer token, TLS key and claim directory must remain private.
+The bearer token must be at least 32 characters and use the bounded
+alphanumeric/base64url-safe alphabet.
 The service emits only a redaction-safe opening receipt containing policy and
 public-key identities.
 
+## Offline runtime package
+
+`ok authority stage package` builds one private `0600` installation package
+from the reviewed policy, a digest-pinned runner image, TLS/signing material,
+one client token and the pinned runtime template. The package contains exactly:
+
+```text
+immutable private Secret
+ServiceAccount without automounted token
+64Mi (configurable) restart-safe claim PVC
+ClusterIP Service
+deny-by-default NetworkPolicy
+single-replica StatefulSet
+```
+
+The init container accepts the Kubernetes projected Secret symlinks, verifies
+the policy, key and TLS pair, and copies exactly five files into a memory-backed
+private directory as regular `0600` files. It also creates or reopens the
+private claim directory on the PVC. Partial materialization is preserved and
+never cleaned up or overwritten automatically.
+
+The package receipt contains only component digests, public key identity,
+image identity and object kinds. The package itself contains secrets and must
+remain a private `0600` artifact.
+
+```bash
+ok authority stage package \
+  --policy /private/stage-authority-policy.json \
+  --expected-policy-digest sha256:<reviewed-policy-digest> \
+  --private-key /private/stage-authority-ed25519.key \
+  --token-file /private/runner-token \
+  --tls-cert /private/tls.crt \
+  --tls-key /private/tls.key \
+  --template deploy/bounded-stage-authority.yaml.tpl \
+  --template-digest sha256:<reviewed-template-digest> \
+  --image ghcr.io/openkubes/ok-cluster-runner@sha256:<image-digest> \
+  --storage-class local-path \
+  --storage-request 64Mi \
+  --output /private/ok147-stage-authority-package.yaml
+```
+
 ## Deployment and ownership limits
 
-A live Deployment is not authorized by this implementation checkpoint. A
-later deployment package must provide:
+A live installation is not authorized by this implementation checkpoint. A
+later activation checkpoint must bind the verified package digest and verify:
 
 - exactly one replica for the bounded DEV run;
 - durable private claim state across process restarts;

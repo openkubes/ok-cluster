@@ -3171,6 +3171,16 @@ separate policy. The authority never renders, submits, observes or repairs
 Cluster resources. Its CLI provides offline policy derivation and a TLS 1.3
 serve mode; live deployment is a later explicitly authorized checkpoint.
 
+The follow-up runtime package keeps projected Secret symlinks outside the
+authority process. A tokenless init container verifies and materializes exactly
+policy, signing key, client token and TLS pair as regular `0600` files. The
+single-replica StatefulSet mounts create-only claim state from a PVC, so a
+process restart cannot erase replay decisions. Its Service is reachable only
+from the runner Pod label through a deny-by-default NetworkPolicy and it has no
+egress. The private package also carries the immutable Secret and emits only a
+redaction-safe component receipt. Package creation is offline and does not
+authorize installation.
+
 The concrete post-runtime execution adapter now composes those boundaries into
 one single-use Stage 8-12 library path. It normally starts from the exact
 seven-receipt cursor, reuses one verified runtime binding, resolves the fresh
