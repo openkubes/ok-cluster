@@ -2887,6 +2887,19 @@ retry, rollback or cleanup method. The Platform capability factory remains an
 explicit process-local dependency; this boundary does not invent a production
 observability transport or widen the private execution manifest.
 
+The first concrete local adapter exposes only the offline half of that
+boundary:
+
+```text
+ok cluster stage run full prepare --manifest /private/full-run.json
+```
+
+It loads the complete private manifest, emits only the redaction-safe
+activation receipt and never opens a credential or runtime dependency. There
+is deliberately no `full execute` command yet: registering one before the
+binary has a fixed production Observability capability adapter would create an
+incomplete mutation surface.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
@@ -3070,8 +3083,9 @@ durable receipts. This is not yet the OK-147 Definition of Done:
 
 - the legacy `ok cluster create` command remains dry-run-only;
 - the joined concrete Stage 1-7 and Stage 8-12 adapters have a shared
-  activation boundary, but no concrete local command or ephemeral Job adapter
-  selects its production capability transport yet;
+  activation boundary and offline local preparation command, but no concrete
+  local execute command or ephemeral Job adapter selects its production
+  capability transport yet;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
