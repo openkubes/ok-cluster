@@ -14,6 +14,12 @@ type fakeConcretePreRuntimeExecution struct {
 	prefixErr   error
 	runs        int
 	prefixCalls int
+	target      string
+	targetErr   error
+}
+
+func (execution *fakeConcretePreRuntimeExecution) RuntimeTargetIdentity() (string, error) {
+	return execution.target, execution.targetErr
 }
 
 func (execution *fakeConcretePreRuntimeExecution) Run(context.Context) (PreRuntimeExecutionReceipt, error) {
@@ -39,6 +45,10 @@ func TestFullRunExecutionComposesConcreteAdaptersWithExactPrivatePrefix(t *testi
 			postCalls++
 			if preRuntime.runs != 1 || preRuntime.prefixCalls != 1 || !reflect.DeepEqual(bound.TargetCredential.Receipts, preRuntime.prefix) {
 				t.Fatalf("post-runtime suffix did not receive the completed private prefix: %#v", bound.TargetCredential.Receipts)
+			}
+			if bound.TargetRegistration.Expected.TargetIdentityDigest == "" ||
+				bound.PlatformApplications.Expected.TargetIdentityDigest != bound.TargetRegistration.Expected.TargetIdentityDigest {
+				t.Fatalf("post-runtime suffix did not receive one lifecycle-derived target identity: %#v", bound)
 			}
 			return postRuntime, nil
 		},
@@ -145,6 +155,28 @@ func TestFullRunExecutionRejectsPrivatePrefixDifferentFromPublicCheckpoints(t *t
 	}
 }
 
+func TestFullRunExecutionDoesNotOpenSuffixWithoutLifecycleTargetIdentity(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	preRuntime.target = ""
+	preRuntime.targetErr = errors.New("missing lifecycle identity")
+	postCalls := 0
+	execution, err := openFullRunExecution(testFullRunExecutionConfig(), fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		len(receipt.Checkpoints) != 7 || postCalls != 0 {
+		t.Fatalf("missing lifecycle identity opened suffix: %#v post=%d err=%v", receipt, postCalls, err)
+	}
+}
+
 func TestOpenFullRunExecutionRejectsHistoricalSuffixState(t *testing.T) {
 	for name, mutate := range map[string]func(*FullRunExecutionConfig){
 		"prebound receipts": func(config *FullRunExecutionConfig) {
@@ -164,6 +196,12 @@ func TestOpenFullRunExecutionRejectsHistoricalSuffixState(t *testing.T) {
 		},
 		"foreign runtime receipt": func(config *FullRunExecutionConfig) {
 			config.PostRuntime.RuntimeBinding.ReceiptPath = "/private/foreign-runtime-receipt.json"
+		},
+		"prefilled registration target": func(config *FullRunExecutionConfig) {
+			config.PostRuntime.TargetRegistration.Expected.TargetIdentityDigest = runnerStageSHA("1")
+		},
+		"prefilled applications target": func(config *FullRunExecutionConfig) {
+			config.PostRuntime.PlatformApplications.Expected.TargetIdentityDigest = runnerStageSHA("1")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -200,7 +238,7 @@ func successfulFakeConcretePreRuntimeExecution(t *testing.T) *fakeConcretePreRun
 	for index, checkpoint := range receipt.Checkpoints {
 		prefix[index] = StageReceiptSource{Path: "/private/" + checkpoint.StageID + ".json", Digest: checkpoint.StageReceiptDigest}
 	}
-	return &fakeConcretePreRuntimeExecution{receipt: receipt, prefix: prefix}
+	return &fakeConcretePreRuntimeExecution{receipt: receipt, prefix: prefix, target: runnerStageSHA("7")}
 }
 
 func testFullRunExecutionConfig() FullRunExecutionConfig {

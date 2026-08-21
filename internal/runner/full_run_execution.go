@@ -20,6 +20,7 @@ type FullRunExecutionConfig struct {
 type fullRunPreRuntimeExecution interface {
 	Run(context.Context) (PreRuntimeExecutionReceipt, error)
 	ReceiptPrefix() ([]StageReceiptSource, error)
+	RuntimeTargetIdentity() (string, error)
 }
 
 type fullRunExecutionFactories struct {
@@ -58,6 +59,10 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 		config.PostRuntime.RuntimeBinding.ReceiptPath != config.PreRuntime.RuntimeBindingReceiptPath {
 		return nil, errors.New("full-run runtime binding handoff differs")
 	}
+	if config.PostRuntime.TargetRegistration.Expected.TargetIdentityDigest != "" ||
+		config.PostRuntime.PlatformApplications.Expected.TargetIdentityDigest != "" {
+		return nil, errors.New("full-run target identity must originate at lifecycle execution")
+	}
 	if len(config.PostRuntime.TargetCredential.Receipts) != 0 || config.PostRuntime.TargetCredentialRecovery != nil ||
 		config.PostRuntime.TargetRegistrationRecovery != nil {
 		return nil, errors.New("full-run execution requires a fresh unbound post-runtime suffix")
@@ -81,8 +86,14 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 					return nil, errors.New("full-run private receipt prefix differs from completed execution")
 				}
 			}
+			targetIdentity, targetErr := preRuntime.RuntimeTargetIdentity()
+			if targetErr != nil || !stageReceiptPrefixDigestPattern.MatchString(targetIdentity) {
+				return nil, errors.New("full-run lifecycle target identity is unavailable")
+			}
 			bound := clonePostRuntimeExecutionConfigForFullRun(postRuntime)
 			bound.TargetCredential.Receipts = append([]StageReceiptSource(nil), privatePrefix...)
+			bound.TargetRegistration.Expected.TargetIdentityDigest = targetIdentity
+			bound.PlatformApplications.Expected.TargetIdentityDigest = targetIdentity
 			continuation, openErr := factories.postRuntime(bound)
 			if openErr != nil || continuation == nil {
 				return nil, errors.New("open full-run post-runtime execution")

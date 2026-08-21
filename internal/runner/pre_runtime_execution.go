@@ -320,6 +320,28 @@ func (executor *PreRuntimeExecution) ReceiptPrefix() ([]StageReceiptSource, erro
 	return append([]StageReceiptSource(nil), executor.prefix...), nil
 }
 
+// RuntimeTargetIdentity reloads the completed private prefix and returns only
+// the lifecycle-derived CAPI Cluster UID digest. Raw target identity remains
+// private and no file path is exposed.
+func (executor *PreRuntimeExecution) RuntimeTargetIdentity() (string, error) {
+	prefix, err := executor.ReceiptPrefix()
+	if err != nil {
+		return "", err
+	}
+	plan, _, verifiedPrefix, err := loadStageResumeWithPrefix(StageResumeConfig{
+		PlanPath: executor.config.PlanPath, PlanExpected: executor.config.PlanExpected, Receipts: prefix,
+	})
+	if err != nil || len(verifiedPrefix) != len(preRuntimeStageOrder) {
+		return "", errors.New("verify completed pre-runtime target identity")
+	}
+	lifecycle, err := verifiedPrefix[1].Receipt()
+	if err != nil || lifecycle.StageID != "cluster-lifecycle" || lifecycle.State != "SUCCEEDED" ||
+		lifecycle.PlanDigest != plan.PlanDigest || !stageReceiptPrefixDigestPattern.MatchString(lifecycle.TargetClusterUIDDigest) {
+		return "", errors.New("completed pre-runtime target identity is unavailable")
+	}
+	return lifecycle.TargetClusterUIDDigest, nil
+}
+
 func (executor *PreRuntimeExecution) resume(receipts []StageReceiptSource) StageResumeConfig {
 	prefix := make([]StageReceiptSource, len(receipts))
 	copy(prefix, receipts)

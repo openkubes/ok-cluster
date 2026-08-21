@@ -65,6 +65,10 @@ func TestPreRuntimeExecutionComposesExactPrefixWithDynamicAuthorization(t *testi
 	if err != nil || len(prefix) != 7 {
 		t.Fatalf("completed private prefix is unavailable: %#v %v", prefix, err)
 	}
+	targetIdentity, err := executor.RuntimeTargetIdentity()
+	if err != nil || targetIdentity != digest.SHA256([]byte("11111111-1111-4111-8111-111111111111")) {
+		t.Fatalf("completed runtime target identity differs: %q %v", targetIdentity, err)
+	}
 	prefix[0].Digest = runnerStageSHA("f")
 	again, err := executor.ReceiptPrefix()
 	if err != nil || again[0].Digest == prefix[0].Digest {

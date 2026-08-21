@@ -12,8 +12,10 @@ adapters; only the post-runtime suffix currently has a bounded ephemeral Job
 activation path.
 That Job path is fully exercised offline and against fake APIs, but has not yet
 been run on the DEV management plane. The full-run library is not yet exposed
-as one local or Job-based CreateCluster activation. It is still an MVP rather
-than a general lifecycle runner or controller.
+as one local or Job-based CreateCluster activation. A strict private full-run
+manifest now verifies the complete fresh-run input boundary offline, but does
+not yet open that execution. It is still an MVP rather than a general lifecycle
+runner or controller.
 
 ```text
 versioned contract + test schema
@@ -2829,6 +2831,27 @@ exposes the defensive private prefix required by the full-run seam. This adds
 no renderer, policy authority, retry, rollback, cleanup, CLI command or Job
 mutation surface.
 
+The private full-run execution manifest closes the fresh-run input contract
+without inventing runtime truth. It binds one empty Stage-1 Plan cursor, the
+verified Contract projection, all R/E/P profiles and renderer artifacts, one
+coherent ledger and the three isolated authority planes, bounded observation
+settings, private future handoff destinations and the eleven private
+create-only stage-receipt destinations across the twelve-stage chain.
+Loading is offline and grants no mutation.
+
+The manifest deliberately cannot carry a selected target identity. After
+Stage 2 succeeds, the concrete execution adapter reloads the exact lifecycle
+receipt and injects its CAPI-UID digest into the Stage 8-12 registration and
+Application expectations. Workload endpoint, CA and token material are also
+future lifecycle-derived files, Stage-8 authorization remains predecessor-
+bound, and capability evidence is produced in memory at observation time.
+Pre-existing handoff or receipt files, mismatched authorities or ledgers,
+foreign profile/artifact digests, duplicate destinations and a non-empty
+resume cursor stop verification. The redaction-safe manifest receipt contains
+only semantic identities and execution modes. This checkpoint defines the
+private contract; the following activation checkpoint converts the verified
+document into the existing concrete adapters.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
@@ -3024,9 +3047,9 @@ durable receipts. This is not yet the OK-147 Definition of Done:
   [ADR-030 amendment proposal](ok147-adr-030-amendment-proposal.md) are defined
   and remain to be reviewed with the live evidence.
 
-The remaining implementation work is a private full-run manifest plus the
-shared local/Job activation surface for this concrete composition; it is not a
-new controller or reconciliation mechanism. After that, live closure must
+The remaining implementation work is the manifest-to-executor activation and
+the shared local/Job activation surface for this concrete composition; it is
+not a new controller or reconciliation mechanism. After that, live closure must
 publish the current image, construct fresh short-lived private inputs, run the
 exact bounded activation on `ok-mgmt`, preserve a stopped partial state without
 automatic retry, and separately repeat disposable-cluster and
