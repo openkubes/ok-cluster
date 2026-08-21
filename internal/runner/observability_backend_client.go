@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -127,7 +128,13 @@ func (client *kubernetesObservabilityBackendClient) pushMetrics(ctx context.Cont
 	if err := client.validateFixture(run, fixture); err != nil {
 		return observabilityBackendResponse{}, err
 	}
-	body := []byte(fmt.Sprintf("%s 1\n%s 1\n", fixture.MetricName, fixture.AlertTriggerMetric))
+	if len(fixture.AlertCorrelationLabels) != 3 || fixture.AlertCorrelationLabels[0] != "fixture_digest" ||
+		fixture.AlertCorrelationLabels[1] != "run_id" || fixture.AlertCorrelationLabels[2] != "target_cluster_uid" {
+		return observabilityBackendResponse{}, errors.New("observability alert correlation profile is invalid")
+	}
+	labels := "fixture_digest=" + strconv.Quote(fixture.FixtureDigest) + ",run_id=" + strconv.Quote(run.RunID) +
+		",target_cluster_uid=" + strconv.Quote(run.TargetClusterUID)
+	body := []byte(fmt.Sprintf("%s 1\n%s{%s} 1\n", fixture.MetricName, fixture.AlertTriggerMetric, labels))
 	path := client.serviceProxyPath(observabilityServiceBinding{Name: fixture.MetricsWorkload, Port: 9091, Scheme: "http"}, "metrics/job/"+fixture.MetricsWorkload)
 	return client.request(ctx, http.MethodPost, path, nil, body, "", "", false)
 }

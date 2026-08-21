@@ -1866,6 +1866,14 @@ into a separate synthetic-fixture digest. The Pod executes only
 account token. Pod/container security contexts, resource bounds and the
 Prometheus release selector are fixed by the implementation.
 
+The alert-trigger sample is also correlation-complete. Its fixed label profile
+contains exactly `fixture_digest`, `run_id` and `target_cluster_uid`, in that
+order. Prometheus preserves these labels on the synthetic alert, so an
+independent delivery receiver can bind a webhook observation to this exact
+experiment instead of treating an alert name as proof. A changed or reordered
+label profile fails before the Pushgateway request. These labels contain
+identities only; they grant no authority and carry no credential or endpoint.
+
 This checkpoint still performs no Kubernetes request. Exact absence/create,
 UID/resourceVersion observation, service-proxy checks and guarded cleanup will
 consume this generated fixture in later transport checkpoints.
