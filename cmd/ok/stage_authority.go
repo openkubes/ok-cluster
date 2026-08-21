@@ -20,6 +20,97 @@ import (
 
 var serveBoundedStageAuthority = serveStageAuthorityTLS
 
+func runAuthorityStagePackage(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok authority stage package", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	policyPath := flags.String("policy", "", "exact bounded stage-authority policy")
+	expectedPolicyDigest := flags.String("expected-policy-digest", "", "reviewed bounded policy SHA-256 identity")
+	privateKeyPath := flags.String("private-key", "", "private base64 Ed25519 signing key")
+	tokenFile := flags.String("token-file", "", "private bearer-token file")
+	tlsCertPath := flags.String("tls-cert", "", "TLS server certificate")
+	tlsKeyPath := flags.String("tls-key", "", "private TLS server key")
+	templatePath := flags.String("template", "", "bounded runtime template")
+	templateDigest := flags.String("template-digest", "", "expected runtime template SHA-256 identity")
+	imageDigest := flags.String("image", "", "digest-pinned ok runner image")
+	storageClass := flags.String("storage-class", "", "bounded DEV storage class")
+	storageRequest := flags.String("storage-request", "", "bounded durable claim size")
+	output := flags.String("output", "", "new private 0600 runtime package")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	for _, input := range []string{
+		*policyPath, *expectedPolicyDigest, *privateKeyPath, *tokenFile, *tlsCertPath, *tlsKeyPath,
+		*templatePath, *templateDigest, *imageDigest, *storageClass, *storageRequest, *output,
+	} {
+		if input == "" {
+			return errors.New("all bounded stage-authority package inputs are required")
+		}
+	}
+	template, err := readBoundedLocalFile(*templatePath, 512*1024)
+	if err != nil {
+		return errors.New("read bounded stage-authority runtime template")
+	}
+	packaged, err := stageauthority.BuildRuntimePackage(stageauthority.RuntimePackageConfig{
+		PolicyPath: *policyPath, ExpectedPolicyDigest: *expectedPolicyDigest, PrivateKeyPath: *privateKeyPath,
+		TokenFile: *tokenFile, TLSCertPath: *tlsCertPath, TLSKeyPath: *tlsKeyPath,
+		Template: template, TemplateDigest: *templateDigest, ImageDigest: *imageDigest,
+		Namespace: "openkubes-execution-system", Name: "ok147-stage-authority", PrivateSecret: "ok147-stage-authority-private",
+		StorageClass: *storageClass, StorageRequest: *storageRequest,
+	})
+	if err != nil {
+		return err
+	}
+	raw, err := packaged.PrivateBytes()
+	if err != nil {
+		return err
+	}
+	if err := writeNewLocalFile(*output, raw); err != nil {
+		return errors.New("write private bounded stage-authority runtime package")
+	}
+	receipt, err := packaged.Receipt()
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(receipt)
+}
+
+func runAuthorityStageMaterialize(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok authority stage materialize", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	source := flags.String("source", "", "projected bounded stage-authority Secret directory")
+	destination := flags.String("destination", "", "empty private destination directory")
+	stateDirectory := flags.String("state-directory", "", "private durable single-use state directory")
+	expectedPolicyDigest := flags.String("expected-policy-digest", "", "reviewed bounded policy SHA-256 identity")
+	expectedKeyID := flags.String("expected-key-id", "", "reviewed Ed25519 public-key identity")
+	materialize := flags.Bool("materialize", false, "copy the exact projected set create-only")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*materialize || *source == "" || *destination == "" || *stateDirectory == "" || *expectedPolicyDigest == "" || *expectedKeyID == "" {
+		return errors.New("bounded stage-authority materialization requires all bindings and explicit --materialize")
+	}
+	receipt, materializeErr := stageauthority.Materialize(stageauthority.MaterializationConfig{
+		SourceDirectory: *source, DestinationDirectory: *destination, StateDirectory: *stateDirectory,
+		ExpectedPolicyDigest: *expectedPolicyDigest, ExpectedKeyID: *expectedKeyID,
+	})
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(receipt); err != nil {
+		return err
+	}
+	return materializeErr
+}
+
 func runAuthorityStagePolicy(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok authority stage policy", flag.ContinueOnError)
 	flags.SetOutput(stderr)

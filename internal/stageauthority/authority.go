@@ -204,7 +204,7 @@ func Open(config Config) (*Authority, Receipt, error) {
 		return nil, Receipt{}, errors.New("read bounded stage authority bearer token")
 	}
 	token := bytes.TrimSuffix(tokenRaw, []byte("\n"))
-	if len(token) == 0 || len(token) != len(bytes.TrimSpace(token)) || bytes.ContainsAny(token, "\r\n") {
+	if !validBearerToken(token) {
 		return nil, Receipt{}, errors.New("bounded stage authority bearer token is invalid")
 	}
 	stateInfo, err := os.Lstat(config.StateDirectory)
@@ -227,6 +227,19 @@ func Open(config Config) (*Authority, Receipt, error) {
 		SingleUseLedger: "create-only-local/v1", MutationAllowed: false,
 	}
 	return authority, receipt, nil
+}
+
+func validBearerToken(token []byte) bool {
+	if len(token) < 32 || len(token) > maximumCredentialBytes || len(token) != len(bytes.TrimSpace(token)) || bytes.ContainsAny(token, "\r\n") {
+		return false
+	}
+	for _, value := range token {
+		if value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || strings.ContainsRune("._~-", rune(value)) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // ServeHTTP accepts only the exact normal stage-authorization protocol. It
