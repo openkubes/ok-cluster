@@ -63,6 +63,8 @@ func TestKubernetesObservabilityPlatformCapabilityFactoryResolvesLazily(t *testi
 	platformProfile := runnerPlatformProfile()
 	binding := FullRunPlatformCapabilityBinding{
 		Namespace: "ok-observability", Timeout: time.Minute, CleanupTimeout: 10 * time.Second,
+		PollInterval: time.Millisecond, PushgatewayImage: capabilityFixtureConfig().PushgatewayImage,
+		LogEmitterImage: capabilityFixtureConfig().LogEmitterImage, IndependentEvidencePath: evidenceSource.path, IndependentEvidenceKeyID: evidenceSource.keyID,
 		IntentRevision: platformProfile.IntentRevision, PlatformRevision: platformProfile.PlatformRevision,
 		ExecutionFixture: platformProfile.ExecutionFixture, ContractDigest: platformProfile.CapabilityContractDigest,
 		ExecutableDigest: platformProfile.CapabilityExecutableDigest,
@@ -151,6 +153,8 @@ func TestKubernetesObservabilityPlatformCapabilityFactoryRejectsForeignProfileBe
 	platformProfile := runnerPlatformProfile()
 	resolver, err := factory.OpenFullRunPlatformCapability(FullRunPlatformCapabilityBinding{
 		Namespace: "ok-observability", Timeout: time.Minute, CleanupTimeout: 10 * time.Second,
+		PollInterval: time.Millisecond, PushgatewayImage: capabilityFixtureConfig().PushgatewayImage,
+		LogEmitterImage: capabilityFixtureConfig().LogEmitterImage, IndependentEvidencePath: evidenceSource.path, IndependentEvidenceKeyID: evidenceSource.keyID,
 		IntentRevision: platformProfile.IntentRevision, PlatformRevision: platformProfile.PlatformRevision,
 		ExecutionFixture: platformProfile.ExecutionFixture, ContractDigest: platformProfile.CapabilityContractDigest,
 		ExecutableDigest: platformProfile.CapabilityExecutableDigest,

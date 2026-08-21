@@ -43,7 +43,10 @@ func NewKubernetesObservabilityPlatformCapabilityFactory(config KubernetesObserv
 func (factory *KubernetesObservabilityPlatformCapabilityFactory) OpenFullRunPlatformCapability(binding FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
 	if factory == nil || factory.config.WorkloadAuthority == nil || factory.config.IndependentEvidence == nil || factory.config.Clock == nil ||
 		binding.Namespace != factory.config.Profile.namespace || binding.Timeout < time.Minute || binding.Timeout > 30*time.Minute ||
-		binding.CleanupTimeout < 10*time.Second || binding.CleanupTimeout > 2*time.Minute {
+		binding.CleanupTimeout < 10*time.Second || binding.CleanupTimeout > 2*time.Minute ||
+		binding.PollInterval != factory.config.PollInterval || binding.PushgatewayImage != factory.config.Fixture.PushgatewayImage ||
+		binding.LogEmitterImage != factory.config.Fixture.LogEmitterImage || binding.IndependentEvidencePath != factory.config.IndependentEvidence.path ||
+		binding.IndependentEvidenceKeyID != factory.config.IndependentEvidence.keyID {
 		return nil, errors.New("full-run observability capability binding is invalid")
 	}
 	for _, value := range []string{binding.IntentRevision, binding.PlatformRevision, binding.ExecutionFixture, binding.ContractDigest, binding.ExecutableDigest} {

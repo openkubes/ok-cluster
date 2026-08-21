@@ -111,9 +111,14 @@ type fullRunPlatformApplicationsDocument struct {
 }
 
 type fullRunCapabilityDocument struct {
-	Namespace      string `json:"namespace"`
-	Timeout        string `json:"timeout"`
-	CleanupTimeout string `json:"cleanupTimeout"`
+	Namespace                string `json:"namespace"`
+	Timeout                  string `json:"timeout"`
+	CleanupTimeout           string `json:"cleanupTimeout"`
+	PollInterval             string `json:"pollInterval"`
+	PushgatewayImage         string `json:"pushgatewayImage"`
+	LogEmitterImage          string `json:"logEmitterImage"`
+	IndependentEvidencePath  string `json:"independentEvidencePath"`
+	IndependentEvidenceKeyID string `json:"independentEvidenceKeyId"`
 }
 
 type fullRunPlatformObservationDocument struct {
@@ -184,14 +189,19 @@ type VerifiedFullRunExecutionManifest struct {
 // first-run capability boundary. The factory receives no credential, endpoint,
 // target UID, command or arbitrary payload.
 type FullRunPlatformCapabilityBinding struct {
-	Namespace        string
-	Timeout          time.Duration
-	CleanupTimeout   time.Duration
-	IntentRevision   string
-	PlatformRevision string
-	ExecutionFixture string
-	ContractDigest   string
-	ExecutableDigest string
+	Namespace                string
+	Timeout                  time.Duration
+	CleanupTimeout           time.Duration
+	PollInterval             time.Duration
+	PushgatewayImage         string
+	LogEmitterImage          string
+	IndependentEvidencePath  string
+	IndependentEvidenceKeyID string
+	IntentRevision           string
+	PlatformRevision         string
+	ExecutionFixture         string
+	ContractDigest           string
+	ExecutableDigest         string
 }
 
 // FullRunPlatformCapabilityFactory supplies the process-local fixed checks and
@@ -278,9 +288,17 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	if err != nil {
 		return FullRunExecutionConfig{}, errors.New("parse full-run capability cleanup timeout")
 	}
+	capabilityPollInterval, err := time.ParseDuration(document.PlatformObservation.Capability.PollInterval)
+	if err != nil {
+		return FullRunExecutionConfig{}, errors.New("parse full-run capability polling")
+	}
 	capabilityResolver, err := runtime.PlatformCapability.OpenFullRunPlatformCapability(FullRunPlatformCapabilityBinding{
 		Namespace: document.PlatformObservation.Capability.Namespace, Timeout: capabilityTimeout, CleanupTimeout: cleanupTimeout,
-		IntentRevision: plan.IntentRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
+		PollInterval: capabilityPollInterval, PushgatewayImage: document.PlatformObservation.Capability.PushgatewayImage,
+		LogEmitterImage:          document.PlatformObservation.Capability.LogEmitterImage,
+		IndependentEvidencePath:  document.PlatformObservation.Capability.IndependentEvidencePath,
+		IndependentEvidenceKeyID: document.PlatformObservation.Capability.IndependentEvidenceKeyID,
+		IntentRevision:           plan.IntentRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
 		ContractDigest: manifest.platform.CapabilityContractDigest, ExecutableDigest: manifest.platform.CapabilityExecutableDigest,
 	})
 	if err != nil || capabilityResolver == nil {
@@ -744,10 +762,19 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 	}
 	capabilityTimeout, capabilityErr := time.ParseDuration(document.PlatformObservation.Capability.Timeout)
 	cleanupTimeout, cleanupErr := time.ParseDuration(document.PlatformObservation.Capability.CleanupTimeout)
+	capabilityPollInterval, capabilityPollErr := time.ParseDuration(document.PlatformObservation.Capability.PollInterval)
 	if capabilityErr != nil || cleanupErr != nil || capabilityTimeout < time.Minute || capabilityTimeout > 30*time.Minute ||
 		cleanupTimeout < 10*time.Second || cleanupTimeout > 2*time.Minute ||
-		document.PlatformObservation.Capability.Namespace != "ok-observability" {
+		capabilityPollErr != nil || capabilityPollInterval < time.Millisecond || capabilityPollInterval > 30*time.Second ||
+		document.PlatformObservation.Capability.Namespace != "ok-observability" ||
+		!capabilityImageDigestPattern.MatchString(document.PlatformObservation.Capability.PushgatewayImage) ||
+		!capabilityImageDigestPattern.MatchString(document.PlatformObservation.Capability.LogEmitterImage) ||
+		!validFullRunAbsolutePath(document.PlatformObservation.Capability.IndependentEvidencePath) ||
+		!platformInputDigestPattern.MatchString(document.PlatformObservation.Capability.IndependentEvidenceKeyID) {
 		return errors.New("full-run capability execution bounds are invalid")
+	}
+	if _, exists := seenOutputs[document.PlatformObservation.Capability.IndependentEvidencePath]; exists {
+		return errors.New("full-run capability evidence path collides with a private runtime output")
 	}
 	if document.TargetRegistration.TargetName != plan.ContractIdentity.Name ||
 		document.TargetRegistration.ArgoNamespace != document.PlatformApplications.ArgoNamespace ||
