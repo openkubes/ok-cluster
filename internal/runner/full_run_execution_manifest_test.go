@@ -85,7 +85,9 @@ func TestVerifiedFullRunExecutionManifestBuildsConcreteConfiguration(t *testing.
 		t.Fatal("opening the full-run manifest executed the Platform capability probe")
 	}
 	if capabilityBinding.Namespace != "ok-observability" || capabilityBinding.Timeout != 10*time.Minute ||
-		capabilityBinding.CleanupTimeout != time.Minute || capabilityBinding.IntentRevision == "" ||
+		capabilityBinding.CleanupTimeout != time.Minute || capabilityBinding.PollInterval != time.Second ||
+		capabilityBinding.PushgatewayImage == "" || capabilityBinding.LogEmitterImage == "" ||
+		capabilityBinding.IndependentEvidencePath == "" || capabilityBinding.IndependentEvidenceKeyID == "" || capabilityBinding.IntentRevision == "" ||
 		capabilityBinding.PlatformRevision == "" || capabilityBinding.ExecutionFixture == "" ||
 		capabilityBinding.ContractDigest == "" || capabilityBinding.ExecutableDigest == "" {
 		t.Fatalf("capability factory did not receive the exact manifest binding: %#v", capabilityBinding)
@@ -143,6 +145,19 @@ func TestFullRunExecutionManifestFailsClosed(t *testing.T) {
 		},
 		"wrong capability namespace": func(value map[string]any) {
 			value["platformObservation"].(map[string]any)["capability"].(map[string]any)["namespace"] = "default"
+		},
+		"mutable capability image": func(value map[string]any) {
+			value["platformObservation"].(map[string]any)["capability"].(map[string]any)["pushgatewayImage"] = "registry.k8s.io/pushgateway:latest"
+		},
+		"foreign evidence key": func(value map[string]any) {
+			value["platformObservation"].(map[string]any)["capability"].(map[string]any)["independentEvidenceKeyId"] = "mutable"
+		},
+		"unbounded capability polling": func(value map[string]any) {
+			value["platformObservation"].(map[string]any)["capability"].(map[string]any)["pollInterval"] = "1m"
+		},
+		"evidence path collides with runtime output": func(value map[string]any) {
+			binding := value["networkObservation"].(map[string]any)["workload"].(map[string]any)["bindingPath"]
+			value["platformObservation"].(map[string]any)["capability"].(map[string]any)["independentEvidencePath"] = binding
 		},
 		"relative runtime output": func(value map[string]any) {
 			value["runtimeBinding"].(map[string]any)["materialPath"] = "runtime-binding.json"
@@ -373,7 +388,11 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 		},
 		PlatformObservation: fullRunPlatformObservationDocument{
 			Ledger: ledger, Argo: post.PlatformObservation.Argo,
-			Capability:   fullRunCapabilityDocument{Namespace: "ok-observability", Timeout: "10m", CleanupTimeout: "1m"},
+			Capability: fullRunCapabilityDocument{
+				Namespace: "ok-observability", Timeout: "10m", CleanupTimeout: "1m", PollInterval: "1s",
+				PushgatewayImage: capabilityFixtureConfig().PushgatewayImage, LogEmitterImage: capabilityFixtureConfig().LogEmitterImage,
+				IndependentEvidencePath: filepath.Join(privateRoot, "observability-independent-evidence.json"), IndependentEvidenceKeyID: digestOf("d"),
+			},
 			PollInterval: "1s", PollTimeout: "1m",
 		},
 		AggregateEvidence: fullRunAggregateEvidenceDocument{Ledger: ledger, Management: managementAuthority, Argo: post.AggregateEvidence.Argo, WorkloadKubeconfigFile: workload.KubeconfigFile, WorkloadCAFile: workload.CAFile},

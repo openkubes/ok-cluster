@@ -3002,8 +3002,14 @@ readers, strict parsers, signed evidence consumer, semantic checks and bounded
 probe. Token-mode workload authority, a foreign Platform profile, changed
 revision or second resolution fails before an API request. The factory adds no
 new action surface and still performs no delivery/autonomy collection itself.
-Binding this factory and its private paths through the execution manifest is
-the remaining full-run activation step.
+The full-run manifest now binds the factory's immutable Pushgateway and
+log-emitter image digests, signed-evidence path and public-key identity, and
+backend polling interval alongside the existing timeouts and semantic
+revisions. The concrete factory rejects any process-local configuration that
+differs from those values. Invalid or mutable images, an unbounded interval,
+foreign key identity, relative evidence path or collision with a private
+runtime output fails manifest verification. Selecting this factory from the
+local/Job execute entry point remains the activation step.
 
 The issuer can now obtain its typed input through one exact external-authority
 request. The TLS-only collector pins a CA digest and private bearer token,
