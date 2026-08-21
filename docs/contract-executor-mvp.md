@@ -2954,6 +2954,18 @@ not prove autonomy under loss of external connectivity. Wiring the parsed
 results together with explicit delivery and autonomy evidence remains the next
 backend-composition boundary.
 
+The concrete backend now performs that composition. It pushes the generated
+metric pair exactly once, polls only valid correlated absence for Prometheus,
+Grafana, OpenSearch and Alertmanager, and stops on malformed or operational
+errors. Every call requires a caller deadline. Alert delivery is queried only
+after the exact alert is firing, through a separate identity-bound evidence
+source; autonomy likewise comes from a separate source that must report both
+local readiness and the number of external-cluster dependencies. Neither claim
+is inferred from ordinary reachability. The resulting typed observations feed
+the five-check evaluator without adding repair, retry authority or lifecycle
+ownership. Concrete delivery/autonomy evidence sources and the full-run factory
+wiring remain separate follow-ups.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
