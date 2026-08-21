@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 type fakeConcretePreRuntimeExecution struct {
@@ -187,6 +188,11 @@ func TestOpenFullRunExecutionRejectsHistoricalSuffixState(t *testing.T) {
 		},
 		"registration recovery": func(config *FullRunExecutionConfig) {
 			config.PostRuntime.TargetRegistrationRecovery = &PostRuntimeTargetRegistrationRecoveryConfig{}
+		},
+		"prebound Stage-8 authorization": func(config *FullRunExecutionConfig) {
+			config.PostRuntime.TargetCredential.GrantPath = "/private/stage8-grant.json"
+			config.PostRuntime.TargetCredential.GrantPublicKeyPath = "/private/stage8-authority.pub"
+			config.PostRuntime.TargetCredential.EvaluationTime = time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
 		},
 		"foreign plan": func(config *FullRunExecutionConfig) {
 			config.PostRuntime.TargetCredential.PlanPath = "/private/foreign-plan.json"

@@ -67,6 +67,10 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 		config.PostRuntime.TargetRegistrationRecovery != nil {
 		return nil, errors.New("full-run execution requires a fresh unbound post-runtime suffix")
 	}
+	if config.PostRuntime.TargetCredential.GrantPath != "" || config.PostRuntime.TargetCredential.GrantPublicKeyPath != "" ||
+		!config.PostRuntime.TargetCredential.EvaluationTime.IsZero() {
+		return nil, errors.New("full-run Stage-8 authorization must be resolved after the completed prefix")
+	}
 
 	preRuntime, err := factories.preRuntime(config.PreRuntime)
 	if err != nil || preRuntime == nil {
