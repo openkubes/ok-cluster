@@ -38,6 +38,53 @@ func TestFullRunPrepareVerifiesWithoutOpeningExecution(t *testing.T) {
 	}
 }
 
+func TestFullRunMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
+	previous := materializeFullRunExecutionBundle
+	defer func() { materializeFullRunExecutionBundle = previous }()
+	calls := 0
+	materializeFullRunExecutionBundle = func(config runner.FullRunExecutionBundleMaterializationConfig) (runner.FullRunExecutionBundleMaterializationReceipt, error) {
+		calls++
+		if config.SourceDirectory != "/var/run/openkubes/source" || config.DestinationDirectory != "/var/run/openkubes/workspace" ||
+			config.HandoffDirectory != "/var/run/openkubes/handoff" || config.ExpectedBundleDigest != testSHA("1") {
+			t.Fatalf("full-run materialization config differs: %#v", config)
+		}
+		return runner.FullRunExecutionBundleMaterializationReceipt{
+			Format: runner.FullRunExecutionBundleMaterializationReceiptFormat, State: "MATERIALIZED_VERIFIED",
+			BundleDigest: testSHA("1"), ManifestDigest: testSHA("2"), EvidenceKeyID: testSHA("3"), FileCount: 26, TotalBytes: 1024,
+		}, nil
+	}
+	valid := []string{
+		"cluster", "stage", "run", "full", "materialize",
+		"--source", "/var/run/openkubes/source", "--destination", "/var/run/openkubes/workspace",
+		"--handoff", "/var/run/openkubes/handoff", "--expected-bundle-digest", testSHA("1"), "--materialize",
+	}
+	var stdout bytes.Buffer
+	if err := run(valid, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt runner.FullRunExecutionBundleMaterializationReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || calls != 1 || receipt.State != "MATERIALIZED_VERIFIED" || receipt.KubernetesMutationAllowed {
+		t.Fatalf("unexpected full-run materialization: receipt=%#v calls=%d err=%v", receipt, calls, err)
+	}
+	for name, arguments := range map[string][]string{
+		"missing activation": removeArgument(valid, "--materialize"),
+		"missing source":     removeArgument(valid, "/var/run/openkubes/source"),
+		"missing handoff":    removeArgument(valid, "/var/run/openkubes/handoff"),
+		"bad digest":         replaceArgument(valid, "--expected-bundle-digest", "sha256:bad"),
+		"positional":         append(append([]string(nil), valid...), "extra"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+				t.Fatal("unsafe full-run materialization was accepted")
+			}
+			if calls != before {
+				t.Fatalf("invalid CLI input reached materializer: calls=%d before=%d", calls, before)
+			}
+		})
+	}
+}
+
 func TestFullRunExecuteRequiresPreparedIdentityAndRunsOnce(t *testing.T) {
 	previous := openKubernetesObservabilityFullRunActivation
 	previousPrepare := prepareFullRunExecutionManifest

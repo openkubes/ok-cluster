@@ -22,6 +22,8 @@ var prepareFullRunExecutionManifest = func(path string) (runner.FullRunExecution
 	return receipt, err
 }
 
+var materializeFullRunExecutionBundle = runner.MaterializeFullRunExecutionBundle
+
 var openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
 	return runner.OpenKubernetesObservabilityFullRunActivation(path, runner.KubernetesObservabilityFullRunActivationConfig{
 		IndependentEvidencePublicKeyPath: publicKeyPath, Clock: time.Now, Wait: runner.WaitWithTimer,
@@ -58,6 +60,39 @@ func runClusterStageRunFullPrepare(arguments []string, stdout, stderr io.Writer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(receipt)
+}
+
+func runClusterStageRunFullMaterialize(arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster stage run full materialize", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	source := flags.String("source", "", "projected immutable full-run bundle directory")
+	destination := flags.String("destination", "", "fixed private executor workspace")
+	handoff := flags.String("handoff", "", "fixed private evidence-authority handoff")
+	expectedBundleDigest := flags.String("expected-bundle-digest", "", "exact canonical bundle index digest")
+	materialize := flags.Bool("materialize", false, "create the private full-run workspace")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if !*materialize {
+		return errors.New("full-run private materialization requires explicit --materialize")
+	}
+	if *source == "" || *destination == "" || *handoff == "" || !sha256DigestPattern.MatchString(*expectedBundleDigest) {
+		return errors.New("--source, --destination, --handoff and a lowercase SHA-256 --expected-bundle-digest are required")
+	}
+	receipt, err := materializeFullRunExecutionBundle(runner.FullRunExecutionBundleMaterializationConfig{
+		SourceDirectory: *source, DestinationDirectory: *destination, HandoffDirectory: *handoff,
+		ExpectedBundleDigest: *expectedBundleDigest,
+	})
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if outputErr := encoder.Encode(receipt); outputErr != nil {
+		return outputErr
+	}
+	return err
 }
 
 func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
