@@ -23,8 +23,7 @@ func TestObservabilityEvidenceProduceRunsOneBoundedIndependentCollection(t *test
 			t.Fatalf("evidence production was not bounded: deadline=%v config=%#v", deadline, config)
 		}
 		if config.OutputPath != "/private/evidence.json" || config.PrivateKeyPath != "/private/evidence.key" ||
-			config.RunID != "ok147-0123456789abcdef01234567" || config.TargetClusterUID != "cluster-uid-ok147" ||
-			config.FixtureDigest != testSHA("1") || config.ProfileDigest != testSHA("2") ||
+			config.IdentityPath != "/private/evidence-identity.json" || config.ExpectedIdentityDigest != testSHA("2") ||
 			config.CollectorEndpoint != "https://192.0.2.50:8443" || config.CollectorToken != "/private/collector-token" ||
 			config.CollectorCA != "/private/collector-ca" || config.CollectorCADigest != testSHA("3") ||
 			config.ValidFor != 10*time.Minute || config.Timeout != 2*time.Minute {
@@ -61,15 +60,12 @@ func TestObservabilityEvidenceProduceFailsClosedBeforeCollector(t *testing.T) {
 	}
 	valid := observabilityEvidenceProduceArguments()
 	for name, arguments := range map[string][]string{
-		"missing produce": removeArgument(valid, "--produce"),
-		"bad run id":      replaceArgument(valid, "--run-id", "foreign-run"),
-		"bad target UID":  replaceArgument(valid, "--target-cluster-uid", "contains whitespace"),
-		"bad fixture":     replaceArgument(valid, "--fixture-digest", "sha256:bad"),
-		"bad profile":     replaceArgument(valid, "--profile-digest", "sha256:bad"),
-		"bad CA digest":   replaceArgument(valid, "--collector-ca-digest", "sha256:bad"),
-		"short validity":  replaceArgument(valid, "--valid-for", "30s"),
-		"long collection": replaceArgument(valid, "--timeout", "31m"),
-		"positional":      append(append([]string(nil), valid...), "extra"),
+		"missing produce":     removeArgument(valid, "--produce"),
+		"bad identity digest": replaceArgument(valid, "--expected-identity-digest", "sha256:bad"),
+		"bad CA digest":       replaceArgument(valid, "--collector-ca-digest", "sha256:bad"),
+		"short validity":      replaceArgument(valid, "--valid-for", "30s"),
+		"long collection":     replaceArgument(valid, "--timeout", "31m"),
+		"positional":          append(append([]string(nil), valid...), "extra"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
@@ -102,10 +98,54 @@ func observabilityEvidenceProduceArguments() []string {
 	return []string{
 		"cluster", "stage", "evidence", "observability", "produce",
 		"--output", "/private/evidence.json", "--private-key", "/private/evidence.key",
-		"--run-id", "ok147-0123456789abcdef01234567", "--target-cluster-uid", "cluster-uid-ok147",
-		"--fixture-digest", testSHA("1"), "--profile-digest", testSHA("2"),
+		"--identity-file", "/private/evidence-identity.json", "--expected-identity-digest", testSHA("2"),
 		"--collector-endpoint", "https://192.0.2.50:8443", "--collector-token-file", "/private/collector-token",
 		"--collector-ca-file", "/private/collector-ca", "--collector-ca-digest", testSHA("3"),
 		"--valid-for", "10m", "--timeout", "2m", "--produce",
+	}
+}
+
+func TestObservabilityEvidenceIdentityMaterializeWritesOnlyRedactedReceipt(t *testing.T) {
+	previous := materializeObservabilityEvidenceIdentity
+	defer func() { materializeObservabilityEvidenceIdentity = previous }()
+	calls := 0
+	materializeObservabilityEvidenceIdentity = func(config runner.ObservabilityIndependentEvidenceIdentityMaterialConfig) (runner.ObservabilityIndependentEvidenceIdentityReceipt, error) {
+		calls++
+		if config.ManifestPath != "/private/full-run.json" || config.ExpectedManifestDigest != testSHA("1") ||
+			config.ReceiptPrefixPath != "/private/six-prefix.json" || config.ExpectedReceiptPrefixDigest != testSHA("2") ||
+			config.OutputPath != "/private/evidence-identity.json" {
+			t.Fatalf("identity materialization differs: %#v", config)
+		}
+		return runner.ObservabilityIndependentEvidenceIdentityReceipt{
+			Format: runner.ObservabilityIndependentEvidenceIdentityReceiptFormat, State: "WRITTEN_VERIFIED",
+			ManifestDigest: testSHA("1"), RuntimeBindingDigest: testSHA("3"), TargetClusterUIDDigest: testSHA("4"),
+			IdentityDigest: testSHA("5"), FileMode: "0600", FileSize: 512,
+		}, nil
+	}
+	arguments := []string{
+		"cluster", "stage", "evidence", "observability", "identity", "materialize",
+		"--manifest", "/private/full-run.json", "--expected-manifest-digest", testSHA("1"),
+		"--receipt-prefix", "/private/six-prefix.json", "--expected-receipt-prefix-digest", testSHA("2"),
+		"--output", "/private/evidence-identity.json", "--materialize",
+	}
+	var stdout bytes.Buffer
+	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || strings.Contains(stdout.String(), "/private/") || strings.Contains(stdout.String(), "cluster-uid") {
+		t.Fatalf("unsafe identity materialization output: calls=%d output=%s", calls, stdout.String())
+	}
+	for name, invalid := range map[string][]string{
+		"missing activation": removeArgument(arguments, "--materialize"),
+		"bad manifest":       replaceArgument(arguments, "--expected-manifest-digest", "bad"),
+		"bad prefix":         replaceArgument(arguments, "--expected-receipt-prefix-digest", "bad"),
+		"positional":         append(append([]string(nil), arguments...), "extra"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := calls
+			if err := run(invalid, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || calls != before {
+				t.Fatalf("unsafe materialization input reached writer: calls=%d before=%d err=%v", calls, before, err)
+			}
+		})
 	}
 }

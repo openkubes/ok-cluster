@@ -3037,16 +3037,37 @@ non-JSON responses fail closed and there is no retry or arbitrary URL surface.
 The external service implementation remains a separate operational component;
 this client neither invents delivery evidence nor performs an outage test.
 
-The separately operated issuer now has an explicit one-shot CLI boundary:
+The separately operated issuer no longer accepts the run ID, target Cluster
+UID, fixture digest or profile digest as manually repeated command arguments.
+After Stage 6, a local-only materializer derives those values from the exact
+verified full-run manifest, the digest-bound six-receipt prefix and the
+lifecycle-produced private runtime binding:
+
+```text
+ok cluster stage evidence observability identity materialize \
+  --manifest /private/full-run.json \
+  --expected-manifest-digest sha256:<verified manifest identity> \
+  --receipt-prefix /private/stage-1-6-prefix.json \
+  --expected-receipt-prefix-digest sha256:<verified prefix identity> \
+  --output /private/observability-evidence-identity.json \
+  --materialize
+```
+
+This performs no API request. It reconstructs the exact synthetic fixture and
+standard check profile, derives the capability run from the runtime CAPI
+Cluster UID, and writes one canonical private `0600` identity with `O_EXCL`,
+`fsync` and pullback verification. Its public receipt contains only source and
+identity digests, the target-UID digest and file metadata.
+
+The issuer consumes that private identity through an explicit one-shot CLI
+boundary:
 
 ```text
 ok cluster stage evidence observability produce \
   --output /private/observability-evidence.json \
   --private-key /private/observability-evidence.key \
-  --run-id ok147-<24 hex> \
-  --target-cluster-uid <exact CAPI Cluster UID> \
-  --fixture-digest sha256:<exact fixture identity> \
-  --profile-digest sha256:<standard profile identity> \
+  --identity-file /private/observability-evidence-identity.json \
+  --expected-identity-digest sha256:<exact derived identity> \
   --collector-endpoint https://<authority> \
   --collector-token-file /private/collector-token \
   --collector-ca-file /private/collector-ca.crt \
@@ -3054,7 +3075,7 @@ ok cluster stage evidence observability produce \
   --valid-for 10m --timeout 2m --produce
 ```
 
-The command validates all correlation identities before opening the collector,
+The command verifies the private canonical identity before opening the collector,
 uses the fixed HTTPS request path and standard profile, performs one bounded
 collection and delegates one create-only signed write to the existing
 single-use producer. It emits only the redaction-safe production receipt and
