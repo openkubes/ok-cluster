@@ -74,3 +74,54 @@ func TestEvidenceObservabilityServeRejectsIncompleteActivation(t *testing.T) {
 		t.Fatal("incomplete collector activation was accepted")
 	}
 }
+
+type fakeObservabilityCollectorActivation struct {
+	served bool
+}
+
+func (activation *fakeObservabilityCollectorActivation) Receipt() (runner.ObservabilityIndependentEvidenceCollectorServerReceipt, error) {
+	return runner.ObservabilityIndependentEvidenceCollectorServerReceipt{
+		Format: runner.ObservabilityIndependentEvidenceCollectorServerReceiptFormat,
+		State:  "VERIFIED", SeparateAuthorities: true, MutationAllowed: false,
+	}, nil
+}
+
+func (activation *fakeObservabilityCollectorActivation) Serve(ctx context.Context, serve runner.ObservabilityCollectorServeFunc) error {
+	activation.served = true
+	return serve(ctx, "127.0.0.1:8443", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), []byte("cert"), []byte("key"))
+}
+
+func TestEvidenceObservabilityServeUsesPackagedActivation(t *testing.T) {
+	originalOpen := openObservabilityCollectorActivation
+	originalServe := serveBoundedObservabilityCollector
+	defer func() {
+		openObservabilityCollectorActivation = originalOpen
+		serveBoundedObservabilityCollector = originalServe
+	}()
+	fake := &fakeObservabilityCollectorActivation{}
+	openObservabilityCollectorActivation = func(path string) (observabilityCollectorActivationRunner, error) {
+		if path != "/var/run/openkubes/collector/activation.json" {
+			t.Fatalf("unexpected activation path: %q", path)
+		}
+		return fake, nil
+	}
+	serveBoundedObservabilityCollector = func(_ context.Context, address string, handler http.Handler, certRaw, keyRaw []byte) error {
+		if address != "127.0.0.1:8443" || handler == nil || string(certRaw) != "cert" || string(keyRaw) != "key" {
+			t.Fatal("packaged activation lost serving identity")
+		}
+		return nil
+	}
+	stdout := &bytes.Buffer{}
+	if err := run([]string{"evidence", "observability", "serve", "--activation", "/var/run/openkubes/collector/activation.json"}, stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.served || !bytes.Contains(stdout.Bytes(), []byte(`"state": "VERIFIED"`)) {
+		t.Fatal("packaged collector activation was not served")
+	}
+	if err := run([]string{
+		"evidence", "observability", "serve", "--activation", "/var/run/openkubes/collector/activation.json",
+		"--listen", "127.0.0.1:8443",
+	}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("packaged activation accepted an individual serving flag")
+	}
+}

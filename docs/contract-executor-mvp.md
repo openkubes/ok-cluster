@@ -3060,8 +3060,8 @@ identity and historical records fail closed. A separate query token protects
 the canonical evidence endpoint. The server deliberately requires an injected
 independent autonomy observer and returns no collection result when that source
 is unavailable. It therefore cannot turn webhook receipt or API reachability
-into an autonomy claim. Packaging this receiver and implementing the real
-cluster-local autonomy observer remain the next checkpoints.
+into an autonomy claim. The cluster-local autonomy observer and runtime
+packaging described below close those two boundaries.
 
 The autonomy source now has a concrete read-only Kubernetes observer. It is
 bound to one runtime Cluster UID, pinned CA and the standard profile and can
@@ -3100,10 +3100,40 @@ must cover the literal public endpoint, and the observer must be the dedicated
 tokenless `ok147-observability-autonomy` ServiceAccount with the default
 Kubernetes audience. Construction performs no API request or mutation.
 
-This closes the post-runtime authority materialization boundary without
-turning the collector into a lifecycle owner. A Kubernetes Job/Service/
-NetworkPolicy envelope, CLI materialization boundary and fresh image remain
-separate prerequisites before this process may be deployed.
+The package is now composed with one LoadBalancer Service, an exact
+NetworkPolicy and one three-hour, `backoffLimit: 0` Job. Ingress admits only
+the bound alert-source CIDR and the contract-executor Pods in
+`openkubes-execution-system`; egress admits only the single-address workload
+API. The Pod has no mounted ServiceAccount token. Its init container copies
+the seven projected Secret entries create-only to private `0600` files and
+creates the private delivery-state directory; the main container accepts only
+the canonical activation:
+
+```text
+ok cluster stage evidence observability collector package <bound inputs> \
+  --job-template deploy/observability-evidence-collector-job.yaml.tpl \
+  --job-template-digest sha256:<template identity> \
+  --run-id ok147-<collector run> \
+  --image ghcr.io/openkubes/ok-cluster@sha256:<image identity> \
+  --workload-api-cidr <single-address CIDR> \
+  --alert-source-cidr <bounded observed workload egress CIDR> \
+  --output /private/collector-runtime.yaml
+
+ok cluster stage evidence observability collector materialize \
+  --source /var/run/openkubes/collector-source \
+  --destination /var/run/openkubes/collector \
+  --state-directory /var/lib/openkubes/observability-evidence \
+  <four expected digests> --materialize
+
+ok evidence observability serve \
+  --activation /var/run/openkubes/collector/activation.json
+```
+
+This closes the offline post-runtime packaging and activation boundaries
+without turning the collector into a lifecycle owner. The package builder and
+materializer perform no API request or mutation. A fresh published image,
+bounded installation launcher and live receiver binding remain separate
+prerequisites before deployment.
 
 The separately operated issuer no longer accepts the run ID, target Cluster
 UID, fixture digest or profile digest as manually repeated command arguments.

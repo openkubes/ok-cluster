@@ -70,10 +70,14 @@ type ObservabilityCollectorActivation struct {
 	TargetClusterUID          string `json:"targetClusterUid"`
 	WorkloadEndpoint          string `json:"workloadEndpoint"`
 	WorkloadCADigest          string `json:"workloadCaDigest"`
+	WorkloadTokenDigest       string `json:"workloadTokenDigest"`
 	ObserverCredentialExpires string `json:"observerCredentialExpires"`
 	ObserverEvidenceDigest    string `json:"observerEvidenceDigest"`
+	WebhookAuthorityDigest    string `json:"webhookAuthorityDigest"`
+	QueryAuthorityDigest      string `json:"queryAuthorityDigest"`
 	PublicEndpoint            string `json:"publicEndpoint"`
 	ListenAddress             string `json:"listenAddress"`
+	TLSCertificateDigest      string `json:"tlsCertificateDigest"`
 	ReceiverName              string `json:"receiverName"`
 	ProfileDigest             string `json:"profileDigest"`
 	MaximumRecordAge          string `json:"maximumRecordAge"`
@@ -224,10 +228,14 @@ func BuildObservabilityCollectorActivationPackage(config ObservabilityCollectorA
 		TargetClusterUID:          runtimeBinding.material.Target.CAPIClusterUID,
 		WorkloadEndpoint:          runtimeBinding.material.Target.WorkloadAPIEndpoint,
 		WorkloadCADigest:          runtimeReceipt.WorkloadAPICADigest,
+		WorkloadTokenDigest:       config.ObserverCredential.TokenDigest,
 		ObserverCredentialExpires: observerReceipt.ExpiresAt,
 		ObserverEvidenceDigest:    observerReceipt.TokenRequestEvidenceDigest,
+		WebhookAuthorityDigest:    digest.SHA256(webhookToken),
+		QueryAuthorityDigest:      digest.SHA256(queryToken),
 		PublicEndpoint:            config.PublicEndpoint, ListenAddress: config.ListenAddress,
-		ReceiverName: observabilityCollectorReceiver, ProfileDigest: profile.Digest(),
+		TLSCertificateDigest: certificateDigest,
+		ReceiverName:         observabilityCollectorReceiver, ProfileDigest: profile.Digest(),
 		MaximumRecordAge: config.MaximumRecordAge.String(), StateDirectory: observabilityCollectorStateRoot,
 		WebhookTokenPath:   observabilityCollectorRuntimeRoot + "/" + observabilityCollectorWebhookKey,
 		QueryTokenPath:     observabilityCollectorRuntimeRoot + "/" + observabilityCollectorQueryKey,
@@ -355,9 +363,13 @@ func verifyObservabilityCollectorActivationPackage(packaged VerifiedObservabilit
 		activation.ExecutionFixture != receipt.ExecutionFixture ||
 		digest.SHA256([]byte(activation.TargetClusterUID)) != receipt.TargetClusterUIDDigest ||
 		activation.WorkloadCADigest != receipt.WorkloadCADigest ||
+		!stageReceiptPrefixDigestPattern.MatchString(activation.WorkloadTokenDigest) ||
 		activation.ObserverCredentialExpires != receipt.ObserverCredentialExpires ||
 		activation.ObserverEvidenceDigest != receipt.ObserverTokenRequestEvidence ||
+		activation.WebhookAuthorityDigest != receipt.WebhookAuthorityDigest ||
+		activation.QueryAuthorityDigest != receipt.QueryAuthorityDigest ||
 		digest.SHA256([]byte(activation.PublicEndpoint)) != receipt.PublicEndpointDigest ||
+		activation.TLSCertificateDigest != receipt.TLSCertificateDigest ||
 		activation.ProfileDigest != receipt.ProfileDigest ||
 		digest.SHA256([]byte("ok147-observability-alert-receiver/v1\n"+activation.ReceiverName)) != receipt.ReceiverIdentityDigest {
 		return errors.New("observability collector activation differs from receipt")
@@ -370,6 +382,7 @@ func verifyObservabilityCollectorActivationPackage(packaged VerifiedObservabilit
 	privateKeyRaw, keyErr := decode(observabilityCollectorTLSKeyKey)
 	if webhookErr != nil || queryErr != nil || workloadErr != nil || caErr != nil || certErr != nil || keyErr != nil ||
 		digest.SHA256(webhook) != receipt.WebhookAuthorityDigest || digest.SHA256(query) != receipt.QueryAuthorityDigest ||
+		digest.SHA256(workloadToken) != activation.WorkloadTokenDigest ||
 		digest.SHA256(workloadCA) != receipt.WorkloadCADigest || digest.SHA256(certificateRaw) != receipt.TLSCertificateDigest ||
 		subtle.ConstantTimeCompare(webhook, query) == 1 || subtle.ConstantTimeCompare(webhook, workloadToken) == 1 ||
 		subtle.ConstantTimeCompare(query, workloadToken) == 1 {
@@ -391,7 +404,11 @@ func canonicalObservabilityCollectorActivation(activation ObservabilityCollector
 		!runtimeInputUIDPattern.MatchString(activation.TargetClusterUID) ||
 		!validFullRunKubernetesEndpoint(activation.WorkloadEndpoint) ||
 		!stageReceiptPrefixDigestPattern.MatchString(activation.WorkloadCADigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(activation.WorkloadTokenDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(activation.ObserverEvidenceDigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(activation.WebhookAuthorityDigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(activation.QueryAuthorityDigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(activation.TLSCertificateDigest) ||
 		activation.ReceiverName != observabilityCollectorReceiver ||
 		!stageReceiptPrefixDigestPattern.MatchString(activation.ProfileDigest) ||
 		activation.StateDirectory != observabilityCollectorStateRoot ||

@@ -177,8 +177,12 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   that exact observer identity into one immutable private Secret together with
   separate webhook/query authorities, a short-lived observer token, pinned
   workload CA and TLS key pair. Its public receipt exposes only correlated
-  digests; package construction performs no cluster request or mutation. The
-  CLI and Kubernetes runtime envelope remain separate activation steps.
+  digests. `ok cluster stage evidence observability collector package` now
+  composes that Secret with one LoadBalancer Service, exact NetworkPolicy and
+  time-limited non-retrying Job; the init-only materializer and activation-only
+  serve path keep projected secrets private. These offline steps perform no
+  cluster request or mutation; publishing and launching the fresh package
+  remain separate gates.
   Stage 4 now has its first distinct path as well:
   `ok cluster stage run enablement --execute` binds the verified three-receipt
   prefix and signed `CreateEnablement` grant to exactly one externally rendered
