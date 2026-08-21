@@ -2908,6 +2908,17 @@ closes the credential-mode mismatch between the full-run lifecycle authority
 and the existing fixed synthetic fixture client; the five concrete
 observability checks remain the next separate adapter boundary.
 
+The first part of that adapter boundary is now a closed, deterministic
+`ok-observability-standard` check profile. It freezes the four Service names,
+ports and schemes; the credential Secret and exact key names; the platform
+dashboard ConfigMap and UID; the Prometheus datasource, synthetic alert and
+log-index identities; and the requirement that alert *delivery* is proven
+rather than treating alert firing as equivalent. Callers may select this
+profile only for `ok-observability`; none of these targets or assertions is an
+execution-time parameter. A canonical profile digest makes any future change
+to this list explicit. This checkpoint defines identities only and still
+performs no Secret read, service-proxy request or cluster mutation.
+
 The post-runtime authorization resolver closes the next authority boundary.
 After a predecessor receipt is durable, it derives one canonical,
 redaction-safe request from the verified cursor, including the exact Plan,
