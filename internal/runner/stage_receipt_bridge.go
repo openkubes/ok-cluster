@@ -45,6 +45,13 @@ func ObservationStageReceiptReference(receipt execution.ObservationStageRunRecei
 	}
 }
 
+func BindingStageReceiptReference(receipt execution.BindingStageRunReceipt) StageRunReceiptReference {
+	return StageRunReceiptReference{
+		Format: receipt.Format, State: receipt.State, PlanDigest: receipt.PlanDigest,
+		StageID: receipt.StageID, StageReceiptDigest: receipt.StageReceiptDigest,
+	}
+}
+
 // LoadStageReceiptMaterial reads exactly one independently digest-bound,
 // already durable redaction-safe stage receipt. It never reconstructs private
 // credential material and performs no source-authority request.
