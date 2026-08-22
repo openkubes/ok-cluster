@@ -112,10 +112,10 @@ func validateProviderAccessExpected(expected ProviderAccessExpected) error {
 	return nil
 }
 
-// MaterializeSecret reads one private 0600 kubeconfig, rewrites only the
-// current context namespace required by external CAPK, and produces one exact
-// immutable Secret object in memory. Credential bytes never enter errors or a
-// separate public receipt.
+// MaterializeSecret reads one private 0600 kubeconfig, retains only its
+// selected static context, rewrites that context namespace as required by
+// external CAPK, and produces one exact immutable Secret object in memory.
+// Credential bytes never enter errors or a separate public receipt.
 func (policy VerifiedProviderAccessPolicy) MaterializeSecret(kubeconfigPath string) (Object, error) {
 	if !policy.verified || policy.document.Format != ProviderAccessPolicyFormat || !immutableDigestPattern.MatchString(policy.digest) {
 		return Object{}, errors.New("provider-access policy was not produced by verification")
@@ -220,7 +220,7 @@ func rewriteProviderKubeconfigNamespace(raw []byte, namespace string) ([]byte, e
 	if err != nil {
 		return nil, errors.New("kubeconfig users are invalid")
 	}
-	var selected *yaml.Node
+	var selected, selectedEntry *yaml.Node
 	contextNames := map[string]struct{}{}
 	for _, entry := range contexts.Content {
 		if entry.Kind != yaml.MappingNode {
@@ -237,6 +237,7 @@ func rewriteProviderKubeconfigNamespace(raw []byte, namespace string) ([]byte, e
 		contextNames[name.Value] = struct{}{}
 		if name != nil && name.Value == current.Value {
 			selected = context
+			selectedEntry = entry
 		}
 	}
 	if selected == nil || selected.Kind != yaml.MappingNode {
@@ -244,9 +245,16 @@ func rewriteProviderKubeconfigNamespace(raw []byte, namespace string) ([]byte, e
 	}
 	cluster := providerMappingValue(selected, "cluster")
 	user := providerMappingValue(selected, "user")
-	if cluster == nil || user == nil || cluster.Value == "" || user.Value == "" ||
-		clusterEntries[cluster.Value] == nil || userEntries[user.Value] == nil {
+	if cluster == nil || user == nil || cluster.Value == "" || user.Value == "" || selectedEntry == nil {
 		return nil, errors.New("kubeconfig current context references are invalid")
+	}
+	selectedCluster := clusterEntries[cluster.Value]
+	selectedUser := userEntries[user.Value]
+	if selectedCluster == nil || selectedUser == nil {
+		return nil, errors.New("kubeconfig current context references are invalid")
+	}
+	if err := validateStaticProviderIdentity(selectedCluster, selectedUser); err != nil {
+		return nil, err
 	}
 	if existing := providerMappingValue(selected, "namespace"); existing != nil {
 		existing.Tag, existing.Kind, existing.Value = "!!str", yaml.ScalarNode, namespace
@@ -256,6 +264,11 @@ func rewriteProviderKubeconfigNamespace(raw []byte, namespace string) ([]byte, e
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: namespace},
 		)
 	}
+	// The provider Secret must not transport credentials or endpoints unrelated
+	// to the selected authority, even when the source kubeconfig contains them.
+	contexts.Content = []*yaml.Node{selectedEntry}
+	clusters.Content = []*yaml.Node{selectedCluster}
+	users.Content = []*yaml.Node{selectedUser}
 	var output bytes.Buffer
 	encoder := yaml.NewEncoder(&output)
 	encoder.SetIndent(2)
@@ -266,6 +279,36 @@ func rewriteProviderKubeconfigNamespace(raw []byte, namespace string) ([]byte, e
 		return nil, errors.New("close kubeconfig encoder")
 	}
 	return output.Bytes(), nil
+}
+
+func validateStaticProviderIdentity(clusterEntry, userEntry *yaml.Node) error {
+	cluster := providerMappingNode(clusterEntry, "cluster")
+	user := providerMappingNode(userEntry, "user")
+	server := providerMappingValue(cluster, "server")
+	caData := providerMappingValue(cluster, "certificate-authority-data")
+	if cluster == nil || user == nil || server == nil || !strings.HasPrefix(server.Value, "https://") ||
+		caData == nil || caData.Value == "" || providerMappingNode(cluster, "proxy-url") != nil ||
+		providerMappingNode(cluster, "certificate-authority") != nil ||
+		providerMappingNode(cluster, "insecure-skip-tls-verify") != nil {
+		return errors.New("kubeconfig selected cluster transport is not static and verified")
+	}
+	for _, forbidden := range []string{
+		"exec", "auth-provider", "tokenFile", "token-file", "client-certificate", "client-key",
+		"username", "password", "as", "as-uid", "as-groups", "as-user-extra",
+	} {
+		if providerMappingNode(user, forbidden) != nil {
+			return errors.New("kubeconfig selected user authentication is not static and self-contained")
+		}
+	}
+	certificate := providerMappingValue(user, "client-certificate-data")
+	key := providerMappingValue(user, "client-key-data")
+	token := providerMappingValue(user, "token")
+	certificateMode := certificate != nil && certificate.Value != "" && key != nil && key.Value != ""
+	tokenMode := token != nil && token.Value != ""
+	if certificateMode == tokenMode {
+		return errors.New("kubeconfig selected user authentication mode is ambiguous")
+	}
+	return nil
 }
 
 func validateProviderYAMLNode(node *yaml.Node) error {

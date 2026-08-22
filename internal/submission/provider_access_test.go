@@ -90,6 +90,52 @@ func TestProviderAccessMaterializationIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestProviderAccessMaterializationRetainsOnlySelectedStaticIdentity(t *testing.T) {
+	root := t.TempDir()
+	policyPath, expected := writeProviderAccessPolicy(t, root)
+	credentialPath := filepath.Join(root, "provider.kubeconfig")
+	raw := []byte(`apiVersion: v1
+kind: Config
+current-context: provider
+clusters:
+- name: provider-cluster
+  cluster: {server: https://provider.example.invalid:6443, certificate-authority-data: Y2E=}
+- name: unrelated-cluster
+  cluster: {server: https://unrelated.example.invalid:6443, certificate-authority-data: dW5yZWxhdGVkLWNh}
+users:
+- name: provider-user
+  user: {client-certificate-data: Y2VydA==, client-key-data: cHJpdmF0ZS1rZXk=}
+- name: unrelated-user
+  user: {token: unrelated-private-token}
+contexts:
+- name: provider
+  context: {cluster: provider-cluster, user: provider-user, namespace: ok-infra}
+- name: unrelated
+  context: {cluster: unrelated-cluster, user: unrelated-user}
+`)
+	if err := os.WriteFile(credentialPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := LoadProviderAccessPolicy(policyPath, expected)
+	object, err := policy.MaterializeSecret(credentialPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secret struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(object.Raw, &secret); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := base64.StdEncoding.Strict().DecodeString(secret.Data["kubeconfig"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(rewritten, []byte("unrelated")) {
+		t.Fatal("unselected provider identity remained in materialized kubeconfig")
+	}
+}
+
 func TestProviderAccessMaterializationFailsClosedWithoutLeakingCredential(t *testing.T) {
 	root := t.TempDir()
 	policyPath, expected := writeProviderAccessPolicy(t, root)
@@ -105,6 +151,20 @@ func TestProviderAccessMaterializationFailsClosedWithoutLeakingCredential(t *tes
 		{name: "missing current context", raw: []byte("apiVersion: v1\nkind: Config\ncurrent-context: missing\ncontexts: []\nclusters: []\nusers: []\nmarker: " + secretMarker + "\n"), mode: 0o600},
 		{name: "duplicate cluster identity", raw: []byte("apiVersion: v1\nkind: Config\ncurrent-context: provider\ncontexts:\n- name: provider\n  context: {cluster: duplicate, user: provider-user}\nclusters:\n- name: duplicate\n  cluster: {}\n- name: duplicate\n  cluster: {}\nusers:\n- name: provider-user\n  user: {token: " + secretMarker + "}\n"), mode: 0o600},
 		{name: "trailing document", raw: append(providerKubeconfig("ok-infra"), []byte("---\nmarker: "+secretMarker+"\n")...), mode: 0o600},
+		{name: "exec credential", raw: []byte(`apiVersion: v1
+kind: Config
+current-context: provider
+clusters:
+- name: provider-cluster
+  cluster: {server: https://provider.example.invalid:6443, certificate-authority-data: Y2E=}
+users:
+- name: provider-user
+  user:
+    exec: {apiVersion: client.authentication.k8s.io/v1, command: credential-helper}
+contexts:
+- name: provider
+  context: {cluster: provider-cluster, user: provider-user}
+`), mode: 0o600},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
