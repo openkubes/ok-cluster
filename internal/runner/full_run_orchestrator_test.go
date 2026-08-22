@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,7 +101,7 @@ func TestFullRunOrchestrationAllowsExactlyOneConcurrentInvocation(t *testing.T) 
 func TestFullRunOrchestrationStopsBeforeContinuationWhenPrefixStops(t *testing.T) {
 	calls := []string{}
 	prefix := successfulPreRuntimeOrchestration(&calls)
-	prefix.RunEnablement = func(context.Context, execution.ObservationStageRunReceipt) (execution.StagedOperationReceipt, error) {
+	prefix.RunProviderPrerequisites = func(context.Context) (execution.StagedOperationReceipt, error) {
 		return execution.StagedOperationReceipt{}, errors.New("private failure")
 	}
 	bindCalls := 0
@@ -112,8 +113,11 @@ func TestFullRunOrchestrationStopsBeforeContinuationWhenPrefixStops(t *testing.T
 		},
 	}
 	receipt, err := orchestration.Run(context.Background())
-	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "enablement" || len(receipt.Checkpoints) != 3 || bindCalls != 0 {
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" || len(receipt.Checkpoints) != 0 || bindCalls != 0 {
 		t.Fatalf("stopped prefix reached continuation: %#v bindCalls=%d err=%v", receipt, bindCalls, err)
+	}
+	if !strings.Contains(err.Error(), "private failure") {
+		t.Fatalf("prefix failure cause was not preserved: %v", err)
 	}
 }
 

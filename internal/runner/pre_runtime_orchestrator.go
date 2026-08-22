@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
 )
@@ -68,8 +69,15 @@ func (orchestration PreRuntimeOrchestration) Run(ctx context.Context) (PreRuntim
 	}
 
 	providerReceipt, runErr := orchestration.RunProviderPrerequisites(ctx)
-	if err := appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[0], execution.StagedReceiptFormat, providerReceipt.Format, providerReceipt.State, providerReceipt.PlanDigest, providerReceipt.StageID, providerReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[0])
+	appendErr := appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[0], execution.StagedReceiptFormat, providerReceipt.Format, providerReceipt.State, providerReceipt.PlanDigest, providerReceipt.StageID, providerReceipt.StageReceiptDigest)
+	if runErr != nil {
+		if appendErr == nil || providerReceipt == (execution.StagedOperationReceipt{}) {
+			return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[0], runErr)
+		}
+		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[0], appendErr)
+	}
+	if appendErr != nil {
+		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[0], appendErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[1])
@@ -142,4 +150,12 @@ func appendPreRuntimeCheckpoint(receipt *PreRuntimeOrchestrationReceipt, expecte
 func stopPreRuntimeOrchestration(receipt PreRuntimeOrchestrationReceipt, stageID string) (PreRuntimeOrchestrationReceipt, error) {
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
 	return receipt, errors.New("pre-runtime orchestration stopped at " + stageID)
+}
+
+func stopPreRuntimeOrchestrationWithCause(receipt PreRuntimeOrchestrationReceipt, stageID string, cause error) (PreRuntimeOrchestrationReceipt, error) {
+	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	if cause == nil {
+		return receipt, errors.New("pre-runtime orchestration stopped at " + stageID)
+	}
+	return receipt, fmt.Errorf("pre-runtime orchestration stopped at %s: %w", stageID, cause)
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -167,7 +168,7 @@ func ResolveStageAuthorization(ctx context.Context, resume StageResumeConfig, re
 	}
 	source, err := resolver.ResolveStageAuthorization(ctx, cloneStageAuthorizationRequest(request))
 	if err != nil {
-		return ResolvedStageAuthorization{}, errors.New("resolve stage authorization")
+		return ResolvedStageAuthorization{}, fmt.Errorf("resolve stage authorization: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return ResolvedStageAuthorization{}, errors.New("stage authorization context became unavailable")

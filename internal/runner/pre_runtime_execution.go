@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 
@@ -211,7 +212,10 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 			return execution.StagedOperationReceipt{}, err
 		}
 		invocation, err := executor.factories.submission(executor.resume(receipts), "provider-prerequisites", source, executor.config)
-		if err != nil || invocation.run == nil || invocation.store == nil {
+		if err != nil {
+			return execution.StagedOperationReceipt{}, fmt.Errorf("open provider-prerequisites stage: %w", err)
+		}
+		if invocation.run == nil || invocation.store == nil {
 			return execution.StagedOperationReceipt{}, errors.New("open provider-prerequisites stage")
 		}
 		run, err := invocation.run(ctx)

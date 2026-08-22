@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
@@ -123,6 +124,18 @@ func TestPreRuntimeOrchestrationStopsWithoutRetry(t *testing.T) {
 				t.Fatalf("stages were retried or invoked after stop: %v", calls)
 			}
 		})
+	}
+}
+
+func TestPreRuntimeOrchestrationPreservesProviderFailureCause(t *testing.T) {
+	orchestration := successfulPreRuntimeOrchestration(nil)
+	orchestration.RunProviderPrerequisites = func(context.Context) (execution.StagedOperationReceipt, error) {
+		return execution.StagedOperationReceipt{}, errors.New("safe provider authorization cause")
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" ||
+		!strings.Contains(err.Error(), "safe provider authorization cause") {
+		t.Fatalf("provider failure cause was not preserved: %#v err=%v", receipt, err)
 	}
 }
 
