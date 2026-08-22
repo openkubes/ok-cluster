@@ -96,7 +96,7 @@ func BuildFullRunExecutionActivationPackage(config FullRunExecutionActivationPac
 		binaryData[strings.ReplaceAll(path, "/", ".")] = base64.StdEncoding.EncodeToString(raw)
 	}
 	secret := postRuntimeActivationSecret{
-		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", BinaryData: binaryData,
+		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", Data: binaryData,
 		Metadata: postRuntimeActivationSecretMetadata{
 			Name: config.ActivationSecret, Namespace: submissionStageInputNamespace,
 			Labels:      map[string]string{"app.kubernetes.io/name": "ok-cluster-contract-executor", "openkubes.io/stage-id": "full-run"},

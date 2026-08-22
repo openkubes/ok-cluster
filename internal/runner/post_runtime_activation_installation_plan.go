@@ -90,10 +90,10 @@ func PlanPostRuntimeExecutionActivationInstallation(packaged VerifiedPostRuntime
 		case "Secret":
 			annotations, _ := metadata["annotations"].(map[string]any)
 			labels, _ := metadata["labels"].(map[string]any)
-			binaryData, _ := object["binaryData"].(map[string]any)
+			data, _ := object["data"].(map[string]any)
 			if name != receipt.ActivationSecret || object["immutable"] != true || object["type"] != "Opaque" ||
 				labels["openkubes.io/stage-id"] != "post-runtime" || annotations["openkubes.io/bundle-digest"] != receipt.BundleDigest ||
-				annotations["openkubes.io/manifest-digest"] != receipt.ManifestDigest || len(binaryData) != receipt.PrivateFileCount+1 {
+				annotations["openkubes.io/manifest-digest"] != receipt.ManifestDigest || len(data) != receipt.PrivateFileCount+1 {
 				return PostRuntimeExecutionActivationInstallationPlan{}, errors.New("post-runtime activation Secret semantics differ")
 			}
 		case "NetworkPolicy":

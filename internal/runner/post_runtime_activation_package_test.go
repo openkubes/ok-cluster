@@ -51,10 +51,10 @@ func TestBuildPostRuntimeExecutionActivationPackageBindsPrivateSecretAndJob(t *t
 		t.Fatal(err)
 	}
 	if secret.Kind != "Secret" || !secret.Immutable || secret.Type != "Opaque" || secret.Metadata.Name != config.ActivationSecret ||
-		len(secret.BinaryData) != len(postRuntimeExecutionBundleFiles)+1 {
+		len(secret.Data) != len(postRuntimeExecutionBundleFiles)+1 {
 		t.Fatalf("unexpected private activation Secret: %#v", secret)
 	}
-	indexRaw, err := base64.StdEncoding.DecodeString(secret.BinaryData[postRuntimeExecutionBundleIndexName])
+	indexRaw, err := base64.StdEncoding.DecodeString(secret.Data[postRuntimeExecutionBundleIndexName])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,12 @@ func TestPostRuntimeExecutionActivationPackageMaterializesExactSecret(t *testing
 	if err := os.Mkdir(source, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	indexRaw, _ := base64.StdEncoding.DecodeString(secret.BinaryData[postRuntimeExecutionBundleIndexName])
+	indexRaw, _ := base64.StdEncoding.DecodeString(secret.Data[postRuntimeExecutionBundleIndexName])
 	if err := os.WriteFile(filepath.Join(source, postRuntimeExecutionBundleIndexName), indexRaw, 0o440); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range postRuntimeExecutionBundleFiles {
-		encoded := secret.BinaryData[strings.ReplaceAll(path, "/", ".")]
+		encoded := secret.Data[strings.ReplaceAll(path, "/", ".")]
 		content, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			t.Fatal(err)
@@ -141,7 +141,7 @@ func TestPostRuntimeExecutionRecoveryActivationCarriesHistoricalReceipts(t *test
 	if len(parts) != 2 || json.Unmarshal(parts[0], &secret) != nil {
 		t.Fatal("decode recovery activation Secret")
 	}
-	indexRaw, err := base64.StdEncoding.DecodeString(secret.BinaryData[postRuntimeExecutionBundleIndexName])
+	indexRaw, err := base64.StdEncoding.DecodeString(secret.Data[postRuntimeExecutionBundleIndexName])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestPostRuntimeExecutionRecoveryActivationCarriesHistoricalReceipts(t *test
 		t.Fatalf("unexpected recovery bundle index: %#v", index)
 	}
 	for _, relative := range postRuntimeExecutionRecoveryReceiptFiles {
-		if secret.BinaryData[strings.ReplaceAll(relative, "/", ".")] == "" {
+		if secret.Data[strings.ReplaceAll(relative, "/", ".")] == "" {
 			t.Fatalf("recovery receipt %s is absent from private activation", relative)
 		}
 	}
@@ -169,7 +169,7 @@ func TestPostRuntimeExecutionRecoveryActivationCarriesHistoricalReceipts(t *test
 		t.Fatal(err)
 	}
 	for _, file := range index.Files {
-		encoded := secret.BinaryData[strings.ReplaceAll(file.Path, "/", ".")]
+		encoded := secret.Data[strings.ReplaceAll(file.Path, "/", ".")]
 		content, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			t.Fatal(err)

@@ -269,7 +269,7 @@ func BuildObservabilityCollectorActivationPackage(config ObservabilityCollectorA
 		observabilityCollectorTLSKeyKey:     base64.StdEncoding.EncodeToString(privateKeyRaw),
 	}
 	secret := postRuntimeActivationSecret{
-		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", BinaryData: binaryData,
+		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", Data: binaryData,
 		Metadata: postRuntimeActivationSecretMetadata{
 			Name: config.ActivationSecret, Namespace: submissionStageInputNamespace,
 			Labels: map[string]string{
@@ -345,7 +345,7 @@ func verifyObservabilityCollectorActivationPackage(packaged VerifiedObservabilit
 	var secret postRuntimeActivationSecret
 	if err := jsonstrict.Decode(packaged.raw, &secret); err != nil || secret.APIVersion != "v1" || secret.Kind != "Secret" ||
 		!secret.Immutable || secret.Type != "Opaque" || secret.Metadata.Name != receipt.ActivationSecret ||
-		secret.Metadata.Namespace != submissionStageInputNamespace || len(secret.BinaryData) != receipt.PrivateFileCount ||
+		secret.Metadata.Namespace != submissionStageInputNamespace || len(secret.Data) != receipt.PrivateFileCount ||
 		secret.Metadata.Labels["app.kubernetes.io/name"] != "ok147-observability-evidence-collector" ||
 		secret.Metadata.Labels["openkubes.io/stage-id"] != "independent-evidence" ||
 		secret.Metadata.Annotations["openkubes.io/manifest-digest"] != receipt.ManifestDigest ||
@@ -353,7 +353,7 @@ func verifyObservabilityCollectorActivationPackage(packaged VerifiedObservabilit
 		return errors.New("observability collector activation Secret identity differs")
 	}
 	decode := func(key string) ([]byte, error) {
-		raw, err := base64.StdEncoding.Strict().DecodeString(secret.BinaryData[key])
+		raw, err := base64.StdEncoding.Strict().DecodeString(secret.Data[key])
 		if err != nil || len(raw) == 0 {
 			return nil, errors.New("observability collector activation private file is invalid")
 		}

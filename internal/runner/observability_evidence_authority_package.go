@@ -158,7 +158,7 @@ func BuildObservabilityEvidenceAuthorityPackage(config ObservabilityEvidenceAuth
 		observabilityEvidenceAuthorityCollectorCA:    base64.StdEncoding.EncodeToString(caRaw),
 	}
 	secret := postRuntimeActivationSecret{
-		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", BinaryData: binaryData,
+		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", Data: binaryData,
 		Metadata: postRuntimeActivationSecretMetadata{
 			Name: config.ActivationSecret, Namespace: submissionStageInputNamespace,
 			Labels: map[string]string{
@@ -218,10 +218,10 @@ func verifyObservabilityEvidenceAuthorityPackage(packaged VerifiedObservabilityE
 		secret.Metadata.Labels["openkubes.io/stage-id"] != "independent-evidence" ||
 		secret.Metadata.Annotations["openkubes.io/manifest-digest"] != receipt.ManifestDigest ||
 		secret.Metadata.Annotations["openkubes.io/activation-digest"] != receipt.ActivationDigest ||
-		len(secret.BinaryData) != receipt.PrivateFileCount {
+		len(secret.Data) != receipt.PrivateFileCount {
 		return errors.New("observability evidence authority Secret identity differs")
 	}
-	activationRaw, err := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityActivationKey])
+	activationRaw, err := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityActivationKey])
 	if err != nil || digest.SHA256(activationRaw) != receipt.ActivationDigest {
 		return errors.New("observability evidence authority activation identity differs")
 	}
@@ -234,7 +234,7 @@ func verifyObservabilityEvidenceAuthorityPackage(packaged VerifiedObservabilityE
 		activation.CollectorCADigest != receipt.CollectorCADigest || digest.SHA256([]byte(activation.CollectorEndpoint)) != receipt.CollectorAuthorityDigest {
 		return errors.New("observability evidence authority activation differs from receipt")
 	}
-	privateKeyRaw, err := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityPrivateKeyKey])
+	privateKeyRaw, err := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityPrivateKeyKey])
 	if err != nil {
 		return errors.New("decode observability evidence authority private key")
 	}
@@ -244,8 +244,8 @@ func verifyObservabilityEvidenceAuthorityPackage(packaged VerifiedObservabilityE
 		digest.SHA256(ed25519.PrivateKey(privateKey).Public().(ed25519.PublicKey)) != receipt.EvidenceKeyID {
 		return errors.New("observability evidence authority key identity differs")
 	}
-	tokenRaw, tokenErr := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityCollectorToken])
-	caRaw, caErr := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityCollectorCA])
+	tokenRaw, tokenErr := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityCollectorToken])
+	caRaw, caErr := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityCollectorCA])
 	if tokenErr != nil || len(tokenRaw) == 0 || caErr != nil || digest.SHA256(caRaw) != receipt.CollectorCADigest {
 		return errors.New("observability evidence authority collector material differs")
 	}

@@ -34,6 +34,15 @@ func TestBuildFullRunExecutionActivationPackageBindsBothAuthoritiesAndJob(t *tes
 	if len(parts) != 3 {
 		t.Fatalf("unexpected package component count: %d", len(parts))
 	}
+	for index, part := range parts[:2] {
+		var object map[string]any
+		if err := json.Unmarshal(part, &object); err != nil {
+			t.Fatal(err)
+		}
+		if object["data"] == nil || object["binaryData"] != nil {
+			t.Fatalf("Kubernetes Secret %d must use data and never binaryData", index)
+		}
+	}
 	var activationSecret, evidenceSecret postRuntimeActivationSecret
 	if err := json.Unmarshal(parts[0], &activationSecret); err != nil {
 		t.Fatal(err)
@@ -41,8 +50,8 @@ func TestBuildFullRunExecutionActivationPackageBindsBothAuthoritiesAndJob(t *tes
 	if err := json.Unmarshal(parts[1], &evidenceSecret); err != nil {
 		t.Fatal(err)
 	}
-	if !activationSecret.Immutable || len(activationSecret.BinaryData) != len(fullRunExecutionBundleFiles)+1 ||
-		!evidenceSecret.Immutable || len(evidenceSecret.BinaryData) != 4 ||
+	if !activationSecret.Immutable || len(activationSecret.Data) != len(fullRunExecutionBundleFiles)+1 ||
+		!evidenceSecret.Immutable || len(evidenceSecret.Data) != 4 ||
 		activationSecret.Metadata.Name == evidenceSecret.Metadata.Name {
 		t.Fatalf("private Secret boundary differs: activation=%#v evidence=%#v", activationSecret.Metadata, evidenceSecret.Metadata)
 	}

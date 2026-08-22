@@ -48,10 +48,10 @@ func TestBuildObservabilityCollectorActivationPackageBindsPrivateRuntime(t *test
 	if err := json.Unmarshal(privateRaw, &secret); err != nil {
 		t.Fatal(err)
 	}
-	if !secret.Immutable || secret.Metadata.Name != config.ActivationSecret || len(secret.BinaryData) != 7 {
+	if !secret.Immutable || secret.Metadata.Name != config.ActivationSecret || len(secret.Data) != 7 {
 		t.Fatalf("unexpected collector activation Secret: %#v", secret.Metadata)
 	}
-	activationRaw, err := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityCollectorActivationKey])
+	activationRaw, err := base64.StdEncoding.DecodeString(secret.Data[observabilityCollectorActivationKey])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func pemEncodeECPrivateKey(raw []byte) []byte {
 
 func mustDecodeCollectorSecret(t *testing.T, secret postRuntimeActivationSecret, key string) []byte {
 	t.Helper()
-	raw, err := base64.StdEncoding.DecodeString(secret.BinaryData[key])
+	raw, err := base64.StdEncoding.DecodeString(secret.Data[key])
 	if err != nil {
 		t.Fatal(err)
 	}

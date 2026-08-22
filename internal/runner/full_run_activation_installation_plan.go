@@ -146,9 +146,9 @@ func fullRunActivationSecretMatches(object map[string]any, name, stageID, bundle
 	metadata, _ := object["metadata"].(map[string]any)
 	annotations, _ := metadata["annotations"].(map[string]any)
 	labels, _ := metadata["labels"].(map[string]any)
-	binaryData, _ := object["binaryData"].(map[string]any)
+	data, _ := object["data"].(map[string]any)
 	if metadata["name"] != name || object["immutable"] != true || object["type"] != "Opaque" ||
-		labels["openkubes.io/stage-id"] != stageID || annotations["openkubes.io/manifest-digest"] != manifestDigest || len(binaryData) != fileCount {
+		labels["openkubes.io/stage-id"] != stageID || annotations["openkubes.io/manifest-digest"] != manifestDigest || len(data) != fileCount {
 		return false
 	}
 	if bundleDigest != "" && annotations["openkubes.io/bundle-digest"] != bundleDigest {
