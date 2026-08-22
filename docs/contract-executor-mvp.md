@@ -3159,9 +3159,15 @@ runtime handoff now use the explicit `FullRunPostPrefixActivator` seam. The
 orchestrator passes that seam the exact seven-receipt private prefix,
 lifecycle-derived target identity and workload authority under the same run
 context, and cannot open Stage 8 until activation returns successfully. The
-concrete factory that builds the collector package and launcher from those
-fresh runtime inputs remains the next prerequisite before a complete fresh
-run.
+concrete `KubernetesObservabilityCollectorPostPrefix` factory now consumes
+those fresh inputs. It replays only the first six receipts into runtime-binding
+verification, derives the package materialization time from the run clock,
+requires the target UID digest, workload endpoint and CA to match the distinct
+installer credential, then builds the package and opens the single-use
+launcher. Its receipt retains only package, runtime-binding and target digests,
+launch state and created-object count. Wiring all private factory inputs into
+the full-run CLI/Job activation remains the next prerequisite before a
+complete fresh run.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation
 boundary:
@@ -3583,7 +3589,7 @@ durable receipts. This is not yet the OK-147 Definition of Done:
 - the independent-evidence collector has an exact private package replay,
   non-authorizing installation plan and single-use workload-cluster launcher;
   the Stage-7-to-Stage-8 handoff now has an ordered fail-closed activator seam,
-  while its concrete package/launcher factory remains explicit;
+  and its concrete package/launcher factory is single-use and runtime-bound;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
@@ -3606,8 +3612,8 @@ private `0600` files with the binding last. It has no list, watch, discovery,
 Kubernetes mutation, retry or cleanup surface. The verified full-run manifest
 now opens that materializer, all concrete Stage 1-12 adapters and the shared
 single-execution Platform capability session without contacting a cluster.
-The remaining implementation work is the concrete post-prefix factory that
-builds and installs the verified collector after Stage 7; Stage 8-12 is now
+The remaining implementation work is binding the concrete post-prefix factory
+inputs into the local/Job activation package and CLI. Stage 8-12 is already
 structurally unable to open before that activator succeeds. This is not a new
 controller or reconciliation mechanism.
 After that, live closure must
