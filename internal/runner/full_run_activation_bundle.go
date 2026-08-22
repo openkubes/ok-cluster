@@ -22,6 +22,8 @@ const (
 	fullRunExecutionManifestPath        = "activation/full-run-manifest.json"
 	fullRunExecutionWorkspaceRoot       = "/var/run/openkubes/workspace"
 	fullRunExecutionHandoffRoot         = "/var/run/openkubes/handoff"
+	fullRunExecutionHandoffVolumeRoot   = "/var/run/openkubes/handoff-volume"
+	fullRunExecutionHandoffPrivateRoot  = "/var/run/openkubes/handoff-volume/private"
 	maximumFullRunExecutionBundleBytes  = 900 * 1024
 	maximumFullRunExecutionBundleFiles  = 34
 )

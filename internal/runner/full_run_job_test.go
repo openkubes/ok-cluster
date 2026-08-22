@@ -41,7 +41,7 @@ func TestRenderFullRunExecutionJobTemplateIsolatesExecutorAndEvidenceAuthority(t
 	fullInit := inits[0].(map[string]any)
 	if got := stringArray(t, fullInit, "args"); !reflect.DeepEqual(got, []string{
 		"cluster", "stage", "run", "full", "materialize", "--source", "/var/run/openkubes/source",
-		"--destination", "/var/run/openkubes/workspace", "--handoff", "/var/run/openkubes/handoff",
+		"--destination", "/var/run/openkubes/workspace", "--handoff", "/var/run/openkubes/handoff-volume/private",
 		"--expected-bundle-digest", values.BundleDigest, "--materialize",
 	}) {
 		t.Fatalf("unexpected full-run initializer: %v", got)
@@ -71,8 +71,8 @@ func TestRenderFullRunExecutionJobTemplateIsolatesExecutorAndEvidenceAuthority(t
 	}) {
 		t.Fatalf("unexpected evidence authority command: %v", got)
 	}
-	assertFullRunContainerMounts(t, executor, map[string]string{"executor-private": "workspace", "evidence-handoff": ""})
-	assertFullRunContainerMounts(t, authority, map[string]string{"authority-private": "evidence-authority", "evidence-handoff": ""})
+	assertFullRunContainerMounts(t, executor, map[string]string{"executor-private": "workspace", "evidence-handoff": "private"})
+	assertFullRunContainerMounts(t, authority, map[string]string{"authority-private": "evidence-authority", "evidence-handoff": "private"})
 
 	volumes := arrayAt(t, podSpec, "volumes")
 	if len(volumes) != 5 {

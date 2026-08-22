@@ -40,7 +40,7 @@ type FullRunExecutionBundleMaterializationReceipt struct {
 // evidence handoff is a separate private emptyDir shared only with the
 // independent authority process.
 func MaterializeFullRunExecutionBundle(config FullRunExecutionBundleMaterializationConfig) (FullRunExecutionBundleMaterializationReceipt, error) {
-	if config.DestinationDirectory != fullRunExecutionWorkspaceRoot || config.HandoffDirectory != fullRunExecutionHandoffRoot {
+	if config.DestinationDirectory != fullRunExecutionWorkspaceRoot || config.HandoffDirectory != fullRunExecutionHandoffPrivateRoot {
 		return stoppedFullRunMaterializationReceipt(), errors.New("full-run bundle destinations differ from fixed runtime roots")
 	}
 	return materializeFullRunExecutionBundle(config)
@@ -57,13 +57,18 @@ func materializeFullRunExecutionBundle(config FullRunExecutionBundleMaterializat
 	if _, err := os.Lstat(config.DestinationDirectory); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return receipt, errors.New("full-run bundle destination must be absent")
 	}
+	handoffMissing := false
 	handoffInfo, err := os.Lstat(config.HandoffDirectory)
-	if err != nil || !handoffInfo.IsDir() || handoffInfo.Mode()&os.ModeSymlink != 0 || handoffInfo.Mode().Perm()&0o007 != 0 {
+	if errors.Is(err, os.ErrNotExist) {
+		handoffMissing = true
+	} else if err != nil || !handoffInfo.IsDir() || handoffInfo.Mode()&os.ModeSymlink != 0 || handoffInfo.Mode().Perm() != 0o700 {
 		return receipt, errors.New("full-run evidence handoff is not a private directory")
 	}
-	entries, err := os.ReadDir(config.HandoffDirectory)
-	if err != nil || len(entries) != 0 {
-		return receipt, errors.New("full-run evidence handoff must be empty before materialization")
+	if !handoffMissing {
+		entries, readErr := os.ReadDir(config.HandoffDirectory)
+		if readErr != nil || len(entries) != 0 {
+			return receipt, errors.New("full-run evidence handoff must be empty before materialization")
+		}
 	}
 	indexRaw, err := readProjectedPostRuntimeBundleFile(config.SourceDirectory, fullRunExecutionBundleIndexName, 64*1024)
 	if err != nil {
@@ -101,6 +106,16 @@ func materializeFullRunExecutionBundle(config FullRunExecutionBundleMaterializat
 	}
 	receipt.EvidenceKeyID = publicKeyID
 
+	handoffParentInfo, err := os.Lstat(filepath.Dir(config.HandoffDirectory))
+	if err != nil || !handoffParentInfo.IsDir() || handoffParentInfo.Mode()&os.ModeSymlink != 0 {
+		return receipt, errors.New("full-run evidence handoff parent is invalid")
+	}
+	if handoffMissing {
+		receipt.State = "STOPPED_PARTIAL_OR_UNKNOWN"
+		if err := os.Mkdir(config.HandoffDirectory, 0o700); err != nil {
+			return receipt, errors.New("create private full-run evidence handoff")
+		}
+	}
 	parentInfo, err := os.Lstat(filepath.Dir(config.DestinationDirectory))
 	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
 		return receipt, errors.New("full-run bundle destination parent is invalid")
