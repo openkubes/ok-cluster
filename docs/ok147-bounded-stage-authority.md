@@ -172,6 +172,12 @@ fixed order. Existing state stops with zero writes. An attempted or uncertain
 write stops as partial state. The launcher is single-use and exposes no update,
 patch, apply, adoption, delete, cleanup, rollback, list, watch or retry path.
 
+The created-object check recognizes exactly one Kubernetes serialization
+equivalence: for the bounded NetworkPolicy, an API response may omit the
+explicitly empty `spec.egress` list. This is accepted only when the desired
+object binds `policyTypes: [Ingress, Egress]` and an empty egress list; all
+other fields remain subject to the exact desired-subset check.
+
 ```bash
 ok authority stage launch execute \
   --package /private/ok147-stage-authority-package.yaml \
