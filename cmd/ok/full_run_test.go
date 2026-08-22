@@ -397,6 +397,15 @@ func TestFullRunExecuteFailsClosedBeforeRun(t *testing.T) {
 	if err := run(valid, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || runs != 0 {
 		t.Fatalf("foreign prepared identity reached execution: opens=%d runs=%d err=%v", opens, runs, err)
 	}
+
+	prepareFullRunExecutionManifest = func(string) (runner.FullRunExecutionManifestReceipt, error) {
+		return runner.FullRunExecutionManifestReceipt{}, errors.New("specific manifest rejection")
+	}
+	opensBefore := opens
+	err := run(valid, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "specific manifest rejection") || opens != opensBefore || runs != 0 {
+		t.Fatalf("manifest rejection was not preserved before activation: opens=%d runs=%d err=%v", opens, runs, err)
+	}
 }
 
 type fullRunActivationRunnerFunc func(context.Context) (runner.FullRunExecutionActivationReceipt, error)
