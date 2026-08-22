@@ -3119,6 +3119,22 @@ ok cluster stage evidence observability collector package <bound inputs> \
   --alert-source-cidr <bounded observed workload egress CIDR> \
   --output /private/collector-runtime.yaml
 
+ok cluster stage evidence observability collector launch prepare \
+  --package /private/collector-runtime.yaml \
+  --package-receipt /private/collector-runtime-receipt.json \
+  --expected-package-receipt-digest sha256:<reviewed receipt identity>
+
+ok cluster stage evidence observability collector launch execute \
+  --package /private/collector-runtime.yaml \
+  --package-receipt /private/collector-runtime-receipt.json \
+  --expected-package-receipt-digest sha256:<reviewed receipt identity> \
+  --expected-package-digest sha256:<private package identity> \
+  --installer-api-endpoint https://<workload API IP>:6443 \
+  --installer-ca-digest sha256:<workload CA identity> \
+  --installer-token-file /private/collector-installer.token \
+  --installer-ca-file /private/workload-ca.crt \
+  --execute
+
 ok cluster stage evidence observability collector materialize \
   --source /var/run/openkubes/collector-source \
   --destination /var/run/openkubes/collector \
@@ -3131,9 +3147,15 @@ ok evidence observability serve \
 
 This closes the offline post-runtime packaging and activation boundaries
 without turning the collector into a lifecycle owner. The package builder and
-materializer perform no API request or mutation. A bounded installation
-launcher and live receiver binding remain separate prerequisites before
-deployment.
+materializer perform no API request or mutation. The single-use launcher first
+replays the exact public receipt and private `0600` package, verifies the
+runtime target identity, then completes two exact prerequisite GETs and all
+four exact-name absence GETs before its first write. It can create only Secret,
+Service, NetworkPolicy and Job in that order. Existing state stops zero-write;
+any failure after the first POST is retained as partial or unknown state, and
+the launcher exposes no retry, update, patch, delete, rollback or cleanup.
+Live receiver binding and ordered insertion immediately after the Stage-7
+runtime handoff remain separate prerequisites before a complete fresh run.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation
 boundary:
@@ -3552,6 +3574,9 @@ durable receipts. This is not yet the OK-147 Definition of Done:
   ephemeral full-run Job and private activation package select that same
   production capability transport and have a bounded installer plus its
   separate prepare/execute CLI;
+- the independent-evidence collector has an exact private package replay,
+  non-authorizing installation plan and single-use workload-cluster launcher;
+  wiring that launcher into the Stage-7-to-Stage-8 handoff remains explicit;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
@@ -3574,9 +3599,10 @@ private `0600` files with the binding last. It has no list, watch, discovery,
 Kubernetes mutation, retry or cleanup surface. The verified full-run manifest
 now opens that materializer, all concrete Stage 1-12 adapters and the shared
 single-execution Platform capability session without contacting a cluster.
-The remaining implementation work is the shared local/Job activation surface
-for this concrete composition; this is not a new controller or reconciliation
-mechanism. After that, live closure must
+The remaining implementation work is the ordered local/Job composition that
+installs the verified collector after Stage 7 and then activates the verified
+Stage 8-12 suffix; this is not a new controller or reconciliation mechanism.
+After that, live closure must
 publish the current image, construct fresh short-lived private inputs, run the
 exact bounded activation on `ok-mgmt`, preserve a stopped partial state without
 automatic retry, and separately repeat disposable-cluster and
