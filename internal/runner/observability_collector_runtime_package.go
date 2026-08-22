@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"os"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
@@ -51,6 +52,42 @@ type VerifiedObservabilityCollectorRuntimePackage struct {
 	raw      []byte
 	receipt  ObservabilityCollectorRuntimePackageReceipt
 	verified bool
+}
+
+type ObservabilityCollectorRuntimePackageFileConfig struct {
+	PackagePath           string
+	ReceiptPath           string
+	ExpectedReceiptDigest string
+}
+
+// LoadObservabilityCollectorRuntimePackage reconstructs one verified private
+// package from a 0600 local file and an exact public receipt identity. It does
+// not open a Kubernetes credential or contact any API.
+func LoadObservabilityCollectorRuntimePackage(config ObservabilityCollectorRuntimePackageFileConfig) (VerifiedObservabilityCollectorRuntimePackage, error) {
+	if !stageReceiptPrefixDigestPattern.MatchString(config.ExpectedReceiptDigest) {
+		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("observability collector receipt identity is invalid")
+	}
+	info, err := os.Lstat(config.PackagePath)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("observability collector private package permissions are invalid")
+	}
+	raw, err := readBoundedRegular(config.PackagePath, maximumObservabilityCollectorRuntimeBytes)
+	if err != nil {
+		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("read bounded observability collector private package")
+	}
+	receiptRaw, err := readBoundedRegular(config.ReceiptPath, maximumRuntimeBindingMaterialFileBytes)
+	if err != nil || digest.SHA256(receiptRaw) != config.ExpectedReceiptDigest {
+		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("observability collector public receipt differs from expected identity")
+	}
+	var receipt ObservabilityCollectorRuntimePackageReceipt
+	if err := jsonstrict.Decode(receiptRaw, &receipt); err != nil {
+		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("decode strict observability collector public receipt")
+	}
+	packaged := VerifiedObservabilityCollectorRuntimePackage{raw: raw, receipt: receipt, verified: true}
+	if err := verifyObservabilityCollectorRuntimePackage(packaged); err != nil {
+		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("verify replayed observability collector runtime package")
+	}
+	return packaged, nil
 }
 
 // BuildObservabilityCollectorRuntimePackage composes the private activation,
