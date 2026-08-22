@@ -3,8 +3,10 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -79,6 +81,13 @@ func TestObservabilityCollectorPostPrefixBuildsAndLaunchesFreshBindingOnce(t *te
 		}
 		return authorityInstaller, nil
 	}
+	observerCredential := collectorObserverCredentialFixture(t, config)
+	activator.issueObserver = func(_ context.Context, received ObservabilityCollectorObserverCredentialConfig) (VerifiedObservabilityCollectorObserverCredential, error) {
+		if received.ExpectedTargetDigest != target || received.Clock == nil {
+			t.Fatalf("observer credential binding differs: %#v", received)
+		}
+		return observerCredential, nil
+	}
 	credential := collectorInstallerCredentialFixture(t, target, config.Activation.ObserverCredential.CABundleDigest, config.Activation.MaterializationTime)
 	activator.issue = func(_ context.Context, received ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error) {
 		if received.ExpectedTargetDigest != target || received.Clock == nil {
@@ -104,11 +113,39 @@ func TestObservabilityCollectorPostPrefixBuildsAndLaunchesFreshBindingOnce(t *te
 	if receipt.State != "ACTIVATED" || receipt.PackageDigest != packageReceipt.PackageDigest || receipt.CreatedObjects != 4 ||
 		receipt.RuntimeAuthorityCreatedObjects != 5 || !stageReceiptPrefixDigestPattern.MatchString(receipt.RuntimeAuthorityPackageDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(receipt.RuntimeAuthorityReceiptDigest) ||
+		!stageReceiptPrefixDigestPattern.MatchString(receipt.ObserverCredentialReceiptDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(receipt.CredentialReceiptDigest) || buildCalls != 1 || authorityOpenCalls != 1 || authorityInstaller.calls != 1 || openCalls != 1 || launcher.calls != 1 {
 		t.Fatalf("unexpected post-prefix receipt: %#v calls=%d/%d/%d/%d", receipt, buildCalls, authorityOpenCalls, openCalls, launcher.calls)
 	}
 	if err := activator.ActivateFullRunPostPrefix(context.Background(), prefix); err == nil || buildCalls != 1 || launcher.calls != 1 {
 		t.Fatal("post-prefix activation was replayed")
+	}
+}
+
+func collectorObserverCredentialFixture(t *testing.T, config ObservabilityCollectorRuntimePackageConfig) VerifiedObservabilityCollectorObserverCredential {
+	t.Helper()
+	token, err := os.ReadFile(config.Activation.ObserverCredential.TokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := config.Activation.ObserverCredential
+	source.TokenFile = ""
+	receipt := ObservabilityCollectorObserverCredentialReceipt{
+		Format: ObservabilityCollectorObserverCredentialReceiptFormat, State: "ISSUED",
+		TargetIdentityDigest:         source.AuthorityIdentity,
+		ServiceAccountIdentityDigest: digest.SHA256([]byte(source.ExpectedSubject)),
+		RequestDigest:                runnerStageSHA("c"), CABundleDigest: source.CABundleDigest, AudienceMode: "server-default",
+		IssuedAt: source.IssuedAt.UTC().Format(time.RFC3339), ExpiresAt: source.ExpiresAt.UTC().Format(time.RFC3339),
+		LifetimeSeconds: int64(source.ExpiresAt.Sub(source.IssuedAt) / time.Second), CredentialBytesInReceipt: false, MutationState: "ATTEMPTED",
+	}
+	receiptRaw, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.TokenRequestEvidenceDigest = digest.SHA256(receiptRaw)
+	return VerifiedObservabilityCollectorObserverCredential{
+		token: token, caFile: source.CAFile, targetIdentity: source.AuthorityIdentity,
+		caBundleDigest: source.CABundleDigest, source: source, receipt: receipt, verified: true,
 	}
 }
 

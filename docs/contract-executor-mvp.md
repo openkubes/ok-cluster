@@ -3166,8 +3166,15 @@ verification, derives the package materialization time from the run clock,
 and requires the target UID digest and CA to match the lifecycle-derived
 workload authority before building the package.
 
-It no longer accepts a persisted installer-token file. Instead, after package
-and target correlation have passed, a single-use issuer performs exactly one
+It no longer accepts persisted installer- or observer-token files. After the
+five workload-side authority objects exist, a separate single-use issuer first
+performs exactly one one-hour, server-default-audience TokenRequest for
+`ok-observability/ok147-observability-autonomy`. The exact subject, audience,
+issuer, issued-at, not-before and expiry claims are verified. The token is
+passed directly into activation-package construction in process memory; the
+package still binds its digest and redacted TokenRequest evidence identity.
+Only after that package and target correlation have passed, another single-use
+issuer performs exactly one
 30-minute, server-default-audience TokenRequest for the dedicated
 `openkubes-execution-system/ok147-observability-collector-installer`. The response must
 carry the exact ServiceAccount subject, audience set, expiry and bounded
@@ -3197,15 +3204,16 @@ verification and installation planning are offline; no live cluster has been
 contacted.
 
 The concrete post-prefix factory now enforces the complete order under the
-same run context: build the collector package and exact authority package;
-install all five authority objects; issue the one short-lived installer token;
-open and execute the four-object collector launcher; return only after the
-collector activation receipt is complete. A failed or partial authority install
-is retained in the redacted post-prefix receipt and cannot reach TokenRequest
-or collector creation. A credential or collector failure cannot open Stage 8
-and has no implicit retry or cleanup path. Wiring the private authority manifest
-and remaining factory inputs into the full-run CLI/Job activation is now the
-next prerequisite before a complete fresh run.
+same run context: build the exact authority package; install all five authority
+objects; issue the one-hour observer token; build and correlate the collector
+package; issue the 30-minute installer token; open and execute the four-object
+collector launcher; return only after the collector activation receipt is
+complete. A failed or partial authority install is retained in the redacted
+post-prefix receipt and cannot reach either TokenRequest or collector creation.
+An observer-credential, package, installer-credential or collector failure
+cannot open Stage 8 and has no implicit retry or cleanup path. Wiring the
+private authority manifest and remaining factory inputs into the full-run
+CLI/Job activation is now the next prerequisite before a complete fresh run.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation
 boundary:
