@@ -24,15 +24,16 @@ type StageReceiptSource struct {
 // paths, digests and expected identities. An explicit empty receipt slice is
 // required for the first stage.
 type SubmissionStageBundleConfig struct {
-	ExpectedStageID        string
-	PlanPath               string
-	PlanExpected           stageplan.Expected
-	Receipts               []StageReceiptSource
-	GrantPath              string
-	GrantPublicKeyPath     string
-	ProjectionManifestPath string
-	ProjectionRoot         string
-	EvaluationTime         time.Time
+	ExpectedStageID          string
+	PlanPath                 string
+	PlanExpected             stageplan.Expected
+	Receipts                 []StageReceiptSource
+	GrantPath                string
+	GrantPublicKeyPath       string
+	ProjectionManifestPath   string
+	ProjectionRoot           string
+	ProviderAccessPolicyPath string
+	EvaluationTime           time.Time
 }
 
 // VerifiedSubmissionStageBundle retains only values produced by verification.
@@ -43,14 +44,17 @@ type VerifiedSubmissionStageBundle struct {
 	grant             authorization.VerifiedStageGrant
 	projectionBinding projection.Binding
 	projection        submission.Plan
+	providerAccess    submission.VerifiedProviderAccessPolicy
+	hasProviderAccess bool
 	stageID           string
 	verified          bool
 }
 
 type SubmissionStageRuntimeConfig struct {
-	Ledger    KubernetesLedgerConfig
-	Authority KubernetesAuthorityConfig
-	Clock     func() time.Time
+	Ledger                       KubernetesLedgerConfig
+	Authority                    KubernetesAuthorityConfig
+	ProviderAccessKubeconfigFile string
+	Clock                        func() time.Time
 }
 
 type BoundSubmissionStage struct {
@@ -125,6 +129,10 @@ func LoadSubmissionStageBundle(config SubmissionStageBundleConfig) (VerifiedSubm
 	if err != nil {
 		return VerifiedSubmissionStageBundle{}, err
 	}
+	providerAccess, hasProviderAccess, err := loadSubmissionProviderAccessPolicy(config, plan, decision.StageID)
+	if err != nil {
+		return VerifiedSubmissionStageBundle{}, err
+	}
 	directPredecessors, err := cursor.Predecessors()
 	if err != nil {
 		return VerifiedSubmissionStageBundle{}, err
@@ -142,6 +150,8 @@ func LoadSubmissionStageBundle(config SubmissionStageBundleConfig) (VerifiedSubm
 		grant:             grant,
 		projectionBinding: projectionBinding,
 		projection:        projected,
+		providerAccess:    providerAccess,
+		hasProviderAccess: hasProviderAccess,
 		stageID:           decision.StageID,
 		verified:          true,
 	}, nil
@@ -160,14 +170,69 @@ func (bundle VerifiedSubmissionStageBundle) Open(config SubmissionStageRuntimeCo
 	if !bundle.verified {
 		return BoundSubmissionStage{}, errors.New("submission stage bundle was not produced by verification")
 	}
+	projectionPlan, err := bindSubmissionProviderAccess(bundle, config.ProviderAccessKubeconfigFile)
+	if err != nil {
+		return BoundSubmissionStage{}, err
+	}
 	operation, err := OpenKubernetesSubmissionStageOperation(KubernetesSubmissionStageOperationConfig{
 		Ledger: config.Ledger, Authority: config.Authority, Plan: bundle.plan,
-		StageID: bundle.stageID, Projection: bundle.projection, Clock: config.Clock,
+		StageID: bundle.stageID, Projection: projectionPlan, Clock: config.Clock,
 	})
 	if err != nil {
 		return BoundSubmissionStage{}, err
 	}
 	return BoundSubmissionStage{operation: operation, plan: bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true}, nil
+}
+
+func bindSubmissionProviderAccess(bundle VerifiedSubmissionStageBundle, kubeconfigFile string) (submission.Plan, error) {
+	projectionPlan := bundle.projection
+	if !bundle.hasProviderAccess {
+		if kubeconfigFile != "" {
+			return submission.Plan{}, errors.New("provider-access credential is not bound by the selected stage")
+		}
+		return projectionPlan, nil
+	}
+	if bundle.stageID != "cluster-lifecycle" || kubeconfigFile == "" {
+		return submission.Plan{}, errors.New("cluster-lifecycle provider-access runtime is incomplete")
+	}
+	object, err := bundle.providerAccess.MaterializeSecret(kubeconfigFile)
+	if err != nil {
+		return submission.Plan{}, err
+	}
+	projectionPlan.Management.Objects = append([]submission.Object{object}, projectionPlan.Management.Objects...)
+	return projectionPlan, nil
+}
+
+func loadSubmissionProviderAccessPolicy(config SubmissionStageBundleConfig, plan stageplan.Binding, stageID string) (submission.VerifiedProviderAccessPolicy, bool, error) {
+	stage, _, err := plan.Stage(stageID)
+	if err != nil {
+		return submission.VerifiedProviderAccessPolicy{}, false, err
+	}
+	providerDigest := ""
+	for _, input := range stage.Inputs {
+		if input.Name == "stage.provider-access" {
+			providerDigest = input.Digest
+			break
+		}
+	}
+	if providerDigest == "" {
+		if config.ProviderAccessPolicyPath != "" {
+			return submission.VerifiedProviderAccessPolicy{}, false, errors.New("provider-access policy is not bound by the selected stage")
+		}
+		return submission.VerifiedProviderAccessPolicy{}, false, nil
+	}
+	if stageID != "cluster-lifecycle" || config.ProviderAccessPolicyPath == "" {
+		return submission.VerifiedProviderAccessPolicy{}, false, errors.New("cluster-lifecycle provider-access policy is incomplete")
+	}
+	policy, err := submission.LoadProviderAccessPolicy(config.ProviderAccessPolicyPath, submission.ProviderAccessExpected{
+		PolicyDigest: providerDigest, ContractIdentity: plan.ContractIdentity,
+		IntentRevision: plan.IntentRevision, ExecutionFixture: plan.ExecutionFixture,
+		ManagementAuthority: plan.Authorities.Management, ProviderAuthority: plan.Authorities.Infrastructure,
+	})
+	if err != nil {
+		return submission.VerifiedProviderAccessPolicy{}, false, err
+	}
+	return policy, true, nil
 }
 
 func (stage BoundSubmissionStage) Run(ctx context.Context) (execution.StagedOperationReceipt, error) {
