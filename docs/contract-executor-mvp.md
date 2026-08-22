@@ -3162,12 +3162,27 @@ context, and cannot open Stage 8 until activation returns successfully. The
 concrete `KubernetesObservabilityCollectorPostPrefix` factory now consumes
 those fresh inputs. It replays only the first six receipts into runtime-binding
 verification, derives the package materialization time from the run clock,
-requires the target UID digest, workload endpoint and CA to match the distinct
-installer credential, then builds the package and opens the single-use
-launcher. Its receipt retains only package, runtime-binding and target digests,
-launch state and created-object count. Wiring all private factory inputs into
-the full-run CLI/Job activation remains the next prerequisite before a
-complete fresh run.
+and requires the target UID digest and CA to match the lifecycle-derived
+workload authority before building the package.
+
+It no longer accepts a persisted installer-token file. Instead, after package
+and target correlation have passed, a single-use issuer performs exactly one
+30-minute, server-default-audience TokenRequest for
+`openkubes-execution-system/ok147-contract-executor-runtime`. The response must
+carry the exact ServiceAccount subject, audience set, expiry and bounded
+lifetime. The token is retained only in process memory and is handed directly
+to the existing single-use collector launcher. The redacted receipt exposes
+only target, ServiceAccount, request and CA digests plus timestamps; no token,
+CA, endpoint, kubeconfig or source path is retained.
+
+The live composition remains fail-closed until the workload-side runtime
+ServiceAccount and its exact collector create permissions are themselves
+projected and installed by a separately verified boundary. The existing
+Stage-7 target-access artifact does not currently contain that prerequisite;
+credential issuance therefore cannot be mistaken for runtime authorization.
+Wiring that exact prerequisite package and all private factory inputs into the
+full-run CLI/Job activation remains the next prerequisite before a complete
+fresh run.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation
 boundary:
