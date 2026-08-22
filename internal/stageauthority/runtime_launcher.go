@@ -228,7 +228,8 @@ func (launcher *KubernetesRuntimeLauncher) request(ctx context.Context, method, 
 
 func verifyRuntimeCreatedObject(raw, desiredRaw []byte) (string, string, error) {
 	var observed, desired map[string]any
-	if json.Unmarshal(raw, &observed) != nil || json.Unmarshal(desiredRaw, &desired) != nil || !runtimeSubset(desired, observed) {
+	if json.Unmarshal(raw, &observed) != nil || json.Unmarshal(desiredRaw, &desired) != nil ||
+		!normalizeRuntimeAPIResponse(desired, observed) || !runtimeSubset(desired, observed) {
 		return "", "", errors.New("created bounded stage authority object differs from verified package")
 	}
 	metadata, _ := observed["metadata"].(map[string]any)
@@ -238,6 +239,29 @@ func verifyRuntimeCreatedObject(raw, desiredRaw []byte) (string, string, error) 
 		return "", "", errors.New("created bounded stage authority object lacks runtime identity")
 	}
 	return uid, resourceVersion, nil
+}
+
+// Kubernetes omits an explicitly empty NetworkPolicy egress list when it
+// serializes the stored object. With policyTypes containing Egress, omitted and
+// empty both mean deny all egress. Keep this equivalence deliberately scoped to
+// that one API field; every other desired field remains an exact subset check.
+func normalizeRuntimeAPIResponse(desired, observed map[string]any) bool {
+	if desired["apiVersion"] != "networking.k8s.io/v1" || desired["kind"] != "NetworkPolicy" {
+		return true
+	}
+	desiredSpec, desiredOK := desired["spec"].(map[string]any)
+	observedSpec, observedOK := observed["spec"].(map[string]any)
+	if !desiredOK || !observedOK {
+		return false
+	}
+	desiredEgress, bound := desiredSpec["egress"].([]any)
+	if !bound || len(desiredEgress) != 0 {
+		return true
+	}
+	if _, present := observedSpec["egress"]; !present {
+		observedSpec["egress"] = []any{}
+	}
+	return true
 }
 
 func runtimeSubset(expected, observed any) bool {

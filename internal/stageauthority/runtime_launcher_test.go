@@ -99,6 +99,25 @@ func TestRuntimeLauncherPreflightsAllThenCreatesInOrder(t *testing.T) {
 	}
 }
 
+func TestVerifyRuntimeCreatedNetworkPolicyAcceptsOnlyOmittedEmptyEgress(t *testing.T) {
+	desired := []byte(`{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"ok147-stage-authority","namespace":"openkubes-execution-system"},"spec":{"podSelector":{},"policyTypes":["Ingress","Egress"],"ingress":[],"egress":[]}}`)
+	observed := []byte(`{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"ok147-stage-authority","namespace":"openkubes-execution-system","uid":"runtime-uid-123","resourceVersion":"1001"},"spec":{"podSelector":{},"policyTypes":["Ingress","Egress"],"ingress":[]}}`)
+	if _, _, err := verifyRuntimeCreatedObject(observed, desired); err != nil {
+		t.Fatalf("API-omitted empty egress was rejected: %v", err)
+	}
+
+	nonEmpty := []byte(`{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"ok147-stage-authority","namespace":"openkubes-execution-system"},"spec":{"podSelector":{},"policyTypes":["Ingress","Egress"],"ingress":[],"egress":[{"to":[]}]}}`)
+	if _, _, err := verifyRuntimeCreatedObject(observed, nonEmpty); err == nil {
+		t.Fatal("API-omitted non-empty egress was accepted")
+	}
+
+	serviceDesired := []byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"ok147-stage-authority","namespace":"openkubes-execution-system"},"spec":{"selector":{},"ports":[]}}`)
+	serviceObserved := []byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"ok147-stage-authority","namespace":"openkubes-execution-system","uid":"runtime-uid-123","resourceVersion":"1001"},"spec":{"selector":{}}}`)
+	if _, _, err := verifyRuntimeCreatedObject(serviceObserved, serviceDesired); err == nil {
+		t.Fatal("omitted empty list outside the bounded NetworkPolicy field was accepted")
+	}
+}
+
 func TestRuntimeLauncherStopsZeroWriteAndPreservesPartialWithoutRetry(t *testing.T) {
 	packaged := runtimeLauncherPackage(t)
 	plan, _ := PlanRuntimeInstallation(packaged, "ok-mgmt")
