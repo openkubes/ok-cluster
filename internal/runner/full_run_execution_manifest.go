@@ -223,9 +223,10 @@ func (factory FullRunPlatformCapabilityFactoryFunc) OpenFullRunPlatformCapabilit
 // that cannot be serialized in the private manifest. Capability construction
 // is typed and runtime-bound; Clock and Wait make bounded polling testable.
 type FullRunExecutionManifestRuntime struct {
-	PlatformCapability FullRunPlatformCapabilityFactory
-	Clock              func() time.Time
-	Wait               ObservationWaiter
+	PlatformCapability  FullRunPlatformCapabilityFactory
+	PostPrefixActivator FullRunPostPrefixActivator
+	Clock               func() time.Time
+	Wait                ObservationWaiter
 }
 
 // Receipt returns the already verified, redaction-safe manifest identity. The
@@ -330,6 +331,7 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 		SourceRepository: document.PlatformApplications.SourceRepository, Profile: clonePlatformProfile(manifest.platform),
 	}
 	config := FullRunExecutionConfig{
+		PostPrefixActivator: runtime.PostPrefixActivator,
 		EvidenceIdentityBinder: newFullRunObservabilityEvidenceIdentityBinder(
 			manifest,
 			document.PlatformObservation.Capability.IndependentEvidenceIdentityPath,

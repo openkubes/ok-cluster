@@ -3155,7 +3155,13 @@ Service, NetworkPolicy and Job in that order. Existing state stops zero-write;
 any failure after the first POST is retained as partial or unknown state, and
 the launcher exposes no retry, update, patch, delete, rollback or cleanup.
 Live receiver binding and ordered insertion immediately after the Stage-7
-runtime handoff remain separate prerequisites before a complete fresh run.
+runtime handoff now use the explicit `FullRunPostPrefixActivator` seam. The
+orchestrator passes that seam the exact seven-receipt private prefix,
+lifecycle-derived target identity and workload authority under the same run
+context, and cannot open Stage 8 until activation returns successfully. The
+concrete factory that builds the collector package and launcher from those
+fresh runtime inputs remains the next prerequisite before a complete fresh
+run.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation
 boundary:
@@ -3576,7 +3582,8 @@ durable receipts. This is not yet the OK-147 Definition of Done:
   separate prepare/execute CLI;
 - the independent-evidence collector has an exact private package replay,
   non-authorizing installation plan and single-use workload-cluster launcher;
-  wiring that launcher into the Stage-7-to-Stage-8 handoff remains explicit;
+  the Stage-7-to-Stage-8 handoff now has an ordered fail-closed activator seam,
+  while its concrete package/launcher factory remains explicit;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
@@ -3599,9 +3606,10 @@ private `0600` files with the binding last. It has no list, watch, discovery,
 Kubernetes mutation, retry or cleanup surface. The verified full-run manifest
 now opens that materializer, all concrete Stage 1-12 adapters and the shared
 single-execution Platform capability session without contacting a cluster.
-The remaining implementation work is the ordered local/Job composition that
-installs the verified collector after Stage 7 and then activates the verified
-Stage 8-12 suffix; this is not a new controller or reconciliation mechanism.
+The remaining implementation work is the concrete post-prefix factory that
+builds and installs the verified collector after Stage 7; Stage 8-12 is now
+structurally unable to open before that activator succeeds. This is not a new
+controller or reconciliation mechanism.
 After that, live closure must
 publish the current image, construct fresh short-lived private inputs, run the
 exact bounded activation on `ok-mgmt`, preserve a stopped partial state without
