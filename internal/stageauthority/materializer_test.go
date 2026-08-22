@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,7 +107,7 @@ func selfSignedTLS(t *testing.T) ([]byte, []byte) {
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "ok147-stage-authority"},
 		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames: []string{"ok147-stage-authority"},
+		DNSNames: []string{"ok147-stage-authority"}, IPAddresses: []net.IP{net.ParseIP("10.43.250.147")},
 	}
 	certificateDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
 	if err != nil {

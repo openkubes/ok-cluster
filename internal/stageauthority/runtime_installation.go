@@ -171,7 +171,8 @@ func expectedRuntimeObjectIdentity(index int, kind, name string, value map[strin
 	case "Service":
 		spec, _ := value["spec"].(map[string]any)
 		selector, _ := spec["selector"].(map[string]any)
-		return selector["app.kubernetes.io/name"] == "ok147-stage-authority"
+		serviceIP, _ := spec["clusterIP"].(string)
+		return validRuntimeServiceIP(serviceIP) && digest.SHA256([]byte(serviceIP)) == receipt.ServiceIdentityDigest && selector["app.kubernetes.io/name"] == "ok147-stage-authority"
 	case "NetworkPolicy":
 		spec, _ := value["spec"].(map[string]any)
 		return spec != nil

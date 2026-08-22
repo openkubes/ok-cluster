@@ -23,6 +23,7 @@ metadata:
   name: "${OK147_AUTHORITY_NAME}"
   namespace: "${OK147_AUTHORITY_NAMESPACE}"
 spec:
+  clusterIP: "${OK147_AUTHORITY_SERVICE_IP}"
   selector:
     app.kubernetes.io/name: "${OK147_AUTHORITY_NAME}"
   ports:
