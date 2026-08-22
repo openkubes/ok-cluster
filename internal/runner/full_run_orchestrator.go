@@ -60,7 +60,7 @@ type PreRuntimeContinuation interface {
 // independently checked before Run.
 type FullRunOrchestration struct {
 	PreRuntime      PreRuntimeContinuation
-	BindPostRuntime func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error)
+	BindPostRuntime func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error)
 
 	mu   sync.Mutex
 	used bool
@@ -102,7 +102,7 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 		return stopFullRunOrchestration(receipt, postRuntimeStageOrder[0])
 	}
 
-	continuation, err := orchestration.BindPostRuntime(prefix)
+	continuation, err := orchestration.BindPostRuntime(ctx, prefix)
 	if err != nil || continuation == nil {
 		return stopFullRunOrchestration(receipt, postRuntimeStageOrder[0])
 	}

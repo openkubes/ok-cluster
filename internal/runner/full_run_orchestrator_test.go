@@ -35,7 +35,7 @@ func TestFullRunOrchestrationComposesExactTwelveStageChainOnce(t *testing.T) {
 	continuation := successfulFakePostRuntimeContinuation()
 	orchestration := &FullRunOrchestration{
 		PreRuntime: successfulPreRuntimeOrchestration(&calls),
-		BindPostRuntime: func(prefix PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(_ context.Context, prefix PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			calls = append(calls, "bind-post-runtime")
 			if prefix.State != "SUCCEEDED" || len(prefix.Checkpoints) != 7 {
 				t.Fatal("post-runtime binder did not receive the completed prefix")
@@ -69,7 +69,7 @@ func TestFullRunOrchestrationAllowsExactlyOneConcurrentInvocation(t *testing.T) 
 	continuation := successfulFakePostRuntimeContinuation()
 	orchestration := &FullRunOrchestration{
 		PreRuntime: successfulPreRuntimeOrchestration(nil),
-		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			return continuation, nil
 		},
 	}
@@ -106,7 +106,7 @@ func TestFullRunOrchestrationStopsBeforeContinuationWhenPrefixStops(t *testing.T
 	bindCalls := 0
 	orchestration := &FullRunOrchestration{
 		PreRuntime: prefix,
-		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			bindCalls++
 			return successfulFakePostRuntimeContinuation(), nil
 		},
@@ -130,7 +130,7 @@ func TestFullRunOrchestrationPreservesCompletedPrefixCheckpointWhenBridgeStops(t
 	bindCalls := 0
 	orchestration := &FullRunOrchestration{
 		PreRuntime: prefix,
-		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			bindCalls++
 			return successfulFakePostRuntimeContinuation(), nil
 		},
@@ -157,7 +157,7 @@ func TestFullRunOrchestrationRejectsForeignContinuationBeforeRun(t *testing.T) {
 			mutate(&continuation.binding)
 			orchestration := &FullRunOrchestration{
 				PreRuntime: successfulPreRuntimeOrchestration(nil),
-				BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+				BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 					return continuation, nil
 				},
 			}
@@ -177,7 +177,7 @@ func TestFullRunOrchestrationPreservesBoundedSuffixStop(t *testing.T) {
 	continuation.err = errors.New("private suffix failure")
 	orchestration := &FullRunOrchestration{
 		PreRuntime: successfulPreRuntimeOrchestration(nil),
-		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			return continuation, nil
 		},
 	}
@@ -195,7 +195,7 @@ func TestFullRunOrchestrationPreservesCompletedSuffixCheckpointWhenBridgeStops(t
 	continuation.err = errors.New("private receipt bridge failure")
 	orchestration := &FullRunOrchestration{
 		PreRuntime: successfulPreRuntimeOrchestration(nil),
-		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			return continuation, nil
 		},
 	}
@@ -211,7 +211,7 @@ func TestFullRunOrchestrationRejectsMalformedSuffix(t *testing.T) {
 	continuation.receipt.Checkpoints[0].StageReceiptDigest = "bad"
 	orchestration := &FullRunOrchestration{
 		PreRuntime: successfulPreRuntimeOrchestration(nil),
-		BindPostRuntime: func(PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			return continuation, nil
 		},
 	}

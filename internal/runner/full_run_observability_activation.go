@@ -10,6 +10,7 @@ import (
 // pinned public key used to verify independent Observability evidence.
 type KubernetesObservabilityFullRunActivationConfig struct {
 	IndependentEvidencePublicKeyPath string
+	PostPrefixActivator              FullRunPostPrefixActivator
 	Clock                            func() time.Time
 	Wait                             ObservationWaiter
 }
@@ -58,7 +59,8 @@ func OpenKubernetesObservabilityFullRunActivation(path string, runtime Kubernete
 		return nil, receipt, errors.New("open full-run Observability capability factory")
 	}
 	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
-		PlatformCapability: capability, Clock: runtime.Clock, Wait: runtime.Wait,
+		PlatformCapability: capability, PostPrefixActivator: runtime.PostPrefixActivator,
+		Clock: runtime.Clock, Wait: runtime.Wait,
 	})
 	if err != nil {
 		return nil, receipt, errors.New("open concrete full-run execution configuration")

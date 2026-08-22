@@ -177,6 +177,55 @@ func TestFullRunExecutionStopsBeforeSuffixWhenEvidenceIdentityBindingFails(t *te
 	}
 }
 
+func TestFullRunExecutionActivatesExactPostPrefixBeforeOpeningSuffix(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	activator := &recordingFullRunPostPrefixActivator{}
+	config := testFullRunExecutionConfig()
+	config.PostPrefixActivator = activator
+	postCalls := 0
+	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			if activator.calls != 1 || !reflect.DeepEqual(activator.activation.ReceiptPrefix, preRuntime.prefix) ||
+				activator.activation.TargetIdentity != preRuntime.target || activator.activation.Workload != preRuntime.workload {
+				t.Fatalf("suffix opened before exact post-prefix activation: %#v", activator)
+			}
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || activator.calls != 1 || postCalls != 1 {
+		t.Fatalf("full run did not activate post-prefix once: receipt=%#v activator=%#v post=%d err=%v", receipt, activator, postCalls, err)
+	}
+}
+
+func TestFullRunExecutionStopsBeforeSuffixWhenPostPrefixActivationFails(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	activator := &recordingFullRunPostPrefixActivator{err: errors.New("collector activation rejected")}
+	config := testFullRunExecutionConfig()
+	config.PostPrefixActivator = activator
+	postCalls := 0
+	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		len(receipt.Checkpoints) != 7 || activator.calls != 1 || postCalls != 0 {
+		t.Fatalf("failed post-prefix activation opened suffix: receipt=%#v activator=%#v post=%d err=%v", receipt, activator, postCalls, err)
+	}
+}
+
 type recordingFullRunWorkloadAuthorityBinder struct {
 	bound WorkloadAuthorityFileResolverConfig
 	calls int
@@ -187,6 +236,19 @@ type recordingFullRunEvidenceIdentityBinder struct {
 	prefix []StageReceiptSource
 	calls  int
 	err    error
+}
+
+type recordingFullRunPostPrefixActivator struct {
+	activation FullRunPostPrefixActivation
+	calls      int
+	err        error
+}
+
+func (activator *recordingFullRunPostPrefixActivator) ActivateFullRunPostPrefix(_ context.Context, activation FullRunPostPrefixActivation) error {
+	activator.calls++
+	activator.activation = activation
+	activator.activation.ReceiptPrefix = append([]StageReceiptSource(nil), activation.ReceiptPrefix...)
+	return activator.err
 }
 
 func (binder *recordingFullRunEvidenceIdentityBinder) BindFullRunEvidenceIdentity(prefix []StageReceiptSource) error {

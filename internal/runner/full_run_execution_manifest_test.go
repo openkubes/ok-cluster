@@ -58,12 +58,13 @@ func TestVerifiedFullRunExecutionManifestBuildsConcreteConfiguration(t *testing.
 		t.Fatal(err)
 	}
 	var capabilityBinding FullRunPlatformCapabilityBinding
+	postPrefix := &recordingFullRunPostPrefixActivator{}
 	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
 		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(binding FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
 			capabilityBinding = binding
 			return capability, nil
 		}),
-		Clock: clock, Wait: WaitWithTimer,
+		PostPrefixActivator: postPrefix, Clock: clock, Wait: WaitWithTimer,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +74,7 @@ func TestVerifiedFullRunExecutionManifestBuildsConcreteConfiguration(t *testing.
 	}
 	if config.PreRuntime.NetworkObservation.Workload.KubeconfigFile == "" || config.PreRuntime.NetworkObservation.Workload.TokenFile != "" ||
 		config.PostRuntime.TargetCredentialRun.Workload != config.PreRuntime.NetworkObservation.Workload ||
-		config.EvidenceIdentityBinder == nil ||
+		config.EvidenceIdentityBinder == nil || config.PostPrefixActivator != postPrefix ||
 		config.PostRuntime.PlatformObservation.Capability == nil || config.PostRuntime.AggregateEvidence.Capability == nil ||
 		config.PostRuntime.TargetRegistration.Expected.TargetIdentityDigest != "" ||
 		!config.PostRuntime.TargetRegistration.Runtime.MaterializationTime.IsZero() {

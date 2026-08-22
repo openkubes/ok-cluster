@@ -17,6 +17,20 @@ type FullRunExecutionConfig struct {
 	PostRuntime             PostRuntimeExecutionConfig
 	WorkloadAuthorityBinder FullRunWorkloadAuthorityBinder
 	EvidenceIdentityBinder  FullRunEvidenceIdentityBinder
+	PostPrefixActivator     FullRunPostPrefixActivator
+}
+
+type FullRunPostPrefixActivation struct {
+	ReceiptPrefix  []StageReceiptSource
+	TargetIdentity string
+	Workload       WorkloadAuthorityFileResolverConfig
+}
+
+// FullRunPostPrefixActivator is the only ordered seam between successful
+// Stage 7 and opening Stage 8. A collector installer implementation may use
+// it once; it must return only after its exact activation is established.
+type FullRunPostPrefixActivator interface {
+	ActivateFullRunPostPrefix(context.Context, FullRunPostPrefixActivation) error
 }
 
 // FullRunEvidenceIdentityBinder publishes only the private, derived
@@ -90,7 +104,7 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 	prefix := &concretePreRuntimeContinuation{executor: preRuntime}
 	orchestration := &FullRunOrchestration{
 		PreRuntime: prefix,
-		BindPostRuntime: func(completed PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		BindPostRuntime: func(ctx context.Context, completed PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			privatePrefix, prefixErr := preRuntime.ReceiptPrefix()
 			if prefixErr != nil || len(privatePrefix) != len(completed.Checkpoints) || len(privatePrefix) != len(preRuntimeStageOrder) {
 				return nil, errors.New("load full-run private receipt prefix")
@@ -116,6 +130,16 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 			if config.EvidenceIdentityBinder != nil {
 				if bindErr := config.EvidenceIdentityBinder.BindFullRunEvidenceIdentity(append([]StageReceiptSource(nil), privatePrefix[:6]...)); bindErr != nil {
 					return nil, errors.New("bind full-run independent evidence identity")
+				}
+			}
+			if config.PostPrefixActivator != nil {
+				activation := FullRunPostPrefixActivation{
+					ReceiptPrefix:  append([]StageReceiptSource(nil), privatePrefix...),
+					TargetIdentity: targetIdentity,
+					Workload:       workloadAuthority,
+				}
+				if activateErr := config.PostPrefixActivator.ActivateFullRunPostPrefix(ctx, activation); activateErr != nil {
+					return nil, errors.New("activate full-run post-prefix prerequisites")
 				}
 			}
 			bound := clonePostRuntimeExecutionConfigForFullRun(postRuntime)
