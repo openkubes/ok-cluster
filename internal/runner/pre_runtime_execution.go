@@ -58,6 +58,7 @@ type PreRuntimeExecutionConfig struct {
 	PlanExpected              stageplan.Expected
 	ProjectionManifestPath    string
 	ProjectionRoot            string
+	ProviderAccessPolicyPath  string
 	Authorization             StageAuthorizationResolver
 	ProviderPrerequisites     SubmissionStageRuntimeConfig
 	ClusterLifecycle          SubmissionStageRuntimeConfig
@@ -445,6 +446,7 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 				ExpectedStageID: stageID, PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
 				GrantPath: grant.GrantPath, GrantPublicKeyPath: grant.PublicKeyPath, EvaluationTime: grant.EvaluationTime,
 				ProjectionManifestPath: config.ProjectionManifestPath, ProjectionRoot: config.ProjectionRoot,
+				ProviderAccessPolicyPath: config.ProviderAccessPolicyPath,
 			})
 			if err != nil {
 				return preRuntimeStagedInvocation{}, err

@@ -87,12 +87,60 @@ func TestSubmissionStageBundleOpenIsOfflineAndRequiresDistinctCredentials(t *tes
 	}
 }
 
+func TestClusterLifecycleBundleRequiresBoundProviderAccessCredential(t *testing.T) {
+	fixture := submissionBundleFixtureWithProviderAccess(t)
+	bundle, err := LoadSubmissionStageBundle(fixture.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := submissionBundleRuntime(t, fixture.plan, "cluster-lifecycle")
+	if _, err := bundle.Open(runtime); err == nil || !strings.Contains(err.Error(), "provider-access runtime is incomplete") {
+		t.Fatalf("missing provider credential was accepted: %v", err)
+	}
+	credential := filepath.Join(t.TempDir(), "provider.kubeconfig")
+	if err := os.WriteFile(credential, providerAccessBundleKubeconfig(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ProviderAccessKubeconfigFile = credential
+	boundPlan, err := bindSubmissionProviderAccess(bundle, credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boundPlan.Management.Objects) != 2 || boundPlan.Management.Objects[0].Identity.Kind != "Secret" ||
+		boundPlan.Management.Objects[1].Identity.Kind != "Cluster" || len(bundle.projection.Management.Objects) != 1 {
+		t.Fatalf("provider Secret was not prepended without mutating the verified projection: %#v", boundPlan.Management.Objects)
+	}
+	opened, err := bundle.Open(runtime)
+	if err != nil || !opened.verified {
+		t.Fatalf("bound provider credential did not open lifecycle operation: %#v %v", opened, err)
+	}
+
+	legacy := submissionBundleFixture(t, true, "")
+	legacyBundle, err := LoadSubmissionStageBundle(legacy.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRuntime := submissionBundleRuntime(t, legacy.plan, "cluster-lifecycle")
+	legacyRuntime.ProviderAccessKubeconfigFile = credential
+	if _, err := legacyBundle.Open(legacyRuntime); err == nil || !strings.Contains(err.Error(), "not bound") {
+		t.Fatalf("legacy lifecycle stage accepted an unbound provider credential: %v", err)
+	}
+}
+
 type submissionBundleTestFixture struct {
 	config SubmissionStageBundleConfig
 	plan   stageplan.Binding
 }
 
 func submissionBundleFixture(t *testing.T, completedProvider bool, overrideProviderDigest string) submissionBundleTestFixture {
+	return submissionBundleFixtureOptions(t, completedProvider, overrideProviderDigest, false)
+}
+
+func submissionBundleFixtureWithProviderAccess(t *testing.T) submissionBundleTestFixture {
+	return submissionBundleFixtureOptions(t, true, "", true)
+}
+
+func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overrideProviderDigest string, providerAccess bool) submissionBundleTestFixture {
 	t.Helper()
 	root := t.TempDir()
 	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
@@ -137,7 +185,22 @@ func submissionBundleFixture(t *testing.T, completedProvider bool, overrideProvi
 		ContractIdentity: identity, IntentRevision: revision, EnablementRevision: bundleSHA("b"), PlatformRevision: bundleSHA("c"), ExecutionFixture: bundleSHA("d"),
 		InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt", GitOpsAuthority: "ok-shared",
 	}
-	planPath := writeBundleFile(t, root, "staged-plan.json", submissionBundlePlan(t, expected, providerDigest, digest.SHA256(management)))
+	providerAccessPath := ""
+	providerAccessDigest := ""
+	if providerAccess {
+		policy := mustJSON(t, map[string]any{
+			"format": "ok147-provider-access-policy/v1", "contractIdentity": identity,
+			"intentRevision": revision, "executionFixture": expected.ExecutionFixture,
+			"managementAuthority": "ok-mgmt", "providerAuthority": "ok-infra",
+			"secret": map[string]any{
+				"apiVersion": "v1", "kind": "Secret", "namespace": "disposable-ok147",
+				"name": "external-infra-kubeconfig-disposable-ok147", "type": "Opaque", "dataKey": "kubeconfig", "immutable": true,
+			},
+		})
+		providerAccessPath = writeBundleFile(t, root, "provider-access-policy.json", policy)
+		providerAccessDigest = digest.SHA256(policy)
+	}
+	planPath := writeBundleFile(t, root, "staged-plan.json", submissionBundlePlanWithProviderAccess(t, expected, providerDigest, digest.SHA256(management), providerAccessDigest))
 	plan, err := stageplan.Load(planPath, expected)
 	if err != nil {
 		t.Fatal(err)
@@ -166,13 +229,17 @@ func submissionBundleFixture(t *testing.T, completedProvider bool, overrideProvi
 	return submissionBundleTestFixture{
 		config: SubmissionStageBundleConfig{
 			ExpectedStageID: stageID, PlanPath: planPath, PlanExpected: expected, Receipts: receipts, GrantPath: grantPath, GrantPublicKeyPath: keyPath,
-			ProjectionManifestPath: manifestPath, ProjectionRoot: root, EvaluationTime: at,
+			ProjectionManifestPath: manifestPath, ProjectionRoot: root, ProviderAccessPolicyPath: providerAccessPath, EvaluationTime: at,
 		},
 		plan: plan,
 	}
 }
 
 func submissionBundlePlan(t *testing.T, expected stageplan.Expected, providerDigest, managementDigest string) []byte {
+	return submissionBundlePlanWithProviderAccess(t, expected, providerDigest, managementDigest, "")
+}
+
+func submissionBundlePlanWithProviderAccess(t *testing.T, expected stageplan.Expected, providerDigest, managementDigest, providerAccessDigest string) []byte {
 	t.Helper()
 	ids := []string{"provider-prerequisites", "cluster-lifecycle", "lifecycle-observation", "enablement", "network-observation", "runtime-binding", "target-access", "target-credential", "target-registration", "platform-applications", "platform-observation", "aggregate-evidence"}
 	kinds := []string{"Submission", "Submission", "Observation", "Submission", "Observation", "Binding", "Submission", "Credential", "Submission", "Submission", "Observation", "Evaluation"}
@@ -190,9 +257,13 @@ func submissionBundlePlan(t *testing.T, expected stageplan.Expected, providerDig
 		} else if index == 1 {
 			name, inputDigest = "projection.cluster-lifecycle", managementDigest
 		}
+		inputs := []map[string]any{{"name": name, "digest": inputDigest}}
+		if index == 1 && providerAccessDigest != "" {
+			inputs = append(inputs, map[string]any{"name": "stage.provider-access", "digest": providerAccessDigest})
+		}
 		stages[index] = map[string]any{
 			"id": ids[index], "order": index + 1, "kind": kinds[index], "authority": authorities[index], "requires": requires,
-			"inputs": []map[string]any{{"name": name, "digest": inputDigest}},
+			"inputs": inputs,
 		}
 		if operations[index] != "" {
 			stages[index]["grantOperation"] = operations[index]
@@ -205,6 +276,29 @@ func submissionBundlePlan(t *testing.T, expected stageplan.Expected, providerDig
 		"authorities":        map[string]any{"infrastructure": expected.InfrastructureAuthority, "management": expected.ManagementAuthority, "gitOps": expected.GitOpsAuthority, "workloadIdentityMode": "capi-cluster-uid/v1", "runnerIdentityMode": "bounded-job/v1"},
 		"stages":             stages,
 	})
+}
+
+func providerAccessBundleKubeconfig() []byte {
+	return []byte(`apiVersion: v1
+kind: Config
+current-context: provider
+clusters:
+  - name: provider-cluster
+    cluster:
+      server: https://provider.example.invalid:6443
+      certificate-authority-data: Y2E=
+users:
+  - name: provider-user
+    user:
+      client-certificate-data: Y2VydA==
+      client-key-data: a2V5
+contexts:
+  - name: provider
+    context:
+      cluster: provider-cluster
+      user: provider-user
+      namespace: ok-infra
+`)
 }
 
 func writeSubmissionStageGrant(t *testing.T, root string, plan stageplan.Binding, stageID string, predecessors []stagereceipt.Verified, at time.Time) (string, string) {

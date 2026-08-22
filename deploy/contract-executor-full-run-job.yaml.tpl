@@ -202,6 +202,7 @@ spec:
               - {key: credentials.ledger-token, path: credentials/ledger-token}
               - {key: credentials.management-ca.crt, path: credentials/management-ca.crt}
               - {key: credentials.management-token, path: credentials/management-token}
+              - {key: credentials.provider-access-kubeconfig, path: credentials/provider-access-kubeconfig}
               - {key: input.aggregate-profile.json, path: input/aggregate-profile.json}
               - {key: input.authorization-authority.pub, path: input/authorization-authority.pub}
               - {key: input.collector-job.yaml, path: input/collector-job.yaml}
@@ -211,6 +212,7 @@ spec:
               - {key: input.network-profile.json, path: input/network-profile.json}
               - {key: input.platform-applications.yaml, path: input/platform-applications.yaml}
               - {key: input.platform-profile.json, path: input/platform-profile.json}
+              - {key: input.provider-access-policy.json, path: input/provider-access-policy.json}
               - {key: input.projection.authority-map.json, path: input/projection/authority-map.json}
               - {key: input.projection.ok-infra-prerequisites.yaml, path: input/projection/ok-infra-prerequisites.yaml}
               - {key: input.projection.ok-mgmt-lifecycle.yaml, path: input/projection/ok-mgmt-lifecycle.yaml}

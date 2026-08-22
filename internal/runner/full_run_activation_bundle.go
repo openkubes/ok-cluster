@@ -23,7 +23,7 @@ const (
 	fullRunExecutionWorkspaceRoot       = "/var/run/openkubes/workspace"
 	fullRunExecutionHandoffRoot         = "/var/run/openkubes/handoff"
 	maximumFullRunExecutionBundleBytes  = 900 * 1024
-	maximumFullRunExecutionBundleFiles  = 32
+	maximumFullRunExecutionBundleFiles  = 34
 )
 
 var fullRunExecutionBundleFiles = []string{
@@ -42,6 +42,7 @@ var fullRunExecutionBundleFiles = []string{
 	"credentials/ledger-token",
 	"credentials/management-ca.crt",
 	"credentials/management-token",
+	"credentials/provider-access-kubeconfig",
 	"input/aggregate-profile.json",
 	"input/authorization-authority.pub",
 	"input/collector-job.yaml",
@@ -51,6 +52,7 @@ var fullRunExecutionBundleFiles = []string{
 	"input/network-profile.json",
 	"input/platform-applications.yaml",
 	"input/platform-profile.json",
+	"input/provider-access-policy.json",
 	"input/projection/authority-map.json",
 	"input/projection/ok-infra-prerequisites.yaml",
 	"input/projection/ok-mgmt-lifecycle.yaml",
@@ -210,6 +212,7 @@ func collectFullRunExecutionSources(document fullRunExecutionManifestDocument, e
 		"credentials/ledger-token":                     document.ProviderPrerequisites.Ledger.TokenFile,
 		"credentials/management-ca.crt":                document.ClusterLifecycle.Authority.CAFile,
 		"credentials/management-token":                 document.ClusterLifecycle.Authority.TokenFile,
+		"credentials/provider-access-kubeconfig":       document.ProviderAccess.KubeconfigFile,
 		"input/aggregate-profile.json":                 document.Profiles.Aggregate.Path,
 		"input/authorization-authority.pub":            document.Authorization.PublicKeyPath,
 		"input/collector-job.yaml":                     document.ObservabilityCollector.JobTemplatePath,
@@ -219,6 +222,7 @@ func collectFullRunExecutionSources(document fullRunExecutionManifestDocument, e
 		"input/network-profile.json":                   document.Profiles.Network.Path,
 		"input/platform-applications.yaml":             document.PlatformApplications.ArtifactPath,
 		"input/platform-profile.json":                  document.Profiles.Platform.Path,
+		"input/provider-access-policy.json":            document.ProviderAccess.PolicyPath,
 		"input/projection/authority-map.json":          filepath.Join(document.Projection.Root, "authority-map.json"),
 		"input/projection/ok-infra-prerequisites.yaml": filepath.Join(document.Projection.Root, "ok-infra-prerequisites.yaml"),
 		"input/projection/ok-mgmt-lifecycle.yaml":      filepath.Join(document.Projection.Root, "ok-mgmt-lifecycle.yaml"),
@@ -294,6 +298,9 @@ func rewriteFullRunExecutionBundle(document fullRunExecutionManifestDocument, so
 	document.Authorization.PublicKeyPath, document.Authorization.OutputDirectory = path("input/authorization-authority.pub"), path("work/authorizations")
 	document.Profiles.Network.Path, document.Profiles.Platform.Path, document.Profiles.Aggregate.Path = path("input/network-profile.json"), path("input/platform-profile.json"), path("input/aggregate-profile.json")
 	document.ProviderPrerequisites = fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: infrastructure}
+	document.ProviderAccess = fullRunProviderAccessDocument{
+		PolicyPath: path("input/provider-access-policy.json"), KubeconfigFile: path("credentials/provider-access-kubeconfig"),
+	}
 	document.ClusterLifecycle = fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: management}
 	document.LifecycleObservation.Ledger, document.LifecycleObservation.Management = ledger, management
 	document.Enablement.ArtifactPath, document.Enablement.Runtime = path("input/enablement.yaml"), fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: management}
