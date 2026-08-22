@@ -19,17 +19,18 @@ type ObservabilityCollectorPostPrefixConfig struct {
 }
 
 type ObservabilityCollectorPostPrefixReceipt struct {
-	Format                         string `json:"format"`
-	State                          string `json:"state"`
-	PackageDigest                  string `json:"packageDigest,omitempty"`
-	RuntimeBindingDigest           string `json:"runtimeBindingDigest,omitempty"`
-	TargetIdentityDigest           string `json:"targetIdentityDigest,omitempty"`
-	RuntimeAuthorityPackageDigest  string `json:"runtimeAuthorityPackageDigest,omitempty"`
-	RuntimeAuthorityReceiptDigest  string `json:"runtimeAuthorityReceiptDigest,omitempty"`
-	RuntimeAuthorityCreatedObjects int    `json:"runtimeAuthorityCreatedObjects"`
-	CredentialReceiptDigest        string `json:"credentialReceiptDigest,omitempty"`
-	LaunchState                    string `json:"launchState,omitempty"`
-	CreatedObjects                 int    `json:"createdObjects"`
+	Format                          string `json:"format"`
+	State                           string `json:"state"`
+	PackageDigest                   string `json:"packageDigest,omitempty"`
+	RuntimeBindingDigest            string `json:"runtimeBindingDigest,omitempty"`
+	TargetIdentityDigest            string `json:"targetIdentityDigest,omitempty"`
+	RuntimeAuthorityPackageDigest   string `json:"runtimeAuthorityPackageDigest,omitempty"`
+	RuntimeAuthorityReceiptDigest   string `json:"runtimeAuthorityReceiptDigest,omitempty"`
+	RuntimeAuthorityCreatedObjects  int    `json:"runtimeAuthorityCreatedObjects"`
+	ObserverCredentialReceiptDigest string `json:"observerCredentialReceiptDigest,omitempty"`
+	CredentialReceiptDigest         string `json:"credentialReceiptDigest,omitempty"`
+	LaunchState                     string `json:"launchState,omitempty"`
+	CreatedObjects                  int    `json:"createdObjects"`
 }
 
 type observabilityCollectorRuntimeLauncher interface {
@@ -51,6 +52,7 @@ type KubernetesObservabilityCollectorPostPrefix struct {
 	build          func(ObservabilityCollectorRuntimePackageConfig) (VerifiedObservabilityCollectorRuntimePackage, error)
 	buildAuthority func(ObservabilityCollectorRuntimeAuthorityPackageConfig) (VerifiedObservabilityCollectorRuntimeAuthorityPackage, error)
 	openAuthority  func(WorkloadAuthorityFileResolverConfig, VerifiedObservabilityCollectorRuntimeAuthorityPackage) (observabilityCollectorRuntimeAuthorityInstaller, error)
+	issueObserver  func(context.Context, ObservabilityCollectorObserverCredentialConfig) (VerifiedObservabilityCollectorObserverCredential, error)
 	issue          func(context.Context, ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error)
 	open           func(submissionStageInstallerClientConfig, VerifiedObservabilityCollectorRuntimePackage) (observabilityCollectorRuntimeLauncher, error)
 	resolve        func(WorkloadAuthorityFileResolverConfig) (WorkloadAuthorityBinding, KubernetesAuthorityConfig, error)
@@ -59,7 +61,7 @@ type KubernetesObservabilityCollectorPostPrefix struct {
 func NewKubernetesObservabilityCollectorPostPrefix(config ObservabilityCollectorPostPrefixConfig) (*KubernetesObservabilityCollectorPostPrefix, error) {
 	if config.Clock == nil || config.Package.Activation.RuntimeBinding.Bundle.PlanPath == "" ||
 		config.Package.Activation.RuntimeBinding.MaterialPath == "" || config.Package.Activation.RuntimeBinding.ReceiptPath == "" ||
-		config.Package.Activation.ObserverCredential.CAFile == "" ||
+		config.Package.Activation.ObserverCredential.CAFile == "" || len(config.Package.Activation.ObserverToken) != 0 ||
 		!stageReceiptPrefixDigestPattern.MatchString(config.Package.Activation.ObserverCredential.CABundleDigest) ||
 		len(config.RuntimeAuthority.Manifest) == 0 || !stageReceiptPrefixDigestPattern.MatchString(config.RuntimeAuthority.ExpectedManifestDigest) ||
 		digest.SHA256(config.RuntimeAuthority.Manifest) != config.RuntimeAuthority.ExpectedManifestDigest || config.RuntimeAuthority.TargetIdentityDigest != "" {
@@ -72,6 +74,13 @@ func NewKubernetesObservabilityCollectorPostPrefix(config ObservabilityCollector
 		buildAuthority: BuildObservabilityCollectorRuntimeAuthorityPackage,
 		openAuthority: func(workload WorkloadAuthorityFileResolverConfig, packaged VerifiedObservabilityCollectorRuntimeAuthorityPackage) (observabilityCollectorRuntimeAuthorityInstaller, error) {
 			return OpenKubernetesObservabilityCollectorRuntimeAuthorityInstaller(workload, packaged)
+		},
+		issueObserver: func(ctx context.Context, config ObservabilityCollectorObserverCredentialConfig) (VerifiedObservabilityCollectorObserverCredential, error) {
+			issuer, err := OpenKubernetesObservabilityCollectorObserverCredentialIssuer(config)
+			if err != nil {
+				return VerifiedObservabilityCollectorObserverCredential{}, err
+			}
+			return issuer.Issue(ctx)
 		},
 		issue: func(ctx context.Context, config ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error) {
 			issuer, err := OpenKubernetesObservabilityCollectorInstallerCredentialIssuer(config)
@@ -110,25 +119,6 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 		activation.stop()
 		return errors.New("observability collector installer differs from runtime workload authority")
 	}
-	packageConfig := activation.config.Package
-	packageConfig.Activation.RuntimeBinding.Bundle.Receipts = append([]StageReceiptSource(nil), prefix.ReceiptPrefix[:6]...)
-	packageConfig.Activation.MaterializationTime = activation.config.Clock().UTC().Truncate(time.Second)
-	packageConfig.Activation.ObserverCredential.AuthorityIdentity = prefix.TargetIdentity
-	packaged, err := activation.build(packageConfig)
-	if err != nil {
-		activation.stop()
-		return errors.New("build observability collector post-prefix package")
-	}
-	packageReceipt, err := packaged.Receipt()
-	if err != nil {
-		activation.stop()
-		return errors.New("verify observability collector post-prefix package")
-	}
-	plan, err := PlanObservabilityCollectorRuntimeInstallation(packaged)
-	if err != nil || plan.TargetIdentityDigest != prefix.TargetIdentity || plan.RuntimeBindingDigest != packageReceipt.RuntimeBindingDigest {
-		activation.stop()
-		return errors.New("observability collector package differs from fresh runtime prefix")
-	}
 	authorityConfig := activation.config.RuntimeAuthority
 	authorityConfig.TargetIdentityDigest = prefix.TargetIdentity
 	authorityPackage, err := activation.buildAuthority(authorityConfig)
@@ -159,6 +149,43 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 		authorityInstallReceipt.TargetIdentityDigest != prefix.TargetIdentity || authorityInstallReceipt.PackageDigest != authorityPackageReceipt.PackageDigest {
 		activation.stop()
 		return errors.New("install observability collector runtime authority")
+	}
+	observerCredential, err := activation.issueObserver(ctx, ObservabilityCollectorObserverCredentialConfig{
+		Workload: prefix.Workload, ExpectedTargetDigest: prefix.TargetIdentity, Clock: activation.config.Clock,
+	})
+	if err != nil {
+		activation.stop()
+		return errors.New("issue observability collector observer credential")
+	}
+	observerSource, observerToken, observerReceipt, err := observerCredential.Material()
+	if err != nil || observerSource.AuthorityIdentity != prefix.TargetIdentity || observerSource.CABundleDigest != authority.CABundleDigest {
+		activation.stop()
+		return errors.New("verify observability collector observer credential")
+	}
+	observerReceiptRaw, err := json.Marshal(observerReceipt)
+	if err != nil {
+		activation.stop()
+		return errors.New("encode observability collector observer credential receipt")
+	}
+	packageConfig := activation.config.Package
+	packageConfig.Activation.RuntimeBinding.Bundle.Receipts = append([]StageReceiptSource(nil), prefix.ReceiptPrefix[:6]...)
+	packageConfig.Activation.MaterializationTime = activation.config.Clock().UTC().Truncate(time.Second)
+	packageConfig.Activation.ObserverCredential = observerSource
+	packageConfig.Activation.ObserverToken = observerToken
+	packaged, err := activation.build(packageConfig)
+	if err != nil {
+		activation.stop()
+		return errors.New("build observability collector post-prefix package")
+	}
+	packageReceipt, err := packaged.Receipt()
+	if err != nil {
+		activation.stop()
+		return errors.New("verify observability collector post-prefix package")
+	}
+	plan, err := PlanObservabilityCollectorRuntimeInstallation(packaged)
+	if err != nil || plan.TargetIdentityDigest != prefix.TargetIdentity || plan.RuntimeBindingDigest != packageReceipt.RuntimeBindingDigest {
+		activation.stop()
+		return errors.New("observability collector package differs from fresh runtime prefix")
 	}
 	credential, err := activation.issue(ctx, ObservabilityCollectorInstallerCredentialConfig{
 		Workload: prefix.Workload, ExpectedTargetDigest: prefix.TargetIdentity, Clock: activation.config.Clock,
@@ -192,6 +219,7 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	activation.receipt.PackageDigest = packageReceipt.PackageDigest
 	activation.receipt.RuntimeBindingDigest = packageReceipt.RuntimeBindingDigest
 	activation.receipt.TargetIdentityDigest = prefix.TargetIdentity
+	activation.receipt.ObserverCredentialReceiptDigest = digest.SHA256(observerReceiptRaw)
 	activation.receipt.CredentialReceiptDigest = digest.SHA256(credentialReceiptRaw)
 	activation.receipt.LaunchState = launchReceipt.State
 	activation.receipt.CreatedObjects = len(launchReceipt.Results)

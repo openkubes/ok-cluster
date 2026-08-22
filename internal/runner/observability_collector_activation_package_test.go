@@ -136,6 +136,30 @@ func TestBuildObservabilityCollectorActivationPackageFailsClosed(t *testing.T) {
 	}
 }
 
+func TestBuildObservabilityCollectorActivationPackageAcceptsOnlyBoundInMemoryObserverToken(t *testing.T) {
+	config, cleanup := observabilityCollectorActivationFixture(t)
+	defer cleanup()
+	token, err := os.ReadFile(config.ObserverCredential.TokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ObserverCredential.TokenFile = ""
+	config.ObserverToken = token
+	packaged, err := BuildObservabilityCollectorActivationPackage(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := packaged.Receipt()
+	if err != nil || receipt.ObserverTokenRequestEvidence != config.ObserverCredential.TokenRequestEvidenceDigest {
+		t.Fatalf("in-memory observer credential was not bound: %#v %v", receipt, err)
+	}
+	config.ObserverToken = append([]byte(nil), token...)
+	config.ObserverToken[len(config.ObserverToken)-1] ^= 1
+	if packaged, err := BuildObservabilityCollectorActivationPackage(config); err == nil || packaged.verified {
+		t.Fatal("changed in-memory observer credential was accepted")
+	}
+}
+
 func observabilityCollectorActivationFixture(t *testing.T) (ObservabilityCollectorActivationPackageConfig, func()) {
 	t.Helper()
 	manifestPath, cleanup := fullRunExecutionManifestFixture(t)

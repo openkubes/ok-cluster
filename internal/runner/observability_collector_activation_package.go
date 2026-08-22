@@ -50,6 +50,7 @@ type ObservabilityCollectorActivationPackageConfig struct {
 	ActivationSecret       string
 	MaterializationTime    time.Time
 	ObserverCredential     SubmissionStageCredentialSource
+	ObserverToken          []byte
 	WebhookTokenPath       string
 	QueryTokenPath         string
 	PublicEndpoint         string
@@ -180,7 +181,7 @@ func BuildObservabilityCollectorActivationPackage(config ObservabilityCollectorA
 		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("observability collector observer credential identity is invalid")
 	}
 	observerReceipt, workloadToken, err := loadObservabilityCollectorObserverCredential(
-		config.ObserverCredential, targetAuthority, expectedSubject, config.MaterializationTime.UTC(),
+		config.ObserverCredential, config.ObserverToken, targetAuthority, expectedSubject, config.MaterializationTime.UTC(),
 	)
 	if err != nil {
 		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("verify observability collector observer credential")
@@ -485,14 +486,26 @@ func loadObservabilityCollectorTLS(certificatePath, privateKeyPath, publicEndpoi
 	return certificateRaw, privateKeyRaw, digest.SHA256(certificateRaw), nil
 }
 
-func loadObservabilityCollectorObserverCredential(source SubmissionStageCredentialSource, authority, expectedSubject string, now time.Time) (observabilityCollectorObserverCredential, []byte, error) {
-	if source.AuthorityIdentity != authority || authority == "" || source.TokenFile == "" || source.CAFile == "" ||
+func loadObservabilityCollectorObserverCredential(source SubmissionStageCredentialSource, inMemoryToken []byte, authority, expectedSubject string, now time.Time) (observabilityCollectorObserverCredential, []byte, error) {
+	if source.AuthorityIdentity != authority || authority == "" || source.CAFile == "" ||
 		!stageReceiptPrefixDigestPattern.MatchString(source.TokenDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(source.CABundleDigest) ||
 		!stageReceiptPrefixDigestPattern.MatchString(source.TokenRequestEvidenceDigest) {
 		return observabilityCollectorObserverCredential{}, nil, errors.New("observability collector observer credential source is invalid")
 	}
-	token, err := readBoundedRegular(source.TokenFile, maximumTokenBytes)
+	var token []byte
+	var err error
+	if len(inMemoryToken) != 0 {
+		if source.TokenFile != "" || len(inMemoryToken) > maximumTokenBytes {
+			return observabilityCollectorObserverCredential{}, nil, errors.New("observability collector in-memory observer token is invalid")
+		}
+		token = append([]byte(nil), inMemoryToken...)
+	} else {
+		if source.TokenFile == "" {
+			return observabilityCollectorObserverCredential{}, nil, errors.New("observability collector observer token source is missing")
+		}
+		token, err = readBoundedRegular(source.TokenFile, maximumTokenBytes)
+	}
 	if err != nil || digest.SHA256(token) != source.TokenDigest {
 		return observabilityCollectorObserverCredential{}, nil, errors.New("observability collector observer token differs from source")
 	}
