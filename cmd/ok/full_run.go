@@ -372,8 +372,13 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 		return errors.New("--manifest, --independent-evidence-public-key and a lowercase SHA-256 --expected-manifest-digest are required")
 	}
 	verified, err := prepareFullRunExecutionManifest(*manifestPath)
-	if err != nil || verified.Format != runner.FullRunExecutionManifestReceiptFormat || verified.State != "VERIFIED" ||
-		verified.MutationAllowed || verified.ManifestDigest != *expectedManifestDigest {
+	if err != nil {
+		return fmt.Errorf("prepare full-run manifest: %w", err)
+	}
+	if verified.Format != runner.FullRunExecutionManifestReceiptFormat || verified.State != "VERIFIED" || verified.MutationAllowed {
+		return errors.New("full-run manifest preparation did not produce a verified identity")
+	}
+	if verified.ManifestDigest != *expectedManifestDigest {
 		return errors.New("full-run manifest differs from the prepared identity")
 	}
 	activation, prepared, err := openKubernetesObservabilityFullRunActivation(*manifestPath, *evidencePublicKey)
@@ -381,8 +386,10 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 		return err
 	}
 	if activation == nil || prepared.Format != runner.FullRunExecutionActivationReceiptFormat || prepared.State != "PREPARED" ||
-		prepared.Execution != nil || prepared.Manifest.State != "VERIFIED" || prepared.Manifest.MutationAllowed ||
-		prepared.Manifest != verified {
+		prepared.Execution != nil || prepared.Manifest.State != "VERIFIED" || prepared.Manifest.MutationAllowed {
+		return errors.New("full-run activation did not produce a prepared identity")
+	}
+	if prepared.Manifest != verified {
 		return errors.New("full-run manifest differs from the prepared identity")
 	}
 	bounded, cancel := context.WithTimeout(ctx, fullRunExecutionTimeout)
