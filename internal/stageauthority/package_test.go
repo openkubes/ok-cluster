@@ -25,7 +25,8 @@ func TestBuildRuntimePackageBindsPrivateSecretAndRestartSafeRuntime(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.State != "VERIFIED" || receipt.PackageDigest != digest.SHA256(raw) || receipt.PolicyDigest != config.ExpectedPolicyDigest ||
+	if receipt.Format != RuntimePackageFormat || receipt.State != "VERIFIED" || receipt.PackageDigest != digest.SHA256(raw) || receipt.PolicyDigest != config.ExpectedPolicyDigest ||
+		receipt.ServiceIdentityDigest != digest.SHA256([]byte(config.ServiceIP)) ||
 		receipt.PrivateFileCount != 5 || len(receipt.ObjectKinds) != 6 || receipt.MutationAllowed {
 		t.Fatalf("unexpected package receipt: %#v", receipt)
 	}
@@ -39,7 +40,7 @@ func TestBuildRuntimePackageBindsPrivateSecretAndRestartSafeRuntime(t *testing.T
 	}
 	runtime := string(parts[1])
 	for _, required := range []string{
-		"kind: PersistentVolumeClaim", "kind: StatefulSet", "replicas: 1", "automountServiceAccountToken: false",
+		"kind: PersistentVolumeClaim", "kind: StatefulSet", "replicas: 1", "automountServiceAccountToken: false", "clusterIP: \"" + config.ServiceIP + "\"",
 		"readOnlyRootFilesystem: true", "egress: []", "authority\n            - stage\n            - materialize",
 		"/var/lib/openkubes/stage-authority/claims", config.ImageDigest, config.ExpectedPolicyDigest,
 	} {
@@ -63,6 +64,16 @@ func TestBuildRuntimePackageRejectsChangedTemplateAndMutableIdentity(t *testing.
 	if _, err := BuildRuntimePackage(config); err == nil {
 		t.Fatal("mutable image was accepted")
 	}
+	config = runtimePackageFixture(t)
+	config.ServiceIP = "authority.openkubes-execution-system.svc"
+	if _, err := BuildRuntimePackage(config); err == nil {
+		t.Fatal("non-IP authority Service identity was accepted")
+	}
+	config = runtimePackageFixture(t)
+	config.ServiceIP = "10.43.250.148"
+	if _, err := BuildRuntimePackage(config); err == nil {
+		t.Fatal("TLS identity that does not bind the Service IP was accepted")
+	}
 }
 
 func runtimePackageFixture(t *testing.T) RuntimePackageConfig {
@@ -82,6 +93,6 @@ func runtimePackageFixture(t *testing.T) RuntimePackageConfig {
 		TLSCertPath: certPath, TLSKeyPath: tlsKeyPath, Template: template, TemplateDigest: digest.SHA256(template),
 		ImageDigest: "ghcr.io/openkubes/ok-cluster-runner@sha256:" + strings.Repeat("a", 64),
 		Namespace:   "openkubes-execution-system", Name: "ok147-stage-authority", PrivateSecret: "ok147-stage-authority-private",
-		StorageClass: "local-path", StorageRequest: "64Mi",
+		StorageClass: "local-path", StorageRequest: "64Mi", ServiceIP: "10.43.250.147",
 	}
 }

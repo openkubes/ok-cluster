@@ -108,7 +108,7 @@ one client token and the pinned runtime template. The package contains exactly:
 immutable private Secret
 ServiceAccount without automounted token
 64Mi (configurable) restart-safe claim PVC
-ClusterIP Service
+Service with an exact private ClusterIP
 deny-by-default NetworkPolicy
 single-replica StatefulSet
 ```
@@ -120,8 +120,11 @@ private claim directory on the PVC. Partial materialization is preserved and
 never cleaned up or overwritten automatically.
 
 The package receipt contains only component digests, public key identity,
-image identity and object kinds. The package itself contains secrets and must
-remain a private `0600` artifact.
+image identity, a digest of the fixed Service IP and object kinds. The fixed
+address lets the TLS identity, runner authorization endpoint and single-address
+NetworkPolicy egress agree before any object is created; the raw address stays
+inside the private package. The package itself contains secrets and must remain
+a private `0600` artifact.
 
 ```bash
 ok authority stage package \
@@ -136,6 +139,7 @@ ok authority stage package \
   --image ghcr.io/openkubes/ok-cluster-runner@sha256:<image-digest> \
   --storage-class local-path \
   --storage-request 64Mi \
+  --service-ip <reviewed-unused-private-cluster-ip> \
   --output /private/ok147-stage-authority-package.yaml
 ```
 

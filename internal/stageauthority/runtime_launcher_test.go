@@ -36,7 +36,7 @@ func TestPlanRuntimeInstallationBindsExactSixObjectOrder(t *testing.T) {
 		t.Fatal("runtime package accepted a non-management authority")
 	}
 	public, _ := json.Marshal(plan)
-	for _, forbidden := range []string{"token", "authority.key", "tls.key", "secretobjectdigest"} {
+	for _, forbidden := range []string{"token", "authority.key", "tls.key", "secretobjectdigest", "10.43.250.147"} {
 		if strings.Contains(strings.ToLower(string(public)), forbidden) {
 			t.Fatalf("plan disclosed %q", forbidden)
 		}
