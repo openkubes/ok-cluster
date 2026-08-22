@@ -216,6 +216,9 @@ spec:
               - {key: input.projection.authority-map.json, path: input/projection/authority-map.json}
               - {key: input.projection.ok-infra-prerequisites.yaml, path: input/projection/ok-infra-prerequisites.yaml}
               - {key: input.projection.ok-mgmt-lifecycle.yaml, path: input/projection/ok-mgmt-lifecycle.yaml}
+              - {key: input.projection.renderer-input.yaml, path: input/projection/renderer-input.yaml}
+              - {key: input.projection.renderer-source.yaml, path: input/projection/renderer-source.yaml}
+              - {key: input.projection.resolved-renderer-input.yaml, path: input/projection/resolved-renderer-input.yaml}
               - {key: input.projection-manifest.json, path: input/projection-manifest.json}
               - {key: input.staged-plan.json, path: input/staged-plan.json}
               - {key: input.target-access.yaml, path: input/target-access.yaml}

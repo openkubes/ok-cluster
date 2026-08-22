@@ -64,12 +64,15 @@ func TestBuildFullRunExecutionBundleIsDeterministicAndSelfContained(t *testing.T
 		t.Fatal("semantic full-run identity changed during path rewrite")
 	}
 	for relative, sourcePath := range map[string]string{
-		"input/staged-plan.json":                 source.document.Plan.Path,
-		"input/enablement.yaml":                  source.document.Enablement.ArtifactPath,
-		"input/platform-applications.yaml":       source.document.PlatformApplications.ArtifactPath,
-		"input/provider-access-policy.json":      source.document.ProviderAccess.PolicyPath,
-		"credentials/provider-access-kubeconfig": source.document.ProviderAccess.KubeconfigFile,
-		"input/independent-evidence.pub":         publicKeyPath,
+		"input/staged-plan.json":                        source.document.Plan.Path,
+		"input/enablement.yaml":                         source.document.Enablement.ArtifactPath,
+		"input/platform-applications.yaml":              source.document.PlatformApplications.ArtifactPath,
+		"input/provider-access-policy.json":             source.document.ProviderAccess.PolicyPath,
+		"credentials/provider-access-kubeconfig":        source.document.ProviderAccess.KubeconfigFile,
+		"input/independent-evidence.pub":                publicKeyPath,
+		"input/projection/renderer-input.yaml":          filepath.Join(source.document.Projection.Root, "renderer-input.yaml"),
+		"input/projection/renderer-source.yaml":         filepath.Join(source.document.Projection.Root, "renderer-source.yaml"),
+		"input/projection/resolved-renderer-input.yaml": filepath.Join(source.document.Projection.Root, "resolved-renderer-input.yaml"),
 	} {
 		want, readErr := os.ReadFile(sourcePath)
 		if readErr != nil || !bytes.Equal(bundle.files[relative], want) {
@@ -97,6 +100,19 @@ func TestBuildFullRunExecutionBundleRejectsForeignOrIncompleteSources(t *testing
 		},
 		"missing manifest": func(_ *testing.T, manifestPath string, config *FullRunExecutionBundleConfig) {
 			config.ManifestPath = manifestPath + ".missing"
+		},
+		"missing renderer provenance": func(t *testing.T, manifestPath string, _ *FullRunExecutionBundleConfig) {
+			raw, err := os.ReadFile(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document fullRunExecutionManifestDocument
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(document.Projection.Root, "renderer-source.yaml")); err != nil {
+				t.Fatal(err)
+			}
 		},
 		"invalid authorization token": func(t *testing.T, manifestPath string, _ *FullRunExecutionBundleConfig) {
 			raw, err := os.ReadFile(manifestPath)

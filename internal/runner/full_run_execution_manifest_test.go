@@ -317,12 +317,22 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 		"managementPlane":     map[string]any{"identity": "ok-mgmt", "role": "single-lifecycle-writer", "resources": []map[string]any{{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "namespace": "disposable-ok147", "name": "disposable-ok147"}}},
 		"providerAccess":      map[string]any{}, "excludedRendererArtifacts": []any{},
 	})
+	rendererInput := []byte("apiVersion: openkubes.io/v1alpha1\nkind: ClusterContract\nmetadata:\n  name: disposable-ok147\n")
+	rendererSource := []byte("renderer: ok-cluster\nprofile: datacenter-isolated-v1\n")
+	resolvedRendererInput := []byte("clusterName: disposable-ok147\nworkerCount: 1\n")
 	writeBundleFile(t, root, "authority-map.json", authority)
 	writeBundleFile(t, root, "ok-infra-prerequisites.yaml", infra)
 	writeBundleFile(t, root, "ok-mgmt-lifecycle.yaml", management)
+	writeBundleFile(t, root, "renderer-input.yaml", rendererInput)
+	writeBundleFile(t, root, "renderer-source.yaml", rendererSource)
+	writeBundleFile(t, root, "resolved-renderer-input.yaml", resolvedRendererInput)
 	projectionManifest := mustJSON(t, map[string]any{
 		"format": "ok141-contract-to-capi-projection/v2", "R": expected.IntentRevision, "authorizationState": "NO-GO",
-		"artifacts":      map[string]any{"authority-map.json": digest.SHA256(authority), "ok-infra-prerequisites.yaml": digest.SHA256(infra), "ok-mgmt-lifecycle.yaml": digest.SHA256(management)},
+		"artifacts": map[string]any{
+			"authority-map.json": digest.SHA256(authority), "ok-infra-prerequisites.yaml": digest.SHA256(infra),
+			"ok-mgmt-lifecycle.yaml": digest.SHA256(management), "renderer-input.yaml": digest.SHA256(rendererInput),
+			"renderer-source.yaml": digest.SHA256(rendererSource), "resolved-renderer-input.yaml": digest.SHA256(resolvedRendererInput),
+		},
 		"objectSets":     map[string]any{"okInfraPrerequisites": map[string]any{"count": 1, "digest": runnerStageSHA("1")}, "okMgmtLifecycle": map[string]any{"count": 1, "digest": runnerStageSHA("2")}},
 		"providerAccess": map[string]any{}, "source": map[string]any{},
 	})
