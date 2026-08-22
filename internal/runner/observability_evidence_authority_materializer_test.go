@@ -107,7 +107,7 @@ func observabilityEvidenceAuthorityMaterializerFixture(t *testing.T) (Observabil
 		t.Fatal(err)
 	}
 	for _, name := range observabilityEvidenceAuthorityProjectedFiles {
-		decoded, decodeErr := base64.StdEncoding.DecodeString(secret.BinaryData[name])
+		decoded, decodeErr := base64.StdEncoding.DecodeString(secret.Data[name])
 		if decodeErr != nil {
 			t.Fatal(decodeErr)
 		}

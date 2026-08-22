@@ -114,10 +114,10 @@ func PlanObservabilityCollectorRuntimeInstallation(packaged VerifiedObservabilit
 		case "Secret":
 			annotations, _ := metadata["annotations"].(map[string]any)
 			labels, _ := metadata["labels"].(map[string]any)
-			binaryData, _ := object["binaryData"].(map[string]any)
+			data, _ := object["data"].(map[string]any)
 			if name != receipt.ActivationSecret || object["immutable"] != true || object["type"] != "Opaque" ||
 				labels["openkubes.io/stage-id"] != "independent-evidence" || annotations["openkubes.io/manifest-digest"] != receipt.ManifestDigest ||
-				annotations["openkubes.io/activation-digest"] != receipt.ActivationDigest || len(binaryData) != 7 {
+				annotations["openkubes.io/activation-digest"] != receipt.ActivationDigest || len(data) != 7 {
 				return ObservabilityCollectorRuntimeInstallationPlan{}, errors.New("observability collector Secret semantics differ")
 			}
 		case "Service":

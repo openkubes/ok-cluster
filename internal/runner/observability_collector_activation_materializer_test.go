@@ -159,7 +159,7 @@ func collectorActivationProjectionFixture(t *testing.T) (ObservabilityCollectorA
 		t.Fatal(err)
 	}
 	for _, name := range observabilityCollectorProjectedFiles {
-		decoded, decodeErr := base64.StdEncoding.DecodeString(secret.BinaryData[name])
+		decoded, decodeErr := base64.StdEncoding.DecodeString(secret.Data[name])
 		if decodeErr != nil {
 			t.Fatal(decodeErr)
 		}

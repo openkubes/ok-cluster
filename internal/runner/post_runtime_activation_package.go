@@ -75,7 +75,7 @@ type postRuntimeActivationSecret struct {
 	Metadata   postRuntimeActivationSecretMetadata `json:"metadata"`
 	Immutable  bool                                `json:"immutable"`
 	Type       string                              `json:"type"`
-	BinaryData map[string]string                   `json:"binaryData"`
+	Data       map[string]string                   `json:"data"`
 }
 
 type postRuntimeActivationSecretMetadata struct {
@@ -150,7 +150,7 @@ func BuildPostRuntimeExecutionActivationPackage(config PostRuntimeExecutionActiv
 		binaryData[strings.ReplaceAll(path, "/", ".")] = base64.StdEncoding.EncodeToString(files[path])
 	}
 	secret := postRuntimeActivationSecret{
-		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", BinaryData: binaryData,
+		APIVersion: "v1", Kind: "Secret", Immutable: true, Type: "Opaque", Data: binaryData,
 		Metadata: postRuntimeActivationSecretMetadata{
 			Name: config.ActivationSecret, Namespace: submissionStageInputNamespace,
 			Labels: map[string]string{

@@ -52,10 +52,10 @@ func TestBuildObservabilityEvidenceAuthorityPackageBindsPrivateAuthority(t *test
 		t.Fatal(err)
 	}
 	if secret.Kind != "Secret" || !secret.Immutable || secret.Metadata.Namespace != submissionStageInputNamespace ||
-		secret.Metadata.Name != config.ActivationSecret || len(secret.BinaryData) != 4 {
+		secret.Metadata.Name != config.ActivationSecret || len(secret.Data) != 4 {
 		t.Fatalf("unexpected evidence authority Secret: %#v", secret)
 	}
-	activationRaw, err := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityActivationKey])
+	activationRaw, err := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityActivationKey])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,9 +72,9 @@ func TestBuildObservabilityEvidenceAuthorityPackageBindsPrivateAuthority(t *test
 		activation.CollectorEndpoint != config.CollectorEndpoint || activation.IdentityWaitTimeout != "30m0s" {
 		t.Fatalf("evidence authority activation differs: %#v", activation)
 	}
-	privateKey, _ := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityPrivateKeyKey])
-	token, _ := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityCollectorToken])
-	ca, _ := base64.StdEncoding.DecodeString(secret.BinaryData[observabilityEvidenceAuthorityCollectorCA])
+	privateKey, _ := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityPrivateKeyKey])
+	token, _ := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityCollectorToken])
+	ca, _ := base64.StdEncoding.DecodeString(secret.Data[observabilityEvidenceAuthorityCollectorCA])
 	if len(privateKey) == 0 || string(token) != "independent-evidence-token" || digest.SHA256(ca) != receipt.CollectorCADigest {
 		t.Fatal("private evidence authority material differs from verified sources")
 	}

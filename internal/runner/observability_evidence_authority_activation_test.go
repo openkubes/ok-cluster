@@ -39,7 +39,7 @@ func TestObservabilityEvidenceAuthorityActivationRunsOneBoundedProduction(t *tes
 	if err := json.Unmarshal(raw, &secret); err != nil {
 		t.Fatal(err)
 	}
-	for key, encoded := range secret.BinaryData {
+	for key, encoded := range secret.Data {
 		content, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			t.Fatal(err)
@@ -113,7 +113,7 @@ func TestOpenObservabilityEvidenceAuthorityActivationFailsClosed(t *testing.T) {
 	if err := json.Unmarshal(raw, &secret); err != nil {
 		t.Fatal(err)
 	}
-	for key, encoded := range secret.BinaryData {
+	for key, encoded := range secret.Data {
 		content, _ := base64.StdEncoding.DecodeString(encoded)
 		if err := os.WriteFile(filepath.Join(authorityRoot, key), content, 0o600); err != nil {
 			t.Fatal(err)

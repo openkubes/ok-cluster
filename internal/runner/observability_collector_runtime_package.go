@@ -205,7 +205,7 @@ func observabilityCollectorActivationFromSecret(raw []byte) (ObservabilityCollec
 	if err := jsonstrict.Decode(raw, &secret); err != nil || secret.Kind != "Secret" || !secret.Immutable {
 		return ObservabilityCollectorActivation{}, errors.New("decode observability collector activation Secret")
 	}
-	activationRaw, err := base64.StdEncoding.Strict().DecodeString(secret.BinaryData[observabilityCollectorActivationKey])
+	activationRaw, err := base64.StdEncoding.Strict().DecodeString(secret.Data[observabilityCollectorActivationKey])
 	if err != nil {
 		return ObservabilityCollectorActivation{}, errors.New("decode observability collector activation")
 	}
