@@ -64,6 +64,30 @@ func TestFullRunExecutionActivationPreservesStoppedExecution(t *testing.T) {
 	}
 }
 
+func TestFullRunExecutionActivationRetainsRedactedPostPrefixReceipt(t *testing.T) {
+	execution := &recordingFullRunManifestExecution{receipt: successfulFullRunActivationExecutionReceipt()}
+	postPrefix := ObservabilityCollectorPostPrefixReceipt{
+		Format: ObservabilityCollectorPostPrefixReceiptFormat, State: "ACTIVATED",
+		PackageDigest: runnerStageSHA("1"), RuntimeBindingDigest: runnerStageSHA("2"), TargetIdentityDigest: runnerStageSHA("3"),
+		RuntimeAuthorityPackageDigest: runnerStageSHA("4"), RuntimeAuthorityReceiptDigest: runnerStageSHA("5"), RuntimeAuthorityCreatedObjects: 5,
+		ObserverCredentialReceiptDigest: runnerStageSHA("6"), CredentialReceiptDigest: runnerStageSHA("a"),
+		LaunchState: "ACTIVATED", CreatedObjects: 4,
+	}
+	activation := &FullRunExecutionActivation{
+		execution: execution, manifest: verifiedFullRunActivationManifestReceipt(),
+		postPrefixReceipt: func() ObservabilityCollectorPostPrefixReceipt { return postPrefix },
+	}
+	receipt, err := activation.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || receipt.PostPrefix == nil || !reflect.DeepEqual(*receipt.PostPrefix, postPrefix) {
+		t.Fatalf("post-prefix receipt was not retained: %#v err=%v", receipt, err)
+	}
+	raw, err := json.Marshal(receipt)
+	if err != nil || strings.Contains(strings.ToLower(string(raw)), "token") || strings.Contains(strings.ToLower(string(raw)), "endpoint") ||
+		strings.Contains(strings.ToLower(string(raw)), "kubeconfig") || strings.Contains(strings.ToLower(string(raw)), "certificate") {
+		t.Fatalf("post-prefix receipt disclosed private material: %s err=%v", raw, err)
+	}
+}
+
 func TestFullRunExecutionActivationAllowsOneConcurrentRun(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

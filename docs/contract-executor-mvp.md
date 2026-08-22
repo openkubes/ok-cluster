@@ -8,14 +8,12 @@ observation and evaluation components and offline Kubernetes workload
 packaging. The stages are now composed into a typed in-process Stage 1-7 prefix,
 a Stage 8-12 suffix and a receipt-bound, single-use full-run execution seam. The
 Stage 1-7 prefix and Stage 8-12 suffix both have concrete single-use execution
-adapters; only the post-runtime suffix currently has a bounded ephemeral Job
-activation path.
-That Job path is fully exercised offline and against fake APIs, but has not yet
-been run on the DEV management plane. The full-run library is not yet exposed
-as one local or Job-based CreateCluster activation. A strict private full-run
-manifest now verifies the complete fresh-run input boundary offline, but does
-not yet open that execution. It is still an MVP rather than a general lifecycle
-runner or controller.
+adapters. The joined path has local prepare/execute commands and one bounded
+ephemeral Job activation package. That path is fully exercised offline and
+against fake APIs, but has not yet been run on the DEV management plane. A
+strict private full-run manifest v2 verifies and opens the complete fresh-run
+input boundary, including the post-Stage-7 independent-evidence collector. It
+is still an MVP rather than a general lifecycle runner or controller.
 
 ```text
 versioned contract + test schema
@@ -3649,8 +3647,8 @@ durable receipts. This is not yet the OK-147 Definition of Done:
   separate prepare/execute CLI;
 - the independent-evidence collector has an exact private package replay,
   non-authorizing installation plan and single-use workload-cluster launcher;
-  the Stage-7-to-Stage-8 handoff now has an ordered fail-closed activator seam,
-  and its concrete package/launcher factory is single-use and runtime-bound;
+  the Stage-7-to-Stage-8 handoff opens that concrete runtime-bound factory
+  directly from the private manifest v2 and blocks Stage 8 until activation;
 - the standalone Stage-12 launcher has not yet been executed as part of the
   complete predecessor-bound stage chain;
 - the current staged-library source is published as the immutable multi-platform
@@ -3673,11 +3671,12 @@ private `0600` files with the binding last. It has no list, watch, discovery,
 Kubernetes mutation, retry or cleanup surface. The verified full-run manifest
 now opens that materializer, all concrete Stage 1-12 adapters and the shared
 single-execution Platform capability session without contacting a cluster.
-The remaining implementation work is binding the concrete post-prefix factory
-inputs into the local/Job activation package and CLI. Stage 8-12 is already
-structurally unable to open before that activator succeeds. This is not a new
-controller or reconciliation mechanism.
-After that, live closure must
+The full-run activation receipt now retains the collector's redaction-safe
+post-prefix receipt after execution. Its authority/package, observer credential,
+installer credential, runtime-binding and launch identities are therefore
+reviewable without exposing tokens, endpoints or private paths. This is not a
+new controller or reconciliation mechanism.
+Live closure must next
 publish the current image, construct fresh short-lived private inputs, run the
 exact bounded activation on `ok-mgmt`, preserve a stopped partial state without
 automatic retry, and separately repeat disposable-cluster and
