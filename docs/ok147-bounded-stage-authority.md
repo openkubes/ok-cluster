@@ -139,10 +139,58 @@ ok authority stage package \
   --output /private/ok147-stage-authority-package.yaml
 ```
 
-## Deployment and ownership limits
+## Bounded installation launcher
 
-A live installation is not authorized by this implementation checkpoint. A
-later activation checkpoint must bind the verified package digest and verify:
+`ok authority stage launch prepare` replays the private package from a `0600`
+file, binds its exact public receipt and produces the six-object installation
+plan without opening a Kubernetes credential or contacting a cluster:
+
+```bash
+ok authority stage launch prepare \
+  --package /private/ok147-stage-authority-package.yaml \
+  --package-receipt /reviewed/ok147-stage-authority-package-receipt.json \
+  --expected-package-receipt-digest sha256:<receipt-file-digest> \
+  --installer-authority ok-mgmt
+```
+
+The plan fixes the complete absence preflight and create sequence:
+
+```text
+Secret -> ServiceAccount -> PersistentVolumeClaim
+       -> Service -> NetworkPolicy -> StatefulSet
+```
+
+`ok authority stage launch execute --execute` additionally requires the exact
+private package digest, a short-lived installer token, an independently bound
+CA digest and the IP-literal HTTPS endpoint of `ok-mgmt`. It repeats all six
+exact-name GETs before the first POST and then creates the six objects in the
+fixed order. Existing state stops with zero writes. An attempted or uncertain
+write stops as partial state. The launcher is single-use and exposes no update,
+patch, apply, adoption, delete, cleanup, rollback, list, watch or retry path.
+
+```bash
+ok authority stage launch execute \
+  --package /private/ok147-stage-authority-package.yaml \
+  --package-receipt /reviewed/ok147-stage-authority-package-receipt.json \
+  --expected-package-receipt-digest sha256:<receipt-file-digest> \
+  --expected-package-digest sha256:<private-package-digest> \
+  --installer-authority ok-mgmt \
+  --installer-api-endpoint https://<ok-mgmt-api-ip>:6443 \
+  --installer-token-file /private/installer.token \
+  --installer-ca-file /private/installer-ca.crt \
+  --installer-ca-digest sha256:<ca-digest> \
+  --execute
+```
+
+The receipt contains only package identity plus digests of the UID and
+resourceVersion returned for each verified created object. It never records
+the Secret, token, endpoint, raw UID or raw resourceVersion.
+
+## Activation and ownership limits
+
+The presence of this launcher does not authorize a live installation. A live
+activation checkpoint must separately bind the verified package digest and
+verify:
 
 - exactly one replica for the bounded DEV run;
 - durable private claim state across process restarts;

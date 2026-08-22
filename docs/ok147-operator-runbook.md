@@ -64,6 +64,13 @@ domains. The former may sign an exact mutation decision; the latter must prove
 real receiver delivery and autonomy. Neither may substitute static success for
 the other's evidence.
 
+Before preparing the full-run activation, install the authority only through
+the two-step offline/live boundary documented in
+[bounded DEV stage authority](ok147-bounded-stage-authority.md): first review
+`authority stage launch prepare`, then separately authorize the single-use
+`authority stage launch execute --execute`. The launcher proves all six exact
+names absent before creating anything and cannot update, delete or retry.
+
 ## Preflight
 
 1. Verify that the source commit, image digest, attestation and publication
