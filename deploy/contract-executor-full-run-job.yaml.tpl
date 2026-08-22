@@ -190,6 +190,10 @@ spec:
               - {key: activation.full-run-manifest.json, path: activation/full-run-manifest.json}
               - {key: credentials.authorization-ca.crt, path: credentials/authorization-ca.crt}
               - {key: credentials.authorization-token, path: credentials/authorization-token}
+              - {key: credentials.collector-query-token, path: credentials/collector-query-token}
+              - {key: credentials.collector-tls.crt, path: credentials/collector-tls.crt}
+              - {key: credentials.collector-tls.key, path: credentials/collector-tls.key}
+              - {key: credentials.collector-webhook-token, path: credentials/collector-webhook-token}
               - {key: credentials.gitops-ca.crt, path: credentials/gitops-ca.crt}
               - {key: credentials.gitops-token, path: credentials/gitops-token}
               - {key: credentials.infrastructure-ca.crt, path: credentials/infrastructure-ca.crt}
@@ -200,6 +204,8 @@ spec:
               - {key: credentials.management-token, path: credentials/management-token}
               - {key: input.aggregate-profile.json, path: input/aggregate-profile.json}
               - {key: input.authorization-authority.pub, path: input/authorization-authority.pub}
+              - {key: input.collector-job.yaml, path: input/collector-job.yaml}
+              - {key: input.collector-runtime-authority.yaml, path: input/collector-runtime-authority.yaml}
               - {key: input.enablement.yaml, path: input/enablement.yaml}
               - {key: input.independent-evidence.pub, path: input/independent-evidence.pub}
               - {key: input.network-profile.json, path: input/network-profile.json}

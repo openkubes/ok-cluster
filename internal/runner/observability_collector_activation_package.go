@@ -45,6 +45,7 @@ type ObservabilityCollectorActivationPackageConfig struct {
 	ManifestPath           string
 	ExpectedManifestDigest string
 	ManifestReceiptPath    string
+	ManifestReceipt        *FullRunExecutionManifestReceipt
 	ExpectedReceiptDigest  string
 	RuntimeBinding         RuntimeBindingMaterialFileConfig
 	ActivationSecret       string
@@ -142,12 +143,21 @@ func BuildObservabilityCollectorActivationPackage(config ObservabilityCollectorA
 	if err != nil || manifestDigest != config.ExpectedManifestDigest {
 		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("verify observability collector full-run manifest")
 	}
-	manifestReceiptRaw, err := readBoundedRegular(config.ManifestReceiptPath, maximumRuntimeBindingMaterialFileBytes)
-	if err != nil || digest.SHA256(manifestReceiptRaw) != config.ExpectedReceiptDigest {
-		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("verify observability collector full-run manifest receipt")
-	}
 	var manifestReceipt FullRunExecutionManifestReceipt
-	if err := jsonstrict.Decode(manifestReceiptRaw, &manifestReceipt); err != nil ||
+	var manifestReceiptRaw []byte
+	if config.ManifestReceipt != nil {
+		if config.ManifestReceiptPath != "" {
+			return VerifiedObservabilityCollectorActivationPackage{}, errors.New("observability collector manifest receipt source is ambiguous")
+		}
+		manifestReceipt = *config.ManifestReceipt
+		manifestReceiptRaw, err = json.Marshal(manifestReceipt)
+	} else {
+		manifestReceiptRaw, err = readBoundedRegular(config.ManifestReceiptPath, maximumRuntimeBindingMaterialFileBytes)
+		if err == nil {
+			err = jsonstrict.Decode(manifestReceiptRaw, &manifestReceipt)
+		}
+	}
+	if err != nil || digest.SHA256(manifestReceiptRaw) != config.ExpectedReceiptDigest ||
 		manifestReceipt.Format != FullRunExecutionManifestReceiptFormat || manifestReceipt.State != "VERIFIED" ||
 		manifestReceipt.MutationAllowed || manifestReceipt.ManifestDigest != manifestDigest {
 		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("observability collector manifest receipt is invalid")

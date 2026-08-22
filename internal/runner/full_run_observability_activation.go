@@ -1,8 +1,11 @@
 package runner
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/openkubes/ok-cluster/internal/digest"
 )
 
 // KubernetesObservabilityFullRunActivationConfig contains the only
@@ -58,8 +61,15 @@ func OpenKubernetesObservabilityFullRunActivation(path string, runtime Kubernete
 	if err != nil {
 		return nil, receipt, errors.New("open full-run Observability capability factory")
 	}
+	postPrefix := runtime.PostPrefixActivator
+	if postPrefix == nil {
+		postPrefix, err = manifest.openObservabilityCollectorPostPrefix(path, runtime.Clock)
+		if err != nil {
+			return nil, receipt, errors.New("open full-run Observability collector post-prefix")
+		}
+	}
 	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
-		PlatformCapability: capability, PostPrefixActivator: runtime.PostPrefixActivator,
+		PlatformCapability: capability, PostPrefixActivator: postPrefix,
 		Clock: runtime.Clock, Wait: runtime.Wait,
 	})
 	if err != nil {
@@ -72,4 +82,55 @@ func OpenKubernetesObservabilityFullRunActivation(path string, runtime Kubernete
 	}
 	receipt.State = "PREPARED"
 	return &FullRunExecutionActivation{execution: execution, manifest: manifestReceipt}, receipt, nil
+}
+
+func (manifest VerifiedFullRunExecutionManifest) openObservabilityCollectorPostPrefix(manifestPath string, clock func() time.Time) (FullRunPostPrefixActivator, error) {
+	if !manifest.verified || clock == nil || manifestPath == "" {
+		return nil, errors.New("verified collector manifest binding is incomplete")
+	}
+	document := manifest.document
+	collector := document.ObservabilityCollector
+	authority, err := readBoundedRegular(collector.RuntimeAuthorityPath, maximumFullRunExecutionManifestBytes)
+	if err != nil || digest.SHA256(authority) != collector.RuntimeAuthorityDigest {
+		return nil, errors.New("read bound collector runtime authority")
+	}
+	job, err := readBoundedRegular(collector.JobTemplatePath, maximumFullRunExecutionManifestBytes)
+	if err != nil || digest.SHA256(job) != collector.JobTemplateDigest {
+		return nil, errors.New("read bound collector Job template")
+	}
+	maximumRecordAge, err := time.ParseDuration(collector.MaximumRecordAge)
+	if err != nil {
+		return nil, errors.New("parse bound collector record age")
+	}
+	manifestReceipt := manifest.receipt
+	manifestReceiptRaw, err := json.Marshal(manifestReceipt)
+	if err != nil {
+		return nil, errors.New("encode bound collector manifest receipt")
+	}
+	expected := fullRunPlanExpected(document.Plan.Expected)
+	return NewKubernetesObservabilityCollectorPostPrefix(ObservabilityCollectorPostPrefixConfig{
+		Package: ObservabilityCollectorRuntimePackageConfig{
+			Activation: ObservabilityCollectorActivationPackageConfig{
+				ManifestPath: manifestPath, ExpectedManifestDigest: manifest.receipt.ManifestDigest,
+				ManifestReceipt: &manifestReceipt, ExpectedReceiptDigest: digest.SHA256(manifestReceiptRaw),
+				RuntimeBinding: RuntimeBindingMaterialFileConfig{
+					Bundle:       StageResumeConfig{PlanPath: document.Plan.Path, PlanExpected: expected},
+					MaterialPath: document.RuntimeBinding.MaterialPath, ReceiptPath: document.RuntimeBinding.ReceiptPath,
+				},
+				ActivationSecret:   collector.ActivationSecret,
+				ObserverCredential: SubmissionStageCredentialSource{CAFile: document.NetworkObservation.Workload.CAFile},
+				WebhookTokenPath:   collector.WebhookTokenPath, QueryTokenPath: collector.QueryTokenPath,
+				PublicEndpoint: collector.PublicEndpoint, ListenAddress: collector.ListenAddress,
+				TLSCertificatePath: collector.TLSCertificatePath, TLSPrivateKeyPath: collector.TLSPrivateKeyPath,
+				MaximumRecordAge: maximumRecordAge,
+			},
+			JobTemplate: job, JobTemplateDigest: collector.JobTemplateDigest,
+			RunID: collector.RunID, ImageDigest: collector.ImageDigest,
+			WorkloadAPICIDR: collector.WorkloadAPICIDR, AlertSourceCIDR: collector.AlertSourceCIDR,
+		},
+		RuntimeAuthority: ObservabilityCollectorRuntimeAuthorityPackageConfig{
+			Manifest: authority, ExpectedManifestDigest: collector.RuntimeAuthorityDigest,
+		},
+		Clock: clock,
+	})
 }

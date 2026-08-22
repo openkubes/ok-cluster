@@ -20,7 +20,8 @@ func TestBuildFullRunExecutionActivationPackageBindsBothAuthoritiesAndJob(t *tes
 		t.Fatal(err)
 	}
 	receipt, err := packaged.Receipt()
-	if err != nil || receipt.State != "VERIFIED" || receipt.MutationAllowed || receipt.PrivateFileCount != 30 ||
+	if err != nil || receipt.State != "VERIFIED" || receipt.MutationAllowed ||
+		receipt.PrivateFileCount != len(fullRunExecutionBundleFiles)+len(observabilityEvidenceAuthorityProjectedFiles) ||
 		receipt.ActivationSecret != config.ActivationSecret || receipt.EvidenceAuthoritySecret != config.EvidenceAuthority.ActivationSecret ||
 		receipt.ManagementAuthority != "ok-mgmt" || receipt.ImageDigest != config.Job.ImageDigest || len(receipt.ObjectKinds) != 4 {
 		t.Fatalf("unexpected full-run package receipt: %#v err=%v", receipt, err)

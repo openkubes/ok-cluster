@@ -62,7 +62,7 @@ func NewKubernetesObservabilityCollectorPostPrefix(config ObservabilityCollector
 	if config.Clock == nil || config.Package.Activation.RuntimeBinding.Bundle.PlanPath == "" ||
 		config.Package.Activation.RuntimeBinding.MaterialPath == "" || config.Package.Activation.RuntimeBinding.ReceiptPath == "" ||
 		config.Package.Activation.ObserverCredential.CAFile == "" || len(config.Package.Activation.ObserverToken) != 0 ||
-		!stageReceiptPrefixDigestPattern.MatchString(config.Package.Activation.ObserverCredential.CABundleDigest) ||
+		(config.Package.Activation.ObserverCredential.CABundleDigest != "" && !stageReceiptPrefixDigestPattern.MatchString(config.Package.Activation.ObserverCredential.CABundleDigest)) ||
 		len(config.RuntimeAuthority.Manifest) == 0 || !stageReceiptPrefixDigestPattern.MatchString(config.RuntimeAuthority.ExpectedManifestDigest) ||
 		digest.SHA256(config.RuntimeAuthority.Manifest) != config.RuntimeAuthority.ExpectedManifestDigest || config.RuntimeAuthority.TargetIdentityDigest != "" {
 		return nil, errors.New("observability collector post-prefix configuration is incomplete")
@@ -113,8 +113,9 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 		return errors.New("observability collector post-prefix binding is invalid")
 	}
 	binding, authority, err := activation.resolve(prefix.Workload)
+	expectedCA := activation.config.Package.Activation.ObserverCredential.CABundleDigest
 	if err != nil || digest.SHA256([]byte(binding.TargetClusterUID)) != prefix.TargetIdentity ||
-		authority.CABundleDigest != activation.config.Package.Activation.ObserverCredential.CABundleDigest ||
+		(expectedCA != "" && authority.CABundleDigest != expectedCA) ||
 		prefix.Workload.CAFile != activation.config.Package.Activation.ObserverCredential.CAFile {
 		activation.stop()
 		return errors.New("observability collector installer differs from runtime workload authority")

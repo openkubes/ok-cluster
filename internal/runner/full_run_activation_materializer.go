@@ -165,6 +165,12 @@ func validPackagedFullRunRuntimePaths(document fullRunExecutionManifestDocument)
 		document.TargetCredential.PolicyPath == path("input/target-credential-policy.json") && document.TargetCredential.Workload == workload &&
 		document.TargetRegistration.ArtifactPath == path("input/target-registration.yaml") && document.TargetRegistration.GitOps.TokenFile == path("credentials/gitops-token") && document.TargetRegistration.GitOps.CAFile == path("credentials/gitops-ca.crt") &&
 		document.PlatformApplications.ArtifactPath == path("input/platform-applications.yaml") && document.ReceiptDirectory == path("work/receipts") &&
+		document.ObservabilityCollector.RuntimeAuthorityPath == path("input/collector-runtime-authority.yaml") &&
+		document.ObservabilityCollector.JobTemplatePath == path("input/collector-job.yaml") &&
+		document.ObservabilityCollector.WebhookTokenPath == path("credentials/collector-webhook-token") &&
+		document.ObservabilityCollector.QueryTokenPath == path("credentials/collector-query-token") &&
+		document.ObservabilityCollector.TLSCertificatePath == path("credentials/collector-tls.crt") &&
+		document.ObservabilityCollector.TLSPrivateKeyPath == path("credentials/collector-tls.key") &&
 		document.AggregateEvidence.WorkloadTokenFile == "" && document.AggregateEvidence.WorkloadKubeconfigFile == workload.KubeconfigFile && document.AggregateEvidence.WorkloadCAFile == workload.CAFile &&
 		document.PlatformObservation.Capability.IndependentEvidenceIdentityPath == fullRunExecutionHandoffRoot+"/observability-evidence-identity.json" &&
 		document.PlatformObservation.Capability.IndependentEvidenceIdentityReceiptPath == fullRunExecutionHandoffRoot+"/observability-evidence-identity-receipt.json" &&
