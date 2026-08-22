@@ -252,7 +252,7 @@ func TestFullRunMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
 	materializeFullRunExecutionBundle = func(config runner.FullRunExecutionBundleMaterializationConfig) (runner.FullRunExecutionBundleMaterializationReceipt, error) {
 		calls++
 		if config.SourceDirectory != "/var/run/openkubes/source" || config.DestinationDirectory != "/var/run/openkubes/workspace" ||
-			config.HandoffDirectory != "/var/run/openkubes/handoff" || config.ExpectedBundleDigest != testSHA("1") {
+			config.HandoffDirectory != "/var/run/openkubes/handoff-volume/private" || config.ExpectedBundleDigest != testSHA("1") {
 			t.Fatalf("full-run materialization config differs: %#v", config)
 		}
 		return runner.FullRunExecutionBundleMaterializationReceipt{
@@ -263,7 +263,7 @@ func TestFullRunMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
 	valid := []string{
 		"cluster", "stage", "run", "full", "materialize",
 		"--source", "/var/run/openkubes/source", "--destination", "/var/run/openkubes/workspace",
-		"--handoff", "/var/run/openkubes/handoff", "--expected-bundle-digest", testSHA("1"), "--materialize",
+		"--handoff", "/var/run/openkubes/handoff-volume/private", "--expected-bundle-digest", testSHA("1"), "--materialize",
 	}
 	var stdout bytes.Buffer
 	if err := run(valid, &stdout, &bytes.Buffer{}); err != nil {
@@ -276,7 +276,7 @@ func TestFullRunMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
 	for name, arguments := range map[string][]string{
 		"missing activation": removeArgument(valid, "--materialize"),
 		"missing source":     removeArgument(valid, "/var/run/openkubes/source"),
-		"missing handoff":    removeArgument(valid, "/var/run/openkubes/handoff"),
+		"missing handoff":    removeArgument(valid, "/var/run/openkubes/handoff-volume/private"),
 		"bad digest":         replaceArgument(valid, "--expected-bundle-digest", "sha256:bad"),
 		"positional":         append(append([]string(nil), valid...), "extra"),
 	} {

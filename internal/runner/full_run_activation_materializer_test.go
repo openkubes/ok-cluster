@@ -33,6 +33,37 @@ func TestMaterializeFullRunExecutionBundleCreatesPrivateWorkspace(t *testing.T) 
 	}
 }
 
+func TestMaterializeFullRunExecutionBundleCreatesPrivateHandoffAfterVerification(t *testing.T) {
+	config, _ := fullRunMaterializerFixture(t)
+	if err := os.Remove(config.HandoffDirectory); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := materializeFullRunExecutionBundle(config)
+	if err != nil || receipt.State != "MATERIALIZED_VERIFIED" {
+		t.Fatalf("missing handoff was not safely materialized: %#v err=%v", receipt, err)
+	}
+	info, err := os.Lstat(config.HandoffDirectory)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("created handoff is not private: %#v err=%v", info, err)
+	}
+}
+
+func TestMaterializeFullRunExecutionBundleReportsPartialAfterCreatingHandoff(t *testing.T) {
+	config, _ := fullRunMaterializerFixture(t)
+	if err := os.Remove(config.HandoffDirectory); err != nil {
+		t.Fatal(err)
+	}
+	config.DestinationDirectory = filepath.Join(filepath.Dir(config.DestinationDirectory), "missing-parent", "workspace")
+	receipt, err := materializeFullRunExecutionBundle(config)
+	if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" {
+		t.Fatalf("local handoff write was not reported as partial: %#v err=%v", receipt, err)
+	}
+	info, statErr := os.Lstat(config.HandoffDirectory)
+	if statErr != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("created handoff is not private: %#v err=%v", info, statErr)
+	}
+}
+
 func TestMaterializeFullRunExecutionBundleFailsClosedBeforeWrite(t *testing.T) {
 	for name, mutate := range map[string]func(*testing.T, *FullRunExecutionBundleMaterializationConfig){
 		"wrong bundle digest": func(_ *testing.T, config *FullRunExecutionBundleMaterializationConfig) {

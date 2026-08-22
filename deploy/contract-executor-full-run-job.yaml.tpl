@@ -82,7 +82,7 @@ spec:
             - --destination
             - /var/run/openkubes/workspace
             - --handoff
-            - /var/run/openkubes/handoff
+            - /var/run/openkubes/handoff-volume/private
             - --expected-bundle-digest
             - "${OK147_BUNDLE_DIGEST}"
             - --materialize
@@ -96,7 +96,7 @@ spec:
           volumeMounts:
             - {name: activation-source, mountPath: /var/run/openkubes/source, readOnly: true}
             - {name: executor-private, mountPath: /var/run/openkubes}
-            - {name: evidence-handoff, mountPath: /var/run/openkubes/handoff}
+            - {name: evidence-handoff, mountPath: /var/run/openkubes/handoff-volume}
         - name: materialize-evidence-authority
           image: "${OK147_IMAGE_DIGEST}"
           imagePullPolicy: IfNotPresent
@@ -156,7 +156,7 @@ spec:
             capabilities: {drop: ["ALL"]}
           volumeMounts:
             - {name: executor-private, mountPath: /var/run/openkubes/workspace, subPath: workspace}
-            - {name: evidence-handoff, mountPath: /var/run/openkubes/handoff}
+            - {name: evidence-handoff, mountPath: /var/run/openkubes/handoff, subPath: private}
         - name: evidence-authority
           image: "${OK147_IMAGE_DIGEST}"
           imagePullPolicy: IfNotPresent
@@ -179,7 +179,7 @@ spec:
             capabilities: {drop: ["ALL"]}
           volumeMounts:
             - {name: authority-private, mountPath: /var/run/openkubes/evidence-authority, subPath: evidence-authority}
-            - {name: evidence-handoff, mountPath: /var/run/openkubes/handoff}
+            - {name: evidence-handoff, mountPath: /var/run/openkubes/handoff, subPath: private}
       volumes:
         - name: activation-source
           secret:
