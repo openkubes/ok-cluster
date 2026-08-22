@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
@@ -92,11 +93,15 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 	}
 
 	prefix, prefixErr := orchestration.PreRuntime.Run(ctx)
+	if prefixErr != nil && prefix.State == "STOPPED" && prefix.StoppedAt == preRuntimeStageOrder[0] &&
+		prefix.PlanDigest == "" && len(prefix.Checkpoints) == 0 {
+		return stopFullRunOrchestrationWithCause(receipt, prefix.StoppedAt, prefixErr)
+	}
 	if err := appendFullRunPrefix(&receipt, prefix); err != nil {
 		return stopFullRunOrchestration(receipt, nextFullRunStage(receipt.Checkpoints))
 	}
 	if prefixErr != nil || prefix.State != "SUCCEEDED" {
-		return stopFullRunOrchestration(receipt, prefix.StoppedAt)
+		return stopFullRunOrchestrationWithCause(receipt, prefix.StoppedAt, prefixErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return stopFullRunOrchestration(receipt, postRuntimeStageOrder[0])
@@ -241,6 +246,17 @@ func stopFullRunOrchestration(receipt FullRunOrchestrationReceipt, stageID strin
 	}
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
 	return receipt, errors.New("full-run orchestration stopped at " + stageID)
+}
+
+func stopFullRunOrchestrationWithCause(receipt FullRunOrchestrationReceipt, stageID string, cause error) (FullRunOrchestrationReceipt, error) {
+	if stageID == "" {
+		stageID = nextFullRunStage(receipt.Checkpoints)
+	}
+	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	if cause == nil {
+		return receipt, errors.New("full-run orchestration stopped at " + stageID)
+	}
+	return receipt, fmt.Errorf("full-run orchestration stopped at %s: %w", stageID, cause)
 }
 
 func oneOfString(value string, options ...string) bool {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -144,8 +145,11 @@ func (resolver *StageAuthorizationHTTPResolver) resolve(ctx context.Context, req
 	}
 	defer response.Body.Close()
 	grantRaw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumStageAuthorizationHTTPResponseBytes+1))
+	if response.StatusCode != http.StatusCreated {
+		return StageAuthorizationSource{}, fmt.Errorf("stage authorization authority returned HTTP %d", response.StatusCode)
+	}
 	if readErr != nil || len(grantRaw) == 0 || len(grantRaw) > maximumStageAuthorizationHTTPResponseBytes ||
-		response.StatusCode != http.StatusCreated || response.Header.Get("Content-Type") != stageAuthorizationResponseMediaType {
+		response.Header.Get("Content-Type") != stageAuthorizationResponseMediaType {
 		return StageAuthorizationSource{}, errors.New("stage authorization authority response is not accepted")
 	}
 	file, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

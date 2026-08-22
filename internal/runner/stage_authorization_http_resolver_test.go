@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,36 @@ func TestStageAuthorizationHTTPResolverRequestsAndPersistsExactGrant(t *testing.
 	defer mu.Unlock()
 	if requests != 1 {
 		t.Fatalf("authority requests=%d, want 1", requests)
+	}
+}
+
+func TestStageAuthorizationHTTPResolverReportsOnlySafeHTTPStatus(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusForbidden)
+		_, _ = response.Write([]byte("sensitive authority detail"))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
+		Endpoint: server.URL + "/v1/stage-authorizations", TokenFile: writeBundleFile(t, root, "token", []byte("authority-token")),
+		CAFile:          writeRuntimeBindingServerCA(t, root, "ca.crt", server),
+		PublicKeyPath:   writeBundleFile(t, root, "authority.pub", []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n")),
+		OutputDirectory: root, Clock: time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestDigest := "sha256:" + strings.Repeat("a", 64)
+	_, err = resolver.resolve(context.Background(), requestDigest, []byte(`{}`), stageAuthorizationRequestMediaType)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") || strings.Contains(err.Error(), "sensitive authority detail") || strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("unsafe or incomplete HTTP error: %v", err)
 	}
 }
 
