@@ -21,7 +21,7 @@ func TestPlanObservabilityCollectorRuntimeInstallationBindsExactOrder(t *testing
 	}
 	if plan.Format != ObservabilityCollectorRuntimeInstallationPlanFormat || plan.State != "VERIFIED" ||
 		plan.RunID != "ok147-evidence-collector-01" || plan.Authority != plan.TargetIdentityDigest ||
-		!stageReceiptPrefixDigestPattern.MatchString(plan.Authority) || plan.MutationAllowed || len(plan.Prerequisites) != 2 || len(plan.Creates) != 4 {
+		!stageReceiptPrefixDigestPattern.MatchString(plan.Authority) || plan.MutationAllowed || len(plan.Prerequisites) != 1 || len(plan.Creates) != 4 {
 		t.Fatalf("unexpected collector installation plan: %#v", plan)
 	}
 	for index, kind := range []string{"Secret", "Service", "NetworkPolicy", "Job"} {
@@ -120,11 +120,11 @@ func TestObservabilityCollectorRuntimeLauncherPreflightsThenCreates(t *testing.T
 		receipt.TargetIdentityDigest != plan.TargetIdentityDigest || receipt.Authority != plan.Authority {
 		t.Fatalf("collector launch identity differs: %#v", receipt)
 	}
-	if len(api.requests) != 10 {
-		t.Fatalf("requests=%d, want two prerequisite GETs, four absence GETs and four POSTs: %#v", len(api.requests), api.requests)
+	if len(api.requests) != 9 {
+		t.Fatalf("requests=%d, want one prerequisite GET, four absence GETs and four POSTs: %#v", len(api.requests), api.requests)
 	}
 	for index, create := range plan.Creates {
-		preflight, submission := api.requests[index+2], api.requests[index+6]
+		preflight, submission := api.requests[index+1], api.requests[index+5]
 		if preflight.method != http.MethodGet || preflight.path != create.ObjectPath || len(preflight.body) != 0 {
 			t.Fatalf("preflight %d differs: %#v", index, preflight)
 		}
@@ -197,9 +197,6 @@ func newObservabilityCollectorRuntimeLauncher(t *testing.T, packaged VerifiedObs
 }
 
 func seedObservabilityCollectorRuntimePrerequisites(api *submissionStageInstallerAPI) {
-	api.objects["/api/v1/namespaces/openkubes-execution-system"] = map[string]any{
-		"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "openkubes-execution-system"},
-	}
 	api.objects["/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor-runtime"] = map[string]any{
 		"apiVersion": "v1", "kind": "ServiceAccount", "automountServiceAccountToken": false,
 		"metadata": map[string]any{"name": "ok147-contract-executor-runtime", "namespace": "openkubes-execution-system", "labels": map[string]any{

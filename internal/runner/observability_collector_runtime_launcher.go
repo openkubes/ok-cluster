@@ -155,9 +155,7 @@ func PlanObservabilityCollectorRuntimeInstallation(packaged VerifiedObservabilit
 		PackageDigest: receipt.PackageDigest, ManifestDigest: receipt.ManifestDigest, RuntimeBindingDigest: receipt.RuntimeBindingDigest,
 		TargetIdentityDigest: targetIdentity, Authority: targetIdentity,
 		Prerequisites: []FullRunExecutionActivationPrerequisite{
-			{Order: 1, APIVersion: "v1", Kind: "Namespace", Name: submissionStageInputNamespace, Method: http.MethodGet,
-				ObjectPath: "/api/v1/namespaces/" + submissionStageInputNamespace, ExpectState: "PRESENT"},
-			{Order: 2, APIVersion: "v1", Kind: "ServiceAccount", Namespace: submissionStageInputNamespace, Name: "ok147-contract-executor-runtime", Method: http.MethodGet,
+			{Order: 1, APIVersion: "v1", Kind: "ServiceAccount", Namespace: submissionStageInputNamespace, Name: "ok147-contract-executor-runtime", Method: http.MethodGet,
 				ObjectPath: "/api/v1/namespaces/" + submissionStageInputNamespace + "/serviceaccounts/ok147-contract-executor-runtime", ExpectState: "PRESENT_EXACT_RUNTIME"},
 		},
 		Creates: creates, MutationAllowed: false,

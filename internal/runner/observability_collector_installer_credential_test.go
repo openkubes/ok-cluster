@@ -22,7 +22,7 @@ func TestObservabilityCollectorInstallerCredentialIssuesOnceInMemory(t *testing.
 	client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
 		body, _ := io.ReadAll(request.Body)
-		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-contract-executor-runtime/token" ||
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/namespaces/openkubes-execution-system/serviceaccounts/ok147-observability-collector-installer/token" ||
 			request.Header.Get("Authorization") != "Bearer workload-admin" || request.Header.Get("Content-Type") != "application/json" ||
 			bytes.Contains(body, []byte("audiences")) {
 			t.Fatalf("unexpected collector installer TokenRequest: %s %s %s", request.Method, request.URL.Path, body)
@@ -78,10 +78,10 @@ func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 		status    int
 	}{
 		"foreign subject":  {subject: "system:serviceaccount:openkubes-execution-system:foreign", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated},
-		"short lifetime":   {subject: "system:serviceaccount:openkubes-execution-system:ok147-contract-executor-runtime", expires: now.Add(10 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated},
-		"missing audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-contract-executor-runtime", expires: now.Add(30 * time.Minute), audiences: []string{}, status: http.StatusCreated},
-		"foreign audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-contract-executor-runtime", expires: now.Add(30 * time.Minute), audiences: []string{"foreign"}, status: http.StatusCreated},
-		"wrong status":     {subject: "system:serviceaccount:openkubes-execution-system:ok147-contract-executor-runtime", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusForbidden},
+		"short lifetime":   {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(10 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated},
+		"missing audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{}, status: http.StatusCreated},
+		"foreign audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"foreign"}, status: http.StatusCreated},
+		"wrong status":     {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusForbidden},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

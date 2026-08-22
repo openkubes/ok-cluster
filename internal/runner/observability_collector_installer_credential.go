@@ -21,7 +21,8 @@ import (
 const (
 	ObservabilityCollectorInstallerCredentialReceiptFormat = "ok147-observability-collector-installer-credential-receipt/v1"
 	observabilityCollectorInstallerNamespace               = "openkubes-execution-system"
-	observabilityCollectorInstallerServiceAccount          = "ok147-contract-executor-runtime"
+	observabilityCollectorInstallerServiceAccount          = "ok147-observability-collector-installer"
+	observabilityCollectorRuntimeServiceAccount            = "ok147-contract-executor-runtime"
 	observabilityCollectorInstallerLifetime                = 30 * time.Minute
 	minimumObservabilityCollectorInstallerLifetime         = 25 * time.Minute
 )
