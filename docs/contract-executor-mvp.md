@@ -3194,8 +3194,17 @@ ServiceAccount -> Role -> RoleBinding, retains a redacted successful prefix on
 partial failure and has no
 retry, adoption, update, patch, delete, rollback or cleanup operation. Package
 verification and installation planning are offline; no live cluster has been
-contacted. Wiring this verified prerequisite package ahead of the TokenRequest
-and all private factory inputs into the full-run CLI/Job activation remains the
+contacted.
+
+The concrete post-prefix factory now enforces the complete order under the
+same run context: build the collector package and exact authority package;
+install all five authority objects; issue the one short-lived installer token;
+open and execute the four-object collector launcher; return only after the
+collector activation receipt is complete. A failed or partial authority install
+is retained in the redacted post-prefix receipt and cannot reach TokenRequest
+or collector creation. A credential or collector failure cannot open Stage 8
+and has no implicit retry or cleanup path. Wiring the private authority manifest
+and remaining factory inputs into the full-run CLI/Job activation is now the
 next prerequisite before a complete fresh run.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation

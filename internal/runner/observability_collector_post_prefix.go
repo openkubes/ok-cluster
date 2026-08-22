@@ -13,50 +13,66 @@ import (
 const ObservabilityCollectorPostPrefixReceiptFormat = "ok147-observability-collector-post-prefix-receipt/v1"
 
 type ObservabilityCollectorPostPrefixConfig struct {
-	Package ObservabilityCollectorRuntimePackageConfig
-	Clock   func() time.Time
+	Package          ObservabilityCollectorRuntimePackageConfig
+	RuntimeAuthority ObservabilityCollectorRuntimeAuthorityPackageConfig
+	Clock            func() time.Time
 }
 
 type ObservabilityCollectorPostPrefixReceipt struct {
-	Format                  string `json:"format"`
-	State                   string `json:"state"`
-	PackageDigest           string `json:"packageDigest,omitempty"`
-	RuntimeBindingDigest    string `json:"runtimeBindingDigest,omitempty"`
-	TargetIdentityDigest    string `json:"targetIdentityDigest,omitempty"`
-	CredentialReceiptDigest string `json:"credentialReceiptDigest,omitempty"`
-	LaunchState             string `json:"launchState,omitempty"`
-	CreatedObjects          int    `json:"createdObjects"`
+	Format                         string `json:"format"`
+	State                          string `json:"state"`
+	PackageDigest                  string `json:"packageDigest,omitempty"`
+	RuntimeBindingDigest           string `json:"runtimeBindingDigest,omitempty"`
+	TargetIdentityDigest           string `json:"targetIdentityDigest,omitempty"`
+	RuntimeAuthorityPackageDigest  string `json:"runtimeAuthorityPackageDigest,omitempty"`
+	RuntimeAuthorityReceiptDigest  string `json:"runtimeAuthorityReceiptDigest,omitempty"`
+	RuntimeAuthorityCreatedObjects int    `json:"runtimeAuthorityCreatedObjects"`
+	CredentialReceiptDigest        string `json:"credentialReceiptDigest,omitempty"`
+	LaunchState                    string `json:"launchState,omitempty"`
+	CreatedObjects                 int    `json:"createdObjects"`
 }
 
 type observabilityCollectorRuntimeLauncher interface {
 	Launch(context.Context) (ObservabilityCollectorRuntimeLaunchReceipt, error)
 }
 
+type observabilityCollectorRuntimeAuthorityInstaller interface {
+	Install(context.Context) (ObservabilityCollectorRuntimeAuthorityInstallationReceipt, error)
+}
+
 // KubernetesObservabilityCollectorPostPrefix builds and installs the exact
 // collector only after the fresh seven-stage prefix exists. It is single-use
 // and retains only a redaction-safe receipt.
 type KubernetesObservabilityCollectorPostPrefix struct {
-	mu      sync.Mutex
-	used    bool
-	config  ObservabilityCollectorPostPrefixConfig
-	receipt ObservabilityCollectorPostPrefixReceipt
-	build   func(ObservabilityCollectorRuntimePackageConfig) (VerifiedObservabilityCollectorRuntimePackage, error)
-	issue   func(context.Context, ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error)
-	open    func(submissionStageInstallerClientConfig, VerifiedObservabilityCollectorRuntimePackage) (observabilityCollectorRuntimeLauncher, error)
-	resolve func(WorkloadAuthorityFileResolverConfig) (WorkloadAuthorityBinding, KubernetesAuthorityConfig, error)
+	mu             sync.Mutex
+	used           bool
+	config         ObservabilityCollectorPostPrefixConfig
+	receipt        ObservabilityCollectorPostPrefixReceipt
+	build          func(ObservabilityCollectorRuntimePackageConfig) (VerifiedObservabilityCollectorRuntimePackage, error)
+	buildAuthority func(ObservabilityCollectorRuntimeAuthorityPackageConfig) (VerifiedObservabilityCollectorRuntimeAuthorityPackage, error)
+	openAuthority  func(WorkloadAuthorityFileResolverConfig, VerifiedObservabilityCollectorRuntimeAuthorityPackage) (observabilityCollectorRuntimeAuthorityInstaller, error)
+	issue          func(context.Context, ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error)
+	open           func(submissionStageInstallerClientConfig, VerifiedObservabilityCollectorRuntimePackage) (observabilityCollectorRuntimeLauncher, error)
+	resolve        func(WorkloadAuthorityFileResolverConfig) (WorkloadAuthorityBinding, KubernetesAuthorityConfig, error)
 }
 
 func NewKubernetesObservabilityCollectorPostPrefix(config ObservabilityCollectorPostPrefixConfig) (*KubernetesObservabilityCollectorPostPrefix, error) {
 	if config.Clock == nil || config.Package.Activation.RuntimeBinding.Bundle.PlanPath == "" ||
 		config.Package.Activation.RuntimeBinding.MaterialPath == "" || config.Package.Activation.RuntimeBinding.ReceiptPath == "" ||
 		config.Package.Activation.ObserverCredential.CAFile == "" ||
-		!stageReceiptPrefixDigestPattern.MatchString(config.Package.Activation.ObserverCredential.CABundleDigest) {
+		!stageReceiptPrefixDigestPattern.MatchString(config.Package.Activation.ObserverCredential.CABundleDigest) ||
+		len(config.RuntimeAuthority.Manifest) == 0 || !stageReceiptPrefixDigestPattern.MatchString(config.RuntimeAuthority.ExpectedManifestDigest) ||
+		digest.SHA256(config.RuntimeAuthority.Manifest) != config.RuntimeAuthority.ExpectedManifestDigest || config.RuntimeAuthority.TargetIdentityDigest != "" {
 		return nil, errors.New("observability collector post-prefix configuration is incomplete")
 	}
 	return &KubernetesObservabilityCollectorPostPrefix{
-		config:  config,
-		receipt: ObservabilityCollectorPostPrefixReceipt{Format: ObservabilityCollectorPostPrefixReceiptFormat, State: "PREPARED"},
-		build:   BuildObservabilityCollectorRuntimePackage,
+		config:         config,
+		receipt:        ObservabilityCollectorPostPrefixReceipt{Format: ObservabilityCollectorPostPrefixReceiptFormat, State: "PREPARED"},
+		build:          BuildObservabilityCollectorRuntimePackage,
+		buildAuthority: BuildObservabilityCollectorRuntimeAuthorityPackage,
+		openAuthority: func(workload WorkloadAuthorityFileResolverConfig, packaged VerifiedObservabilityCollectorRuntimeAuthorityPackage) (observabilityCollectorRuntimeAuthorityInstaller, error) {
+			return OpenKubernetesObservabilityCollectorRuntimeAuthorityInstaller(workload, packaged)
+		},
 		issue: func(ctx context.Context, config ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error) {
 			issuer, err := OpenKubernetesObservabilityCollectorInstallerCredentialIssuer(config)
 			if err != nil {
@@ -112,6 +128,37 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	if err != nil || plan.TargetIdentityDigest != prefix.TargetIdentity || plan.RuntimeBindingDigest != packageReceipt.RuntimeBindingDigest {
 		activation.stop()
 		return errors.New("observability collector package differs from fresh runtime prefix")
+	}
+	authorityConfig := activation.config.RuntimeAuthority
+	authorityConfig.TargetIdentityDigest = prefix.TargetIdentity
+	authorityPackage, err := activation.buildAuthority(authorityConfig)
+	if err != nil {
+		activation.stop()
+		return errors.New("build observability collector runtime authority package")
+	}
+	authorityPackageReceipt, err := authorityPackage.Receipt()
+	if err != nil || authorityPackageReceipt.TargetIdentityDigest != prefix.TargetIdentity {
+		activation.stop()
+		return errors.New("verify observability collector runtime authority package")
+	}
+	authorityInstaller, err := activation.openAuthority(prefix.Workload, authorityPackage)
+	if err != nil {
+		activation.stop()
+		return errors.New("open observability collector runtime authority installer")
+	}
+	authorityInstallReceipt, err := authorityInstaller.Install(ctx)
+	authorityInstallReceiptRaw, encodeErr := json.Marshal(authorityInstallReceipt)
+	activation.mu.Lock()
+	activation.receipt.RuntimeAuthorityPackageDigest = authorityPackageReceipt.PackageDigest
+	activation.receipt.RuntimeAuthorityCreatedObjects = len(authorityInstallReceipt.Results)
+	if encodeErr == nil {
+		activation.receipt.RuntimeAuthorityReceiptDigest = digest.SHA256(authorityInstallReceiptRaw)
+	}
+	activation.mu.Unlock()
+	if err != nil || encodeErr != nil || authorityInstallReceipt.State != "INSTALLED" || len(authorityInstallReceipt.Results) != 5 ||
+		authorityInstallReceipt.TargetIdentityDigest != prefix.TargetIdentity || authorityInstallReceipt.PackageDigest != authorityPackageReceipt.PackageDigest {
+		activation.stop()
+		return errors.New("install observability collector runtime authority")
 	}
 	credential, err := activation.issue(ctx, ObservabilityCollectorInstallerCredentialConfig{
 		Workload: prefix.Workload, ExpectedTargetDigest: prefix.TargetIdentity, Clock: activation.config.Clock,
