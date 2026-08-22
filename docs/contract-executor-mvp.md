@@ -3149,7 +3149,8 @@ This closes the offline post-runtime packaging and activation boundaries
 without turning the collector into a lifecycle owner. The package builder and
 materializer perform no API request or mutation. The single-use launcher first
 replays the exact public receipt and private `0600` package, verifies the
-runtime target identity, then completes two exact prerequisite GETs and all
+runtime target identity, then completes one exact runtime-ServiceAccount
+prerequisite GET and all
 four exact-name absence GETs before its first write. It can create only Secret,
 Service, NetworkPolicy and Job in that order. Existing state stops zero-write;
 any failure after the first POST is retained as partial or unknown state, and
@@ -3167,22 +3168,35 @@ workload authority before building the package.
 
 It no longer accepts a persisted installer-token file. Instead, after package
 and target correlation have passed, a single-use issuer performs exactly one
-30-minute, server-default-audience TokenRequest for
-`openkubes-execution-system/ok147-contract-executor-runtime`. The response must
+30-minute, server-default-audience TokenRequest for the dedicated
+`openkubes-execution-system/ok147-observability-collector-installer`. The response must
 carry the exact ServiceAccount subject, audience set, expiry and bounded
 lifetime. The token is retained only in process memory and is handed directly
 to the existing single-use collector launcher. The redacted receipt exposes
 only target, ServiceAccount, request and CA digests plus timestamps; no token,
 CA, endpoint, kubeconfig or source path is retained.
 
-The live composition remains fail-closed until the workload-side runtime
-ServiceAccount and its exact collector create permissions are themselves
-projected and installed by a separately verified boundary. The existing
-Stage-7 target-access artifact does not currently contain that prerequisite;
-credential issuance therefore cannot be mistaken for runtime authorization.
-Wiring that exact prerequisite package and all private factory inputs into the
-full-run CLI/Job activation remains the next prerequisite before a complete
-fresh run.
+That workload-side prerequisite is now represented by an exact five-object
+package: restricted `openkubes-execution-system` Namespace, tokenless and
+unbound `ok147-contract-executor-runtime` ServiceAccount, distinct tokenless
+`ok147-observability-collector-installer` ServiceAccount, one namespaced Role
+and its single-subject installer RoleBinding. The Role can only get the exact
+runtime ServiceAccount and get/create Secrets, Services, NetworkPolicies and
+Jobs in the otherwise dedicated execution namespace. It contains no wildcard,
+list, watch, update, patch, delete, bind, escalate or cluster-scoped permission.
+The running collector therefore receives no installer RBAC and still mounts no
+ServiceAccount token.
+
+The corresponding single-use installer uses only the already correlated
+lifecycle workload authority. It performs all five exact-name absence GETs
+before its first POST, creates Namespace -> runtime ServiceAccount -> installer
+ServiceAccount -> Role -> RoleBinding, retains a redacted successful prefix on
+partial failure and has no
+retry, adoption, update, patch, delete, rollback or cleanup operation. Package
+verification and installation planning are offline; no live cluster has been
+contacted. Wiring this verified prerequisite package ahead of the TokenRequest
+and all private factory inputs into the full-run CLI/Job activation remains the
+next prerequisite before a complete fresh run.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation
 boundary:
