@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	FullRunExecutionManifestFormat        = "ok147-full-run-execution-manifest/v2"
+	FullRunExecutionManifestFormat        = "ok147-full-run-execution-manifest/v3"
 	FullRunExecutionManifestReceiptFormat = "ok147-full-run-execution-manifest-receipt/v1"
 	maximumFullRunExecutionManifestBytes  = 1024 * 1024
 )
@@ -39,6 +39,11 @@ type fullRunProjectionDocument struct {
 type fullRunSubmissionRuntimeDocument struct {
 	Ledger    postRuntimeLedgerDocument    `json:"ledger"`
 	Authority postRuntimeAuthorityDocument `json:"authority"`
+}
+
+type fullRunProviderAccessDocument struct {
+	PolicyPath     string `json:"policyPath"`
+	KubeconfigFile string `json:"kubeconfigFile"`
 }
 
 type fullRunLifecycleObservationDocument struct {
@@ -167,6 +172,7 @@ type fullRunExecutionManifestDocument struct {
 	Authorization          postRuntimeAuthorizationDocument      `json:"authorization"`
 	Profiles               postRuntimeProfilesDocument           `json:"profiles"`
 	ProviderPrerequisites  fullRunSubmissionRuntimeDocument      `json:"providerPrerequisites"`
+	ProviderAccess         fullRunProviderAccessDocument         `json:"providerAccess"`
 	ClusterLifecycle       fullRunSubmissionRuntimeDocument      `json:"clusterLifecycle"`
 	LifecycleObservation   fullRunLifecycleObservationDocument   `json:"lifecycleObservation"`
 	Enablement             fullRunEnablementDocument             `json:"enablement"`
@@ -361,9 +367,13 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 		PreRuntime: PreRuntimeExecutionConfig{
 			PlanPath: document.Plan.Path, PlanExpected: expected,
 			ProjectionManifestPath: document.Projection.ManifestPath, ProjectionRoot: document.Projection.Root,
-			Authorization:         authorization,
-			ProviderPrerequisites: SubmissionStageRuntimeConfig{Ledger: ledger, Authority: authorityConfig(document.ProviderPrerequisites.Authority), Clock: runtime.Clock},
-			ClusterLifecycle:      SubmissionStageRuntimeConfig{Ledger: ledger, Authority: authorityConfig(document.ClusterLifecycle.Authority), Clock: runtime.Clock},
+			Authorization:            authorization,
+			ProviderAccessPolicyPath: document.ProviderAccess.PolicyPath,
+			ProviderPrerequisites:    SubmissionStageRuntimeConfig{Ledger: ledger, Authority: authorityConfig(document.ProviderPrerequisites.Authority), Clock: runtime.Clock},
+			ClusterLifecycle: SubmissionStageRuntimeConfig{
+				Ledger: ledger, Authority: authorityConfig(document.ClusterLifecycle.Authority),
+				ProviderAccessKubeconfigFile: document.ProviderAccess.KubeconfigFile, Clock: runtime.Clock,
+			},
 			LifecycleObservation: LifecycleObservationStageRuntimeConfig{
 				Ledger: ledger, Management: authorityConfig(document.LifecycleObservation.Management),
 				PollInterval: lifecycleInterval, PollTimeout: lifecycleTimeout, Clock: runtime.Clock, Wait: runtime.Wait,
@@ -616,6 +626,21 @@ func loadFullRunExecutionManifest(path string) (fullRunExecutionManifestDocument
 }
 
 func verifyFullRunStaticArtifacts(document fullRunExecutionManifestDocument, plan stageplan.Binding, platformProfile observation.PlatformProfile) error {
+	lifecycleStage, _, err := plan.Stage("cluster-lifecycle")
+	if err != nil || len(lifecycleStage.Inputs) != 2 || lifecycleStage.Inputs[0].Name != "projection.cluster-lifecycle" || lifecycleStage.Inputs[1].Name != "stage.provider-access" {
+		return errors.New("full-run cluster-lifecycle inputs are invalid")
+	}
+	providerPolicy, err := submission.LoadProviderAccessPolicy(document.ProviderAccess.PolicyPath, submission.ProviderAccessExpected{
+		PolicyDigest: lifecycleStage.Inputs[1].Digest, ContractIdentity: plan.ContractIdentity,
+		IntentRevision: plan.IntentRevision, ExecutionFixture: plan.ExecutionFixture,
+		ManagementAuthority: plan.Authorities.Management, ProviderAuthority: plan.Authorities.Infrastructure,
+	})
+	if err != nil {
+		return errors.New("verify full-run provider-access policy")
+	}
+	if _, err := providerPolicy.MaterializeSecret(document.ProviderAccess.KubeconfigFile); err != nil {
+		return errors.New("verify full-run provider-access credential")
+	}
 	enablementStage, _, err := plan.Stage("enablement")
 	if err != nil || len(enablementStage.Inputs) != 1 || enablementStage.Inputs[0].Name != "stage.enablement" {
 		return errors.New("full-run enablement input is invalid")
@@ -743,6 +768,7 @@ func verifyFullRunObservabilityCollector(document fullRunObservabilityCollectorD
 func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, plan stageplan.Binding) error {
 	paths := []string{
 		document.Plan.Path, document.Projection.ManifestPath, document.Projection.Root,
+		document.ProviderAccess.PolicyPath, document.ProviderAccess.KubeconfigFile,
 		document.Authorization.TokenFile, document.Authorization.CAFile, document.Authorization.PublicKeyPath, document.Authorization.OutputDirectory,
 		document.Profiles.Network.Path, document.Profiles.Platform.Path, document.Profiles.Aggregate.Path,
 		document.Enablement.ArtifactPath, document.TargetAccess.ArtifactPath, document.TargetCredential.PolicyPath,

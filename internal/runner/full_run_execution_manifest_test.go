@@ -327,6 +327,18 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 		"providerAccess": map[string]any{}, "source": map[string]any{},
 	})
 	projectionManifestPath := writeBundleFile(t, root, "full-projection-manifest.json", projectionManifest)
+	providerAccessPolicy := mustJSON(t, map[string]any{
+		"format": "ok147-provider-access-policy/v1", "contractIdentity": expected.ContractIdentity,
+		"intentRevision": expected.IntentRevision, "executionFixture": expected.ExecutionFixture,
+		"managementAuthority": expected.ManagementAuthority, "providerAuthority": expected.InfrastructureAuthority,
+		"secret": map[string]any{
+			"apiVersion": "v1", "kind": "Secret", "namespace": expected.ContractIdentity.Namespace,
+			"name": "external-infra-kubeconfig-" + expected.ContractIdentity.Name,
+			"type": "Opaque", "dataKey": "kubeconfig", "immutable": true,
+		},
+	})
+	providerAccessPolicyPath := writeBundleFile(t, root, "provider-access-policy.json", providerAccessPolicy)
+	providerAccessKubeconfigPath := writeBundleFile(t, root, "provider-access.kubeconfig", providerAccessBundleKubeconfig())
 
 	enablement := runnerEnablementYAML(stagePlanExpected(expected))
 	enablementPath := writeBundleFile(t, root, "enablement.yaml", enablement)
@@ -342,7 +354,10 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 	}
 	stages := plan["stages"].([]any)
 	stages[0].(map[string]any)["inputs"] = []any{map[string]any{"name": "projection.provider-prerequisites", "digest": digest.SHA256(infra)}}
-	stages[1].(map[string]any)["inputs"] = []any{map[string]any{"name": "projection.cluster-lifecycle", "digest": digest.SHA256(management)}}
+	stages[1].(map[string]any)["inputs"] = []any{
+		map[string]any{"name": "projection.cluster-lifecycle", "digest": digest.SHA256(management)},
+		map[string]any{"name": "stage.provider-access", "digest": digest.SHA256(providerAccessPolicy)},
+	}
 	stages[3].(map[string]any)["inputs"] = []any{map[string]any{"name": "stage.enablement", "digest": digest.SHA256(enablement)}}
 	planPath := writeBundleFile(t, root, "full-staged-plan.json", mustJSON(t, plan))
 
@@ -397,8 +412,11 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 		Authorization:         post.Authorization,
 		Profiles:              post.Profiles,
 		ProviderPrerequisites: providerRuntime,
-		ClusterLifecycle:      managementRuntime,
-		LifecycleObservation:  fullRunLifecycleObservationDocument{Ledger: ledger, Management: managementAuthority, PollInterval: "1s", PollTimeout: "1m"},
+		ProviderAccess: fullRunProviderAccessDocument{
+			PolicyPath: providerAccessPolicyPath, KubeconfigFile: providerAccessKubeconfigPath,
+		},
+		ClusterLifecycle:     managementRuntime,
+		LifecycleObservation: fullRunLifecycleObservationDocument{Ledger: ledger, Management: managementAuthority, PollInterval: "1s", PollTimeout: "1m"},
 		Enablement: fullRunEnablementDocument{
 			ArtifactPath:   enablementPath,
 			ExpectedObject: projection.ResourceIdentity{APIVersion: "addons.cluster.x-k8s.io/v1alpha1", Kind: "HelmChartProxy", Namespace: "disposable-ok147", Name: "disposable-ok147-cilium"},

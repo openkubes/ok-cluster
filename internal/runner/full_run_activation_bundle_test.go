@@ -46,6 +46,8 @@ func TestBuildFullRunExecutionBundleIsDeterministicAndSelfContained(t *testing.T
 	if rewritten.Plan.Path != path("input/staged-plan.json") ||
 		rewritten.Projection.Root != path("input/projection") ||
 		rewritten.ProviderPrerequisites.Authority.TokenFile != path("credentials/infrastructure-token") ||
+		rewritten.ProviderAccess.PolicyPath != path("input/provider-access-policy.json") ||
+		rewritten.ProviderAccess.KubeconfigFile != path("credentials/provider-access-kubeconfig") ||
 		rewritten.ClusterLifecycle.Authority.TokenFile != path("credentials/management-token") ||
 		rewritten.TargetRegistration.GitOps.TokenFile != path("credentials/gitops-token") ||
 		rewritten.NetworkObservation.Workload.BindingPath != path("work/workload-authority.json") ||
@@ -62,10 +64,12 @@ func TestBuildFullRunExecutionBundleIsDeterministicAndSelfContained(t *testing.T
 		t.Fatal("semantic full-run identity changed during path rewrite")
 	}
 	for relative, sourcePath := range map[string]string{
-		"input/staged-plan.json":           source.document.Plan.Path,
-		"input/enablement.yaml":            source.document.Enablement.ArtifactPath,
-		"input/platform-applications.yaml": source.document.PlatformApplications.ArtifactPath,
-		"input/independent-evidence.pub":   publicKeyPath,
+		"input/staged-plan.json":                 source.document.Plan.Path,
+		"input/enablement.yaml":                  source.document.Enablement.ArtifactPath,
+		"input/platform-applications.yaml":       source.document.PlatformApplications.ArtifactPath,
+		"input/provider-access-policy.json":      source.document.ProviderAccess.PolicyPath,
+		"credentials/provider-access-kubeconfig": source.document.ProviderAccess.KubeconfigFile,
+		"input/independent-evidence.pub":         publicKeyPath,
 	} {
 		want, readErr := os.ReadFile(sourcePath)
 		if readErr != nil || !bytes.Equal(bundle.files[relative], want) {

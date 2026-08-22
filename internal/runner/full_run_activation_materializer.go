@@ -158,6 +158,7 @@ func validPackagedFullRunRuntimePaths(document fullRunExecutionManifestDocument)
 		document.Authorization.PublicKeyPath == path("input/authorization-authority.pub") && document.Authorization.OutputDirectory == path("work/authorizations") &&
 		document.Profiles.Network.Path == path("input/network-profile.json") && document.Profiles.Platform.Path == path("input/platform-profile.json") && document.Profiles.Aggregate.Path == path("input/aggregate-profile.json") &&
 		document.ProviderPrerequisites.Ledger == ledger && document.ProviderPrerequisites.Authority.TokenFile == path("credentials/infrastructure-token") && document.ProviderPrerequisites.Authority.CAFile == path("credentials/infrastructure-ca.crt") &&
+		document.ProviderAccess.PolicyPath == path("input/provider-access-policy.json") && document.ProviderAccess.KubeconfigFile == path("credentials/provider-access-kubeconfig") &&
 		document.ClusterLifecycle.Ledger == ledger && document.ClusterLifecycle.Authority.TokenFile == path("credentials/management-token") && document.ClusterLifecycle.Authority.CAFile == path("credentials/management-ca.crt") &&
 		document.Enablement.ArtifactPath == path("input/enablement.yaml") && document.NetworkObservation.Workload == workload && document.RuntimeBinding.Workload == workload &&
 		document.RuntimeBinding.MaterialPath == path("work/runtime-binding.json") && document.RuntimeBinding.ReceiptPath == path("work/runtime-binding-receipt.json") &&
