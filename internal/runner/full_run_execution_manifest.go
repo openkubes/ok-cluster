@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	FullRunExecutionManifestFormat        = "ok147-full-run-execution-manifest/v1"
+	FullRunExecutionManifestFormat        = "ok147-full-run-execution-manifest/v2"
 	FullRunExecutionManifestReceiptFormat = "ok147-full-run-execution-manifest-receipt/v1"
 	maximumFullRunExecutionManifestBytes  = 1024 * 1024
 )
@@ -140,25 +141,45 @@ type fullRunAggregateEvidenceDocument struct {
 	WorkloadCAFile         string                       `json:"workloadCAFile"`
 }
 
+type fullRunObservabilityCollectorDocument struct {
+	RuntimeAuthorityPath   string `json:"runtimeAuthorityPath"`
+	RuntimeAuthorityDigest string `json:"runtimeAuthorityDigest"`
+	JobTemplatePath        string `json:"jobTemplatePath"`
+	JobTemplateDigest      string `json:"jobTemplateDigest"`
+	RunID                  string `json:"runId"`
+	ImageDigest            string `json:"imageDigest"`
+	WorkloadAPICIDR        string `json:"workloadApiCidr"`
+	AlertSourceCIDR        string `json:"alertSourceCidr"`
+	ActivationSecret       string `json:"activationSecret"`
+	WebhookTokenPath       string `json:"webhookTokenPath"`
+	QueryTokenPath         string `json:"queryTokenPath"`
+	PublicEndpoint         string `json:"publicEndpoint"`
+	ListenAddress          string `json:"listenAddress"`
+	TLSCertificatePath     string `json:"tlsCertificatePath"`
+	TLSPrivateKeyPath      string `json:"tlsPrivateKeyPath"`
+	MaximumRecordAge       string `json:"maximumRecordAge"`
+}
+
 type fullRunExecutionManifestDocument struct {
-	Format                string                              `json:"format"`
-	Plan                  fullRunPlanDocument                 `json:"plan"`
-	Projection            fullRunProjectionDocument           `json:"projection"`
-	Authorization         postRuntimeAuthorizationDocument    `json:"authorization"`
-	Profiles              postRuntimeProfilesDocument         `json:"profiles"`
-	ProviderPrerequisites fullRunSubmissionRuntimeDocument    `json:"providerPrerequisites"`
-	ClusterLifecycle      fullRunSubmissionRuntimeDocument    `json:"clusterLifecycle"`
-	LifecycleObservation  fullRunLifecycleObservationDocument `json:"lifecycleObservation"`
-	Enablement            fullRunEnablementDocument           `json:"enablement"`
-	NetworkObservation    fullRunNetworkObservationDocument   `json:"networkObservation"`
-	RuntimeBinding        fullRunRuntimeBindingDocument       `json:"runtimeBinding"`
-	TargetAccess          fullRunTargetAccessDocument         `json:"targetAccess"`
-	TargetCredential      fullRunTargetCredentialDocument     `json:"targetCredential"`
-	TargetRegistration    fullRunTargetRegistrationDocument   `json:"targetRegistration"`
-	PlatformApplications  fullRunPlatformApplicationsDocument `json:"platformApplications"`
-	PlatformObservation   fullRunPlatformObservationDocument  `json:"platformObservation"`
-	AggregateEvidence     fullRunAggregateEvidenceDocument    `json:"aggregateEvidence"`
-	ReceiptDirectory      string                              `json:"receiptDirectory"`
+	Format                 string                                `json:"format"`
+	Plan                   fullRunPlanDocument                   `json:"plan"`
+	Projection             fullRunProjectionDocument             `json:"projection"`
+	Authorization          postRuntimeAuthorizationDocument      `json:"authorization"`
+	Profiles               postRuntimeProfilesDocument           `json:"profiles"`
+	ProviderPrerequisites  fullRunSubmissionRuntimeDocument      `json:"providerPrerequisites"`
+	ClusterLifecycle       fullRunSubmissionRuntimeDocument      `json:"clusterLifecycle"`
+	LifecycleObservation   fullRunLifecycleObservationDocument   `json:"lifecycleObservation"`
+	Enablement             fullRunEnablementDocument             `json:"enablement"`
+	NetworkObservation     fullRunNetworkObservationDocument     `json:"networkObservation"`
+	RuntimeBinding         fullRunRuntimeBindingDocument         `json:"runtimeBinding"`
+	TargetAccess           fullRunTargetAccessDocument           `json:"targetAccess"`
+	TargetCredential       fullRunTargetCredentialDocument       `json:"targetCredential"`
+	TargetRegistration     fullRunTargetRegistrationDocument     `json:"targetRegistration"`
+	PlatformApplications   fullRunPlatformApplicationsDocument   `json:"platformApplications"`
+	PlatformObservation    fullRunPlatformObservationDocument    `json:"platformObservation"`
+	AggregateEvidence      fullRunAggregateEvidenceDocument      `json:"aggregateEvidence"`
+	ObservabilityCollector fullRunObservabilityCollectorDocument `json:"observabilityCollector"`
+	ReceiptDirectory       string                                `json:"receiptDirectory"`
 }
 
 type FullRunExecutionManifestReceipt struct {
@@ -664,6 +685,58 @@ func verifyFullRunStaticArtifacts(document fullRunExecutionManifestDocument, pla
 	if _, err := submission.LoadPlatformApplications(document.PlatformApplications.ArtifactPath, applicationsExpected); err != nil {
 		return errors.New("verify full-run platform Applications template")
 	}
+	if err := verifyFullRunObservabilityCollector(document.ObservabilityCollector); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyFullRunObservabilityCollector(document fullRunObservabilityCollectorDocument) error {
+	authority, err := readBoundedRegular(document.RuntimeAuthorityPath, maximumFullRunExecutionManifestBytes)
+	if err != nil || !stageReceiptPrefixDigestPattern.MatchString(document.RuntimeAuthorityDigest) ||
+		digest.SHA256(authority) != document.RuntimeAuthorityDigest {
+		return errors.New("verify full-run collector runtime authority identity")
+	}
+	if _, err := BuildObservabilityCollectorRuntimeAuthorityPackage(ObservabilityCollectorRuntimeAuthorityPackageConfig{
+		Manifest: authority, ExpectedManifestDigest: document.RuntimeAuthorityDigest,
+		TargetIdentityDigest: digest.SHA256([]byte("full-run-static-collector-target")),
+	}); err != nil {
+		return errors.New("verify full-run collector runtime authority package")
+	}
+	template, err := readBoundedRegular(document.JobTemplatePath, maximumFullRunExecutionManifestBytes)
+	if err != nil || !stageReceiptPrefixDigestPattern.MatchString(document.JobTemplateDigest) ||
+		digest.SHA256(template) != document.JobTemplateDigest {
+		return errors.New("verify full-run collector Job template identity")
+	}
+	prefix, err := netip.ParsePrefix(document.WorkloadAPICIDR)
+	if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 32 {
+		return errors.New("full-run collector workload API CIDR is invalid")
+	}
+	if _, err := RenderObservabilityCollectorJobTemplate(template, ObservabilityCollectorJobValues{
+		RunID: document.RunID, ImageDigest: document.ImageDigest, ActivationSecret: document.ActivationSecret,
+		ActivationDigest: digest.SHA256([]byte("full-run-static-collector-activation")),
+		ManifestDigest:   digest.SHA256([]byte("full-run-static-collector-manifest")), RuntimeBindingDigest: digest.SHA256([]byte("full-run-static-collector-runtime")),
+		PublicEndpointDigest: digest.SHA256([]byte(document.PublicEndpoint)), PublicEndpoint: document.PublicEndpoint,
+		WorkloadAPIURL: "https://" + prefix.Addr().String() + ":6443", WorkloadAPICIDR: document.WorkloadAPICIDR,
+		AlertSourceCIDR: document.AlertSourceCIDR,
+	}); err != nil {
+		return errors.New("verify full-run collector Job values")
+	}
+	maximumRecordAge, err := time.ParseDuration(document.MaximumRecordAge)
+	if err != nil || maximumRecordAge < time.Minute || maximumRecordAge > maximumObservabilityIndependentEvidenceWindow ||
+		validateObservabilityCollectorNetwork(document.PublicEndpoint, document.ListenAddress) != nil {
+		return errors.New("full-run collector activation bounds are invalid")
+	}
+	webhook, webhookErr := readCollectorToken(document.WebhookTokenPath)
+	query, queryErr := readCollectorToken(document.QueryTokenPath)
+	if webhookErr != nil || queryErr != nil || bytes.Equal(webhook, query) {
+		return errors.New("full-run collector authority tokens are invalid")
+	}
+	for _, path := range []string{document.TLSCertificatePath, document.TLSPrivateKeyPath} {
+		if _, err := readBoundedRegular(path, 128*1024); err != nil {
+			return errors.New("full-run collector TLS material is invalid")
+		}
+	}
 	return nil
 }
 
@@ -674,6 +747,9 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 		document.Profiles.Network.Path, document.Profiles.Platform.Path, document.Profiles.Aggregate.Path,
 		document.Enablement.ArtifactPath, document.TargetAccess.ArtifactPath, document.TargetCredential.PolicyPath,
 		document.TargetRegistration.ArtifactPath, document.PlatformApplications.ArtifactPath, document.ReceiptDirectory,
+		document.ObservabilityCollector.RuntimeAuthorityPath, document.ObservabilityCollector.JobTemplatePath,
+		document.ObservabilityCollector.WebhookTokenPath, document.ObservabilityCollector.QueryTokenPath,
+		document.ObservabilityCollector.TLSCertificatePath, document.ObservabilityCollector.TLSPrivateKeyPath,
 	}
 	for _, path := range paths {
 		if !validFullRunAbsolutePath(path) {

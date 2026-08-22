@@ -3211,9 +3211,24 @@ collector launcher; return only after the collector activation receipt is
 complete. A failed or partial authority install is retained in the redacted
 post-prefix receipt and cannot reach either TokenRequest or collector creation.
 An observer-credential, package, installer-credential or collector failure
-cannot open Stage 8 and has no implicit retry or cleanup path. Wiring the
-private authority manifest and remaining factory inputs into the full-run
-CLI/Job activation is now the next prerequisite before a complete fresh run.
+cannot open Stage 8 and has no implicit retry or cleanup path.
+
+The private full-run execution manifest is now version 2 and binds that
+factory completely. It carries the exact five-object runtime-authority
+manifest and digest, collector Job template and digest, run and image
+identities, workload and alert CIDRs, activation Secret name, endpoint/listen
+binding, maximum record age, distinct webhook/query token paths and TLS
+certificate/key paths. The activation bundle adds those six static/private
+files to its exact 32-file index and Secret projection. Bundle rewriting maps
+all six paths into the fixed executor workspace, and materialization rejects a
+different path set.
+
+`ok cluster stage run full execute` now opens the concrete post-prefix factory
+from that already verified private manifest whenever no test override is
+present. Opening remains inert: it reads and correlates only the digest-bound
+files. The runtime target UID, endpoint, CA and both observer/installer tokens
+still arise only after Stage 7. Consequently the Job needs no manually repeated
+collector flags and the production and test renderers cannot diverge.
 
 Fresh-Run v3 now also has one fail-closed offline image/package correlation
 boundary:

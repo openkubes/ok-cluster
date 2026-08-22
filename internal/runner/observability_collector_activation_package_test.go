@@ -160,6 +160,28 @@ func TestBuildObservabilityCollectorActivationPackageAcceptsOnlyBoundInMemoryObs
 	}
 }
 
+func TestBuildObservabilityCollectorActivationPackageAcceptsVerifiedManifestReceiptInMemory(t *testing.T) {
+	config, cleanup := observabilityCollectorActivationFixture(t)
+	defer cleanup()
+	raw, err := os.ReadFile(config.ManifestReceiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt FullRunExecutionManifestReceipt
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	config.ManifestReceiptPath = ""
+	config.ManifestReceipt = &receipt
+	if packaged, err := BuildObservabilityCollectorActivationPackage(config); err != nil || !packaged.verified {
+		t.Fatalf("verified in-memory manifest receipt was rejected: %v", err)
+	}
+	receipt.ManifestDigest = runnerStageSHA("f")
+	if packaged, err := BuildObservabilityCollectorActivationPackage(config); err == nil || packaged.verified {
+		t.Fatal("changed in-memory manifest receipt was accepted")
+	}
+}
+
 func observabilityCollectorActivationFixture(t *testing.T) (ObservabilityCollectorActivationPackageConfig, func()) {
 	t.Helper()
 	manifestPath, cleanup := fullRunExecutionManifestFixture(t)

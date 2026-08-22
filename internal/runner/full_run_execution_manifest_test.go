@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,6 +172,19 @@ func TestFullRunExecutionManifestFailsClosed(t *testing.T) {
 		"duplicate runtime output": func(value map[string]any) {
 			binding := value["networkObservation"].(map[string]any)["workload"].(map[string]any)["bindingPath"]
 			value["runtimeBinding"].(map[string]any)["materialPath"] = binding
+		},
+		"wrong collector authority digest": func(value map[string]any) {
+			value["observabilityCollector"].(map[string]any)["runtimeAuthorityDigest"] = runnerStageSHA("f")
+		},
+		"mutable collector image": func(value map[string]any) {
+			value["observabilityCollector"].(map[string]any)["imageDigest"] = "ghcr.io/openkubes/ok-cluster:latest"
+		},
+		"broad collector alert source": func(value map[string]any) {
+			value["observabilityCollector"].(map[string]any)["alertSourceCidr"] = "0.0.0.0/0"
+		},
+		"shared collector authorities": func(value map[string]any) {
+			collector := value["observabilityCollector"].(map[string]any)
+			collector["queryTokenPath"] = collector["webhookTokenPath"]
 		},
 	}
 	for name, mutate := range tests {
@@ -367,6 +381,15 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 	gitOpsAuthority.CABundleDigest = digest.SHA256(managementCA)
 	providerRuntime := fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: infrastructureAuthority}
 	managementRuntime := fullRunSubmissionRuntimeDocument{Ledger: ledger, Authority: managementAuthority}
+	collectorAuthority := collectorRuntimeAuthorityManifest(t)
+	collectorAuthorityPath := writeBundleFile(t, root, "collector-runtime-authority.yaml", collectorAuthority)
+	collectorJob := observabilityCollectorJobTemplate(t)
+	collectorJobPath := writeBundleFile(t, root, "collector-job.yaml", collectorJob)
+	collectorWebhookPath := writeBundleFile(t, root, "collector-webhook-token", []byte(strings.Repeat("w", 48)))
+	collectorQueryPath := writeBundleFile(t, root, "collector-query-token", []byte(strings.Repeat("q", 48)))
+	collectorCertificate, collectorKey := collectorServerCredential(t, time.Now().UTC(), net.ParseIP("192.0.2.44"))
+	collectorCertificatePath := writeBundleFile(t, root, "collector-tls.crt", collectorCertificate)
+	collectorKeyPath := writeBundleFile(t, root, "collector-tls.key", collectorKey)
 	document := fullRunExecutionManifestDocument{
 		Format:                FullRunExecutionManifestFormat,
 		Plan:                  fullRunPlanDocument{Path: planPath, Expected: expected},
@@ -408,7 +431,16 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 			PollInterval: "1s", PollTimeout: "1m",
 		},
 		AggregateEvidence: fullRunAggregateEvidenceDocument{Ledger: ledger, Management: managementAuthority, Argo: gitOpsAuthority, WorkloadKubeconfigFile: workload.KubeconfigFile, WorkloadCAFile: workload.CAFile},
-		ReceiptDirectory:  receiptDirectory,
+		ObservabilityCollector: fullRunObservabilityCollectorDocument{
+			RuntimeAuthorityPath: collectorAuthorityPath, RuntimeAuthorityDigest: digest.SHA256(collectorAuthority),
+			JobTemplatePath: collectorJobPath, JobTemplateDigest: digest.SHA256(collectorJob),
+			RunID: "ok147-observability-collector-01", ImageDigest: capabilityFixtureConfig().PushgatewayImage,
+			WorkloadAPICIDR: "192.0.2.147/32", AlertSourceCIDR: "10.244.0.0/16",
+			ActivationSecret: "ok147-observability-collector-activation", WebhookTokenPath: collectorWebhookPath, QueryTokenPath: collectorQueryPath,
+			PublicEndpoint: "https://192.0.2.44:8443", ListenAddress: "0.0.0.0:8443",
+			TLSCertificatePath: collectorCertificatePath, TLSPrivateKeyPath: collectorKeyPath, MaximumRecordAge: "10m",
+		},
+		ReceiptDirectory: receiptDirectory,
 	}
 	return writeBundleFile(t, root, "full-run-manifest.json", mustJSON(t, document)), cleanup
 }

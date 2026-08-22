@@ -30,6 +30,10 @@ var fullRunExecutionBundleFiles = []string{
 	"activation/full-run-manifest.json",
 	"credentials/authorization-ca.crt",
 	"credentials/authorization-token",
+	"credentials/collector-query-token",
+	"credentials/collector-tls.crt",
+	"credentials/collector-tls.key",
+	"credentials/collector-webhook-token",
 	"credentials/gitops-ca.crt",
 	"credentials/gitops-token",
 	"credentials/infrastructure-ca.crt",
@@ -40,6 +44,8 @@ var fullRunExecutionBundleFiles = []string{
 	"credentials/management-token",
 	"input/aggregate-profile.json",
 	"input/authorization-authority.pub",
+	"input/collector-job.yaml",
+	"input/collector-runtime-authority.yaml",
 	"input/enablement.yaml",
 	"input/independent-evidence.pub",
 	"input/network-profile.json",
@@ -192,6 +198,10 @@ func collectFullRunExecutionSources(document fullRunExecutionManifestDocument, e
 	paths := map[string]string{
 		"credentials/authorization-ca.crt":             document.Authorization.CAFile,
 		"credentials/authorization-token":              document.Authorization.TokenFile,
+		"credentials/collector-query-token":            document.ObservabilityCollector.QueryTokenPath,
+		"credentials/collector-tls.crt":                document.ObservabilityCollector.TLSCertificatePath,
+		"credentials/collector-tls.key":                document.ObservabilityCollector.TLSPrivateKeyPath,
+		"credentials/collector-webhook-token":          document.ObservabilityCollector.WebhookTokenPath,
 		"credentials/gitops-ca.crt":                    document.TargetRegistration.GitOps.CAFile,
 		"credentials/gitops-token":                     document.TargetRegistration.GitOps.TokenFile,
 		"credentials/infrastructure-ca.crt":            document.ProviderPrerequisites.Authority.CAFile,
@@ -202,6 +212,8 @@ func collectFullRunExecutionSources(document fullRunExecutionManifestDocument, e
 		"credentials/management-token":                 document.ClusterLifecycle.Authority.TokenFile,
 		"input/aggregate-profile.json":                 document.Profiles.Aggregate.Path,
 		"input/authorization-authority.pub":            document.Authorization.PublicKeyPath,
+		"input/collector-job.yaml":                     document.ObservabilityCollector.JobTemplatePath,
+		"input/collector-runtime-authority.yaml":       document.ObservabilityCollector.RuntimeAuthorityPath,
 		"input/enablement.yaml":                        document.Enablement.ArtifactPath,
 		"input/independent-evidence.pub":               evidencePublicKeyPath,
 		"input/network-profile.json":                   document.Profiles.Network.Path,
@@ -298,6 +310,12 @@ func rewriteFullRunExecutionBundle(document fullRunExecutionManifestDocument, so
 	document.PlatformObservation.Capability.IndependentEvidencePath = fullRunExecutionHandoffRoot + "/observability-evidence.json"
 	document.AggregateEvidence.Ledger, document.AggregateEvidence.Management, document.AggregateEvidence.Argo = ledger, management, gitOps
 	document.AggregateEvidence.WorkloadTokenFile, document.AggregateEvidence.WorkloadKubeconfigFile, document.AggregateEvidence.WorkloadCAFile = "", workload.KubeconfigFile, workload.CAFile
+	document.ObservabilityCollector.RuntimeAuthorityPath = path("input/collector-runtime-authority.yaml")
+	document.ObservabilityCollector.JobTemplatePath = path("input/collector-job.yaml")
+	document.ObservabilityCollector.WebhookTokenPath = path("credentials/collector-webhook-token")
+	document.ObservabilityCollector.QueryTokenPath = path("credentials/collector-query-token")
+	document.ObservabilityCollector.TLSCertificatePath = path("credentials/collector-tls.crt")
+	document.ObservabilityCollector.TLSPrivateKeyPath = path("credentials/collector-tls.key")
 	document.ReceiptDirectory = path("work/receipts")
 	manifestRaw, err := json.Marshal(document)
 	if err != nil {
