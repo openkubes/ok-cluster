@@ -81,7 +81,11 @@ func OpenKubernetesObservabilityFullRunActivation(path string, runtime Kubernete
 		return nil, receipt, errors.New("open concrete Kubernetes observability full-run execution")
 	}
 	receipt.State = "PREPARED"
-	return &FullRunExecutionActivation{execution: execution, manifest: manifestReceipt}, receipt, nil
+	activation := &FullRunExecutionActivation{execution: execution, manifest: manifestReceipt}
+	if collector, ok := postPrefix.(*KubernetesObservabilityCollectorPostPrefix); ok {
+		activation.postPrefixReceipt = collector.Receipt
+	}
+	return activation, receipt, nil
 }
 
 func (manifest VerifiedFullRunExecutionManifest) openObservabilityCollectorPostPrefix(manifestPath string, clock func() time.Time) (FullRunPostPrefixActivator, error) {

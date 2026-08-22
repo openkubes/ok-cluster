@@ -12,10 +12,11 @@ const FullRunExecutionActivationReceiptFormat = "ok147-full-run-execution-activa
 // by local and future Job activation adapters. It contains no credentials,
 // endpoints, runtime target identity or private paths.
 type FullRunExecutionActivationReceipt struct {
-	Format    string                          `json:"format"`
-	State     string                          `json:"state"`
-	Manifest  FullRunExecutionManifestReceipt `json:"manifest"`
-	Execution *FullRunOrchestrationReceipt    `json:"execution,omitempty"`
+	Format     string                                   `json:"format"`
+	State      string                                   `json:"state"`
+	Manifest   FullRunExecutionManifestReceipt          `json:"manifest"`
+	PostPrefix *ObservabilityCollectorPostPrefixReceipt `json:"postPrefix,omitempty"`
+	Execution  *FullRunOrchestrationReceipt             `json:"execution,omitempty"`
 }
 
 type fullRunManifestExecution interface {
@@ -31,8 +32,9 @@ type fullRunExecutionActivationFactories struct {
 // single-use and delegates exactly once to the already bounded Stage 1-12
 // executor. It adds no retry, rollback or cleanup surface.
 type FullRunExecutionActivation struct {
-	execution fullRunManifestExecution
-	manifest  FullRunExecutionManifestReceipt
+	execution         fullRunManifestExecution
+	manifest          FullRunExecutionManifestReceipt
+	postPrefixReceipt func() ObservabilityCollectorPostPrefixReceipt
 
 	mu   sync.Mutex
 	used bool
@@ -85,6 +87,12 @@ func (activation *FullRunExecutionActivation) Run(ctx context.Context) (FullRunE
 	}
 	executed, err := execution.Run(ctx)
 	receipt.Execution = &executed
+	if activation.postPrefixReceipt != nil {
+		postPrefix := activation.postPrefixReceipt()
+		if postPrefix.State != "PREPARED" {
+			receipt.PostPrefix = &postPrefix
+		}
+	}
 	if err != nil {
 		if executed.State == "STOPPED" {
 			receipt.State = "STOPPED"
