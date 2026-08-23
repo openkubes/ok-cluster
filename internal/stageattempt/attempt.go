@@ -97,7 +97,7 @@ func Verify(raw []byte, expected Expected) (Receipt, error) {
 		Format: ReceiptFormat, State: "VERIFIED", ExecutionAttemptDigest: digest.SHA256(canonical),
 		SourceFixtureDigest: document.SourceFixtureDigest, SourcePlanDigest: document.SourcePlanSemanticDigest,
 		RunnerImage: document.RunnerImage, ActivationPackageDigest: document.ActivationPackageDigest,
-		Mode: document.Mode, RecoveryBound: document.PredecessorAttemptDigest != "", MaxAttempts: document.MaxAttempts,
+		Mode: document.Mode, RecoveryBound: document.PredecessorAttemptDigest != "" || document.StoppedEvidenceDigest != "", MaxAttempts: document.MaxAttempts,
 		MutationAllowed: false,
 	}, nil
 }
@@ -107,9 +107,6 @@ func validateExpected(expected Expected) error {
 		!digestPattern.MatchString(expected.SourcePlanSemanticDigest) || !imagePattern.MatchString(expected.RunnerImage) ||
 		!digestPattern.MatchString(expected.ActivationPackageDigest) || !digestPattern.MatchString(expected.DecisionWindowDigest) {
 		return errors.New("expected execution attempt identity is invalid")
-	}
-	if (expected.PredecessorAttemptDigest == "") != (expected.StoppedEvidenceDigest == "") {
-		return errors.New("expected recovery attempt lineage is incomplete")
 	}
 	for _, value := range []string{expected.PredecessorAttemptDigest, expected.StoppedEvidenceDigest} {
 		if value != "" && !digestPattern.MatchString(value) {
@@ -125,9 +122,6 @@ func validateDocument(document Document) error {
 		!digestPattern.MatchString(document.SourcePlanSemanticDigest) || !imagePattern.MatchString(document.RunnerImage) ||
 		!digestPattern.MatchString(document.ActivationPackageDigest) || !digestPattern.MatchString(document.DecisionWindowDigest) {
 		return errors.New("execution attempt identity is invalid")
-	}
-	if (document.PredecessorAttemptDigest == "") != (document.StoppedEvidenceDigest == "") {
-		return errors.New("execution attempt recovery lineage is incomplete")
 	}
 	for _, value := range []string{document.PredecessorAttemptDigest, document.StoppedEvidenceDigest} {
 		if value != "" && !digestPattern.MatchString(value) {
