@@ -117,7 +117,7 @@ that binds at least:
 - reviewed runner image digest;
 - activation-package digest;
 - bounded operational mode (`create + converge + observe` for this scope);
-- explicit predecessor attempt or stopped-evidence digest when applicable;
+- explicit predecessor attempt and/or stopped-evidence digest when applicable;
 - expiry or decision-window identity; and
 - `maxAttempts: 1`.
 

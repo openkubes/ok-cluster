@@ -30,7 +30,9 @@ No Kubernetes API was contacted and no infrastructure object was changed.
 - an immutable runner image;
 - the activation-package digest;
 - the exact `create-converge-observe/v1` mode;
-- predecessor-attempt and stopped-evidence digests together for recovery;
+- predecessor-attempt and/or stopped-evidence digests for recovery (a
+  historical v1 predecessor has no attempt digest, so its stopped evidence is
+  sufficient and no synthetic predecessor identity is invented);
 - a decision-window digest; and
 - `maxAttempts: 1`.
 
@@ -65,8 +67,8 @@ Offline tests establish:
 
 1. equivalent attempt documents produce the same digest;
 2. a changed bound runner identity produces a different digest;
-3. incomplete recovery lineage, mutable runner images and `maxAttempts != 1`
-   fail closed;
+3. malformed recovery lineage, mutable runner images and `maxAttempts != 1`
+   fail closed, while stopped-evidence-only v1 migration remains possible;
 4. a changed attempt produces a different PlanDigest, policy and request;
 5. the signed grant carries the same attempt identity;
 6. same-attempt replay remains HTTP 409;

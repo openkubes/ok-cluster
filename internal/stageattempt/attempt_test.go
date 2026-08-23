@@ -59,6 +59,25 @@ func TestVerifyFailsClosed(t *testing.T) {
 	}
 }
 
+func TestVerifySupportsHistoricalV1RecoveryWithoutInventedAttemptIdentity(t *testing.T) {
+	document, expected := fixture()
+	document.PredecessorAttemptDigest = ""
+	expected.PredecessorAttemptDigest = ""
+	raw, _ := json.Marshal(document)
+	receipt, err := Verify(raw, expected)
+	if err != nil || !receipt.RecoveryBound || receipt.ExecutionAttemptDigest == "" {
+		t.Fatalf("stopped-evidence-only v1 migration was rejected: %#v %v", receipt, err)
+	}
+
+	document.StoppedEvidenceDigest = ""
+	expected.StoppedEvidenceDigest = ""
+	raw, _ = json.Marshal(document)
+	receipt, err = Verify(raw, expected)
+	if err != nil || receipt.RecoveryBound {
+		t.Fatalf("initial attempt without lineage was rejected: %#v %v", receipt, err)
+	}
+}
+
 func fixture() (Document, Expected) {
 	document := Document{
 		Format: Format, AttemptID: "ok147-full-run-r11", SourceFixtureDigest: sha("1"), SourcePlanSemanticDigest: sha("2"),
