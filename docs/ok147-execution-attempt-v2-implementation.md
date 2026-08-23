@@ -23,12 +23,12 @@ No Kubernetes API was contacted and no infrastructure object was changed.
 
 ## Attempt identity
 
-`ok147-execution-attempt/v1` is a strict, redaction-safe document that binds:
+`ok147-execution-attempt/v2` is a strict, redaction-safe document that binds:
 
 - an explicit attempt identifier;
 - source FixtureDigest and source staged-plan semantic identity;
 - an immutable runner image;
-- the activation-package digest;
+- the source activation-package digest from which the new attempt is derived;
 - the exact `create-converge-observe/v1` mode;
 - predecessor-attempt and/or stopped-evidence digests for recovery (a
   historical v1 predecessor has no attempt digest, so its stopped evidence is
@@ -39,6 +39,13 @@ No Kubernetes API was contacted and no infrastructure object was changed.
 The verifier accepts only independently supplied expected identities. It
 canonicalizes the document and returns `ExecutionAttemptDigest`; the document
 is not a grant and its receipt has `mutationAllowed: false`.
+
+The source qualifier is essential. The final activation package embeds plan
+v2, which embeds `ExecutionAttemptDigest`. Binding that final package inside
+the attempt document would create an impossible digest cycle. The final
+package is instead built after the attempt and is bound independently by the
+launch candidate. Historical attempt-v1 documents remain verifiable, but must
+not be used to create a new cyclic binding.
 
 ## Additive protocol formats
 

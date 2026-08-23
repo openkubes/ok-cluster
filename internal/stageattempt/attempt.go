@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	Format        = "ok147-execution-attempt/v1"
-	ReceiptFormat = "ok147-verified-execution-attempt/v1"
-	Mode          = "create-converge-observe/v1"
+	LegacyFormat        = "ok147-execution-attempt/v1"
+	LegacyReceiptFormat = "ok147-verified-execution-attempt/v1"
+	Format              = "ok147-execution-attempt/v2"
+	ReceiptFormat       = "ok147-verified-execution-attempt/v2"
+	Mode                = "create-converge-observe/v1"
 )
 
 var (
@@ -34,40 +36,46 @@ type Document struct {
 	SourceFixtureDigest      string `json:"sourceFixtureDigest"`
 	SourcePlanSemanticDigest string `json:"sourcePlanSemanticDigest"`
 	RunnerImage              string `json:"runnerImage"`
-	ActivationPackageDigest  string `json:"activationPackageDigest"`
-	Mode                     string `json:"mode"`
-	PredecessorAttemptDigest string `json:"predecessorAttemptDigest,omitempty"`
-	StoppedEvidenceDigest    string `json:"stoppedEvidenceDigest,omitempty"`
-	DecisionWindowDigest     string `json:"decisionWindowDigest"`
-	MaxAttempts              int    `json:"maxAttempts"`
+	// ActivationPackageDigest is retained only for historical v1 documents.
+	// It cannot safely describe the final package because that package embeds
+	// the plan carrying the digest of this document.
+	ActivationPackageDigest       string `json:"activationPackageDigest,omitempty"`
+	SourceActivationPackageDigest string `json:"sourceActivationPackageDigest,omitempty"`
+	Mode                          string `json:"mode"`
+	PredecessorAttemptDigest      string `json:"predecessorAttemptDigest,omitempty"`
+	StoppedEvidenceDigest         string `json:"stoppedEvidenceDigest,omitempty"`
+	DecisionWindowDigest          string `json:"decisionWindowDigest"`
+	MaxAttempts                   int    `json:"maxAttempts"`
 }
 
 // Expected is independently supplied from reviewed fixture, runner,
 // activation and stopped-evidence checkpoints.
 type Expected struct {
-	AttemptID                string
-	SourceFixtureDigest      string
-	SourcePlanSemanticDigest string
-	RunnerImage              string
-	ActivationPackageDigest  string
-	PredecessorAttemptDigest string
-	StoppedEvidenceDigest    string
-	DecisionWindowDigest     string
+	AttemptID                     string
+	SourceFixtureDigest           string
+	SourcePlanSemanticDigest      string
+	RunnerImage                   string
+	ActivationPackageDigest       string
+	SourceActivationPackageDigest string
+	PredecessorAttemptDigest      string
+	StoppedEvidenceDigest         string
+	DecisionWindowDigest          string
 }
 
 // Receipt is safe to retain publicly. It grants no execution authority.
 type Receipt struct {
-	Format                  string `json:"format"`
-	State                   string `json:"state"`
-	ExecutionAttemptDigest  string `json:"executionAttemptDigest"`
-	SourceFixtureDigest     string `json:"sourceFixtureDigest"`
-	SourcePlanDigest        string `json:"sourcePlanSemanticDigest"`
-	RunnerImage             string `json:"runnerImage"`
-	ActivationPackageDigest string `json:"activationPackageDigest"`
-	Mode                    string `json:"mode"`
-	RecoveryBound           bool   `json:"recoveryBound"`
-	MaxAttempts             int    `json:"maxAttempts"`
-	MutationAllowed         bool   `json:"mutationAllowed"`
+	Format                        string `json:"format"`
+	State                         string `json:"state"`
+	ExecutionAttemptDigest        string `json:"executionAttemptDigest"`
+	SourceFixtureDigest           string `json:"sourceFixtureDigest"`
+	SourcePlanDigest              string `json:"sourcePlanSemanticDigest"`
+	RunnerImage                   string `json:"runnerImage"`
+	ActivationPackageDigest       string `json:"activationPackageDigest,omitempty"`
+	SourceActivationPackageDigest string `json:"sourceActivationPackageDigest,omitempty"`
+	Mode                          string `json:"mode"`
+	RecoveryBound                 bool   `json:"recoveryBound"`
+	MaxAttempts                   int    `json:"maxAttempts"`
+	MutationAllowed               bool   `json:"mutationAllowed"`
 }
 
 // Verify accepts only the exact independently expected attempt and returns
@@ -85,7 +93,9 @@ func Verify(raw []byte, expected Expected) (Receipt, error) {
 	}
 	if document.AttemptID != expected.AttemptID || document.SourceFixtureDigest != expected.SourceFixtureDigest ||
 		document.SourcePlanSemanticDigest != expected.SourcePlanSemanticDigest || document.RunnerImage != expected.RunnerImage ||
-		document.ActivationPackageDigest != expected.ActivationPackageDigest || document.PredecessorAttemptDigest != expected.PredecessorAttemptDigest ||
+		document.ActivationPackageDigest != expected.ActivationPackageDigest ||
+		document.SourceActivationPackageDigest != expected.SourceActivationPackageDigest ||
+		document.PredecessorAttemptDigest != expected.PredecessorAttemptDigest ||
 		document.StoppedEvidenceDigest != expected.StoppedEvidenceDigest || document.DecisionWindowDigest != expected.DecisionWindowDigest {
 		return Receipt{}, errors.New("execution attempt differs from independently verified inputs")
 	}
@@ -93,19 +103,31 @@ func Verify(raw []byte, expected Expected) (Receipt, error) {
 	if err != nil {
 		return Receipt{}, err
 	}
+	receiptFormat := ReceiptFormat
+	if document.Format == LegacyFormat {
+		receiptFormat = LegacyReceiptFormat
+	}
 	return Receipt{
-		Format: ReceiptFormat, State: "VERIFIED", ExecutionAttemptDigest: digest.SHA256(canonical),
-		SourceFixtureDigest: document.SourceFixtureDigest, SourcePlanDigest: document.SourcePlanSemanticDigest,
-		RunnerImage: document.RunnerImage, ActivationPackageDigest: document.ActivationPackageDigest,
-		Mode: document.Mode, RecoveryBound: document.PredecessorAttemptDigest != "" || document.StoppedEvidenceDigest != "", MaxAttempts: document.MaxAttempts,
-		MutationAllowed: false,
+		Format:                        receiptFormat,
+		State:                         "VERIFIED",
+		ExecutionAttemptDigest:        digest.SHA256(canonical),
+		SourceFixtureDigest:           document.SourceFixtureDigest,
+		SourcePlanDigest:              document.SourcePlanSemanticDigest,
+		RunnerImage:                   document.RunnerImage,
+		ActivationPackageDigest:       document.ActivationPackageDigest,
+		SourceActivationPackageDigest: document.SourceActivationPackageDigest,
+		Mode:                          document.Mode,
+		RecoveryBound:                 document.PredecessorAttemptDigest != "" || document.StoppedEvidenceDigest != "",
+		MaxAttempts:                   document.MaxAttempts,
+		MutationAllowed:               false,
 	}, nil
 }
 
 func validateExpected(expected Expected) error {
 	if !namePattern.MatchString(expected.AttemptID) || !digestPattern.MatchString(expected.SourceFixtureDigest) ||
 		!digestPattern.MatchString(expected.SourcePlanSemanticDigest) || !imagePattern.MatchString(expected.RunnerImage) ||
-		!digestPattern.MatchString(expected.ActivationPackageDigest) || !digestPattern.MatchString(expected.DecisionWindowDigest) {
+		!validActivationIdentity(expected.ActivationPackageDigest, expected.SourceActivationPackageDigest) ||
+		!digestPattern.MatchString(expected.DecisionWindowDigest) {
 		return errors.New("expected execution attempt identity is invalid")
 	}
 	for _, value := range []string{expected.PredecessorAttemptDigest, expected.StoppedEvidenceDigest} {
@@ -117,11 +139,16 @@ func validateExpected(expected Expected) error {
 }
 
 func validateDocument(document Document) error {
-	if document.Format != Format || document.Mode != Mode || document.MaxAttempts != 1 ||
+	if (document.Format != Format && document.Format != LegacyFormat) || document.Mode != Mode || document.MaxAttempts != 1 ||
 		!namePattern.MatchString(document.AttemptID) || !digestPattern.MatchString(document.SourceFixtureDigest) ||
 		!digestPattern.MatchString(document.SourcePlanSemanticDigest) || !imagePattern.MatchString(document.RunnerImage) ||
-		!digestPattern.MatchString(document.ActivationPackageDigest) || !digestPattern.MatchString(document.DecisionWindowDigest) {
+		!validActivationIdentity(document.ActivationPackageDigest, document.SourceActivationPackageDigest) ||
+		!digestPattern.MatchString(document.DecisionWindowDigest) {
 		return errors.New("execution attempt identity is invalid")
+	}
+	if (document.Format == LegacyFormat && document.ActivationPackageDigest == "") ||
+		(document.Format == Format && document.SourceActivationPackageDigest == "") {
+		return errors.New("execution attempt activation identity does not match its format")
 	}
 	for _, value := range []string{document.PredecessorAttemptDigest, document.StoppedEvidenceDigest} {
 		if value != "" && !digestPattern.MatchString(value) {
@@ -129,6 +156,11 @@ func validateDocument(document Document) error {
 		}
 	}
 	return nil
+}
+
+func validActivationIdentity(legacy, source string) bool {
+	return legacy != source && ((legacy != "" && source == "" && digestPattern.MatchString(legacy)) ||
+		(source != "" && legacy == "" && digestPattern.MatchString(source)))
 }
 
 func canonicalJSON(value any) ([]byte, error) {
