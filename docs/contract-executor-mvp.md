@@ -762,10 +762,18 @@ provider prerequisites (ok-infra)
 
 The runner therefore verifies a strict twelve-stage
 `ok147-staged-execution-plan/v1` document before any future orchestration can
-use it. The plan binds `R`, `E`, `P`, `FixtureDigest`, the distinct
+use it. The additive `ok147-staged-execution-plan/v2` additionally binds one
+verified `ExecutionAttemptDigest`, allowing a separately reviewed new attempt
+without deleting historical single-use claims. The plan binds `R`, `E`, `P`, `FixtureDigest`, the distinct
 infrastructure, management and GitOps authorities, exact stage dependencies,
 one immutable input set per stage and a separate operation name for every
 mutating stage. Its canonical digest identifies the complete experiment.
+
+Plan v1 rejects an attempt field. Plan v2 requires the exact independently
+verified attempt digest; that identity flows through authority policy v2,
+authorization request and grant v2, full-run manifest v4 and their receipts.
+Same-attempt replay remains rejected, while a new reviewed attempt produces a
+new PlanDigest and request identity. There is no automatic retry or claim reset.
 
 The plan must remain `authorizationState: NO-GO`; it is never a grant. It
 contains no manifest content, credentials, endpoints, commands or rendering

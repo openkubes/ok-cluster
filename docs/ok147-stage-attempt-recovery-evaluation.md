@@ -169,6 +169,9 @@ checkpoint.
 
 ## Implementation checkpoint
 
+Implemented by the additive checkpoint documented in
+[`ok147-execution-attempt-v2-implementation.md`](ok147-execution-attempt-v2-implementation.md).
+
 The implementation follow-up must prove offline:
 
 1. identical attempt inputs produce the same `ExecutionAttemptDigest`;
@@ -186,9 +189,9 @@ The implementation follow-up must prove offline:
 Observed R10 stop:          expected fail-closed replay protection
 Automatic retry:           rejected
 Claim deletion/reset:      rejected as normal recovery
-Attempt identity:          required before another full run
+Attempt identity:          implemented offline
 Selected mechanism:        additive Plan/Policy/Grant v2 binding
 RequiresReconciler:        no
-Infrastructure mutation:   NO-GO
+Infrastructure mutation:   none in implementation checkpoint
 Next full-run attempt:      NOT GRANTED
 ```

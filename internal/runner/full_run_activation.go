@@ -56,11 +56,15 @@ func openFullRunExecutionActivation(path string, runtime FullRunExecutionManifes
 	}
 	execution, manifest, err := factories.open(path, runtime)
 	receipt.Manifest = manifest
-	if err != nil || execution == nil || manifest.Format != FullRunExecutionManifestReceiptFormat || manifest.State != "VERIFIED" || manifest.MutationAllowed {
+	if err != nil || execution == nil || !validFullRunExecutionManifestReceiptFormat(manifest.Format) || manifest.State != "VERIFIED" || manifest.MutationAllowed {
 		return nil, receipt, errors.New("open verified full-run activation")
 	}
 	receipt.State = "PREPARED"
 	return &FullRunExecutionActivation{execution: execution, manifest: manifest}, receipt, nil
+}
+
+func validFullRunExecutionManifestReceiptFormat(format string) bool {
+	return format == FullRunExecutionManifestReceiptFormat || format == FullRunExecutionManifestReceiptFormatV2
 }
 
 // Run consumes the prepared activation before invoking the concrete executor.

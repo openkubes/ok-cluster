@@ -23,6 +23,7 @@ plan:
 ```text
 verified Plan
     -> exact R / E / P / FixtureDigest
+    -> exact ExecutionAttemptDigest for plan v2
     -> exact mutating stage identities and digests
     -> bounded authority policy
 ```
@@ -47,6 +48,12 @@ Invalid credentials, changed identities, non-canonical JSON, unsupported media
 types and replay fail closed. A claim is never removed automatically. There is
 no retry, rollback, cleanup, Kubernetes credential or generic proxy surface.
 
+The additive v2 protocol permits a separately reviewed new execution attempt
+without resetting that claim. The canonical attempt digest is part of plan v2,
+the authority policy, request identity and signed grant. Replaying the same
+attempt still returns HTTP 409; a foreign or unbound attempt fails before a
+claim is written. Historical v1 policy and claim evidence is not reinterpreted.
+
 The first implementation deliberately rejects target-credential and
 target-registration recovery media types. Recovery requires a separate policy
 checkpoint and must not inherit normal-stage authorization implicitly.
@@ -65,6 +72,7 @@ ok authority stage policy \
   --enablement-revision sha256:<E> \
   --platform-revision sha256:<P> \
   --execution-fixture sha256:<FixtureDigest> \
+  --execution-attempt-digest sha256:<ExecutionAttemptDigest> \
   --infrastructure-authority ok-infra \
   --management-authority ok-mgmt \
   --gitops-authority ok-shared \

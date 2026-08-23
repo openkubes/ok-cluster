@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	StageAuthorizationRequestFormat         = "ok147-stage-authorization-request/v1"
-	ResolvedStageAuthorizationReceiptFormat = "ok147-resolved-stage-authorization/v1"
+	StageAuthorizationRequestFormat           = "ok147-stage-authorization-request/v1"
+	StageAuthorizationRequestFormatV2         = "ok147-stage-authorization-request/v2"
+	ResolvedStageAuthorizationReceiptFormat   = "ok147-resolved-stage-authorization/v1"
+	ResolvedStageAuthorizationReceiptFormatV2 = "ok147-resolved-stage-authorization/v2"
 )
 
 var stageAuthorizationRequestNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,127}$`)
@@ -37,6 +39,7 @@ type StageAuthorizationRequest struct {
 	EnablementRevision string                    `json:"enablementRevision"`
 	PlatformRevision   string                    `json:"platformRevision"`
 	ExecutionFixture   string                    `json:"executionFixture"`
+	ExecutionAttempt   string                    `json:"executionAttemptDigest,omitempty"`
 	StageID            string                    `json:"stageId"`
 	StageOrder         int                       `json:"stageOrder"`
 	StageDigest        string                    `json:"stageDigest"`
@@ -55,6 +58,7 @@ type stageAuthorizationRequestPayload struct {
 	EnablementRevision string                    `json:"enablementRevision"`
 	PlatformRevision   string                    `json:"platformRevision"`
 	ExecutionFixture   string                    `json:"executionFixture"`
+	ExecutionAttempt   string                    `json:"executionAttemptDigest,omitempty"`
 	StageID            string                    `json:"stageId"`
 	StageOrder         int                       `json:"stageOrder"`
 	StageDigest        string                    `json:"stageDigest"`
@@ -97,6 +101,7 @@ type ResolvedStageAuthorizationReceipt struct {
 	PredecessorDigest   string `json:"predecessorDigest"`
 	NotAfter            string `json:"notAfter"`
 	MaxUses             int    `json:"maxUses"`
+	ExecutionAttempt    string `json:"executionAttemptDigest,omitempty"`
 }
 
 type ResolvedStageAuthorization struct {
@@ -108,11 +113,18 @@ type ResolvedStageAuthorization struct {
 
 func (request StageAuthorizationRequest) Bytes() ([]byte, error) {
 	requestDigest, err := stageAuthorizationRequestDigest(request)
-	if err != nil || request.RequestDigest != requestDigest || request.Format != StageAuthorizationRequestFormat ||
+	if err != nil || request.RequestDigest != requestDigest || request.Format != StageAuthorizationRequestFormat && request.Format != StageAuthorizationRequestFormatV2 ||
 		request.Audience != authorization.StageAudience || request.MaxUses != 1 || request.StageOrder < 1 ||
 		!stageAuthorizationRequestNamePattern.MatchString(request.StageID) || strings.TrimSpace(request.Operation) != request.Operation || request.Operation == "" ||
 		!stageAuthorizationRequestNamePattern.MatchString(request.Authority) || request.Predecessors == nil {
 		return nil, errors.New("stage authorization request was not produced by verification")
+	}
+	if request.Format == StageAuthorizationRequestFormat {
+		if request.ExecutionAttempt != "" {
+			return nil, errors.New("stage authorization request v1 cannot bind an execution attempt")
+		}
+	} else if !stageReceiptPrefixDigestPattern.MatchString(request.ExecutionAttempt) {
+		return nil, errors.New("stage authorization request execution attempt is invalid")
 	}
 	for _, value := range []string{
 		request.RequestDigest, request.PlanDigest, request.ContractRevision, request.EnablementRevision,
@@ -188,14 +200,18 @@ func ResolveStageAuthorization(ctx context.Context, resume StageResumeConfig, re
 		return ResolvedStageAuthorization{}, errors.New("bind resolved stage authorization")
 	}
 	grantReceipt := grant.Receipt()
+	receiptFormat := ResolvedStageAuthorizationReceiptFormat
+	if request.Format == StageAuthorizationRequestFormatV2 {
+		receiptFormat = ResolvedStageAuthorizationReceiptFormatV2
+	}
 	receipt := ResolvedStageAuthorizationReceipt{
-		Format: ResolvedStageAuthorizationReceiptFormat, State: "VERIFIED",
+		Format: receiptFormat, State: "VERIFIED",
 		RequestDigest: request.RequestDigest, AuthorizationDigest: grantReceipt.AuthorizationDigest,
 		GrantID: grantReceipt.GrantID, KeyID: grantReceipt.KeyID, PlanDigest: grantReceipt.PlanDigest,
 		StageID: grantReceipt.StageID, StageDigest: grantReceipt.StageDigest,
 		Operation: grantReceipt.Operation, Authority: grantReceipt.Authority,
 		PredecessorDigest: grantReceipt.PredecessorDigest, NotAfter: grantReceipt.NotAfter,
-		MaxUses: grantReceipt.MaxUses,
+		MaxUses: grantReceipt.MaxUses, ExecutionAttempt: request.ExecutionAttempt,
 	}
 	return ResolvedStageAuthorization{request: request, source: source, receipt: receipt, verified: true}, nil
 }
@@ -227,12 +243,17 @@ func newStageAuthorizationRequest(plan stageplan.Binding, decision stagecursor.D
 			return StageAuthorizationRequest{}, errors.New("stage authorization request predecessor is invalid")
 		}
 	}
+	requestFormat := StageAuthorizationRequestFormat
+	if plan.Format == stageplan.BindingFormatV2 {
+		requestFormat = StageAuthorizationRequestFormatV2
+	}
 	request := StageAuthorizationRequest{
-		Format: StageAuthorizationRequestFormat, Audience: authorization.StageAudience,
+		Format: requestFormat, Audience: authorization.StageAudience,
 		PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity,
 		ContractRevision: plan.IntentRevision, EnablementRevision: plan.EnablementRevision,
 		PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
-		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest,
+		ExecutionAttempt: plan.ExecutionAttempt,
+		StageID:          stage.ID, StageOrder: stage.Order, StageDigest: stageDigest,
 		Operation: stage.GrantOperation, Authority: stage.Authority,
 		Predecessors: append([]stagecursor.Predecessor{}, decision.Predecessors...), MaxUses: 1,
 	}
@@ -249,12 +270,15 @@ func cloneStageAuthorizationRequest(request StageAuthorizationRequest) StageAuth
 }
 
 func verifyResolvedStageAuthorization(resolved ResolvedStageAuthorization) error {
-	if !resolved.verified || resolved.receipt.Format != ResolvedStageAuthorizationReceiptFormat || resolved.receipt.State != "VERIFIED" ||
+	if !resolved.verified || resolved.receipt.Format != ResolvedStageAuthorizationReceiptFormat && resolved.receipt.Format != ResolvedStageAuthorizationReceiptFormatV2 || resolved.receipt.State != "VERIFIED" ||
 		resolved.receipt.RequestDigest != resolved.request.RequestDigest || resolved.receipt.PlanDigest != resolved.request.PlanDigest ||
 		resolved.receipt.StageID != resolved.request.StageID || resolved.receipt.StageDigest != resolved.request.StageDigest ||
 		resolved.receipt.Operation != resolved.request.Operation || resolved.receipt.Authority != resolved.request.Authority ||
 		resolved.receipt.MaxUses != 1 || resolved.source.GrantPath == "" || resolved.source.PublicKeyPath == "" || resolved.source.EvaluationTime.IsZero() {
 		return errors.New("stage authorization resolution was not produced by verification")
+	}
+	if resolved.receipt.ExecutionAttempt != resolved.request.ExecutionAttempt {
+		return errors.New("resolved stage authorization execution attempt changed after verification")
 	}
 	for _, value := range []string{
 		resolved.receipt.RequestDigest, resolved.receipt.AuthorizationDigest, resolved.receipt.PlanDigest,
@@ -277,7 +301,8 @@ func stageAuthorizationRequestDigest(request StageAuthorizationRequest) (string,
 		ContractIdentity: request.ContractIdentity, ContractRevision: request.ContractRevision,
 		EnablementRevision: request.EnablementRevision, PlatformRevision: request.PlatformRevision,
 		ExecutionFixture: request.ExecutionFixture, StageID: request.StageID, StageOrder: request.StageOrder,
-		StageDigest: request.StageDigest, Operation: request.Operation, Authority: request.Authority,
+		ExecutionAttempt: request.ExecutionAttempt,
+		StageDigest:      request.StageDigest, Operation: request.Operation, Authority: request.Authority,
 		Predecessors: append([]stagecursor.Predecessor{}, request.Predecessors...), MaxUses: request.MaxUses,
 	}
 	raw, err := json.Marshal(payload)

@@ -158,13 +158,13 @@ func BuildObservabilityCollectorActivationPackage(config ObservabilityCollectorA
 		}
 	}
 	if err != nil || digest.SHA256(manifestReceiptRaw) != config.ExpectedReceiptDigest ||
-		manifestReceipt.Format != FullRunExecutionManifestReceiptFormat || manifestReceipt.State != "VERIFIED" ||
+		!validFullRunExecutionManifestReceiptFormat(manifestReceipt.Format) || manifestReceipt.State != "VERIFIED" ||
 		manifestReceipt.MutationAllowed || manifestReceipt.ManifestDigest != manifestDigest {
 		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("observability collector manifest receipt is invalid")
 	}
 	expected := fullRunPlanExpected(document.Plan.Expected)
 	plan, err := stageplan.Load(document.Plan.Path, expected)
-	if err != nil || plan.PlanDigest != manifestReceipt.PlanDigest {
+	if err != nil || plan.PlanDigest != manifestReceipt.PlanDigest || plan.ExecutionAttempt != manifestReceipt.ExecutionAttemptDigest {
 		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("observability collector manifest plan differs from receipt")
 	}
 	runtimeBinding, err := LoadRuntimeBindingMaterialFiles(config.RuntimeBinding)

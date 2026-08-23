@@ -45,6 +45,57 @@ func TestLoadFullRunExecutionManifestBindsFreshPrivateContract(t *testing.T) {
 	}
 }
 
+func TestLoadFullRunExecutionManifestV4BindsExecutionAttempt(t *testing.T) {
+	manifest, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	attempt := runnerStageSHA("5")
+	upgradeFullRunExecutionManifestToV4(t, manifest, attempt, attempt)
+
+	verified, receipt, err := LoadFullRunExecutionManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := verified.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt != retained || receipt.Format != FullRunExecutionManifestReceiptFormatV2 ||
+		receipt.ExecutionAttemptDigest != attempt || receipt.PlanDigest == "" || receipt.State != "VERIFIED" {
+		t.Fatalf("unexpected attempt-bound full-run receipt: %#v", receipt)
+	}
+}
+
+func TestFullRunExecutionManifestAttemptFormatFailsClosed(t *testing.T) {
+	tests := map[string]func(*fullRunExecutionManifestDocument, map[string]any){
+		"v3 cannot acquire attempt": func(document *fullRunExecutionManifestDocument, plan map[string]any) {
+			document.Plan.Expected.ExecutionAttemptDigest = runnerStageSHA("5")
+		},
+		"v4 requires attempt": func(document *fullRunExecutionManifestDocument, plan map[string]any) {
+			document.Format = FullRunExecutionManifestFormatV4
+			plan["format"] = stageplan.FormatV2
+		},
+		"v4 rejects foreign plan attempt": func(document *fullRunExecutionManifestDocument, plan map[string]any) {
+			document.Format = FullRunExecutionManifestFormatV4
+			document.Plan.Expected.ExecutionAttemptDigest = runnerStageSHA("5")
+			plan["format"] = stageplan.FormatV2
+			plan["executionAttemptDigest"] = runnerStageSHA("6")
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			manifest, cleanup := fullRunExecutionManifestFixture(t)
+			defer cleanup()
+			document, plan := readFullRunExecutionFixture(t, manifest)
+			mutate(&document, plan)
+			writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, plan))
+			writeBundleFile(t, filepath.Dir(manifest), filepath.Base(manifest), mustJSON(t, document))
+			if _, _, err := LoadFullRunExecutionManifest(manifest); err == nil {
+				t.Fatal("attempt/format mismatch was accepted")
+			}
+		})
+	}
+}
+
 func TestVerifiedFullRunExecutionManifestBuildsConcreteConfiguration(t *testing.T) {
 	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
@@ -473,11 +524,44 @@ func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
 	return writeBundleFile(t, root, "full-run-manifest.json", mustJSON(t, document)), cleanup
 }
 
+func readFullRunExecutionFixture(t *testing.T, manifest string) (fullRunExecutionManifestDocument, map[string]any) {
+	t.Helper()
+	manifestRaw, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document fullRunExecutionManifestDocument
+	if err := json.Unmarshal(manifestRaw, &document); err != nil {
+		t.Fatal(err)
+	}
+	planRaw, err := os.ReadFile(document.Plan.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(planRaw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	return document, plan
+}
+
+func upgradeFullRunExecutionManifestToV4(t *testing.T, manifest, expectedAttempt, planAttempt string) {
+	t.Helper()
+	document, plan := readFullRunExecutionFixture(t, manifest)
+	document.Format = FullRunExecutionManifestFormatV4
+	document.Plan.Expected.ExecutionAttemptDigest = expectedAttempt
+	plan["format"] = stageplan.FormatV2
+	plan["executionAttemptDigest"] = planAttempt
+	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, plan))
+	writeBundleFile(t, filepath.Dir(manifest), filepath.Base(manifest), mustJSON(t, document))
+}
+
 func stagePlanExpected(document postRuntimePlanExpectedDocument) stageplan.Expected {
 	return stageplan.Expected{
 		ContractIdentity: document.ContractIdentity,
 		IntentRevision:   document.IntentRevision, EnablementRevision: document.EnablementRevision,
 		PlatformRevision: document.PlatformRevision, ExecutionFixture: document.ExecutionFixture,
+		ExecutionAttemptDigest:  document.ExecutionAttemptDigest,
 		InfrastructureAuthority: document.InfrastructureAuthority, ManagementAuthority: document.ManagementAuthority,
 		GitOpsAuthority: document.GitOpsAuthority,
 	}
