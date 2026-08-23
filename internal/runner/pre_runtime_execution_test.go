@@ -453,3 +453,22 @@ func minInt(first, second int) int {
 	}
 	return second
 }
+
+func TestPreRuntimeProviderAccessPolicyIsBoundOnlyToClusterLifecycle(t *testing.T) {
+	const path = "/private/provider-access-policy.json"
+	for _, test := range []struct {
+		stageID string
+		want    string
+	}{
+		{stageID: "provider-prerequisites", want: ""},
+		{stageID: "cluster-lifecycle", want: path},
+		{stageID: "enablement", want: ""},
+		{stageID: "target-access", want: ""},
+	} {
+		t.Run(test.stageID, func(t *testing.T) {
+			if got := preRuntimeProviderAccessPolicyPath(test.stageID, path); got != test.want {
+				t.Fatalf("provider-access path differs: got %q want %q", got, test.want)
+			}
+		})
+	}
+}
