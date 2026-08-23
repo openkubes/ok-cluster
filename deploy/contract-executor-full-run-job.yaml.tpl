@@ -18,7 +18,11 @@ spec:
       ports: [{protocol: TCP, port: ${OK147_WORKLOAD_API_PORT}}]
     - to: [{ipBlock: {cidr: "${OK147_ARGO_API_CIDR}"}}]
       ports: [{protocol: TCP, port: ${OK147_ARGO_API_PORT}}]
-    - to: [{ipBlock: {cidr: "${OK147_AUTHORIZATION_API_CIDR}"}}]
+    - to:
+        - ipBlock: {cidr: "${OK147_AUTHORIZATION_API_CIDR}"}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ok147-stage-authority
       ports: [{protocol: TCP, port: ${OK147_AUTHORIZATION_API_PORT}}]
     - to: [{ipBlock: {cidr: "${OK147_COLLECTOR_API_CIDR}"}}]
       ports: [{protocol: TCP, port: ${OK147_COLLECTOR_API_PORT}}]
