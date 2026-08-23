@@ -112,6 +112,19 @@ func TestStagedOperationInvalidMutatorResultLeavesIndeterminateClaim(t *testing.
 	}
 }
 
+func TestStageMutationValidationAllowsOnlyProviderEnsureWithoutWrite(t *testing.T) {
+	result := StageMutationResult{Outcome: "SUCCEEDED", MutationState: "NOT_ATTEMPTED", EvidenceDigest: stagedSHA("e")}
+	if err := validateStageMutationResult("provider-prerequisites", result, nil); err != nil {
+		t.Fatalf("exact existing provider prerequisites were rejected: %v", err)
+	}
+	if err := validateStageMutationResult("cluster-lifecycle", result, nil); err == nil {
+		t.Fatal("Cluster lifecycle claimed success without a write")
+	}
+	if err := validateStageMutationResult("provider-prerequisites", result, errors.New("write uncertainty")); err == nil {
+		t.Fatal("provider prerequisites hid a mutation error behind no-write success")
+	}
+}
+
 func TestStagedOperationRejectsWrongMutatorBeforeClaim(t *testing.T) {
 	plan := stagedPlan(t)
 	at := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
