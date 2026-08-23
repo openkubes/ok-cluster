@@ -144,7 +144,18 @@ func validateSubmissionPlaneOutcome(receipt submission.PlaneReceipt, plane submi
 			return "", errors.New("submission receipt object state is invalid")
 		}
 	}
-	if receipt.MutationState != wantMutation {
+	if stopped {
+		// A failed POST is an attempted mutation even when no object result can
+		// be appended. Completed results therefore provide only a lower bound
+		// for a stopped receipt's mutation state.
+		if receipt.MutationState != "NOT_ATTEMPTED" && receipt.MutationState != "ATTEMPTED" {
+			return "", errors.New("submission receipt mutation state is invalid")
+		}
+		if wantMutation == "ATTEMPTED" && receipt.MutationState != "ATTEMPTED" {
+			return "", errors.New("submission receipt mutation state loses a completed create")
+		}
+		return receipt.MutationState, nil
+	} else if receipt.MutationState != wantMutation {
 		return "", errors.New("submission receipt mutation state is inconsistent")
 	}
 	return wantMutation, nil
