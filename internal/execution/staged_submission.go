@@ -92,6 +92,13 @@ func (mutator *SubmissionPlaneMutator) Mutate(ctx context.Context, request Stage
 		return StageMutationResult{Outcome: "STOPPED", MutationState: mutationState, EvidenceDigest: evidenceDigest}, errors.New("bounded submission stopped")
 	}
 	if mutationState != "ATTEMPTED" {
+		// Provider prerequisites are intentionally durable across disposable
+		// Cluster attempts. An exact all-UNCHANGED plane is therefore a
+		// successful idempotent ensure, while Cluster lifecycle and every other
+		// mutating stage still require an actual write.
+		if mutator.binding.StageID == "provider-prerequisites" && mutationState == "NOT_ATTEMPTED" {
+			return StageMutationResult{Outcome: "SUCCEEDED", MutationState: mutationState, EvidenceDigest: evidenceDigest}, nil
+		}
 		return StageMutationResult{Outcome: "STOPPED", MutationState: mutationState, EvidenceDigest: evidenceDigest}, nil
 	}
 	result := StageMutationResult{Outcome: "SUCCEEDED", MutationState: mutationState, EvidenceDigest: evidenceDigest}
