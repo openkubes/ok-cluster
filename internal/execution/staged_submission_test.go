@@ -151,6 +151,22 @@ func TestSubmissionPlaneMutatorPreservesPartialStoppedEvidence(t *testing.T) {
 	}
 }
 
+func TestSubmissionPlaneMutatorPreservesFailedFirstCreateAttempt(t *testing.T) {
+	plan := stagedPlan(t)
+	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
+	receipt := submission.PlaneReceipt{
+		Format: submission.PlaneReceiptFormat, Authority: projected.Management.Identity,
+		Role: projected.Management.Role, State: "STOPPED_PARTIAL_OR_UNKNOWN",
+		MutationState: "ATTEMPTED", Results: []submission.ObjectResult{},
+	}
+	submitter := &fakePlaneSubmitter{receipt: receipt, err: errors.New("sensitive API detail")}
+	mutator, _ := NewSubmissionPlaneMutator(plan, "cluster-lifecycle", projected, submitter)
+	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
+	if err == nil || err.Error() != "bounded submission stopped" || result.Outcome != "STOPPED" || result.MutationState != "ATTEMPTED" || result.EvidenceDigest == "" {
+		t.Fatalf("failed first create attempt was not durably classifiable: %#v %v", result, err)
+	}
+}
+
 func TestSubmissionPlaneMutatorRejectsWrongStageAuthorityAndRequest(t *testing.T) {
 	plan := stagedPlan(t)
 	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
