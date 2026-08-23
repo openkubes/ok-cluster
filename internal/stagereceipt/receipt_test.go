@@ -65,10 +65,13 @@ func TestReceiptRejectsMissingForeignAndFailedPredecessors(t *testing.T) {
 func TestReceiptEnforcesMutationBoundary(t *testing.T) {
 	plan := receiptPlan(t)
 	at := time.Date(2026, 8, 16, 16, 0, 0, 0, time.UTC)
-	if _, err := New(plan, "provider-prerequisites", []Verified{}, "SUCCEEDED", "NOT_ATTEMPTED", receiptSHA("1"), receiptSHA("a"), at); err == nil {
-		t.Fatal("successful mutation without attempt was accepted")
+	provider, err := New(plan, "provider-prerequisites", []Verified{}, "SUCCEEDED", "NOT_ATTEMPTED", receiptSHA("1"), receiptSHA("a"), at)
+	if err != nil {
+		t.Fatalf("exact durable provider prerequisites were rejected: %v", err)
 	}
-	provider, _ := New(plan, "provider-prerequisites", []Verified{}, "SUCCEEDED", "ATTEMPTED", receiptSHA("1"), receiptSHA("a"), at)
+	if _, err := New(plan, "cluster-lifecycle", []Verified{provider}, "SUCCEEDED", "NOT_ATTEMPTED", receiptSHA("2"), receiptSHA("b"), at.Add(time.Second)); err == nil {
+		t.Fatal("successful Cluster lifecycle without attempt was accepted")
+	}
 	lifecycle, _ := New(plan, "cluster-lifecycle", []Verified{provider}, "SUCCEEDED", "ATTEMPTED", receiptSHA("2"), receiptSHA("b"), at)
 	if _, err := New(plan, "lifecycle-observation", []Verified{lifecycle}, "SUCCEEDED", "ATTEMPTED", receiptSHA("3"), receiptSHA("c"), at); err == nil {
 		t.Fatal("read-only stage with mutation state was accepted")

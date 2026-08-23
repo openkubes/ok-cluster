@@ -79,14 +79,11 @@ func TestStageCompletionIsBoundImmutableAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	evidence := stageSHA("e")
-	if _, err := store.CompleteStage(context.Background(), claim, "SUCCEEDED", "NOT_ATTEMPTED", evidence, at.Add(time.Second)); err == nil {
-		t.Fatal("successful stage without attempted mutation was accepted")
-	}
-	first, err := store.CompleteStage(context.Background(), claim, "SUCCEEDED", "ATTEMPTED", evidence, at.Add(time.Second))
+	first, err := store.CompleteStage(context.Background(), claim, "SUCCEEDED", "NOT_ATTEMPTED", evidence, at.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.CompleteStage(context.Background(), claim, "SUCCEEDED", "ATTEMPTED", evidence, at.Add(time.Second))
+	second, err := store.CompleteStage(context.Background(), claim, "SUCCEEDED", "NOT_ATTEMPTED", evidence, at.Add(time.Second))
 	if err != nil || second != first {
 		t.Fatalf("identical stage completion is not idempotent: %#v %v", second, err)
 	}
@@ -96,6 +93,24 @@ func TestStageCompletionIsBoundImmutableAndIdempotent(t *testing.T) {
 	inspection, err := store.InspectStage(context.Background(), grant)
 	if err != nil || inspection.State != "COMPLETED" || inspection.Outcome == nil || inspection.Outcome.Outcome != "SUCCEEDED" {
 		t.Fatalf("unexpected completed stage inspection: %#v %v", inspection, err)
+	}
+}
+
+func TestClusterLifecycleCompletionStillRequiresAttemptedMutation(t *testing.T) {
+	store, _ := Open(filepath.Join(t.TempDir(), "ledger"))
+	at := time.Date(2026, 8, 16, 15, 0, 0, 0, time.UTC)
+	plan := verifiedStagePlan(t)
+	provider, err := stagereceipt.New(plan, "provider-prerequisites", []stagereceipt.Verified{}, "SUCCEEDED", "NOT_ATTEMPTED", stageSHA("1"), stageSHA("e"), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := verifiedStageGrantFor(t, plan, "cluster-lifecycle", []stagereceipt.Verified{provider}, at.Add(time.Second))
+	claim, err := store.ClaimStage(context.Background(), grant, at.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompleteStage(context.Background(), claim, "SUCCEEDED", "NOT_ATTEMPTED", stageSHA("f"), at.Add(2*time.Second)); err == nil {
+		t.Fatal("Cluster lifecycle succeeded without an attempted mutation")
 	}
 }
 

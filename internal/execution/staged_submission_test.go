@@ -108,6 +108,20 @@ func TestSubmissionPlaneMutatorNoWriteCannotClaimStageSuccess(t *testing.T) {
 	}
 }
 
+func TestProviderPrerequisitesExactExistingPlaneCompletesWithoutWrite(t *testing.T) {
+	plan := stagedPlan(t)
+	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
+	submitter := &fakePlaneSubmitter{receipt: successfulPlaneReceipt(projected.Infrastructure, "UNCHANGED", "NOT_ATTEMPTED")}
+	mutator, err := NewSubmissionPlaneMutator(plan, "provider-prerequisites", projected, submitter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
+	if err != nil || result.Outcome != "SUCCEEDED" || result.MutationState != "NOT_ATTEMPTED" || result.EvidenceDigest == "" || submitter.calls != 1 {
+		t.Fatalf("exact durable provider prerequisites did not complete idempotently: %#v calls=%d err=%v", result, submitter.calls, err)
+	}
+}
+
 func TestSubmissionPlaneMutatorBindsLifecycleRuntimeIdentityWithoutExposingUID(t *testing.T) {
 	plan := stagedPlan(t)
 	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)

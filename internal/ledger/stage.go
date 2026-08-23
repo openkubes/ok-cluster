@@ -107,7 +107,7 @@ func (ledger *Ledger) CompleteStageWithTarget(ctx context.Context, claim StageCl
 	if !allowed(outcome, "SUCCEEDED", "FAILED", "STOPPED") || !allowed(mutationState, "NOT_ATTEMPTED", "ATTEMPTED", "UNKNOWN") {
 		return StageOutcomeReceipt{}, errors.New("stage completion state is invalid")
 	}
-	if outcome == "SUCCEEDED" && mutationState != "ATTEMPTED" {
+	if outcome == "SUCCEEDED" && mutationState != "ATTEMPTED" && !(claim.StageID == "provider-prerequisites" && mutationState == "NOT_ATTEMPTED") {
 		return StageOutcomeReceipt{}, errors.New("successful mutating stage requires mutationState ATTEMPTED")
 	}
 	if !validDigest(evidenceDigest) {
@@ -254,7 +254,7 @@ func validateStageOutcome(value StageOutcomeReceipt) error {
 	if _, err := time.Parse(time.RFC3339Nano, value.CompletedAt); err != nil {
 		return errors.New("stage outcome has an invalid timestamp")
 	}
-	if value.Outcome == "SUCCEEDED" && value.MutationState != "ATTEMPTED" {
+	if value.Outcome == "SUCCEEDED" && value.MutationState != "ATTEMPTED" && !(value.StageID == "provider-prerequisites" && value.MutationState == "NOT_ATTEMPTED") {
 		return errors.New("successful stage outcome lacks attempted mutation state")
 	}
 	return nil

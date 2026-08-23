@@ -192,7 +192,7 @@ func verifyReceipt(receipt Receipt, plan stageplan.Binding, predecessors []Verif
 		if !allowed(receipt.MutationState, "NOT_ATTEMPTED", "ATTEMPTED", "UNKNOWN") || !receiptDigestPattern.MatchString(receipt.OperationOutcomeDigest) {
 			return Verified{}, errors.New("mutating stage receipt lacks a valid operation outcome")
 		}
-		if receipt.State == "SUCCEEDED" && receipt.MutationState != "ATTEMPTED" {
+		if receipt.State == "SUCCEEDED" && receipt.MutationState != "ATTEMPTED" && !(stage.ID == "provider-prerequisites" && receipt.MutationState == "NOT_ATTEMPTED") {
 			return Verified{}, errors.New("successful mutating stage did not attempt mutation")
 		}
 	} else if receipt.MutationState != "NOT_APPLICABLE" || receipt.OperationOutcomeDigest != "" {
