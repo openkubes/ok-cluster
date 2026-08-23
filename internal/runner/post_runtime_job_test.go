@@ -74,6 +74,7 @@ func TestRenderPostRuntimeExecutionJobTemplateBindsPrivateInitAndSingleExecution
 	if len(egress) != 4 {
 		t.Fatalf("post-runtime Job egress is not exact: %#v", egress)
 	}
+	assertStageAuthorityEgressPeers(t, egress[3].(map[string]any), values.AuthorizationAPICIDR)
 	text := string(raw)
 	for _, forbidden := range []string{"latest", "system:masters", "privileged: true", "automountServiceAccountToken: true", "restartPolicy: Always"} {
 		if strings.Contains(text, forbidden) {

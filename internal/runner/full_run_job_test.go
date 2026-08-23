@@ -96,14 +96,33 @@ func TestRenderFullRunExecutionJobTemplateIsolatesExecutorAndEvidenceAuthority(t
 	if evidenceSecret["secretName"] != values.EvidenceAuthoritySecret || len(arrayAt(t, evidenceSecret, "items")) != 4 {
 		t.Fatalf("evidence authority projection differs: %#v", evidenceSecret)
 	}
-	if egress := arrayAt(t, objectAt(t, objects["NetworkPolicy"], "spec"), "egress"); len(egress) != 6 {
+	egress := arrayAt(t, objectAt(t, objects["NetworkPolicy"], "spec"), "egress")
+	if len(egress) != 6 {
 		t.Fatalf("full-run egress is not exact: %#v", egress)
 	}
+	assertStageAuthorityEgressPeers(t, egress[4].(map[string]any), values.AuthorizationAPICIDR)
 	text := string(raw)
 	for _, forbidden := range []string{"latest", "system:masters", "privileged: true", "automountServiceAccountToken: true", "restartPolicy: Always"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("full-run Job contains forbidden value %q", forbidden)
 		}
+	}
+}
+
+func assertStageAuthorityEgressPeers(t *testing.T, rule map[string]any, authorizationCIDR string) {
+	t.Helper()
+	peers := arrayAt(t, rule, "to")
+	if len(peers) != 2 {
+		t.Fatalf("stage authority egress peers differ: %#v", peers)
+	}
+	ipBlock := objectAt(t, peers[0].(map[string]any), "ipBlock")
+	if ipBlock["cidr"] != authorizationCIDR {
+		t.Fatalf("stage authority Service CIDR differs: %#v", ipBlock)
+	}
+	podSelector := objectAt(t, peers[1].(map[string]any), "podSelector")
+	labels := objectAt(t, podSelector, "matchLabels")
+	if !reflect.DeepEqual(labels, map[string]any{"app.kubernetes.io/name": "ok147-stage-authority"}) {
+		t.Fatalf("stage authority Pod selector differs: %#v", labels)
 	}
 }
 
