@@ -450,7 +450,7 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 				ExpectedStageID: stageID, PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
 				GrantPath: grant.GrantPath, GrantPublicKeyPath: grant.PublicKeyPath, EvaluationTime: grant.EvaluationTime,
 				ProjectionManifestPath: config.ProjectionManifestPath, ProjectionRoot: config.ProjectionRoot,
-				ProviderAccessPolicyPath: config.ProviderAccessPolicyPath,
+				ProviderAccessPolicyPath: preRuntimeProviderAccessPolicyPath(stageID, config.ProviderAccessPolicyPath),
 			})
 			if err != nil {
 				return preRuntimeStagedInvocation{}, err
@@ -545,6 +545,13 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 			return material.Persist(path)
 		},
 	}
+}
+
+func preRuntimeProviderAccessPolicyPath(stageID, path string) string {
+	if stageID == "cluster-lifecycle" {
+		return path
+	}
+	return ""
 }
 
 func stoppedPreRuntimeExecutionReceipt(stageID string, checkpoints []PreRuntimeStageCheckpoint, authorizations []ResolvedStageAuthorizationReceipt) PreRuntimeExecutionReceipt {
