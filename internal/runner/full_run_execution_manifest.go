@@ -21,9 +21,11 @@ import (
 )
 
 const (
-	FullRunExecutionManifestFormat        = "ok147-full-run-execution-manifest/v3"
-	FullRunExecutionManifestReceiptFormat = "ok147-full-run-execution-manifest-receipt/v1"
-	maximumFullRunExecutionManifestBytes  = 1024 * 1024
+	FullRunExecutionManifestFormat          = "ok147-full-run-execution-manifest/v3"
+	FullRunExecutionManifestFormatV4        = "ok147-full-run-execution-manifest/v4"
+	FullRunExecutionManifestReceiptFormat   = "ok147-full-run-execution-manifest-receipt/v1"
+	FullRunExecutionManifestReceiptFormatV2 = "ok147-full-run-execution-manifest-receipt/v2"
+	maximumFullRunExecutionManifestBytes    = 1024 * 1024
 )
 
 type fullRunPlanDocument struct {
@@ -193,6 +195,7 @@ type FullRunExecutionManifestReceipt struct {
 	State                     string `json:"state"`
 	ManifestDigest            string `json:"manifestDigest"`
 	PlanDigest                string `json:"planDigest"`
+	ExecutionAttemptDigest    string `json:"executionAttemptDigest,omitempty"`
 	ProjectionManifestDigest  string `json:"projectionManifestDigest"`
 	ProjectionAuthorityDigest string `json:"projectionAuthorityDigest"`
 	NetworkProfileDigest      string `json:"networkProfileDigest"`
@@ -277,7 +280,7 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	expected := fullRunPlanExpected(document.Plan.Expected)
 	if plan.PlanDigest != manifest.receipt.PlanDigest || plan.IntentRevision != expected.IntentRevision ||
 		plan.EnablementRevision != expected.EnablementRevision || plan.PlatformRevision != expected.PlatformRevision ||
-		plan.ExecutionFixture != expected.ExecutionFixture {
+		plan.ExecutionFixture != expected.ExecutionFixture || plan.ExecutionAttempt != expected.ExecutionAttemptDigest {
 		return FullRunExecutionConfig{}, errors.New("verified full-run manifest plan changed after loading")
 	}
 	lifecycleInterval, lifecycleTimeout, err := parsePostRuntimePolling(document.LifecycleObservation.PollInterval, document.LifecycleObservation.PollTimeout)
@@ -484,6 +487,7 @@ func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest
 		ContractIdentity: document.Plan.Expected.ContractIdentity,
 		IntentRevision:   document.Plan.Expected.IntentRevision, EnablementRevision: document.Plan.Expected.EnablementRevision,
 		PlatformRevision: document.Plan.Expected.PlatformRevision, ExecutionFixture: document.Plan.Expected.ExecutionFixture,
+		ExecutionAttemptDigest:  document.Plan.Expected.ExecutionAttemptDigest,
 		InfrastructureAuthority: document.Plan.Expected.InfrastructureAuthority,
 		ManagementAuthority:     document.Plan.Expected.ManagementAuthority, GitOpsAuthority: document.Plan.Expected.GitOpsAuthority,
 	}
@@ -496,6 +500,10 @@ func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest
 		return VerifiedFullRunExecutionManifest{}, receipt, errors.New("full-run manifest requires the exact empty Stage-1 cursor")
 	}
 	receipt.PlanDigest = plan.PlanDigest
+	receipt.ExecutionAttemptDigest = plan.ExecutionAttempt
+	if plan.Format == stageplan.BindingFormatV2 {
+		receipt.Format = FullRunExecutionManifestReceiptFormatV2
+	}
 
 	projected, err := projection.Verify(document.Projection.ManifestPath, document.Projection.Root, plan.IntentRevision, plan.ContractIdentity)
 	if err != nil {
@@ -566,8 +574,9 @@ func fullRunPlanExpected(document postRuntimePlanExpectedDocument) stageplan.Exp
 	return stageplan.Expected{
 		ContractIdentity: document.ContractIdentity, IntentRevision: document.IntentRevision,
 		EnablementRevision: document.EnablementRevision, PlatformRevision: document.PlatformRevision,
-		ExecutionFixture: document.ExecutionFixture, InfrastructureAuthority: document.InfrastructureAuthority,
-		ManagementAuthority: document.ManagementAuthority, GitOpsAuthority: document.GitOpsAuthority,
+		ExecutionFixture: document.ExecutionFixture, ExecutionAttemptDigest: document.ExecutionAttemptDigest,
+		InfrastructureAuthority: document.InfrastructureAuthority,
+		ManagementAuthority:     document.ManagementAuthority, GitOpsAuthority: document.GitOpsAuthority,
 	}
 }
 
@@ -605,8 +614,12 @@ func loadFullRunExecutionManifest(path string) (fullRunExecutionManifestDocument
 	if err := jsonstrict.Decode(raw, &document); err != nil {
 		return fullRunExecutionManifestDocument{}, "", errors.New("decode strict full-run execution manifest")
 	}
-	if document.Format != FullRunExecutionManifestFormat {
+	if document.Format != FullRunExecutionManifestFormat && document.Format != FullRunExecutionManifestFormatV4 {
 		return fullRunExecutionManifestDocument{}, "", errors.New("full-run execution manifest format is not supported")
+	}
+	if document.Format == FullRunExecutionManifestFormat && document.Plan.Expected.ExecutionAttemptDigest != "" ||
+		document.Format == FullRunExecutionManifestFormatV4 && !stageReceiptPrefixDigestPattern.MatchString(document.Plan.Expected.ExecutionAttemptDigest) {
+		return fullRunExecutionManifestDocument{}, "", errors.New("full-run execution manifest attempt identity differs from its format")
 	}
 	encoded, err := json.Marshal(document)
 	if err != nil {

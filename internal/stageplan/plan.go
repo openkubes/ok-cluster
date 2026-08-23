@@ -21,7 +21,9 @@ import (
 
 const (
 	Format           = "ok147-staged-execution-plan/v1"
+	FormatV2         = "ok147-staged-execution-plan/v2"
 	BindingFormat    = "ok147-verified-staged-execution-plan/v1"
+	BindingFormatV2  = "ok147-verified-staged-execution-plan/v2"
 	maximumPlanBytes = 128 * 1024
 )
 
@@ -38,6 +40,7 @@ type Expected struct {
 	EnablementRevision      string
 	PlatformRevision        string
 	ExecutionFixture        string
+	ExecutionAttemptDigest  string
 	InfrastructureAuthority string
 	ManagementAuthority     string
 	GitOpsAuthority         string
@@ -75,6 +78,7 @@ type document struct {
 	EnablementRevision string            `json:"enablementRevision"`
 	PlatformRevision   string            `json:"platformRevision"`
 	ExecutionFixture   string            `json:"executionFixture"`
+	ExecutionAttempt   string            `json:"executionAttemptDigest,omitempty"`
 	AuthorizationState string            `json:"authorizationState"`
 	Authorities        Authorities       `json:"authorities"`
 	Stages             []Stage           `json:"stages"`
@@ -90,12 +94,13 @@ type Binding struct {
 	EnablementRevision  string            `json:"enablementRevision"`
 	PlatformRevision    string            `json:"platformRevision"`
 	ExecutionFixture    string            `json:"executionFixture"`
+	ExecutionAttempt    string            `json:"executionAttemptDigest,omitempty"`
 	Authorities         Authorities       `json:"authorities"`
 	Stages              []Stage           `json:"stages"`
 	verified            bool
 	verifiedDigest      string
 	verifiedIdentity    contract.Identity
-	verifiedRevisions   [4]string
+	verifiedRevisions   [5]string
 	verifiedAuthorities Authorities
 	stageDigests        map[string]string
 }
@@ -157,8 +162,15 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 	if err := jsonstrict.Decode(raw, &source); err != nil {
 		return Binding{}, fmt.Errorf("decode staged execution plan: %w", err)
 	}
-	if source.Format != Format {
+	if source.Format != Format && source.Format != FormatV2 {
 		return Binding{}, fmt.Errorf("staged execution plan format %q is not supported", source.Format)
+	}
+	if source.Format == Format {
+		if source.ExecutionAttempt != "" || expected.ExecutionAttemptDigest != "" {
+			return Binding{}, errors.New("staged execution plan v1 cannot bind an execution attempt")
+		}
+	} else if !digestPattern.MatchString(source.ExecutionAttempt) || source.ExecutionAttempt != expected.ExecutionAttemptDigest {
+		return Binding{}, errors.New("staged execution plan execution attempt differs from verified input")
 	}
 	if source.AuthorizationState != "NO-GO" {
 		return Binding{}, errors.New("staged execution plan must remain non-authorizing (authorizationState NO-GO)")
@@ -190,14 +202,19 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 		}
 		stageDigests[stage.ID] = stageDigest
 	}
+	bindingFormat := BindingFormat
+	if source.Format == FormatV2 {
+		bindingFormat = BindingFormatV2
+	}
 	return Binding{
-		Format: BindingFormat, PlanDigest: planDigest,
+		Format: bindingFormat, PlanDigest: planDigest,
 		ContractIdentity: source.ContractIdentity,
 		IntentRevision:   source.IntentRevision, EnablementRevision: source.EnablementRevision,
 		PlatformRevision: source.PlatformRevision, ExecutionFixture: source.ExecutionFixture,
-		Authorities: source.Authorities, Stages: cloneStages(source.Stages),
+		ExecutionAttempt: source.ExecutionAttempt,
+		Authorities:      source.Authorities, Stages: cloneStages(source.Stages),
 		verified: true, verifiedDigest: planDigest, verifiedIdentity: source.ContractIdentity,
-		verifiedRevisions:   [4]string{source.IntentRevision, source.EnablementRevision, source.PlatformRevision, source.ExecutionFixture},
+		verifiedRevisions:   [5]string{source.IntentRevision, source.EnablementRevision, source.PlatformRevision, source.ExecutionFixture, source.ExecutionAttempt},
 		verifiedAuthorities: source.Authorities, stageDigests: stageDigests,
 	}, nil
 }
@@ -215,6 +232,9 @@ func ValidateExpected(expected Expected) error {
 		if !digestPattern.MatchString(value) {
 			return fmt.Errorf("expected %s is invalid", label)
 		}
+	}
+	if expected.ExecutionAttemptDigest != "" && !digestPattern.MatchString(expected.ExecutionAttemptDigest) {
+		return errors.New("expected execution attempt digest is invalid")
 	}
 	for label, value := range map[string]string{
 		"infrastructure authority": expected.InfrastructureAuthority,
@@ -316,10 +336,10 @@ func IsMutating(stage Stage) bool { return strings.TrimSpace(stage.GrantOperatio
 // Stage returns one stage and its canonical semantic digest after rechecking
 // that the in-memory binding still represents the originally verified plan.
 func (binding Binding) Stage(id string) (Stage, string, error) {
-	if !binding.verified || binding.Format != BindingFormat || binding.PlanDigest != binding.verifiedDigest || !digestPattern.MatchString(binding.PlanDigest) {
+	if !binding.verified || binding.Format != BindingFormat && binding.Format != BindingFormatV2 || binding.PlanDigest != binding.verifiedDigest || !digestPattern.MatchString(binding.PlanDigest) {
 		return Stage{}, "", errors.New("verified staged execution binding is required")
 	}
-	if binding.ContractIdentity != binding.verifiedIdentity || [4]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities {
+	if binding.ContractIdentity != binding.verifiedIdentity || [5]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture, binding.ExecutionAttempt} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities {
 		return Stage{}, "", errors.New("staged execution top-level binding changed after verification")
 	}
 	if err := validateStages(binding.Stages); err != nil {

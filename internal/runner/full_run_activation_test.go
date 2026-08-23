@@ -64,6 +64,21 @@ func TestFullRunExecutionActivationPreservesStoppedExecution(t *testing.T) {
 	}
 }
 
+func TestFullRunExecutionActivationAcceptsAttemptBoundManifestReceipt(t *testing.T) {
+	execution := &recordingFullRunManifestExecution{receipt: successfulFullRunActivationExecutionReceipt()}
+	receipt := verifiedFullRunActivationManifestReceipt()
+	receipt.Format = FullRunExecutionManifestReceiptFormatV2
+	receipt.ExecutionAttemptDigest = runnerStageSHA("2")
+	activation, prepared, err := openFullRunExecutionActivation("/private/full-run-v4.json", FullRunExecutionManifestRuntime{}, fullRunExecutionActivationFactories{
+		open: func(string, FullRunExecutionManifestRuntime) (fullRunManifestExecution, FullRunExecutionManifestReceipt, error) {
+			return execution, receipt, nil
+		},
+	})
+	if err != nil || activation == nil || prepared.State != "PREPARED" || prepared.Manifest != receipt {
+		t.Fatalf("attempt-bound activation was rejected: activation=%#v receipt=%#v err=%v", activation, prepared, err)
+	}
+}
+
 func TestFullRunExecutionActivationRetainsRedactedPostPrefixReceipt(t *testing.T) {
 	execution := &recordingFullRunManifestExecution{receipt: successfulFullRunActivationExecutionReceipt()}
 	postPrefix := ObservabilityCollectorPostPrefixReceipt{

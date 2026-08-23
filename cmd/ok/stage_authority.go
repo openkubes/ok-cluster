@@ -122,6 +122,7 @@ func runAuthorityStagePolicy(arguments []string, stdout, stderr io.Writer) error
 	enablementRevision := flags.String("enablement-revision", "", "expected Enablement revision E")
 	platformRevision := flags.String("platform-revision", "", "expected Platform revision P")
 	executionFixture := flags.String("execution-fixture", "", "expected execution FixtureDigest")
+	executionAttempt := flags.String("execution-attempt-digest", "", "expected execution-attempt digest for plan v2")
 	infrastructureAuthority := flags.String("infrastructure-authority", "", "expected infrastructure authority")
 	managementAuthority := flags.String("management-authority", "", "expected management authority")
 	gitOpsAuthority := flags.String("gitops-authority", "", "expected GitOps authority")
@@ -144,6 +145,7 @@ func runAuthorityStagePolicy(arguments []string, stdout, stderr io.Writer) error
 		ContractIdentity: contract.Identity{Namespace: *contractNamespace, Name: *contractName},
 		IntentRevision:   *intentRevision, EnablementRevision: *enablementRevision,
 		PlatformRevision: *platformRevision, ExecutionFixture: *executionFixture,
+		ExecutionAttemptDigest:  *executionAttempt,
 		InfrastructureAuthority: *infrastructureAuthority, ManagementAuthority: *managementAuthority, GitOpsAuthority: *gitOpsAuthority,
 	})
 	if err != nil {

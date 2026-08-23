@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	PostRuntimeExecutionManifestFormat         = "ok147-post-runtime-execution-manifest/v1"
-	PostRuntimeExecutionRecoveryManifestFormat = "ok147-post-runtime-execution-manifest/v2"
-	PostRuntimeExecutionManifestReceiptFormat  = "ok147-post-runtime-execution-manifest-receipt/v1"
-	maximumPostRuntimeExecutionManifestBytes   = 512 * 1024
+	PostRuntimeExecutionManifestFormat          = "ok147-post-runtime-execution-manifest/v1"
+	PostRuntimeExecutionRecoveryManifestFormat  = "ok147-post-runtime-execution-manifest/v2"
+	PostRuntimeExecutionManifestReceiptFormat   = "ok147-post-runtime-execution-manifest-receipt/v1"
+	PostRuntimeExecutionManifestReceiptFormatV2 = "ok147-post-runtime-execution-manifest-receipt/v2"
+	maximumPostRuntimeExecutionManifestBytes    = 512 * 1024
 )
 
 type postRuntimePlanExpectedDocument struct {
@@ -29,6 +30,7 @@ type postRuntimePlanExpectedDocument struct {
 	EnablementRevision      string            `json:"enablementRevision"`
 	PlatformRevision        string            `json:"platformRevision"`
 	ExecutionFixture        string            `json:"executionFixture"`
+	ExecutionAttemptDigest  string            `json:"executionAttemptDigest,omitempty"`
 	InfrastructureAuthority string            `json:"infrastructureAuthority"`
 	ManagementAuthority     string            `json:"managementAuthority"`
 	GitOpsAuthority         string            `json:"gitOpsAuthority"`
@@ -170,6 +172,7 @@ type PostRuntimeExecutionManifestReceipt struct {
 	State                  string `json:"state"`
 	ManifestDigest         string `json:"manifestDigest"`
 	PlanDigest             string `json:"planDigest"`
+	ExecutionAttemptDigest string `json:"executionAttemptDigest,omitempty"`
 	InitialReceiptCount    int    `json:"initialReceiptCount"`
 	TargetIdentityDigest   string `json:"targetIdentityDigest"`
 	NetworkProfileDigest   string `json:"networkProfileDigest"`
@@ -199,6 +202,7 @@ func openPostRuntimeExecutionManifest(path string, factories postRuntimeExecutio
 		ContractIdentity: document.Plan.Expected.ContractIdentity,
 		IntentRevision:   document.Plan.Expected.IntentRevision, EnablementRevision: document.Plan.Expected.EnablementRevision,
 		PlatformRevision: document.Plan.Expected.PlatformRevision, ExecutionFixture: document.Plan.Expected.ExecutionFixture,
+		ExecutionAttemptDigest:  document.Plan.Expected.ExecutionAttemptDigest,
 		InfrastructureAuthority: document.Plan.Expected.InfrastructureAuthority, ManagementAuthority: document.Plan.Expected.ManagementAuthority,
 		GitOpsAuthority: document.Plan.Expected.GitOpsAuthority,
 	}
@@ -216,6 +220,10 @@ func openPostRuntimeExecutionManifest(path string, factories postRuntimeExecutio
 		return nil, receipt, errors.New("post-runtime manifest does not select the exact Stage-8 cursor")
 	}
 	receipt.PlanDigest, receipt.InitialReceiptCount = plan.PlanDigest, len(prefix)
+	receipt.ExecutionAttemptDigest = plan.ExecutionAttempt
+	if plan.Format == stageplan.BindingFormatV2 {
+		receipt.Format = PostRuntimeExecutionManifestReceiptFormatV2
+	}
 	lifecycle, err := prefix[1].Receipt()
 	if err != nil || !stageReceiptPrefixDigestPattern.MatchString(lifecycle.TargetClusterUIDDigest) {
 		return nil, receipt, errors.New("post-runtime manifest lacks durable target identity")

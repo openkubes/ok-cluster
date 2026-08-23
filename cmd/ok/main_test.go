@@ -1617,6 +1617,23 @@ func stageInspectArguments() []string {
 	}
 }
 
+func TestStageInspectPropagatesOptionalExecutionAttempt(t *testing.T) {
+	previous := inspectSubmissionStage
+	defer func() { inspectSubmissionStage = previous }()
+	var captured runner.SubmissionStageBundleConfig
+	inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (stageInspection, error) {
+		captured = config
+		return stageInspection{Format: "ok147-stage-inspection/v1", Decision: stagecursor.Decision{Format: stagecursor.DecisionFormat, State: "NEXT"}, AuthorizationState: "VERIFIED"}, nil
+	}
+	arguments := append(stageInspectArguments(), "--execution-attempt-digest", testSHA("e"))
+	if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if captured.PlanExpected.ExecutionAttemptDigest != testSHA("e") {
+		t.Fatalf("execution attempt was not propagated: %#v", captured.PlanExpected)
+	}
+}
+
 func stageResumeArguments() []string {
 	return []string{
 		"cluster", "stage", "resume",

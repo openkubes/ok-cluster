@@ -27,6 +27,45 @@ func TestVerifyAcceptsExactBoundedSequence(t *testing.T) {
 	}
 }
 
+func TestVerifyV2BindsOneExecutionAttempt(t *testing.T) {
+	firstDocument := validDocument()
+	firstDocument.Format = FormatV2
+	firstDocument.ExecutionAttempt = sha("5")
+	firstExpected := expected()
+	firstExpected.ExecutionAttemptDigest = firstDocument.ExecutionAttempt
+
+	first, err := Verify(planJSON(t, firstDocument), firstExpected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Verify(planJSON(t, firstDocument), firstExpected)
+	if err != nil || first.PlanDigest != second.PlanDigest || first.Format != BindingFormatV2 || first.ExecutionAttempt != firstDocument.ExecutionAttempt {
+		t.Fatalf("v2 attempt identity is not deterministic: %#v %#v %v", first, second, err)
+	}
+
+	changedDocument := firstDocument
+	changedDocument.ExecutionAttempt = sha("6")
+	changedExpected := firstExpected
+	changedExpected.ExecutionAttemptDigest = changedDocument.ExecutionAttempt
+	changed, err := Verify(planJSON(t, changedDocument), changedExpected)
+	if err != nil || changed.PlanDigest == first.PlanDigest {
+		t.Fatalf("changed attempt did not change plan identity: %s %s %v", first.PlanDigest, changed.PlanDigest, err)
+	}
+
+	if _, err := Verify(planJSON(t, firstDocument), changedExpected); err == nil {
+		t.Fatal("foreign execution attempt was accepted")
+	}
+	missing := firstDocument
+	missing.ExecutionAttempt = ""
+	if _, err := Verify(planJSON(t, missing), firstExpected); err == nil {
+		t.Fatal("missing v2 execution attempt was accepted")
+	}
+	legacy := validDocument()
+	if _, err := Verify(planJSON(t, legacy), firstExpected); err == nil {
+		t.Fatal("legacy plan was silently reinterpreted as an attempt-bound plan")
+	}
+}
+
 func TestRequireInputBindsExactArtifactIdentity(t *testing.T) {
 	binding, err := Verify(planJSON(t, validDocument()), expected())
 	if err != nil {
@@ -146,6 +185,22 @@ func TestStageRechecksInMemoryBinding(t *testing.T) {
 	binding.Stages[3].Inputs[0].Digest = sha("0")
 	if _, _, err := binding.Stage("enablement"); err == nil {
 		t.Fatal("changed in-memory stage binding was accepted")
+	}
+}
+
+func TestStageRechecksV2AttemptBinding(t *testing.T) {
+	plan := validDocument()
+	plan.Format = FormatV2
+	plan.ExecutionAttempt = sha("5")
+	want := expected()
+	want.ExecutionAttemptDigest = plan.ExecutionAttempt
+	binding, err := Verify(planJSON(t, plan), want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ExecutionAttempt = sha("6")
+	if _, _, err := binding.Stage("provider-prerequisites"); err == nil {
+		t.Fatal("changed in-memory execution attempt was accepted")
 	}
 }
 

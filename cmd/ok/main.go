@@ -292,7 +292,7 @@ type stageBundleFlags struct {
 	expectedStage                                                 *string
 	planPath, contractNamespace, contractName                     *string
 	intentRevision, enablementRevision, platformRevision          *string
-	executionFixture                                              *string
+	executionFixture, executionAttempt                            *string
 	infrastructureAuthority, managementAuthority, gitOpsAuthority *string
 	grantPath, grantKeyPath, projectionManifest, projectionRoot   *string
 	evaluationTime                                                *string
@@ -303,7 +303,7 @@ type stageBundleFlags struct {
 type stageResumeFlags struct {
 	planPath, contractNamespace, contractName                     *string
 	intentRevision, enablementRevision, platformRevision          *string
-	executionFixture                                              *string
+	executionFixture, executionAttempt                            *string
 	infrastructureAuthority, managementAuthority, gitOpsAuthority *string
 	receipts                                                      receiptFlags
 	receiptPrefix, receiptPrefixDigest                            *string
@@ -318,6 +318,7 @@ func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
 	values.enablementRevision = flags.String("enablement-revision", "", "expected Enablement revision E")
 	values.platformRevision = flags.String("platform-revision", "", "expected Platform revision P")
 	values.executionFixture = flags.String("execution-fixture", "", "expected execution FixtureDigest")
+	values.executionAttempt = flags.String("execution-attempt-digest", "", "expected execution-attempt digest for plan v2")
 	values.infrastructureAuthority = flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
 	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
 	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
@@ -365,6 +366,7 @@ func (values *stageResumeFlags) config() (runner.StageResumeConfig, error) {
 			ContractIdentity: contract.Identity{Namespace: *values.contractNamespace, Name: *values.contractName},
 			IntentRevision:   *values.intentRevision, EnablementRevision: *values.enablementRevision,
 			PlatformRevision: *values.platformRevision, ExecutionFixture: *values.executionFixture,
+			ExecutionAttemptDigest:  *values.executionAttempt,
 			InfrastructureAuthority: *values.infrastructureAuthority, ManagementAuthority: *values.managementAuthority, GitOpsAuthority: *values.gitOpsAuthority,
 		},
 		Receipts: receipts,
@@ -381,6 +383,7 @@ func addStageBundleFlags(flags *flag.FlagSet) *stageBundleFlags {
 	values.enablementRevision = flags.String("enablement-revision", "", "expected Enablement revision E")
 	values.platformRevision = flags.String("platform-revision", "", "expected Platform revision P")
 	values.executionFixture = flags.String("execution-fixture", "", "expected execution FixtureDigest")
+	values.executionAttempt = flags.String("execution-attempt-digest", "", "expected execution-attempt digest for plan v2")
 	values.infrastructureAuthority = flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
 	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
 	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
@@ -442,6 +445,7 @@ func (values *stageBundleFlags) config() (runner.SubmissionStageBundleConfig, er
 			ContractIdentity: contract.Identity{Namespace: *values.contractNamespace, Name: *values.contractName},
 			IntentRevision:   *values.intentRevision, EnablementRevision: *values.enablementRevision,
 			PlatformRevision: *values.platformRevision, ExecutionFixture: *values.executionFixture,
+			ExecutionAttemptDigest:  *values.executionAttempt,
 			InfrastructureAuthority: *values.infrastructureAuthority, ManagementAuthority: *values.managementAuthority, GitOpsAuthority: *values.gitOpsAuthority,
 		},
 		Receipts: receipts, GrantPath: *values.grantPath, GrantPublicKeyPath: *values.grantKeyPath,
@@ -693,6 +697,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "inspect" {
 		return runClusterStageInspect(arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "attempt" && arguments[3] == "verify" {
+		return runClusterStageAttemptVerify(arguments[4:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "resume" {
 		return runClusterStageResume(arguments[3:], stdout, stderr)
 	}
@@ -843,7 +850,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok authority stage policy ... | ok authority stage package ... | ok authority stage materialize ... | ok authority stage launch prepare ... | ok authority stage launch execute ... | ok authority stage serve ... | ok evidence observability serve ... | ok cluster create ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage receipt materialize ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage evidence observability identity materialize ... | ok cluster stage evidence observability authority materialize ... | ok cluster stage evidence observability collector package ... | ok cluster stage evidence observability collector launch prepare ... | ok cluster stage evidence observability collector launch execute ... | ok cluster stage evidence observability collector materialize ... | ok cluster stage evidence observability produce ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run full bind-v3 ... | ok cluster stage run full prepare ... | ok cluster stage run full package ... | ok cluster stage run full launch prepare ... | ok cluster stage run full launch execute ... | ok cluster stage run full materialize ... | ok cluster stage run full execute ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime package ... | ok cluster stage run post-runtime materialize ... | ok cluster stage run post-runtime launch prepare ... | ok cluster stage run post-runtime launch execute ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("usage: ok authority stage policy ... | ok authority stage package ... | ok authority stage materialize ... | ok authority stage launch prepare ... | ok authority stage launch execute ... | ok authority stage serve ... | ok evidence observability serve ... | ok cluster create ... | ok cluster stage attempt verify ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage receipt materialize ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage evidence observability identity materialize ... | ok cluster stage evidence observability authority materialize ... | ok cluster stage evidence observability collector package ... | ok cluster stage evidence observability collector launch prepare ... | ok cluster stage evidence observability collector launch execute ... | ok cluster stage evidence observability collector materialize ... | ok cluster stage evidence observability produce ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run full bind-v3 ... | ok cluster stage run full prepare ... | ok cluster stage run full package ... | ok cluster stage run full launch prepare ... | ok cluster stage run full launch execute ... | ok cluster stage run full materialize ... | ok cluster stage run full execute ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime package ... | ok cluster stage run post-runtime materialize ... | ok cluster stage run post-runtime launch prepare ... | ok cluster stage run post-runtime launch execute ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {

@@ -58,6 +58,39 @@ func TestAuthorityIssuesOneExactVerifiableGrant(t *testing.T) {
 	}
 }
 
+func TestAuthorityV2IssuesOneAttemptBoundGrantAndRejectsReplay(t *testing.T) {
+	material := testMaterialForPlan(t, verifiedPlanV2(t, testDigest("5")))
+	authority, receipt, err := Open(material.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Format != ReceiptFormatV2 || receipt.ExecutionAttempt != material.plan.ExecutionAttempt {
+		t.Fatalf("unexpected v2 authority receipt: %#v", receipt)
+	}
+	requestRaw := requestBytes(t, material.request)
+	response := performRequest(authority, material.token, requestMediaType, requestRaw)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("v2 request returned %d: %s", response.Code, response.Body.String())
+	}
+	publicRaw := []byte(base64.StdEncoding.EncodeToString(material.publicKey))
+	verified, err := authorization.VerifyStage(response.Body.Bytes(), publicRaw, material.plan, material.request.StageID, []stagereceipt.Verified{}, material.now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := verified.Receipt()
+	if grant.Format != "ok147-stage-authorization-receipt/v2" || grant.ExecutionAttempt != material.plan.ExecutionAttempt {
+		t.Fatalf("unexpected v2 grant receipt: %#v", grant)
+	}
+	if replay := performRequest(authority, material.token, requestMediaType, requestRaw); replay.Code != http.StatusConflict {
+		t.Fatalf("same-attempt replay returned %d", replay.Code)
+	}
+
+	foreign := requestForPlan(t, verifiedPlanV2(t, testDigest("6")))
+	if response := performRequest(authority, material.token, requestMediaType, requestBytes(t, foreign)); response.Code != http.StatusForbidden {
+		t.Fatalf("foreign attempt returned %d", response.Code)
+	}
+}
+
 func TestFromPlanDerivesOnlyMutatingStagesDeterministically(t *testing.T) {
 	plan := verifiedPlan(t)
 	first, receipt, err := FromPlan(plan)
@@ -79,6 +112,33 @@ func TestFromPlanDerivesOnlyMutatingStagesDeterministically(t *testing.T) {
 		if stage.Operation == "" {
 			t.Fatalf("read-only stage entered authority policy: %#v", stage)
 		}
+	}
+}
+
+func TestFromPlanV2BindsExecutionAttemptAndChangesRequestIdentity(t *testing.T) {
+	first := verifiedPlanV2(t, testDigest("5"))
+	second := verifiedPlanV2(t, testDigest("6"))
+	firstRaw, firstReceipt, err := FromPlan(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRaw, secondReceipt, err := FromPlan(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(firstRaw, secondRaw) || firstReceipt.PolicyDigest == secondReceipt.PolicyDigest ||
+		firstReceipt.Format != "ok147-bounded-stage-authority-policy-receipt/v2" || firstReceipt.ExecutionAttempt != first.ExecutionAttempt {
+		t.Fatalf("v2 policy did not bind the attempt: %#v %#v", firstReceipt, secondReceipt)
+	}
+	var firstPolicy Policy
+	if err := json.Unmarshal(firstRaw, &firstPolicy); err != nil || firstPolicy.Format != PolicyFormatV2 || firstPolicy.ExecutionAttempt != first.ExecutionAttempt {
+		t.Fatalf("unexpected v2 policy: %#v %v", firstPolicy, err)
+	}
+
+	firstRequest := requestForPlan(t, first)
+	secondRequest := requestForPlan(t, second)
+	if firstRequest.Format != runner.StageAuthorizationRequestFormatV2 || firstRequest.RequestDigest == secondRequest.RequestDigest {
+		t.Fatalf("attempt did not change request identity: %#v %#v", firstRequest, secondRequest)
 	}
 }
 
@@ -171,6 +231,11 @@ type testMaterialValue struct {
 
 func testMaterial(t *testing.T) testMaterialValue {
 	t.Helper()
+	return testMaterialForPlan(t, verifiedPlan(t))
+}
+
+func testMaterialForPlan(t *testing.T, plan stageplan.Binding) testMaterialValue {
+	t.Helper()
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	if err := os.Mkdir(stateDir, 0o700); err != nil {
@@ -180,26 +245,8 @@ func testMaterial(t *testing.T) testMaterialValue {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := verifiedPlan(t)
-	stage, stageDigest, err := plan.Stage("provider-prerequisites")
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := runner.StageAuthorizationRequest{
-		Format: runner.StageAuthorizationRequestFormat, Audience: authorization.StageAudience,
-		PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity, ContractRevision: plan.IntentRevision,
-		EnablementRevision: plan.EnablementRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
-		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Operation: stage.GrantOperation, Authority: stage.Authority,
-		Predecessors: []stagecursor.Predecessor{}, MaxUses: 1,
-	}
-	request.RequestDigest = stageRequestDigest(t, request)
-	policy := Policy{
-		Format: PolicyFormat, PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity,
-		ContractRevision: plan.IntentRevision, EnablementRevision: plan.EnablementRevision,
-		PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
-		Stages: []StagePolicy{{StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Operation: stage.GrantOperation, Authority: stage.Authority, Requires: []string{}}},
-	}
-	policyRaw, err := json.Marshal(policy)
+	request := requestForPlan(t, plan)
+	policyRaw, _, err := FromPlan(plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,11 +255,7 @@ func testMaterial(t *testing.T) testMaterialValue {
 	token := "bounded-authority-token-0123456789abcdef"
 	tokenPath := writeFile(t, root, "token", []byte(token), 0o600)
 	now := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
-	canonicalPolicy, err := canonicalJSON(policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config := Config{PolicyPath: policyPath, ExpectedPolicyDigest: digest.SHA256(canonicalPolicy), PrivateKeyPath: privatePath, TokenFile: tokenPath, StateDirectory: stateDir, GrantValidFor: 10 * time.Minute, Clock: func() time.Time { return now }}
+	config := Config{PolicyPath: policyPath, ExpectedPolicyDigest: digest.SHA256(policyRaw), PrivateKeyPath: privatePath, TokenFile: tokenPath, StateDirectory: stateDir, GrantValidFor: 10 * time.Minute, Clock: func() time.Time { return now }}
 	authority, _, err := Open(config)
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +292,9 @@ func stageRequestDigest(t *testing.T, request runner.StageAuthorizationRequest) 
 		"stageDigest": request.StageDigest, "operation": request.Operation, "authority": request.Authority,
 		"predecessors": request.Predecessors, "maxUses": request.MaxUses,
 	}
+	if request.ExecutionAttempt != "" {
+		payload["executionAttemptDigest"] = request.ExecutionAttempt
+	}
 	canonical, err := canonicalJSON(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -257,6 +303,15 @@ func stageRequestDigest(t *testing.T, request runner.StageAuthorizationRequest) 
 }
 
 func verifiedPlan(t *testing.T) stageplan.Binding {
+	return verifiedPlanWithAttempt(t, "")
+}
+
+func verifiedPlanV2(t *testing.T, attempt string) stageplan.Binding {
+	t.Helper()
+	return verifiedPlanWithAttempt(t, attempt)
+}
+
+func verifiedPlanWithAttempt(t *testing.T, attempt string) stageplan.Binding {
 	t.Helper()
 	identity := contract.Identity{Namespace: "disposable-ok147", Name: "disposable-ok147"}
 	r := testDigest("1")
@@ -283,24 +338,55 @@ func verifiedPlan(t *testing.T) stageplan.Binding {
 		rule["inputs"] = []map[string]string{{"name": "stage.input-" + string(rune('a'+index)), "digest": testDigest(string("abcdef012345"[index]))}}
 		stages[index] = rule
 	}
+	planFormat := stageplan.Format
+	if attempt != "" {
+		planFormat = stageplan.FormatV2
+	}
 	document := map[string]any{
-		"format": stageplan.Format, "contractIdentity": identity, "intentRevision": r, "enablementRevision": e,
+		"format": planFormat, "contractIdentity": identity, "intentRevision": r, "enablementRevision": e,
 		"platformRevision": p, "executionFixture": fixture, "authorizationState": "NO-GO",
 		"authorities": map[string]any{"infrastructure": "ok-infra", "management": "ok-mgmt", "gitOps": "ok-shared", "workloadIdentityMode": "capi-cluster-uid/v1", "runnerIdentityMode": "bounded-job/v1"},
 		"stages":      stages,
+	}
+	if attempt != "" {
+		document["executionAttemptDigest"] = attempt
 	}
 	raw, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := stageplan.Verify(raw, stageplan.Expected{
+	expected := stageplan.Expected{
 		ContractIdentity: identity, IntentRevision: r, EnablementRevision: e, PlatformRevision: p, ExecutionFixture: fixture,
 		InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt", GitOpsAuthority: "ok-shared",
-	})
+	}
+	expected.ExecutionAttemptDigest = attempt
+	plan, err := stageplan.Verify(raw, expected)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return plan
+}
+
+func requestForPlan(t *testing.T, plan stageplan.Binding) runner.StageAuthorizationRequest {
+	t.Helper()
+	stage, stageDigest, err := plan.Stage("provider-prerequisites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestFormat := runner.StageAuthorizationRequestFormat
+	if plan.Format == stageplan.BindingFormatV2 {
+		requestFormat = runner.StageAuthorizationRequestFormatV2
+	}
+	request := runner.StageAuthorizationRequest{
+		Format: requestFormat, Audience: authorization.StageAudience,
+		PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity, ContractRevision: plan.IntentRevision,
+		EnablementRevision: plan.EnablementRevision, PlatformRevision: plan.PlatformRevision,
+		ExecutionFixture: plan.ExecutionFixture, ExecutionAttempt: plan.ExecutionAttempt,
+		StageID: stage.ID, StageOrder: stage.Order, StageDigest: stageDigest, Operation: stage.GrantOperation,
+		Authority: stage.Authority, Predecessors: []stagecursor.Predecessor{}, MaxUses: 1,
+	}
+	request.RequestDigest = stageRequestDigest(t, request)
+	return request
 }
 
 func writeFile(t *testing.T, root, name string, raw []byte, mode os.FileMode) string {

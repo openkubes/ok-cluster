@@ -21,6 +21,7 @@ import (
 
 const (
 	StageFormat   = "ok147-stage-authorization/v1"
+	StageFormatV2 = "ok147-stage-authorization/v2"
 	StageAudience = "ok-cluster-staged-executor"
 
 	maximumStageGrantBytes = 128 * 1024
@@ -44,6 +45,7 @@ type StagePayload struct {
 	EnablementRevision string             `json:"enablementRevision"`
 	PlatformRevision   string             `json:"platformRevision"`
 	ExecutionFixture   string             `json:"executionFixture"`
+	ExecutionAttempt   string             `json:"executionAttemptDigest,omitempty"`
 	StageID            string             `json:"stageId"`
 	StageOrder         int                `json:"stageOrder"`
 	StageDigest        string             `json:"stageDigest"`
@@ -80,6 +82,7 @@ type StageReceipt struct {
 	PredecessorDigest   string `json:"predecessorDigest"`
 	NotAfter            string `json:"notAfter"`
 	MaxUses             int    `json:"maxUses"`
+	ExecutionAttempt    string `json:"executionAttemptDigest,omitempty"`
 }
 
 type StageConsumptionBinding struct {
@@ -95,6 +98,7 @@ type StageConsumptionBinding struct {
 	ContractRevision    string
 	NotBefore           string
 	NotAfter            string
+	ExecutionAttempt    string
 }
 
 type VerifiedStageGrant struct {
@@ -130,7 +134,7 @@ func BindStageGrant(grant VerifiedStageGrant, plan stageplan.Binding, expectedSt
 	if err != nil {
 		return StageConsumptionBinding{}, err
 	}
-	if binding.PlanDigest != plan.PlanDigest || binding.StageID != stage.ID || binding.StageDigest != stageDigest || binding.Operation != stage.GrantOperation || binding.Authority != stage.Authority || binding.PredecessorDigest != predecessorDigest || binding.ContractRevision != plan.IntentRevision {
+	if binding.PlanDigest != plan.PlanDigest || binding.StageID != stage.ID || binding.StageDigest != stageDigest || binding.Operation != stage.GrantOperation || binding.Authority != stage.Authority || binding.PredecessorDigest != predecessorDigest || binding.ContractRevision != plan.IntentRevision || binding.ExecutionAttempt != plan.ExecutionAttempt {
 		return StageConsumptionBinding{}, errors.New("verified stage grant differs from the selected stage cursor")
 	}
 	return binding, nil
@@ -165,8 +169,11 @@ func VerifyStage(raw, publicKeyRaw []byte, plan stageplan.Binding, expectedStage
 	if err := jsonstrict.Decode(raw, &document); err != nil {
 		return VerifiedStageGrant{}, fmt.Errorf("decode stage authorization: %w", err)
 	}
-	if document.Format != StageFormat {
+	if document.Format != StageFormat && document.Format != StageFormatV2 {
 		return VerifiedStageGrant{}, fmt.Errorf("stage authorization format %q is not supported", document.Format)
+	}
+	if plan.Format == stageplan.BindingFormat && document.Format != StageFormat || plan.Format == stageplan.BindingFormatV2 && document.Format != StageFormatV2 {
+		return VerifiedStageGrant{}, errors.New("stage authorization format differs from the staged plan")
 	}
 	publicKey, keyID, err := parsePublicKey(publicKeyRaw)
 	if err != nil {
@@ -190,13 +197,18 @@ func VerifyStage(raw, publicKeyRaw []byte, plan stageplan.Binding, expectedStage
 	if err != nil {
 		return VerifiedStageGrant{}, err
 	}
+	receiptFormat := "ok147-stage-authorization-receipt/v1"
+	if document.Format == StageFormatV2 {
+		receiptFormat = "ok147-stage-authorization-receipt/v2"
+	}
 	receipt := StageReceipt{
-		Format: "ok147-stage-authorization-receipt/v1", State: "VERIFIED",
+		Format: receiptFormat, State: "VERIFIED",
 		AuthorizationDigest: digest.SHA256(raw), GrantID: document.Payload.GrantID, KeyID: keyID,
 		PlanDigest: plan.PlanDigest, StageID: stage.ID, StageDigest: stageDigest,
 		Operation: stage.GrantOperation, Authority: stage.Authority,
 		PredecessorDigest: predecessorDigest,
 		NotAfter:          document.Payload.NotAfter, MaxUses: document.Payload.MaxUses,
+		ExecutionAttempt: document.Payload.ExecutionAttempt,
 	}
 	return VerifiedStageGrant{
 		receipt: receipt,
@@ -206,6 +218,7 @@ func VerifyStage(raw, publicKeyRaw []byte, plan stageplan.Binding, expectedStage
 			Operation: stage.GrantOperation, Authority: stage.Authority,
 			PredecessorDigest: predecessorDigest,
 			ContractRevision:  plan.IntentRevision, NotBefore: document.Payload.NotBefore, NotAfter: document.Payload.NotAfter,
+			ExecutionAttempt: document.Payload.ExecutionAttempt,
 		},
 		verified: true,
 	}, nil
@@ -234,6 +247,9 @@ func verifyStagePayload(payload StagePayload, plan stageplan.Binding, stage stag
 	}
 	if payload.PlanDigest != plan.PlanDigest || payload.ContractIdentity != plan.ContractIdentity || payload.ContractRevision != plan.IntentRevision || payload.EnablementRevision != plan.EnablementRevision || payload.PlatformRevision != plan.PlatformRevision || payload.ExecutionFixture != plan.ExecutionFixture {
 		return "", errors.New("stage authorization plan or Contract bindings differ")
+	}
+	if payload.ExecutionAttempt != plan.ExecutionAttempt {
+		return "", errors.New("stage authorization execution attempt differs")
 	}
 	if payload.StageID != stage.ID || payload.StageOrder != stage.Order || payload.StageDigest != stageDigest || payload.Operation != stage.GrantOperation || payload.Authority != stage.Authority {
 		return "", errors.New("stage authorization does not bind the exact stage")

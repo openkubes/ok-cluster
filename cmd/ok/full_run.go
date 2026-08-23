@@ -307,7 +307,7 @@ func runClusterStageRunFullPrepare(arguments []string, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
-	if manifest.Format != runner.FullRunExecutionManifestReceiptFormat || manifest.State != "VERIFIED" || manifest.MutationAllowed {
+	if !validFullRunManifestReceiptFormat(manifest.Format) || manifest.State != "VERIFIED" || manifest.MutationAllowed {
 		return errors.New("full-run manifest preparation did not verify")
 	}
 	receipt := runner.FullRunExecutionActivationReceipt{
@@ -375,7 +375,7 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 	if err != nil {
 		return fmt.Errorf("prepare full-run manifest: %w", err)
 	}
-	if verified.Format != runner.FullRunExecutionManifestReceiptFormat || verified.State != "VERIFIED" || verified.MutationAllowed {
+	if !validFullRunManifestReceiptFormat(verified.Format) || verified.State != "VERIFIED" || verified.MutationAllowed {
 		return errors.New("full-run manifest preparation did not produce a verified identity")
 	}
 	if verified.ManifestDigest != *expectedManifestDigest {
@@ -402,4 +402,8 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 		return err
 	}
 	return runErr
+}
+
+func validFullRunManifestReceiptFormat(format string) bool {
+	return format == runner.FullRunExecutionManifestReceiptFormat || format == runner.FullRunExecutionManifestReceiptFormatV2
 }

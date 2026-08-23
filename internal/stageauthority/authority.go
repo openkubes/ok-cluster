@@ -27,8 +27,10 @@ import (
 )
 
 const (
-	PolicyFormat  = "ok147-bounded-stage-authority-policy/v1"
-	ReceiptFormat = "ok147-bounded-stage-authority-receipt/v1"
+	PolicyFormat    = "ok147-bounded-stage-authority-policy/v1"
+	PolicyFormatV2  = "ok147-bounded-stage-authority-policy/v2"
+	ReceiptFormat   = "ok147-bounded-stage-authority-receipt/v1"
+	ReceiptFormatV2 = "ok147-bounded-stage-authority-receipt/v2"
 
 	requestMediaType  = "application/vnd.openkubes.stage-authorization-request+json"
 	responseMediaType = "application/vnd.openkubes.stage-authorization+json"
@@ -64,6 +66,7 @@ type Policy struct {
 	EnablementRevision string            `json:"enablementRevision"`
 	PlatformRevision   string            `json:"platformRevision"`
 	ExecutionFixture   string            `json:"executionFixture"`
+	ExecutionAttempt   string            `json:"executionAttemptDigest,omitempty"`
 	Stages             []StagePolicy     `json:"stages"`
 }
 
@@ -81,23 +84,25 @@ type Config struct {
 
 // Receipt is safe to record publicly after opening the authority.
 type Receipt struct {
-	Format          string `json:"format"`
-	State           string `json:"state"`
-	PolicyDigest    string `json:"policyDigest"`
-	KeyID           string `json:"keyId"`
-	StageCount      int    `json:"stageCount"`
-	GrantValidFor   string `json:"grantValidFor"`
-	SingleUseLedger string `json:"singleUseLedger"`
-	MutationAllowed bool   `json:"mutationAllowed"`
+	Format           string `json:"format"`
+	State            string `json:"state"`
+	PolicyDigest     string `json:"policyDigest"`
+	KeyID            string `json:"keyId"`
+	StageCount       int    `json:"stageCount"`
+	GrantValidFor    string `json:"grantValidFor"`
+	SingleUseLedger  string `json:"singleUseLedger"`
+	ExecutionAttempt string `json:"executionAttemptDigest,omitempty"`
+	MutationAllowed  bool   `json:"mutationAllowed"`
 }
 
 type PolicyReceipt struct {
-	Format          string `json:"format"`
-	State           string `json:"state"`
-	PolicyDigest    string `json:"policyDigest"`
-	PlanDigest      string `json:"planDigest"`
-	StageCount      int    `json:"stageCount"`
-	MutationAllowed bool   `json:"mutationAllowed"`
+	Format           string `json:"format"`
+	State            string `json:"state"`
+	PolicyDigest     string `json:"policyDigest"`
+	PlanDigest       string `json:"planDigest"`
+	StageCount       int    `json:"stageCount"`
+	ExecutionAttempt string `json:"executionAttemptDigest,omitempty"`
+	MutationAllowed  bool   `json:"mutationAllowed"`
 }
 
 type Authority struct {
@@ -138,10 +143,17 @@ func FromPlan(plan stageplan.Binding) ([]byte, PolicyReceipt, error) {
 	if !digestPattern.MatchString(plan.PlanDigest) || len(plan.Stages) == 0 {
 		return nil, PolicyReceipt{}, errors.New("verified staged plan is required")
 	}
+	policyFormat := PolicyFormat
+	policyReceiptFormat := "ok147-bounded-stage-authority-policy-receipt/v1"
+	if plan.Format == stageplan.BindingFormatV2 {
+		policyFormat = PolicyFormatV2
+		policyReceiptFormat = "ok147-bounded-stage-authority-policy-receipt/v2"
+	}
 	policy := Policy{
-		Format: PolicyFormat, PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity,
+		Format: policyFormat, PlanDigest: plan.PlanDigest, ContractIdentity: plan.ContractIdentity,
 		ContractRevision: plan.IntentRevision, EnablementRevision: plan.EnablementRevision,
 		PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
+		ExecutionAttempt: plan.ExecutionAttempt,
 	}
 	for _, candidate := range plan.Stages {
 		stage, stageDigest, err := plan.Stage(candidate.ID)
@@ -168,8 +180,9 @@ func FromPlan(plan stageplan.Binding) ([]byte, PolicyReceipt, error) {
 		return nil, PolicyReceipt{}, errors.New("verify derived bounded stage authority policy")
 	}
 	receipt := PolicyReceipt{
-		Format: "ok147-bounded-stage-authority-policy-receipt/v1", State: "VERIFIED",
+		Format: policyReceiptFormat, State: "VERIFIED",
 		PolicyDigest: policyDigest, PlanDigest: plan.PlanDigest, StageCount: len(policy.Stages), MutationAllowed: false,
+		ExecutionAttempt: plan.ExecutionAttempt,
 	}
 	return raw, receipt, nil
 }
@@ -221,10 +234,14 @@ func Open(config Config) (*Authority, Receipt, error) {
 		privateKey: privateKey, keyID: keyID, token: append([]byte(nil), token...),
 		stateDir: config.StateDirectory, grantValidFor: config.GrantValidFor, clock: config.Clock,
 	}
+	receiptFormat := ReceiptFormat
+	if policy.Format == PolicyFormatV2 {
+		receiptFormat = ReceiptFormatV2
+	}
 	receipt := Receipt{
-		Format: ReceiptFormat, State: "VERIFIED", PolicyDigest: policyDigest, KeyID: keyID,
+		Format: receiptFormat, State: "VERIFIED", PolicyDigest: policyDigest, KeyID: keyID,
 		StageCount: len(policy.Stages), GrantValidFor: config.GrantValidFor.String(),
-		SingleUseLedger: "create-only-local/v1", MutationAllowed: false,
+		SingleUseLedger: "create-only-local/v1", ExecutionAttempt: policy.ExecutionAttempt, MutationAllowed: false,
 	}
 	return authority, receipt, nil
 }
@@ -294,8 +311,12 @@ func (authority *Authority) ServeHTTP(response http.ResponseWriter, request *htt
 		http.Error(response, "authority unavailable", http.StatusInternalServerError)
 		return
 	}
+	grantFormat := authorization.StageFormat
+	if authority.policy.Format == PolicyFormatV2 {
+		grantFormat = authorization.StageFormatV2
+	}
 	envelope := stageEnvelope{
-		Format: authorization.StageFormat, Payload: payload,
+		Format: grantFormat, Payload: payload,
 		Signature: stageSignature{Algorithm: "Ed25519", KeyID: authority.keyID, Value: base64.StdEncoding.EncodeToString(ed25519.Sign(authority.privateKey, signed))},
 	}
 	responseRaw, err := json.Marshal(envelope)
@@ -309,6 +330,11 @@ func (authority *Authority) ServeHTTP(response http.ResponseWriter, request *htt
 }
 
 func (authority *Authority) verifyRequest(request runner.StageAuthorizationRequest) error {
+	if authority.policy.Format == PolicyFormat && request.Format != runner.StageAuthorizationRequestFormat ||
+		authority.policy.Format == PolicyFormatV2 && request.Format != runner.StageAuthorizationRequestFormatV2 ||
+		request.ExecutionAttempt != authority.policy.ExecutionAttempt {
+		return errors.New("request execution attempt differs")
+	}
 	if request.PlanDigest != authority.policy.PlanDigest || request.ContractIdentity != authority.policy.ContractIdentity ||
 		request.ContractRevision != authority.policy.ContractRevision || request.EnablementRevision != authority.policy.EnablementRevision ||
 		request.PlatformRevision != authority.policy.PlatformRevision || request.ExecutionFixture != authority.policy.ExecutionFixture || request.MaxUses != 1 {
@@ -331,7 +357,8 @@ func (authority *Authority) payload(request runner.StageAuthorizationRequest, no
 		Audience: request.Audience, GrantID: "ok147-dev-" + strings.TrimPrefix(request.RequestDigest, "sha256:")[:32], Decision: "ALLOW",
 		PlanDigest: request.PlanDigest, ContractIdentity: request.ContractIdentity, ContractRevision: request.ContractRevision,
 		EnablementRevision: request.EnablementRevision, PlatformRevision: request.PlatformRevision, ExecutionFixture: request.ExecutionFixture,
-		StageID: request.StageID, StageOrder: request.StageOrder, StageDigest: request.StageDigest, Operation: request.Operation, Authority: request.Authority,
+		ExecutionAttempt: request.ExecutionAttempt,
+		StageID:          request.StageID, StageOrder: request.StageOrder, StageDigest: request.StageDigest, Operation: request.Operation, Authority: request.Authority,
 		NotBefore: now.Format(time.RFC3339), NotAfter: now.Add(authority.grantValidFor).Format(time.RFC3339), MaxUses: 1,
 	}
 	payload.Predecessors = make([]authorization.StagePredecessor, len(request.Predecessors))
@@ -374,8 +401,15 @@ func verifyPolicy(raw []byte) (Policy, string, error) {
 	if err := jsonstrict.Decode(raw, &policy); err != nil {
 		return Policy{}, "", fmt.Errorf("decode bounded stage authority policy: %w", err)
 	}
-	if policy.Format != PolicyFormat || policy.ContractIdentity.Name == "" || policy.ContractIdentity.Namespace == "" || len(policy.Stages) == 0 {
+	if policy.Format != PolicyFormat && policy.Format != PolicyFormatV2 || policy.ContractIdentity.Name == "" || policy.ContractIdentity.Namespace == "" || len(policy.Stages) == 0 {
 		return Policy{}, "", errors.New("bounded stage authority policy identity is incomplete")
+	}
+	if policy.Format == PolicyFormat {
+		if policy.ExecutionAttempt != "" {
+			return Policy{}, "", errors.New("bounded stage authority policy v1 cannot bind an execution attempt")
+		}
+	} else if !digestPattern.MatchString(policy.ExecutionAttempt) {
+		return Policy{}, "", errors.New("bounded stage authority execution attempt identity is invalid")
 	}
 	for _, value := range []string{policy.PlanDigest, policy.ContractRevision, policy.EnablementRevision, policy.PlatformRevision, policy.ExecutionFixture} {
 		if !digestPattern.MatchString(value) {
