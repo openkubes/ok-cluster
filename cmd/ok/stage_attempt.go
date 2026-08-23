@@ -21,6 +21,7 @@ func runClusterStageAttemptVerify(arguments []string, stdout, stderr io.Writer) 
 	sourcePlan := flags.String("source-plan-semantic-digest", "", "independently expected source plan identity")
 	runnerImage := flags.String("runner-image", "", "independently expected digest-pinned runner image")
 	activationPackage := flags.String("activation-package-digest", "", "independently expected activation package digest")
+	sourceActivationPackage := flags.String("source-activation-package-digest", "", "independently expected pre-attempt activation package digest")
 	predecessorAttempt := flags.String("predecessor-attempt-digest", "", "expected predecessor attempt for recovery")
 	stoppedEvidence := flags.String("stopped-evidence-digest", "", "expected stopped evidence for recovery")
 	decisionWindow := flags.String("decision-window-digest", "", "independently expected decision-window identity")
@@ -30,10 +31,13 @@ func runClusterStageAttemptVerify(arguments []string, stdout, stderr io.Writer) 
 	if flags.NArg() != 0 {
 		return errors.New("positional arguments are not accepted")
 	}
-	for _, value := range []string{*path, *attemptID, *sourceFixture, *sourcePlan, *runnerImage, *activationPackage, *decisionWindow} {
+	for _, value := range []string{*path, *attemptID, *sourceFixture, *sourcePlan, *runnerImage, *decisionWindow} {
 		if value == "" {
 			return errors.New("all non-recovery execution-attempt inputs are required")
 		}
+	}
+	if (*activationPackage == "") == (*sourceActivationPackage == "") {
+		return errors.New("exactly one activation-package identity is required")
 	}
 	info, err := os.Lstat(*path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > maximumExecutionAttemptBytes {
@@ -46,7 +50,8 @@ func runClusterStageAttemptVerify(arguments []string, stdout, stderr io.Writer) 
 	receipt, err := stageattempt.Verify(raw, stageattempt.Expected{
 		AttemptID: *attemptID, SourceFixtureDigest: *sourceFixture, SourcePlanSemanticDigest: *sourcePlan,
 		RunnerImage: *runnerImage, ActivationPackageDigest: *activationPackage,
-		PredecessorAttemptDigest: *predecessorAttempt, StoppedEvidenceDigest: *stoppedEvidence,
+		SourceActivationPackageDigest: *sourceActivationPackage,
+		PredecessorAttemptDigest:      *predecessorAttempt, StoppedEvidenceDigest: *stoppedEvidence,
 		DecisionWindowDigest: *decisionWindow,
 	})
 	if err != nil {

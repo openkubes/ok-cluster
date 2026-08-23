@@ -115,11 +115,18 @@ that binds at least:
 - attempt format and identifier;
 - source FixtureDigest and staged-plan semantic identity;
 - reviewed runner image digest;
-- activation-package digest;
+- source activation-package digest (the immutable package from which this
+  attempt is derived);
 - bounded operational mode (`create + converge + observe` for this scope);
 - explicit predecessor attempt and/or stopped-evidence digest when applicable;
 - expiry or decision-window identity; and
 - `maxAttempts: 1`.
+
+The final activation package cannot be an input to this digest: it embeds the
+plan that carries `ExecutionAttemptDigest`, which would create a circular hash
+dependency. The final package is produced only after the attempt identity and
+is then independently pinned by the launch candidate. Attempt format v2 makes
+that ordering explicit; historical v1 remains verification-only.
 
 The attempt document is not itself a grant. The authority policy must bind its
 digest, and every normal stage authorization request and signed grant must

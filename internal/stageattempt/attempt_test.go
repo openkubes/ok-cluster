@@ -36,7 +36,7 @@ func TestVerifyIsDeterministicAndInputBound(t *testing.T) {
 func TestVerifyFailsClosed(t *testing.T) {
 	document, expected := fixture()
 	tests := map[string]func(*Document){
-		"unknown format":        func(value *Document) { value.Format = "ok147-execution-attempt/v2" },
+		"unknown format":        func(value *Document) { value.Format = "ok147-execution-attempt/v3" },
 		"arbitrary mode":        func(value *Document) { value.Mode = "retry-forever" },
 		"more than one attempt": func(value *Document) { value.MaxAttempts = 2 },
 		"mutable image":         func(value *Document) { value.RunnerImage = "ghcr.io/openkubes/ok-cluster-runner:latest" },
@@ -61,11 +61,16 @@ func TestVerifyFailsClosed(t *testing.T) {
 
 func TestVerifySupportsHistoricalV1RecoveryWithoutInventedAttemptIdentity(t *testing.T) {
 	document, expected := fixture()
+	document.Format = LegacyFormat
+	document.ActivationPackageDigest = document.SourceActivationPackageDigest
+	document.SourceActivationPackageDigest = ""
+	expected.ActivationPackageDigest = expected.SourceActivationPackageDigest
+	expected.SourceActivationPackageDigest = ""
 	document.PredecessorAttemptDigest = ""
 	expected.PredecessorAttemptDigest = ""
 	raw, _ := json.Marshal(document)
 	receipt, err := Verify(raw, expected)
-	if err != nil || !receipt.RecoveryBound || receipt.ExecutionAttemptDigest == "" {
+	if err != nil || receipt.Format != LegacyReceiptFormat || !receipt.RecoveryBound || receipt.ExecutionAttemptDigest == "" {
 		t.Fatalf("stopped-evidence-only v1 migration was rejected: %#v %v", receipt, err)
 	}
 
@@ -78,15 +83,32 @@ func TestVerifySupportsHistoricalV1RecoveryWithoutInventedAttemptIdentity(t *tes
 	}
 }
 
+func TestVerifyRejectsCyclicOrMixedActivationIdentity(t *testing.T) {
+	document, expected := fixture()
+	document.ActivationPackageDigest = sha("8")
+	raw, _ := json.Marshal(document)
+	if _, err := Verify(raw, expected); err == nil {
+		t.Fatal("mixed source and final activation-package identities were accepted")
+	}
+
+	document, expected = fixture()
+	document.SourceActivationPackageDigest = ""
+	expected.SourceActivationPackageDigest = ""
+	raw, _ = json.Marshal(document)
+	if _, err := Verify(raw, expected); err == nil {
+		t.Fatal("attempt without a non-cyclic source package identity was accepted")
+	}
+}
+
 func fixture() (Document, Expected) {
 	document := Document{
 		Format: Format, AttemptID: "ok147-full-run-r11", SourceFixtureDigest: sha("1"), SourcePlanSemanticDigest: sha("2"),
-		RunnerImage: "ghcr.io/openkubes/ok-cluster-runner@" + sha("3"), ActivationPackageDigest: sha("4"), Mode: Mode,
+		RunnerImage: "ghcr.io/openkubes/ok-cluster-runner@" + sha("3"), SourceActivationPackageDigest: sha("4"), Mode: Mode,
 		PredecessorAttemptDigest: sha("5"), StoppedEvidenceDigest: sha("6"), DecisionWindowDigest: sha("7"), MaxAttempts: 1,
 	}
 	expected := Expected{
 		AttemptID: document.AttemptID, SourceFixtureDigest: document.SourceFixtureDigest, SourcePlanSemanticDigest: document.SourcePlanSemanticDigest,
-		RunnerImage: document.RunnerImage, ActivationPackageDigest: document.ActivationPackageDigest,
+		RunnerImage: document.RunnerImage, SourceActivationPackageDigest: document.SourceActivationPackageDigest,
 		PredecessorAttemptDigest: document.PredecessorAttemptDigest, StoppedEvidenceDigest: document.StoppedEvidenceDigest,
 		DecisionWindowDigest: document.DecisionWindowDigest,
 	}
