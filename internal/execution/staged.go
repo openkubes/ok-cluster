@@ -174,8 +174,11 @@ func validateStageMutationResult(stageID string, result StageMutationResult, mut
 	if !oneOf(result.Outcome, "SUCCEEDED", "FAILED", "STOPPED") || !oneOf(result.MutationState, "NOT_ATTEMPTED", "ATTEMPTED", "UNKNOWN") || !stagedDigestPattern.MatchString(result.EvidenceDigest) {
 		return errors.New("stage mutator returned an invalid redaction-safe result")
 	}
-	if result.Outcome == "SUCCEEDED" && (result.MutationState != "ATTEMPTED" || mutationErr != nil) {
-		return errors.New("stage mutator reported an inconsistent successful result")
+	if result.Outcome == "SUCCEEDED" {
+		providerEnsureWithoutWrite := stageID == "provider-prerequisites" && result.MutationState == "NOT_ATTEMPTED"
+		if mutationErr != nil || (result.MutationState != "ATTEMPTED" && !providerEnsureWithoutWrite) {
+			return errors.New("stage mutator reported an inconsistent successful result")
+		}
 	}
 	if stageID == "cluster-lifecycle" && result.Outcome == "SUCCEEDED" {
 		if !stagedDigestPattern.MatchString(result.TargetClusterUIDDigest) {
