@@ -106,9 +106,10 @@ func TestClusterLifecycleBundleRequiresBoundProviderAccessCredential(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(boundPlan.Management.Objects) != 2 || boundPlan.Management.Objects[0].Identity.Kind != "Secret" ||
-		boundPlan.Management.Objects[1].Identity.Kind != "Cluster" || len(bundle.projection.Management.Objects) != 1 {
-		t.Fatalf("provider Secret was not prepended without mutating the verified projection: %#v", boundPlan.Management.Objects)
+	if len(boundPlan.Management.Objects) != 3 || boundPlan.Management.Objects[0].Identity.Kind != "Namespace" ||
+		boundPlan.Management.Objects[1].Identity.Kind != "Secret" || boundPlan.Management.Objects[2].Identity.Kind != "Cluster" ||
+		len(bundle.projection.Management.Objects) != 2 {
+		t.Fatalf("provider Secret was not inserted after its Namespace without mutating the verified projection: %#v", boundPlan.Management.Objects)
 	}
 	opened, err := bundle.Open(runtime)
 	if err != nil || !opened.verified {
@@ -147,7 +148,7 @@ func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overri
 	identity := contract.Identity{Namespace: "disposable-ok147", Name: "disposable-ok147"}
 	revision := bundleSHA("a")
 	infra := []byte("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: " + revision + "\n")
-	management := []byte("apiVersion: cluster.x-k8s.io/v1beta2\nkind: Cluster\nmetadata:\n  name: disposable-ok147\n  namespace: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: " + revision + "\nspec:\n  clusterNetwork:\n    services:\n      cidrBlocks: [10.100.0.0/20]\n")
+	management := []byte("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: " + revision + "\n---\napiVersion: cluster.x-k8s.io/v1beta2\nkind: Cluster\nmetadata:\n  name: disposable-ok147\n  namespace: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: " + revision + "\nspec:\n  clusterNetwork:\n    services:\n      cidrBlocks: [10.100.0.0/20]\n")
 	authority := mustJSON(t, map[string]any{
 		"format": "ok141-contract-to-capi-projection/v2", "contractIdentity": identity, "intentRevision": revision,
 		"infrastructurePlane": map[string]any{
@@ -156,7 +157,10 @@ func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overri
 		},
 		"managementPlane": map[string]any{
 			"identity": "ok-mgmt", "role": "single-lifecycle-writer",
-			"resources": []map[string]any{{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "namespace": "disposable-ok147", "name": "disposable-ok147"}},
+			"resources": []map[string]any{
+				{"apiVersion": "v1", "kind": "Namespace", "name": "disposable-ok147"},
+				{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "namespace": "disposable-ok147", "name": "disposable-ok147"},
+			},
 		},
 		"providerAccess": map[string]any{}, "excludedRendererArtifacts": []any{},
 	})
@@ -171,7 +175,7 @@ func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overri
 		},
 		"objectSets": map[string]any{
 			"okInfraPrerequisites": map[string]any{"count": 1, "digest": bundleSHA("1")},
-			"okMgmtLifecycle":      map[string]any{"count": 1, "digest": bundleSHA("2")},
+			"okMgmtLifecycle":      map[string]any{"count": 2, "digest": bundleSHA("2")},
 		},
 		"providerAccess": map[string]any{}, "source": map[string]any{},
 	})

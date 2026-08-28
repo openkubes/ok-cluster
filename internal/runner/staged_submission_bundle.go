@@ -199,7 +199,29 @@ func bindSubmissionProviderAccess(bundle VerifiedSubmissionStageBundle, kubeconf
 	if err != nil {
 		return submission.Plan{}, err
 	}
-	projectionPlan.Management.Objects = append([]submission.Object{object}, projectionPlan.Management.Objects...)
+	// The Secret is namespaced, so its Namespace must be created first. Keep
+	// the verified lifecycle projection order and insert the runtime-bound
+	// provider credential immediately after that exact Namespace object.
+	// Prepending the Secret makes a fresh run fail with NotFound before the
+	// Namespace can be submitted.
+	insertAfter := -1
+	for index, projected := range projectionPlan.Management.Objects {
+		if projected.Identity.APIVersion == "v1" && projected.Identity.Kind == "Namespace" &&
+			projected.Identity.Name == object.Identity.Namespace && projected.Identity.Namespace == "" {
+			if insertAfter != -1 {
+				return submission.Plan{}, errors.New("cluster-lifecycle provider-access namespace is ambiguous")
+			}
+			insertAfter = index
+		}
+	}
+	if insertAfter == -1 {
+		return submission.Plan{}, errors.New("cluster-lifecycle provider-access namespace is absent from the verified projection")
+	}
+	objects := make([]submission.Object, 0, len(projectionPlan.Management.Objects)+1)
+	objects = append(objects, projectionPlan.Management.Objects[:insertAfter+1]...)
+	objects = append(objects, object)
+	objects = append(objects, projectionPlan.Management.Objects[insertAfter+1:]...)
+	projectionPlan.Management.Objects = objects
 	return projectionPlan, nil
 }
 
