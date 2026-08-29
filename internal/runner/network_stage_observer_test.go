@@ -42,13 +42,14 @@ func TestNetworkStageObserverBindsHistoricalTargetAndConverges(t *testing.T) {
 	}
 }
 
-func TestNetworkStageObserverReturnsTerminalFalseAndBoundedUnknown(t *testing.T) {
+func TestNetworkStageObserverWaitsThroughFalseUntilConvergedOrBounded(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		statuses []string
 		want     string
 		calls    int
 	}{
-		"terminal false":  {statuses: []string{"False"}, want: "FAILED", calls: 1},
+		"transient false": {statuses: []string{"False", "True"}, want: "SUCCEEDED", calls: 2},
+		"bounded false":   {statuses: []string{"False"}, want: "FAILED", calls: 3},
 		"bounded unknown": {statuses: []string{"Unknown"}, want: "STOPPED", calls: 3},
 	} {
 		t.Run(name, func(t *testing.T) {
