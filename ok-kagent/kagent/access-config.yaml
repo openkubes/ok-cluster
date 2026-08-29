@@ -15,7 +15,7 @@ kind: KagentAccessProfile
 
 # read-only  : diagnosis only. No write identity, Role, tool server or Agent.
 # read-write : additionally deploys one scoped write path (see `write:` below).
-mode: read-write
+mode: read-only
 
 install:
   namespace: kagent
@@ -39,20 +39,20 @@ write:
   namespaces:
     - kagent-lab
 
-  # Select any non-empty subset of the supported namespaced resource kinds.
-  # Unlisted kinds are denied; Secrets, RBAC and cluster-scoped resources are
-  # never grantable by this installer.
+  # Declare the exact API verbs per supported resource kind. There is no global
+  # CRUD default: unlisted kinds and unlisted verbs are denied. Secrets, RBAC
+  # and cluster-scoped resources are never grantable by this installer.
   resources:
-    - configmaps
-    - deployments
-    - statefulsets
-    - daemonsets
-    - replicasets
-    - jobs
-    - cronjobs
-    - pods
-    - services
-    - ingresses
+    configmaps: [get, list, watch, create, update, patch, delete]
+    pods: [get, list, watch, delete]
+    services: [get, list, watch, update, patch]
+    deployments: [get, list, watch, update, patch]
+    statefulsets: [get, list, watch, update, patch]
+    daemonsets: [get, list, watch, update, patch]
+    replicasets: [get, list, watch, update, patch]
+    jobs: [get, list, watch, delete]
+    cronjobs: [get, list, watch, update, patch]
+    ingresses: [get, list, watch, update, patch]
 
   # Approve/Reject in the UI for every write tool. The installer refuses false.
   requireApproval: true
