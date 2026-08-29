@@ -130,7 +130,7 @@ func (observer *LifecycleStageObserver) Observe(ctx context.Context) (execution.
 	source := &lifecyclePollingSource{first: &first, source: observer.source, clock: observer.clock}
 	polling, err := NewBoundedPollingObserver(BoundedPollingObserverConfig{
 		Source: source, Interval: observer.pollInterval, Timeout: observer.pollLimit,
-		Clock: observer.clock, Wait: observer.wait,
+		Clock: observer.clock, Wait: observer.wait, ContinueOnFalse: true,
 	})
 	if err != nil {
 		return execution.StageObservationResult{}, err
