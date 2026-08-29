@@ -38,12 +38,14 @@ func TestLifecycleStageObserverBindsSubmissionIdentityAndConverges(t *testing.T)
 	}
 }
 
-func TestLifecycleStageObserverReturnsTerminalFalseAndBoundedUnknown(t *testing.T) {
+func TestLifecycleStageObserverPollsFalseUntilConvergedOrBounded(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		initial, followup, want string
+		collectCalls            int
 	}{
-		"terminal false":  {initial: "False", want: "FAILED"},
-		"bounded unknown": {initial: "Unknown", followup: "Unknown", want: "STOPPED"},
+		"transient false converges":   {initial: "False", followup: "True", want: "SUCCEEDED", collectCalls: 1},
+		"persistent false is bounded": {initial: "False", followup: "False", want: "FAILED", collectCalls: 2},
+		"bounded unknown":             {initial: "Unknown", followup: "Unknown", want: "STOPPED", collectCalls: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			plan, cursor, runtimeUID := lifecycleObserverCursor(t, true)
@@ -61,8 +63,8 @@ func TestLifecycleStageObserverReturnsTerminalFalseAndBoundedUnknown(t *testing.
 			if err != nil || result.Outcome != testCase.want {
 				t.Fatalf("unexpected terminal lifecycle result: %#v %v", result, err)
 			}
-			if testCase.want == "FAILED" && source.collectCalls != 0 {
-				t.Fatal("terminal False lifecycle evidence was polled again")
+			if source.collectCalls != testCase.collectCalls {
+				t.Fatalf("unexpected lifecycle poll count: got %d want %d", source.collectCalls, testCase.collectCalls)
 			}
 		})
 	}

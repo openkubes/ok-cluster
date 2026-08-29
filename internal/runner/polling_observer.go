@@ -15,11 +15,12 @@ type ObservationSource interface {
 type ObservationWaiter func(context.Context, time.Duration) error
 
 type BoundedPollingObserverConfig struct {
-	Source   ObservationSource
-	Interval time.Duration
-	Timeout  time.Duration
-	Clock    func() time.Time
-	Wait     ObservationWaiter
+	Source          ObservationSource
+	Interval        time.Duration
+	Timeout         time.Duration
+	Clock           func() time.Time
+	Wait            ObservationWaiter
+	ContinueOnFalse bool
 }
 
 // BoundedPollingObserver repeats only read-oriented aggregate observation.
@@ -56,10 +57,10 @@ func (observer *BoundedPollingObserver) Observe(ctx context.Context, policy obse
 			return observation.VerifiedResult{}, errors.New("aggregate observer returned an unverified result")
 		}
 		last = result
-		if receipt.Ready == "True" || receipt.Ready == "False" {
+		if receipt.Ready == "True" || (receipt.Ready == "False" && !observer.config.ContinueOnFalse) {
 			return result, nil
 		}
-		if receipt.Ready != "Unknown" {
+		if receipt.Ready != "Unknown" && receipt.Ready != "False" {
 			return observation.VerifiedResult{}, errors.New("aggregate observer returned an invalid readiness state")
 		}
 		now := observer.config.Clock()
