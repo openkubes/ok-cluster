@@ -298,11 +298,14 @@ func evaluateNetworkState(policy Policy, profile NetworkProfile, snapshot Networ
 }
 
 func evaluateAddonSource(source NetworkAddonSource, targetUID, ownerUID, specDigest string, policy Policy, required []string, reasonPrefix string) (string, string) {
-	if !validUID(source.UID) || source.SpecDigest != specDigest || source.IntentRevision != policy.IntentRevision || source.EnablementRevision != policy.EnablementRevision || source.TargetClusterUID != targetUID || !source.TargetSelected || source.OwnerUID != ownerUID {
+	if !validUID(source.UID) || source.SpecDigest != specDigest || source.IntentRevision != policy.IntentRevision || source.EnablementRevision != policy.EnablementRevision || source.TargetClusterUID != targetUID || source.OwnerUID != ownerUID {
 		return "False", reasonPrefix + "IdentityMismatch"
 	}
 	if source.Generation <= 0 || source.StatusObservedGeneration != source.Generation {
 		return "Unknown", reasonPrefix + "NotReady"
+	}
+	if !source.TargetSelected {
+		return "False", reasonPrefix + "IdentityMismatch"
 	}
 	conditions := make(map[string]NetworkSourceCondition, len(source.Conditions))
 	for _, condition := range source.Conditions {
