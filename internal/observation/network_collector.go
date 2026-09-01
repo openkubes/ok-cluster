@@ -540,8 +540,17 @@ func exactNodeConditions(status map[string]any) (map[string]any, map[string]any,
 	if ready == nil && network == nil {
 		return map[string]any{}, map[string]any{}, nil
 	}
-	if ready == nil || network == nil {
-		return nil, nil, errors.New("Node network Conditions are incomplete")
+	// Kubernetes publishes Node Conditions independently. During normal CNI
+	// convergence one of Ready or NetworkUnavailable can therefore be visible
+	// before the other. Preserve the observed Condition and normalize the
+	// missing half to an empty value; networkRuntimeReadyForProbe then keeps the
+	// fixed functional probe closed and the evaluator reports Unknown. Duplicate
+	// Conditions remain malformed and fail closed above.
+	if ready == nil {
+		ready = map[string]any{}
+	}
+	if network == nil {
+		network = map[string]any{}
 	}
 	return ready, network, nil
 }
