@@ -94,6 +94,18 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	if err != nil {
 		return NetworkSnapshot{}, err
 	}
+	snapshot := NetworkSnapshot{
+		Format: NetworkSnapshotFormat, ObservedAt: collector.config.Clock().UTC().Format(time.RFC3339Nano),
+		TargetClusterUID: policy.TargetClusterUID, IntentRevision: policy.IntentRevision,
+		EnablementRevision: hcp.EnablementRevision, HCP: hcp, HRPCount: hrpCount, HRP: hrp,
+	}
+	// CAAPH objects are created before their status is initialized and before
+	// the workload API is necessarily reachable. Preserve that as a bounded
+	// Unknown snapshot instead of turning normal convergence into an
+	// operational source failure or attempting the functional probe too early.
+	if !networkAddonReadyForWorkloadCollection(hcp, hrpCount, hrp) {
+		return snapshot, nil
+	}
 
 	nodesObject, err := getNetworkObject(ctx, collector.workload, "/api/v1/nodes")
 	if err != nil {
@@ -133,6 +145,14 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	if err != nil {
 		return NetworkSnapshot{}, err
 	}
+	snapshot.Nodes, snapshot.Components, snapshot.AgentPods = nodes, components, pods
+	// Pod/container status and Node network Conditions are eventually
+	// populated. The evaluator can classify those normalized gaps as Unknown;
+	// executing cilium-health before they converge would instead manufacture
+	// an operational error that the bounded observer must not retry.
+	if !networkRuntimeReadyForProbe(nodes, components, pods) {
+		return snapshot, nil
+	}
 	probeRaw, err := collector.probe.Probe(ctx, selectedName, selectedUID)
 	if err != nil {
 		return NetworkSnapshot{}, errors.New("fixed Cilium functional probe failed")
@@ -141,12 +161,51 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	if err != nil {
 		return NetworkSnapshot{}, err
 	}
-	return NetworkSnapshot{
-		Format: NetworkSnapshotFormat, ObservedAt: collector.config.Clock().UTC().Format(time.RFC3339Nano),
-		TargetClusterUID: policy.TargetClusterUID, IntentRevision: policy.IntentRevision,
-		EnablementRevision: hcp.EnablementRevision, HCP: hcp, HRPCount: hrpCount, HRP: hrp,
-		Nodes: nodes, Components: components, AgentPods: pods, Probe: probe,
-	}, nil
+	snapshot.Probe = probe
+	return snapshot, nil
+}
+
+func networkAddonReadyForWorkloadCollection(hcp NetworkAddonSource, hrpCount int, hrp NetworkAddonSource) bool {
+	ready := func(source NetworkAddonSource, required ...string) bool {
+		if source.Generation <= 0 || source.StatusObservedGeneration != source.Generation || !source.TargetSelected {
+			return false
+		}
+		conditions := make(map[string]NetworkSourceCondition, len(source.Conditions))
+		for _, condition := range source.Conditions {
+			conditions[condition.Type] = condition
+		}
+		for _, name := range required {
+			condition, exists := conditions[name]
+			if !exists || condition.Status != "True" || condition.ObservedGeneration != source.Generation {
+				return false
+			}
+		}
+		return true
+	}
+	return ready(hcp, "Ready", "HelmReleaseProxySpecsUpToDate", "HelmReleaseProxiesReady") &&
+		hrpCount == 1 && ready(hrp, "Ready", "HelmReleaseReady") && hrp.ReleaseStatus == "deployed" && hrp.ReleaseRevision > 0
+}
+
+func networkRuntimeReadyForProbe(nodes []NetworkNode, components []NetworkComponent, pods []NetworkAgentPod) bool {
+	if len(nodes) == 0 || len(components) != 3 || len(pods) != len(nodes) {
+		return false
+	}
+	for _, node := range nodes {
+		if node.ProviderID == "" || node.Ready != "True" || node.NetworkUnavailable != "False" || node.NetworkUnavailableReason != "CiliumIsUp" {
+			return false
+		}
+	}
+	for _, component := range components {
+		if component.Generation <= 0 || component.ObservedGeneration != component.Generation || component.Desired <= 0 || component.Updated != component.Desired || component.Available != component.Desired || component.Ready != component.Desired {
+			return false
+		}
+	}
+	for _, pod := range pods {
+		if pod.Phase != "Running" || !pod.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 func getNetworkObject(ctx context.Context, source NetworkRawGetter, path string) (map[string]any, error) {
@@ -187,7 +246,7 @@ func normalizeHCP(object map[string]any, namespace, hcpName, clusterName string,
 		return NetworkAddonSource{}, err
 	}
 	status, _ := objectMap(object, "status")
-	matching, err := requiredObjectSlice(status, "matchingClusters", 10)
+	matching, err := optionalObjectSlice(status, "matchingClusters", 10)
 	if err != nil {
 		return NetworkAddonSource{}, errors.New("HCP target selection is invalid")
 	}
@@ -348,8 +407,11 @@ func normalizeAgentPods(list map[string]any, nodeNames map[string]string) ([]Net
 		return nil, "", "", errors.New("Cilium Pod collection identity is invalid")
 	}
 	items, err := requiredObjectSlice(list, "items", 100)
-	if err != nil || len(items) == 0 {
+	if err != nil {
 		return nil, "", "", errors.New("Cilium Pod collection size is invalid")
+	}
+	if len(items) == 0 {
+		return []NetworkAgentPod{}, "", "", nil
 	}
 	type namedPod struct {
 		name string
@@ -366,7 +428,7 @@ func normalizeAgentPods(list map[string]any, nodeNames map[string]string) ([]Net
 			return nil, "", "", errors.New("Cilium Pod runtime identity is invalid")
 		}
 		ready := false
-		containerStatuses, statusErr := requiredObjectSlice(status, "containerStatuses", 20)
+		containerStatuses, statusErr := optionalObjectSlice(status, "containerStatuses", 20)
 		if statusErr != nil {
 			return nil, "", "", errors.New("Cilium Pod container status is invalid")
 		}
@@ -443,7 +505,7 @@ func normalizeNetworkProbe(raw []byte, nodeNames map[string]string) (NetworkProb
 }
 
 func normalizeSourceConditions(status map[string]any) ([]NetworkSourceCondition, error) {
-	items, err := requiredObjectSlice(status, "conditions", 16)
+	items, err := optionalObjectSlice(status, "conditions", 16)
 	if err != nil {
 		return nil, errors.New("add-on source Conditions are invalid")
 	}
@@ -474,6 +536,9 @@ func exactNodeConditions(status map[string]any) (map[string]any, map[string]any,
 			}
 			network = item
 		}
+	}
+	if ready == nil && network == nil {
+		return map[string]any{}, map[string]any{}, nil
 	}
 	if ready == nil || network == nil {
 		return nil, nil, errors.New("Node network Conditions are incomplete")
@@ -534,6 +599,13 @@ func requiredObjectSlice(parent map[string]any, key string, maximum int) ([]map[
 		result = append(result, object)
 	}
 	return result, nil
+}
+
+func optionalObjectSlice(parent map[string]any, key string, maximum int) ([]map[string]any, error) {
+	if _, exists := parent[key]; !exists {
+		return []map[string]any{}, nil
+	}
+	return requiredObjectSlice(parent, key, maximum)
 }
 
 func textMap(parent map[string]any, key string) string { return text(parent[key]) }

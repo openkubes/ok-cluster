@@ -61,6 +61,46 @@ func TestNetworkSourceCollectorNormalizesOrderDeterministically(t *testing.T) {
 	}
 }
 
+func TestNetworkSourceCollectorNormalizesTransientConvergenceWithoutEarlyProbe(t *testing.T) {
+	for name, mutate := range map[string]func(*fakeNetworkGetter, *fakeNetworkGetter){
+		"HCP status not initialized": func(management, _ *fakeNetworkGetter) {
+			management.responses[managementPathHCP] = mutateJSON(t, management.responses[managementPathHCP], func(value map[string]any) {
+				delete(value, "status")
+			})
+		},
+		"HRP not created": func(management, _ *fakeNetworkGetter) {
+			management.responses[managementPathHRP] = mutateJSON(t, management.responses[managementPathHRP], func(value map[string]any) {
+				value["items"] = []any{}
+			})
+		},
+		"Node conditions not initialized": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter) {
+			workload.responses["/api/v1/nodes"] = mutateJSON(t, workload.responses["/api/v1/nodes"], func(value map[string]any) {
+				for _, item := range value["items"].([]any) {
+					item.(map[string]any)["status"].(map[string]any)["conditions"] = []any{}
+				}
+			})
+		},
+		"Cilium Pods not created": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter) {
+			workload.responses["/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dcilium"] = mutateJSON(t, workload.responses["/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dcilium"], func(value map[string]any) {
+				value["items"] = []any{}
+			})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			policy, profile, management, workload, probe := collectorFixture(t)
+			mutate(management, workload)
+			collector := mustNetworkCollector(t, policy, management, workload, probe)
+			evidence, err := collector.Observe(context.Background(), policy, profile)
+			if err != nil || evidence.Status != "Unknown" {
+				t.Fatalf("transient convergence was not normalized to Unknown: evidence=%#v err=%v", evidence, err)
+			}
+			if probe.calls != 0 {
+				t.Fatalf("functional probe ran before prerequisites converged: calls=%d", probe.calls)
+			}
+		})
+	}
+}
+
 func TestAddonSpecDigestNormalizesCAAPHDefaultedFalse(t *testing.T) {
 	requested := map[string]any{
 		"chartName": "cilium", "repoURL": "oci://quay.io/cilium/charts", "version": "1.19.6",
@@ -119,6 +159,17 @@ func TestNetworkSourceCollectorFailsClosed(t *testing.T) {
 				node["status"].(map[string]any)["conditions"] = conditions[:1]
 			})
 		},
+		"malformed HCP matchingClusters": func(management, _ *fakeNetworkGetter, _ *fakeFixedProbe) {
+			management.responses[managementPathHCP] = mutateJSON(t, management.responses[managementPathHCP], func(value map[string]any) {
+				value["status"].(map[string]any)["matchingClusters"] = "invalid"
+			})
+		},
+		"malformed Cilium containerStatuses": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter, _ *fakeFixedProbe) {
+			path := "/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dcilium"
+			workload.responses[path] = mutateJSON(t, workload.responses[path], func(value map[string]any) {
+				value["items"].([]any)[0].(map[string]any)["status"].(map[string]any)["containerStatuses"] = "invalid"
+			})
+		},
 		"foreign probe Node": func(_ *fakeNetworkGetter, _ *fakeNetworkGetter, probe *fakeFixedProbe) {
 			probe.response = mutateJSON(t, probe.response, func(value map[string]any) {
 				value["nodes"].([]any)[0].(map[string]any)["name"] = "foreign"
@@ -161,6 +212,7 @@ func TestNetworkSourceCollectorFailsClosed(t *testing.T) {
 }
 
 const managementPathHCP = "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/disposable-ok141/helmchartproxies/disposable-ok141-cilium"
+const managementPathHRP = "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/disposable-ok141/helmreleaseproxies?labelSelector=cluster.x-k8s.io%2Fcluster-name%3Ddisposable-ok141%2Chelmreleaseproxy.addons.cluster.x-k8s.io%2Fhelmchartproxy-name%3Ddisposable-ok141-cilium"
 
 type fakeNetworkGetter struct {
 	responses map[string][]byte
