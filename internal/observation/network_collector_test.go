@@ -78,6 +78,11 @@ func TestNetworkSourceCollectorNormalizesTransientConvergenceWithoutEarlyProbe(t
 				value["items"] = []any{}
 			})
 		},
+		"HRP collection explicitly null": func(management, _ *fakeNetworkGetter) {
+			management.responses[managementPathHRP] = mutateJSON(t, management.responses[managementPathHRP], func(value map[string]any) {
+				value["items"] = nil
+			})
+		},
 		"HRP conditions explicitly null": func(management, _ *fakeNetworkGetter) {
 			management.responses[managementPathHRP] = mutateJSON(t, management.responses[managementPathHRP], func(value map[string]any) {
 				item := value["items"].([]any)[0].(map[string]any)

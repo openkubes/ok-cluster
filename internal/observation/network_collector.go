@@ -269,7 +269,10 @@ func normalizeHRPList(list map[string]any, namespace, clusterName, hcpName, hcpU
 	if text(list["apiVersion"]) != "addons.cluster.x-k8s.io/v1alpha1" || text(list["kind"]) != "HelmReleaseProxyList" {
 		return 0, NetworkAddonSource{}, errors.New("HRP collection identity is invalid")
 	}
-	items, err := requiredObjectSlice(list, "items", 10)
+	// Kubernetes may serialize an empty list as either [] or null while the
+	// controller has not created the first HRP yet. Both representations mean
+	// "zero matching objects" and are a normal, pollable pre-ready state.
+	items, err := optionalObjectSlice(list, "items", 10)
 	if err != nil {
 		return 0, NetworkAddonSource{}, errors.New("HRP collection is invalid or exceeds bounded size")
 	}
