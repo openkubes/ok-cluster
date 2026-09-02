@@ -92,6 +92,46 @@ func TestBoundedPollingObserverDoesNotRetryFalseOrOperationalError(t *testing.T)
 	}
 }
 
+func TestBoundedPollingObserverContinuesAfterLaterErrorOnlyWhenEnabled(t *testing.T) {
+	policy, _ := aggregateRunnerFixture()
+	unknown := pollingResult(t, policy, "Unknown")
+	ready := pollingResult(t, policy, "True")
+	current := time.Date(2026, 9, 2, 19, 0, 0, 0, time.UTC)
+	source := &sequenceObservationSource{
+		results: []observation.VerifiedResult{unknown, ready},
+		errors:  []error{nil, errors.New("transient private source detail"), nil},
+	}
+	observer, err := NewBoundedPollingObserver(BoundedPollingObserverConfig{
+		Source: source, Interval: time.Second, Timeout: time.Minute,
+		Clock:                           func() time.Time { return current },
+		Wait:                            func(_ context.Context, duration time.Duration) error { current = current.Add(duration); return nil },
+		ContinueOnErrorAfterObservation: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := observer.Observe(context.Background(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := result.Receipt()
+	if receipt.Ready != "True" || source.calls != 3 {
+		t.Fatalf("later transient failure did not remain bounded and pollable: receipt=%#v calls=%d", receipt, source.calls)
+	}
+
+	firstError := &sequenceObservationSource{err: errors.New("initial private source detail")}
+	observer, err = NewBoundedPollingObserver(BoundedPollingObserverConfig{
+		Source: firstError, Interval: time.Second, Timeout: time.Minute, Clock: time.Now,
+		Wait: func(context.Context, time.Duration) error { return nil }, ContinueOnErrorAfterObservation: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := observer.Observe(context.Background(), policy); err == nil || strings.Contains(err.Error(), "private") || firstError.calls != 1 {
+		t.Fatalf("initial source failure did not remain fail-closed and redacted: calls=%d err=%v", firstError.calls, err)
+	}
+}
+
 func pollingResult(t *testing.T, policy observation.Policy, readiness string) observation.VerifiedResult {
 	t.Helper()
 	evidence := []observation.Evidence{}
@@ -118,11 +158,15 @@ type sequenceObservationSource struct {
 	results  []observation.VerifiedResult
 	fallback observation.VerifiedResult
 	err      error
+	errors   []error
 	calls    int
 }
 
 func (source *sequenceObservationSource) Observe(context.Context, observation.Policy) (observation.VerifiedResult, error) {
 	source.calls++
+	if source.calls <= len(source.errors) && source.errors[source.calls-1] != nil {
+		return observation.VerifiedResult{}, source.errors[source.calls-1]
+	}
 	if source.err != nil {
 		return observation.VerifiedResult{}, source.err
 	}
