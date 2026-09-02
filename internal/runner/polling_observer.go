@@ -21,6 +21,11 @@ type BoundedPollingObserverConfig struct {
 	Clock           func() time.Time
 	Wait            ObservationWaiter
 	ContinueOnFalse bool
+	// ContinueOnErrorAfterObservation permits bounded read-only convergence
+	// polling to survive a later operational source failure only after at least
+	// one verified result established the source and authority path. A first
+	// read failure remains fail-closed.
+	ContinueOnErrorAfterObservation bool
 }
 
 // BoundedPollingObserver repeats only read-oriented aggregate observation.
@@ -47,21 +52,25 @@ func (observer *BoundedPollingObserver) Observe(ctx context.Context, policy obse
 	started := observer.config.Clock()
 	deadline := started.Add(observer.config.Timeout)
 	var last observation.VerifiedResult
+	haveLast := false
 	for {
 		result, err := observer.config.Source.Observe(ctx, policy)
 		if err != nil {
-			return observation.VerifiedResult{}, errors.New("bounded aggregate observation failed")
-		}
-		receipt, err := result.Receipt()
-		if err != nil {
-			return observation.VerifiedResult{}, errors.New("aggregate observer returned an unverified result")
-		}
-		last = result
-		if receipt.Ready == "True" || (receipt.Ready == "False" && !observer.config.ContinueOnFalse) {
-			return result, nil
-		}
-		if receipt.Ready != "Unknown" && receipt.Ready != "False" {
-			return observation.VerifiedResult{}, errors.New("aggregate observer returned an invalid readiness state")
+			if !observer.config.ContinueOnErrorAfterObservation || !haveLast {
+				return observation.VerifiedResult{}, errors.New("bounded aggregate observation failed")
+			}
+		} else {
+			receipt, receiptErr := result.Receipt()
+			if receiptErr != nil {
+				return observation.VerifiedResult{}, errors.New("aggregate observer returned an unverified result")
+			}
+			last, haveLast = result, true
+			if receipt.Ready == "True" || (receipt.Ready == "False" && !observer.config.ContinueOnFalse) {
+				return result, nil
+			}
+			if receipt.Ready != "Unknown" && receipt.Ready != "False" {
+				return observation.VerifiedResult{}, errors.New("aggregate observer returned an invalid readiness state")
+			}
 		}
 		now := observer.config.Clock()
 		if !now.Before(deadline) {

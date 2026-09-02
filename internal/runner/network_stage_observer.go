@@ -100,7 +100,7 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 	polling, err := NewBoundedPollingObserver(BoundedPollingObserverConfig{
 		Source:   &networkPollingSource{source: observer.source, profile: observer.profile, clock: observer.clock},
 		Interval: observer.pollInterval, Timeout: observer.pollLimit, Clock: observer.clock, Wait: observer.wait,
-		ContinueOnFalse: true,
+		ContinueOnFalse: true, ContinueOnErrorAfterObservation: true,
 	})
 	if err != nil {
 		return execution.StageObservationResult{}, err
