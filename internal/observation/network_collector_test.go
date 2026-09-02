@@ -68,9 +68,20 @@ func TestNetworkSourceCollectorNormalizesTransientConvergenceWithoutEarlyProbe(t
 				delete(value, "status")
 			})
 		},
+		"HCP conditions explicitly null": func(management, _ *fakeNetworkGetter) {
+			management.responses[managementPathHCP] = mutateJSON(t, management.responses[managementPathHCP], func(value map[string]any) {
+				value["status"].(map[string]any)["conditions"] = nil
+			})
+		},
 		"HRP not created": func(management, _ *fakeNetworkGetter) {
 			management.responses[managementPathHRP] = mutateJSON(t, management.responses[managementPathHRP], func(value map[string]any) {
 				value["items"] = []any{}
+			})
+		},
+		"HRP conditions explicitly null": func(management, _ *fakeNetworkGetter) {
+			management.responses[managementPathHRP] = mutateJSON(t, management.responses[managementPathHRP], func(value map[string]any) {
+				item := value["items"].([]any)[0].(map[string]any)
+				item["status"].(map[string]any)["conditions"] = nil
 			})
 		},
 		"Node conditions not initialized": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter) {
@@ -178,6 +189,11 @@ func TestNetworkSourceCollectorFailsClosed(t *testing.T) {
 		"malformed HCP matchingClusters": func(management, _ *fakeNetworkGetter, _ *fakeFixedProbe) {
 			management.responses[managementPathHCP] = mutateJSON(t, management.responses[managementPathHCP], func(value map[string]any) {
 				value["status"].(map[string]any)["matchingClusters"] = "invalid"
+			})
+		},
+		"malformed HCP conditions": func(management, _ *fakeNetworkGetter, _ *fakeFixedProbe) {
+			management.responses[managementPathHCP] = mutateJSON(t, management.responses[managementPathHCP], func(value map[string]any) {
+				value["status"].(map[string]any)["conditions"] = "invalid"
 			})
 		},
 		"malformed Cilium containerStatuses": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter, _ *fakeFixedProbe) {

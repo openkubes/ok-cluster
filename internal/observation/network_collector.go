@@ -611,7 +611,8 @@ func requiredObjectSlice(parent map[string]any, key string, maximum int) ([]map[
 }
 
 func optionalObjectSlice(parent map[string]any, key string, maximum int) ([]map[string]any, error) {
-	if _, exists := parent[key]; !exists {
+	value, exists := parent[key]
+	if !exists || value == nil {
 		return []map[string]any{}, nil
 	}
 	return requiredObjectSlice(parent, key, maximum)
