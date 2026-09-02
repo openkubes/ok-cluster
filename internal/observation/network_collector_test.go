@@ -80,6 +80,22 @@ func TestNetworkSourceCollectorNormalizesTransientConvergenceWithoutEarlyProbe(t
 				}
 			})
 		},
+		"Node Ready published before NetworkUnavailable": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter) {
+			workload.responses["/api/v1/nodes"] = mutateJSON(t, workload.responses["/api/v1/nodes"], func(value map[string]any) {
+				for _, item := range value["items"].([]any) {
+					conditions := item.(map[string]any)["status"].(map[string]any)["conditions"].([]any)
+					item.(map[string]any)["status"].(map[string]any)["conditions"] = conditions[:1]
+				}
+			})
+		},
+		"Node NetworkUnavailable published before Ready": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter) {
+			workload.responses["/api/v1/nodes"] = mutateJSON(t, workload.responses["/api/v1/nodes"], func(value map[string]any) {
+				for _, item := range value["items"].([]any) {
+					conditions := item.(map[string]any)["status"].(map[string]any)["conditions"].([]any)
+					item.(map[string]any)["status"].(map[string]any)["conditions"] = conditions[1:]
+				}
+			})
+		},
 		"Cilium Pods not created": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter) {
 			workload.responses["/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dcilium"] = mutateJSON(t, workload.responses["/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dcilium"], func(value map[string]any) {
 				value["items"] = []any{}
@@ -152,11 +168,11 @@ func TestNetworkSourceCollectorFailsClosed(t *testing.T) {
 				value["metadata"].(map[string]any)["name"] = "other"
 			})
 		},
-		"malformed Node condition": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter, _ *fakeFixedProbe) {
+		"duplicated Node condition": func(_ *fakeNetworkGetter, workload *fakeNetworkGetter, _ *fakeFixedProbe) {
 			workload.responses["/api/v1/nodes"] = mutateJSON(t, workload.responses["/api/v1/nodes"], func(value map[string]any) {
 				node := value["items"].([]any)[0].(map[string]any)
 				conditions := node["status"].(map[string]any)["conditions"].([]any)
-				node["status"].(map[string]any)["conditions"] = conditions[:1]
+				node["status"].(map[string]any)["conditions"] = append(conditions, conditions[0])
 			})
 		},
 		"malformed HCP matchingClusters": func(management, _ *fakeNetworkGetter, _ *fakeFixedProbe) {
