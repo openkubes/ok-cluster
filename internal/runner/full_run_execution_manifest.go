@@ -291,6 +291,14 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	if err != nil {
 		return FullRunExecutionConfig{}, errors.New("parse full-run network polling")
 	}
+	// Network convergence starts only after lifecycle observation and
+	// enablement have completed. A shorter network window makes the later,
+	// normally slower CAAPH/Cilium convergence boundary less tolerant than the
+	// lifecycle boundary that precedes it and repeatedly turns healthy late
+	// convergence into a stopped full run.
+	if networkTimeout < lifecycleTimeout {
+		return FullRunExecutionConfig{}, errors.New("full-run network polling timeout is shorter than lifecycle polling timeout")
+	}
 	platformInterval, platformTimeout, err := parsePostRuntimePolling(document.PlatformObservation.PollInterval, document.PlatformObservation.PollTimeout)
 	if err != nil {
 		return FullRunExecutionConfig{}, errors.New("parse full-run platform polling")
