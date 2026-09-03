@@ -168,6 +168,38 @@ func TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction(t *testing.T) {
 	}
 }
 
+func TestFullRunExecutionManifestRejectsNetworkWindowShorterThanLifecycle(t *testing.T) {
+	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["lifecycleObservation"].(map[string]any)["pollTimeout"] = "2m"
+	document["networkObservation"].(map[string]any)["pollTimeout"] = "1m"
+	path := writeBundleFile(t, filepath.Dir(manifestPath), "short-network-window.json", mustJSON(t, document))
+	manifest, _, err := LoadFullRunExecutionManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := func() time.Time { return time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC) }
+	probe := &recordingPlatformCapabilityProbe{result: PlatformCapabilityProbeResult{Passed: true}}
+	capability, _ := NewFirstRunPlatformCapabilityResolver(probe, clock)
+	_, err = manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
+		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
+			return capability, nil
+		}),
+		Clock: clock, Wait: WaitWithTimer,
+	})
+	if err == nil || !strings.Contains(err.Error(), "network polling timeout is shorter") {
+		t.Fatalf("shorter network convergence window was accepted: %v", err)
+	}
+}
+
 func TestFullRunExecutionManifestFailsClosed(t *testing.T) {
 	manifest, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
