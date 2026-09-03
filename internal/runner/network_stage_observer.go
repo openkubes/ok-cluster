@@ -101,6 +101,7 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 		Source:   &networkPollingSource{source: observer.source, profile: observer.profile, clock: observer.clock},
 		Interval: observer.pollInterval, Timeout: observer.pollLimit, Clock: observer.clock, Wait: observer.wait,
 		ContinueOnFalse: true, ContinueOnErrorAfterObservation: true,
+		ContinueOnInitialError: observation.IsTransientNetworkSourceError,
 	})
 	if err != nil {
 		return execution.StageObservationResult{}, err

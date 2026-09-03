@@ -132,6 +132,40 @@ func TestBoundedPollingObserverContinuesAfterLaterErrorOnlyWhenEnabled(t *testin
 	}
 }
 
+func TestBoundedPollingObserverContinuesOnlyClassifiedInitialError(t *testing.T) {
+	policy, _ := aggregateRunnerFixture()
+	ready := pollingResult(t, policy, "True")
+	current := time.Date(2026, 9, 3, 8, 0, 0, 0, time.UTC)
+	transient := errors.New("temporary")
+	source := &sequenceObservationSource{errors: []error{transient, nil}, results: []observation.VerifiedResult{ready}}
+	observer, err := NewBoundedPollingObserver(BoundedPollingObserverConfig{
+		Source: source, Interval: time.Second, Timeout: time.Minute, Clock: func() time.Time { return current },
+		Wait:                   func(_ context.Context, duration time.Duration) error { current = current.Add(duration); return nil },
+		ContinueOnInitialError: func(err error) bool { return errors.Is(err, transient) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := observer.Observe(context.Background(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := result.Receipt()
+	if receipt.Ready != "True" || source.calls != 2 {
+		t.Fatalf("classified initial error was not polled: receipt=%#v calls=%d", receipt, source.calls)
+	}
+
+	terminal := &sequenceObservationSource{err: errors.New("terminal")}
+	observer, _ = NewBoundedPollingObserver(BoundedPollingObserverConfig{
+		Source: terminal, Interval: time.Second, Timeout: time.Minute, Clock: time.Now,
+		Wait:                   func(context.Context, time.Duration) error { return nil },
+		ContinueOnInitialError: func(error) bool { return false },
+	})
+	if _, err := observer.Observe(context.Background(), policy); err == nil || terminal.calls != 1 {
+		t.Fatalf("unclassified initial error was retried: calls=%d err=%v", terminal.calls, err)
+	}
+}
+
 func pollingResult(t *testing.T, policy observation.Policy, readiness string) observation.VerifiedResult {
 	t.Helper()
 	evidence := []observation.Evidence{}
