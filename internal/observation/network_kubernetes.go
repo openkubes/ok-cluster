@@ -32,6 +32,23 @@ type KubernetesNetworkReader struct {
 	allowed           map[string]struct{}
 }
 
+type transientNetworkSourceError struct {
+	cause error
+}
+
+func (err transientNetworkSourceError) Error() string {
+	return "temporary bounded network source failure"
+}
+func (err transientNetworkSourceError) Unwrap() error { return err.cause }
+
+// IsTransientNetworkSourceError reports only failures that are safe to poll
+// during bounded convergence. Authentication, authorization, TLS, identity,
+// schema and invariant failures deliberately remain terminal.
+func IsTransientNetworkSourceError(err error) bool {
+	var transient transientNetworkSourceError
+	return errors.As(err, &transient)
+}
+
 func NewKubernetesManagementNetworkReader(config KubernetesNetworkReaderConfig, namespace, name, hcpName string) (*KubernetesNetworkReader, error) {
 	if !validDNSLabel(namespace) || !validDNSLabel(name) || !validDNSLabel(hcpName) {
 		return nil, errors.New("management network reader object identity is invalid")
@@ -102,14 +119,20 @@ func (reader *KubernetesNetworkReader) Get(ctx context.Context, path string) ([]
 	}
 	response, err := reader.client.Do(request)
 	if err != nil {
-		return nil, errors.New("bounded network source request failed")
+		return nil, transientNetworkSourceError{cause: errors.New("bounded network source request failed")}
 	}
 	defer response.Body.Close()
 	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumNetworkSourceBytes+1))
-	if readErr != nil || len(raw) > maximumNetworkSourceBytes {
+	if readErr != nil {
+		return nil, transientNetworkSourceError{cause: errors.New("bounded network source response read failed")}
+	}
+	if len(raw) > maximumNetworkSourceBytes {
 		return nil, errors.New("bounded network source response exceeds accepted size")
 	}
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError {
+			return nil, transientNetworkSourceError{cause: fmt.Errorf("bounded network source request returned HTTP %d", response.StatusCode)}
+		}
 		return nil, fmt.Errorf("bounded network source request returned HTTP %d", response.StatusCode)
 	}
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))

@@ -26,6 +26,9 @@ type BoundedPollingObserverConfig struct {
 	// one verified result established the source and authority path. A first
 	// read failure remains fail-closed.
 	ContinueOnErrorAfterObservation bool
+	// ContinueOnInitialError permits only explicitly classified transient
+	// source failures to remain pollable before the first verified result.
+	ContinueOnInitialError func(error) bool
 }
 
 // BoundedPollingObserver repeats only read-oriented aggregate observation.
@@ -56,7 +59,8 @@ func (observer *BoundedPollingObserver) Observe(ctx context.Context, policy obse
 	for {
 		result, err := observer.config.Source.Observe(ctx, policy)
 		if err != nil {
-			if !observer.config.ContinueOnErrorAfterObservation || !haveLast {
+			initialTransient := !haveLast && observer.config.ContinueOnInitialError != nil && observer.config.ContinueOnInitialError(err)
+			if !initialTransient && (!observer.config.ContinueOnErrorAfterObservation || !haveLast) {
 				return observation.VerifiedResult{}, errors.New("bounded aggregate observation failed")
 			}
 		} else {

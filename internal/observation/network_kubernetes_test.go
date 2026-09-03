@@ -115,6 +115,41 @@ func TestKubernetesNetworkReaderFailsClosedAndRedacts(t *testing.T) {
 	}
 }
 
+func TestKubernetesNetworkReaderClassifiesOnlyConvergenceSafeFailuresAsTransient(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		status    int
+		transport bool
+		want      bool
+	}{
+		"transport":       {transport: true, want: true},
+		"not found":       {status: http.StatusNotFound, want: true},
+		"rate limited":    {status: http.StatusTooManyRequests, want: true},
+		"server failure":  {status: http.StatusServiceUnavailable, want: true},
+		"unauthenticated": {status: http.StatusUnauthorized},
+		"unauthorized":    {status: http.StatusForbidden},
+		"invalid request": {status: http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := &http.Client{Transport: networkRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				if testCase.transport {
+					return nil, errors.New("private transport detail")
+				}
+				return networkJSONResponse(testCase.status, `{}`), nil
+			})}
+			reader, err := NewKubernetesWorkloadNetworkReader(KubernetesNetworkReaderConfig{
+				Endpoint: "http://localhost:12345", BearerToken: "workload-token", Client: client,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = reader.Get(context.Background(), "/api/v1/nodes")
+			if err == nil || IsTransientNetworkSourceError(err) != testCase.want || strings.Contains(err.Error(), "private") {
+				t.Fatalf("unexpected classification: transient=%t err=%v", IsTransientNetworkSourceError(err), err)
+			}
+		})
+	}
+}
+
 func TestKubernetesFixedCiliumProbeBindsExactCommand(t *testing.T) {
 	executor := &fakeCiliumPodExecutor{response: []byte(`{"nodes":[]}`)}
 	probe, err := NewKubernetesFixedCiliumProbe(executor)
