@@ -155,7 +155,12 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	}
 	probeRaw, err := collector.probe.Probe(ctx, selectedName, selectedUID)
 	if err != nil {
-		return NetworkSnapshot{}, errors.New("fixed Cilium functional probe failed")
+		// The command, Pod identity and container are fixed by the probe
+		// boundary. A non-zero execution while Cilium's health cache is still
+		// warming is therefore an operational convergence signal, not an
+		// authorization or input failure. Keep it redacted and let the bounded
+		// observer poll it; malformed successful output remains terminal below.
+		return NetworkSnapshot{}, transientNetworkSourceError{cause: errors.New("fixed Cilium functional probe failed")}
 	}
 	probe, err := normalizeNetworkProbe(probeRaw, nodeNames)
 	if err != nil {

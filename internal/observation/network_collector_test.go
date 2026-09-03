@@ -231,9 +231,6 @@ func TestNetworkSourceCollectorFailsClosed(t *testing.T) {
 		"source transport error": func(management, _ *fakeNetworkGetter, _ *fakeFixedProbe) {
 			management.errors = map[string]error{managementPathHCP: errors.New("https://sensitive-endpoint:6443/token")}
 		},
-		"probe execution error": func(_ *fakeNetworkGetter, _ *fakeNetworkGetter, probe *fakeFixedProbe) {
-			probe.err = errors.New("sensitive raw failure")
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			policy, profile, management, workload, probe := collectorFixture(t)
@@ -241,10 +238,23 @@ func TestNetworkSourceCollectorFailsClosed(t *testing.T) {
 			collector := mustNetworkCollector(t, policy, management, workload, probe)
 			if _, err := collector.Observe(context.Background(), policy, profile); err == nil {
 				t.Fatal("malformed or foreign network source accepted")
-			} else if (name == "probe execution error" || name == "source transport error") && strings.Contains(err.Error(), "sensitive") {
+			} else if name == "source transport error" && strings.Contains(err.Error(), "sensitive") {
 				t.Fatalf("raw source error leaked: %v", err)
 			}
 		})
+	}
+}
+
+func TestNetworkSourceCollectorClassifiesProbeExecutionFailureAsTransient(t *testing.T) {
+	policy, profile, management, workload, probe := collectorFixture(t)
+	probe.err = errors.New("sensitive raw failure")
+	collector := mustNetworkCollector(t, policy, management, workload, probe)
+	_, err := collector.Observe(context.Background(), policy, profile)
+	if err == nil || !IsTransientNetworkSourceError(err) {
+		t.Fatalf("probe execution failure was not transient: %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("raw probe error leaked: %v", err)
 	}
 }
 
