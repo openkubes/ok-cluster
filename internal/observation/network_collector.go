@@ -483,6 +483,14 @@ func normalizeNetworkProbe(raw []byte, nodeNames map[string]string) (NetworkProb
 		return NetworkProbe{}, errors.New("functional probe interval is invalid")
 	}
 	paths := make([]NetworkProbePath, 0, len(nodeNames)*4)
+	rawNodes, nodesPresent := value["nodes"]
+	// cilium-health can successfully publish the response envelope before its
+	// first Node cache snapshot. Missing or null nodes are therefore a bounded
+	// warmup state. A present value of any other type remains malformed and
+	// fails closed in requiredObjectSlice below.
+	if !nodesPresent || rawNodes == nil {
+		return NetworkProbe{}, errNetworkProbePathPending
+	}
 	probeNodes, err := requiredObjectSlice(value, "nodes", 100)
 	if err != nil {
 		return NetworkProbe{}, errors.New("functional probe Node collection is invalid")
