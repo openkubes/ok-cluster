@@ -29,11 +29,12 @@ type PreRuntimeStageCheckpoint struct {
 // PreRuntimeOrchestrationReceipt is a redaction-safe summary. It contains no
 // credential, endpoint, target UID, CA, raw object or local path.
 type PreRuntimeOrchestrationReceipt struct {
-	Format      string                      `json:"format"`
-	State       string                      `json:"state"`
-	PlanDigest  string                      `json:"planDigest,omitempty"`
-	StoppedAt   string                      `json:"stoppedAt,omitempty"`
-	Checkpoints []PreRuntimeStageCheckpoint `json:"checkpoints"`
+	Format       string                      `json:"format"`
+	State        string                      `json:"state"`
+	PlanDigest   string                      `json:"planDigest,omitempty"`
+	StoppedAt    string                      `json:"stoppedAt,omitempty"`
+	StopCategory string                      `json:"stopCategory,omitempty"`
+	Checkpoints  []PreRuntimeStageCheckpoint `json:"checkpoints"`
 }
 
 // PreRuntimeOrchestration composes only the already bounded Stage 1-7
@@ -108,8 +109,11 @@ func (orchestration PreRuntimeOrchestration) Run(ctx context.Context) (PreRuntim
 	}
 
 	networkObservationReceipt, runErr := orchestration.RunNetworkObservation(ctx, enablementReceipt)
-	if err := appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[4], execution.ObservationStageReceiptFormat, networkObservationReceipt.Format, networkObservationReceipt.State, networkObservationReceipt.PlanDigest, networkObservationReceipt.StageID, networkObservationReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[4])
+	if appendErr := appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[4], execution.ObservationStageReceiptFormat, networkObservationReceipt.Format, networkObservationReceipt.State, networkObservationReceipt.PlanDigest, networkObservationReceipt.StageID, networkObservationReceipt.StageReceiptDigest); appendErr != nil || runErr != nil {
+		if runErr != nil {
+			return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[4], runErr)
+		}
+		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[4], appendErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[5])
@@ -149,13 +153,48 @@ func appendPreRuntimeCheckpoint(receipt *PreRuntimeOrchestrationReceipt, expecte
 
 func stopPreRuntimeOrchestration(receipt PreRuntimeOrchestrationReceipt, stageID string) (PreRuntimeOrchestrationReceipt, error) {
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	receipt.StopCategory = "ORCHESTRATION_STOPPED"
 	return receipt, errors.New("pre-runtime orchestration stopped at " + stageID)
 }
 
 func stopPreRuntimeOrchestrationWithCause(receipt PreRuntimeOrchestrationReceipt, stageID string, cause error) (PreRuntimeOrchestrationReceipt, error) {
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	receipt.StopCategory = redactedStopCategory(cause)
 	if cause == nil {
 		return receipt, errors.New("pre-runtime orchestration stopped at " + stageID)
 	}
 	return receipt, fmt.Errorf("pre-runtime orchestration stopped at %s: %w", stageID, cause)
+}
+
+type redactedStopCategorizer interface {
+	RedactedStopCategory() string
+}
+
+func redactedStopCategory(cause error) string {
+	if cause == nil {
+		return "ORCHESTRATION_STOPPED"
+	}
+	var categorized redactedStopCategorizer
+	if errors.As(cause, &categorized) {
+		switch category := categorized.RedactedStopCategory(); category {
+		case "OBSERVATION_SOURCE_ERROR", "OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED":
+			return category
+		}
+	}
+	var observationResult *execution.ObservationStageResultError
+	if errors.As(cause, &observationResult) {
+		return "OBSERVATION_" + observationResult.State
+	}
+	return "STAGE_EXECUTION_ERROR"
+}
+
+func validRedactedStopCategory(category string) bool {
+	switch category {
+	case "ORCHESTRATION_STOPPED", "STAGE_EXECUTION_ERROR", "OBSERVATION_SOURCE_ERROR",
+		"OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED", "OBSERVATION_COMPLETED_FAILED",
+		"OBSERVATION_COMPLETED_STOPPED":
+		return true
+	default:
+		return false
+	}
 }

@@ -78,6 +78,7 @@ type PreRuntimeExecutionReceipt struct {
 	State                  string                              `json:"state"`
 	PlanDigest             string                              `json:"planDigest,omitempty"`
 	StoppedAt              string                              `json:"stoppedAt,omitempty"`
+	StopCategory           string                              `json:"stopCategory,omitempty"`
 	Checkpoints            []PreRuntimeStageCheckpoint         `json:"checkpoints"`
 	ResolvedAuthorizations []ResolvedStageAuthorizationReceipt `json:"resolvedAuthorizations"`
 }
@@ -326,7 +327,7 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 	orchestrationReceipt, runErr := orchestration.Run(ctx)
 	result := PreRuntimeExecutionReceipt{
 		Format: PreRuntimeExecutionReceiptFormat, State: orchestrationReceipt.State,
-		PlanDigest: orchestrationReceipt.PlanDigest, StoppedAt: orchestrationReceipt.StoppedAt,
+		PlanDigest: orchestrationReceipt.PlanDigest, StoppedAt: orchestrationReceipt.StoppedAt, StopCategory: orchestrationReceipt.StopCategory,
 		Checkpoints:            append([]PreRuntimeStageCheckpoint(nil), orchestrationReceipt.Checkpoints...),
 		ResolvedAuthorizations: append([]ResolvedStageAuthorizationReceipt(nil), authorizations...),
 	}

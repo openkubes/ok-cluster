@@ -26,11 +26,12 @@ type FullRunStageCheckpoint struct {
 // It does not contain authorization material, credentials, endpoints, target
 // identities, raw objects or local paths.
 type FullRunOrchestrationReceipt struct {
-	Format      string                   `json:"format"`
-	State       string                   `json:"state"`
-	PlanDigest  string                   `json:"planDigest,omitempty"`
-	StoppedAt   string                   `json:"stoppedAt,omitempty"`
-	Checkpoints []FullRunStageCheckpoint `json:"checkpoints"`
+	Format       string                   `json:"format"`
+	State        string                   `json:"state"`
+	PlanDigest   string                   `json:"planDigest,omitempty"`
+	StoppedAt    string                   `json:"stoppedAt,omitempty"`
+	StopCategory string                   `json:"stopCategory,omitempty"`
+	Checkpoints  []FullRunStageCheckpoint `json:"checkpoints"`
 }
 
 // PostRuntimeContinuationBinding proves that one already-opened Stage 8-12
@@ -95,13 +96,13 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 	prefix, prefixErr := orchestration.PreRuntime.Run(ctx)
 	if prefixErr != nil && prefix.State == "STOPPED" && prefix.StoppedAt == preRuntimeStageOrder[0] &&
 		prefix.PlanDigest == "" && len(prefix.Checkpoints) == 0 {
-		return stopFullRunOrchestrationWithCause(receipt, prefix.StoppedAt, prefixErr)
+		return stopFullRunOrchestrationWithCategory(receipt, prefix.StoppedAt, prefix.StopCategory, prefixErr)
 	}
 	if err := appendFullRunPrefix(&receipt, prefix); err != nil {
 		return stopFullRunOrchestration(receipt, nextFullRunStage(receipt.Checkpoints))
 	}
 	if prefixErr != nil || prefix.State != "SUCCEEDED" {
-		return stopFullRunOrchestrationWithCause(receipt, prefix.StoppedAt, prefixErr)
+		return stopFullRunOrchestrationWithCategory(receipt, prefix.StoppedAt, prefix.StopCategory, prefixErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return stopFullRunOrchestration(receipt, postRuntimeStageOrder[0])
@@ -142,6 +143,9 @@ func appendFullRunPrefix(receipt *FullRunOrchestrationReceipt, prefix PreRuntime
 	if prefix.State == "STOPPED" {
 		if !validStoppedStage(preRuntimeStageOrder, len(prefix.Checkpoints), prefix.StoppedAt) {
 			return errors.New("stopped full-run prefix is inconsistent")
+		}
+		if prefix.StopCategory != "" && !validRedactedStopCategory(prefix.StopCategory) {
+			return errors.New("stopped full-run prefix category is invalid")
 		}
 	}
 	receipt.PlanDigest = prefix.PlanDigest
@@ -245,14 +249,23 @@ func stopFullRunOrchestration(receipt FullRunOrchestrationReceipt, stageID strin
 		stageID = nextFullRunStage(receipt.Checkpoints)
 	}
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	receipt.StopCategory = "ORCHESTRATION_STOPPED"
 	return receipt, errors.New("full-run orchestration stopped at " + stageID)
 }
 
 func stopFullRunOrchestrationWithCause(receipt FullRunOrchestrationReceipt, stageID string, cause error) (FullRunOrchestrationReceipt, error) {
+	return stopFullRunOrchestrationWithCategory(receipt, stageID, "", cause)
+}
+
+func stopFullRunOrchestrationWithCategory(receipt FullRunOrchestrationReceipt, stageID, category string, cause error) (FullRunOrchestrationReceipt, error) {
 	if stageID == "" {
 		stageID = nextFullRunStage(receipt.Checkpoints)
 	}
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	if category == "" {
+		category = redactedStopCategory(cause)
+	}
+	receipt.StopCategory = category
 	if cause == nil {
 		return receipt, errors.New("full-run orchestration stopped at " + stageID)
 	}

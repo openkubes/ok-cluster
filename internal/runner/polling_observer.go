@@ -14,6 +14,18 @@ type ObservationSource interface {
 
 type ObservationWaiter func(context.Context, time.Duration) error
 
+type redactedObservationError struct {
+	category string
+	message  string
+}
+
+func (err *redactedObservationError) Error() string                { return err.message }
+func (err *redactedObservationError) RedactedStopCategory() string { return err.category }
+
+func newRedactedObservationError(category, message string) error {
+	return &redactedObservationError{category: category, message: message}
+}
+
 type BoundedPollingObserverConfig struct {
 	Source          ObservationSource
 	Interval        time.Duration
@@ -50,7 +62,7 @@ func (observer *BoundedPollingObserver) Observe(ctx context.Context, policy obse
 		return observation.VerifiedResult{}, errors.New("bounded polling observer is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return observation.VerifiedResult{}, errors.New("bounded observation polling cancelled")
+		return observation.VerifiedResult{}, newRedactedObservationError("OBSERVATION_INTERRUPTED", "bounded observation polling cancelled")
 	}
 	started := observer.config.Clock()
 	deadline := started.Add(observer.config.Timeout)
@@ -61,19 +73,19 @@ func (observer *BoundedPollingObserver) Observe(ctx context.Context, policy obse
 		if err != nil {
 			initialTransient := !haveLast && observer.config.ContinueOnInitialError != nil && observer.config.ContinueOnInitialError(err)
 			if !initialTransient && (!observer.config.ContinueOnErrorAfterObservation || !haveLast) {
-				return observation.VerifiedResult{}, errors.New("bounded aggregate observation failed")
+				return observation.VerifiedResult{}, newRedactedObservationError("OBSERVATION_SOURCE_ERROR", "bounded aggregate observation failed")
 			}
 		} else {
 			receipt, receiptErr := result.Receipt()
 			if receiptErr != nil {
-				return observation.VerifiedResult{}, errors.New("aggregate observer returned an unverified result")
+				return observation.VerifiedResult{}, newRedactedObservationError("OBSERVATION_RESULT_INVALID", "aggregate observer returned an unverified result")
 			}
 			last, haveLast = result, true
 			if receipt.Ready == "True" || (receipt.Ready == "False" && !observer.config.ContinueOnFalse) {
 				return result, nil
 			}
 			if receipt.Ready != "Unknown" && receipt.Ready != "False" {
-				return observation.VerifiedResult{}, errors.New("aggregate observer returned an invalid readiness state")
+				return observation.VerifiedResult{}, newRedactedObservationError("OBSERVATION_RESULT_INVALID", "aggregate observer returned an invalid readiness state")
 			}
 		}
 		now := observer.config.Clock()
@@ -85,7 +97,7 @@ func (observer *BoundedPollingObserver) Observe(ctx context.Context, policy obse
 			wait = remaining
 		}
 		if err := observer.config.Wait(ctx, wait); err != nil {
-			return observation.VerifiedResult{}, errors.New("bounded observation polling interrupted")
+			return observation.VerifiedResult{}, newRedactedObservationError("OBSERVATION_INTERRUPTED", "bounded observation polling interrupted")
 		}
 	}
 }

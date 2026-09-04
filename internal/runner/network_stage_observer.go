@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
@@ -121,7 +122,7 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 	}
 	result, err := polling.Observe(ctx, observer.policy)
 	if err != nil {
-		return execution.StageObservationResult{}, errors.New("bounded network convergence observation failed")
+		return execution.StageObservationResult{}, fmt.Errorf("bounded network convergence observation failed: %w", err)
 	}
 	receipt, err := result.Receipt()
 	if err != nil {
