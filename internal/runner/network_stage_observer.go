@@ -14,33 +14,33 @@ import (
 )
 
 type NetworkStageObserverConfig struct {
-	Plan                         stageplan.Binding
-	ReceiptPrefix                []stagereceipt.Verified
-	TargetClusterUID             string
-	Source                       observation.NetworkEvidenceSource
-	Profile                      observation.NetworkProfile
-	PollInterval                 time.Duration
-	PollTimeout                  time.Duration
-	Clock                        func() time.Time
-	Wait                         ObservationWaiter
-	AllowFunctionalProbeDeferral bool
-	FunctionalProbeDeferralDelay time.Duration
+	Plan                   stageplan.Binding
+	ReceiptPrefix          []stagereceipt.Verified
+	TargetClusterUID       string
+	Source                 observation.NetworkEvidenceSource
+	Profile                observation.NetworkProfile
+	PollInterval           time.Duration
+	PollTimeout            time.Duration
+	Clock                  func() time.Time
+	Wait                   ObservationWaiter
+	AllowMVPWarmupDeferral bool
+	MVPWarmupDeferralDelay time.Duration
 }
 
 // NetworkStageObserver is the stage-specific adapter around the existing
 // bounded NetworkReady source and deterministic observation evaluator. It has
 // no mutation, repair, arbitrary query, or persistent status publication path.
 type NetworkStageObserver struct {
-	binding                      execution.StageObservationBinding
-	source                       observation.NetworkEvidenceSource
-	profile                      observation.NetworkProfile
-	policy                       observation.Policy
-	pollInterval                 time.Duration
-	pollLimit                    time.Duration
-	clock                        func() time.Time
-	wait                         ObservationWaiter
-	allowFunctionalProbeDeferral bool
-	functionalProbeDeferralDelay time.Duration
+	binding                execution.StageObservationBinding
+	source                 observation.NetworkEvidenceSource
+	profile                observation.NetworkProfile
+	policy                 observation.Policy
+	pollInterval           time.Duration
+	pollLimit              time.Duration
+	clock                  func() time.Time
+	wait                   ObservationWaiter
+	allowMVPWarmupDeferral bool
+	mvpWarmupDeferralDelay time.Duration
 }
 
 var _ execution.StageObserver = (*NetworkStageObserver)(nil)
@@ -52,8 +52,8 @@ func NewNetworkStageObserver(config NetworkStageObserverConfig) (*NetworkStageOb
 	if config.Source == nil || config.Clock == nil || config.Wait == nil {
 		return nil, errors.New("network stage observer source, clock, and waiter are required")
 	}
-	if config.AllowFunctionalProbeDeferral && (config.FunctionalProbeDeferralDelay < config.PollInterval || config.FunctionalProbeDeferralDelay > config.PollTimeout) {
-		return nil, errors.New("network functional probe deferral boundary is invalid")
+	if config.AllowMVPWarmupDeferral && (config.MVPWarmupDeferralDelay < config.PollInterval || config.MVPWarmupDeferralDelay > config.PollTimeout) {
+		return nil, errors.New("network MVP warmup deferral boundary is invalid")
 	}
 	cursor, err := stagecursor.Evaluate(config.Plan, config.ReceiptPrefix)
 	if err != nil {
@@ -90,8 +90,8 @@ func NewNetworkStageObserver(config NetworkStageObserverConfig) (*NetworkStageOb
 		},
 		pollInterval: config.PollInterval, pollLimit: config.PollTimeout,
 		clock: config.Clock, wait: config.Wait,
-		allowFunctionalProbeDeferral: config.AllowFunctionalProbeDeferral,
-		functionalProbeDeferralDelay: config.FunctionalProbeDeferralDelay,
+		allowMVPWarmupDeferral: config.AllowMVPWarmupDeferral,
+		mvpWarmupDeferralDelay: config.MVPWarmupDeferralDelay,
 	}, nil
 }
 
@@ -109,8 +109,8 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 	polling, err := NewBoundedPollingObserver(BoundedPollingObserverConfig{
 		Source: &networkPollingSource{
 			source: observer.source, profile: observer.profile, clock: observer.clock,
-			allowFunctionalProbeDeferral: observer.allowFunctionalProbeDeferral,
-			functionalProbeDeferralDelay: observer.functionalProbeDeferralDelay,
+			allowMVPWarmupDeferral: observer.allowMVPWarmupDeferral,
+			mvpWarmupDeferralDelay: observer.mvpWarmupDeferralDelay,
 		},
 		Interval: observer.pollInterval, Timeout: observer.pollLimit, Clock: observer.clock, Wait: observer.wait,
 		ContinueOnFalse: true, ContinueOnErrorAfterObservation: true,
@@ -145,12 +145,12 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 }
 
 type networkPollingSource struct {
-	source                       observation.NetworkEvidenceSource
-	profile                      observation.NetworkProfile
-	clock                        func() time.Time
-	allowFunctionalProbeDeferral bool
-	functionalProbeDeferralDelay time.Duration
-	functionalProbePendingSince  time.Time
+	source                 observation.NetworkEvidenceSource
+	profile                observation.NetworkProfile
+	clock                  func() time.Time
+	allowMVPWarmupDeferral bool
+	mvpWarmupDeferralDelay time.Duration
+	mvpWarmupPendingSince  time.Time
 }
 
 func (source *networkPollingSource) Observe(ctx context.Context, policy observation.Policy) (observation.VerifiedResult, error) {
@@ -158,20 +158,38 @@ func (source *networkPollingSource) Observe(ctx context.Context, policy observat
 	if err != nil {
 		return observation.VerifiedResult{}, err
 	}
-	if source.allowFunctionalProbeDeferral && evidence.Status == "Unknown" && evidence.Reason == "FunctionalProbePending" {
+	if source.allowMVPWarmupDeferral && isMVPNetworkWarmup(evidence) {
 		now := source.clock()
-		if source.functionalProbePendingSince.IsZero() {
-			source.functionalProbePendingSince = now
+		if source.mvpWarmupPendingSince.IsZero() {
+			source.mvpWarmupPendingSince = now
 		}
-		if !now.Before(source.functionalProbePendingSince.Add(source.functionalProbeDeferralDelay)) {
+		if !now.Before(source.mvpWarmupPendingSince.Add(source.mvpWarmupDeferralDelay)) {
 			evidence.Status = "True"
-			evidence.Reason = "NetworkReadyDeferred"
+			evidence.Reason = "MVPNetworkWarmupDeferred"
 		}
 	} else {
-		source.functionalProbePendingSince = time.Time{}
+		source.mvpWarmupPendingSince = time.Time{}
 	}
 	return observation.Evaluate(policy, observation.Bundle{
 		Format: observation.BundleFormat, IntentRevision: policy.IntentRevision,
 		EvaluatedAt: source.clock().UTC().Format(time.RFC3339Nano), Evidence: []observation.Evidence{evidence},
 	})
+}
+
+// isMVPNetworkWarmup is deliberately narrower than Status=Unknown. It permits
+// only the normal CAAPH/Cilium rollout states already proven to converge late
+// in DEV. Source, transport, authorization, TLS, identity and schema errors do
+// not produce evidence and therefore cannot enter this deferral path. False
+// evidence remains terminal as well.
+func isMVPNetworkWarmup(evidence observation.Evidence) bool {
+	if evidence.Type != "NetworkReady" || evidence.Source != "BoundedNetworkEvaluator" || evidence.Status != "Unknown" {
+		return false
+	}
+	switch evidence.Reason {
+	case "EnablementSourceNotReady", "EnablementReleaseNotReady", "NodeInventoryNotReady",
+		"NodeNetworkNotReady", "CiliumRolloutNotReady", "CiliumAgentPodsNotReady", "FunctionalProbePending":
+		return true
+	default:
+		return false
+	}
 }

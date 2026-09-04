@@ -73,16 +73,19 @@ func TestNetworkStageObserverWaitsThroughFalseUntilConvergedOrBounded(t *testing
 	}
 }
 
-func TestNetworkStageObserverDefersOnlyPersistentFunctionalProbePending(t *testing.T) {
+func TestNetworkStageObserverDefersKnownMVPWarmupAcrossReasonChanges(t *testing.T) {
 	plan, prefix, runtimeUID := networkObserverPrefix(t, true)
 	current := time.Date(2026, 8, 16, 21, 0, 0, 0, time.UTC)
-	source := &fakeNetworkStageSource{statuses: []string{"Unknown"}, reasons: []string{"FunctionalProbePending"}}
+	source := &fakeNetworkStageSource{
+		statuses: []string{"Unknown"},
+		reasons:  []string{"NodeNetworkNotReady", "CiliumRolloutNotReady", "CiliumAgentPodsNotReady", "FunctionalProbePending"},
+	}
 	observer, err := NewNetworkStageObserver(NetworkStageObserverConfig{
 		Plan: plan, ReceiptPrefix: prefix, TargetClusterUID: runtimeUID, Source: source,
 		Profile: networkStageProfile(plan), PollInterval: time.Minute, PollTimeout: 10 * time.Minute,
-		Clock:                        func() time.Time { return current },
-		Wait:                         func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
-		AllowFunctionalProbeDeferral: true, FunctionalProbeDeferralDelay: 5 * time.Minute,
+		Clock:                  func() time.Time { return current },
+		Wait:                   func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
+		AllowMVPWarmupDeferral: true, MVPWarmupDeferralDelay: 5 * time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -97,9 +100,9 @@ func TestNetworkStageObserverDefersOnlyPersistentFunctionalProbePending(t *testi
 	observer, err = NewNetworkStageObserver(NetworkStageObserverConfig{
 		Plan: plan, ReceiptPrefix: prefix, TargetClusterUID: runtimeUID, Source: source,
 		Profile: networkStageProfile(plan), PollInterval: time.Minute, PollTimeout: 6 * time.Minute,
-		Clock:                        func() time.Time { return current },
-		Wait:                         func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
-		AllowFunctionalProbeDeferral: true, FunctionalProbeDeferralDelay: 5 * time.Minute,
+		Clock:                  func() time.Time { return current },
+		Wait:                   func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
+		AllowMVPWarmupDeferral: true, MVPWarmupDeferralDelay: 5 * time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +110,23 @@ func TestNetworkStageObserverDefersOnlyPersistentFunctionalProbePending(t *testi
 	result, err = observer.Observe(context.Background())
 	if err != nil || result.Outcome != "FAILED" {
 		t.Fatalf("real functional probe failure was deferred: %#v err=%v", result, err)
+	}
+
+	current = time.Date(2026, 8, 16, 21, 0, 0, 0, time.UTC)
+	source = &fakeNetworkStageSource{statuses: []string{"Unknown"}, reasons: []string{"RequiredEvidenceMissing"}}
+	observer, err = NewNetworkStageObserver(NetworkStageObserverConfig{
+		Plan: plan, ReceiptPrefix: prefix, TargetClusterUID: runtimeUID, Source: source,
+		Profile: networkStageProfile(plan), PollInterval: time.Minute, PollTimeout: 6 * time.Minute,
+		Clock:                  func() time.Time { return current },
+		Wait:                   func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
+		AllowMVPWarmupDeferral: true, MVPWarmupDeferralDelay: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = observer.Observe(context.Background())
+	if err != nil || result.Outcome != "STOPPED" {
+		t.Fatalf("unknown non-warmup evidence was deferred: %#v err=%v", result, err)
 	}
 }
 

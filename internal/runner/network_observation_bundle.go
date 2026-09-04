@@ -112,7 +112,7 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 		Plan: bundle.plan, ReceiptPrefix: bundle.prefix, TargetClusterUID: binding.TargetClusterUID,
 		Source: source, Profile: loadedProfile.Profile,
 		PollInterval: config.PollInterval, PollTimeout: config.PollTimeout, Clock: config.Clock, Wait: config.Wait,
-		AllowFunctionalProbeDeferral: true, FunctionalProbeDeferralDelay: functionalProbeDeferralDelay(config.PollInterval, config.PollTimeout),
+		AllowMVPWarmupDeferral: true, MVPWarmupDeferralDelay: mvpNetworkWarmupDeferralDelay(config.PollInterval, config.PollTimeout),
 	})
 	if err != nil {
 		return OpenedNetworkObservationStage{}, err
@@ -123,7 +123,7 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 	}, nil
 }
 
-func functionalProbeDeferralDelay(interval, timeout time.Duration) time.Duration {
+func mvpNetworkWarmupDeferralDelay(interval, timeout time.Duration) time.Duration {
 	delay := 5 * time.Minute
 	if half := timeout / 2; half < delay {
 		delay = half

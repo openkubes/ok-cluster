@@ -62,7 +62,8 @@ func TestRenderFullRunExecutionJobTemplateIsolatesExecutorAndEvidenceAuthority(t
 	executor, authority := containers[0].(map[string]any), containers[1].(map[string]any)
 	if got := stringArray(t, executor, "args"); !reflect.DeepEqual(got, []string{
 		"cluster", "stage", "run", "full", "execute", "--manifest", "/var/run/openkubes/workspace/activation/full-run-manifest.json",
-		"--expected-manifest-digest", values.ManifestDigest, "--independent-evidence-public-key", "/var/run/openkubes/workspace/input/independent-evidence.pub", "--execute",
+		"--expected-manifest-digest", values.ManifestDigest, "--independent-evidence-public-key", "/var/run/openkubes/workspace/input/independent-evidence.pub",
+		"--terminal-marker", "/var/run/openkubes/handoff/executor-terminal", "--execute",
 	}) {
 		t.Fatalf("unexpected executor command: %v", got)
 	}
