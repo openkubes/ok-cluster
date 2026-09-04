@@ -160,11 +160,6 @@ func TestKubernetesCiliumWebSocketExecutorFailsClosed(t *testing.T) {
 				stream.err = errors.New("sensitive remote status")
 			},
 		},
-		"stderr": {
-			configure: func(_ *KubernetesCiliumWebSocketExecutor, stream *fakeRemoteCommandExecutor) {
-				stream.stderr = []byte("sensitive diagnostic")
-			},
-		},
 		"oversized stdout": {
 			configure: func(_ *KubernetesCiliumWebSocketExecutor, stream *fakeRemoteCommandExecutor) {
 				stream.stdout = bytes.Repeat([]byte("x"), maximumCiliumExecOutputBytes+1)
@@ -195,6 +190,28 @@ func TestKubernetesCiliumWebSocketExecutorFailsClosed(t *testing.T) {
 			}
 			if name == "wrong command" && (identityCalls != 0 || stream.calls != 0) {
 				t.Fatal("invalid command crossed the API boundary")
+			}
+		})
+	}
+}
+
+func TestKubernetesCiliumWebSocketExecutorClassifiesIncompleteCommandOutputAsProbePending(t *testing.T) {
+	for name, stream := range map[string]*fakeRemoteCommandExecutor{
+		"temporary stderr": {stderr: []byte("sensitive warmup detail")},
+		"empty stdout":     {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := &http.Client{Transport: ciliumRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return ciliumPodResponse("cilium-abc12", "pod-uid-1", "41"), nil
+			})}
+			executor := newTestCiliumWebSocketExecutor(t, client)
+			executor.factory = func(*rest.Config, string, string) (remotecommand.Executor, error) { return stream, nil }
+			_, err := executor.Exec(context.Background(), validCiliumExecRequest())
+			if err == nil || !observation.IsFunctionalProbePendingError(err) {
+				t.Fatalf("incomplete command output was not classified as pending: %v", err)
+			}
+			if strings.Contains(err.Error(), "sensitive") {
+				t.Fatalf("raw command detail leaked: %v", err)
 			}
 		})
 	}
