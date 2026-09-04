@@ -272,6 +272,27 @@ func TestNetworkSourceCollectorClassifiesMissingWarmupProbePathAsTransient(t *te
 	}
 }
 
+func TestNetworkSourceCollectorClassifiesUnpublishedWarmupNodesAsTransient(t *testing.T) {
+	for _, rawNodes := range []any{nil, "invalid"} {
+		name := "null"
+		wantTransient := true
+		if rawNodes != nil {
+			name, wantTransient = "invalid-type", false
+		}
+		t.Run(name, func(t *testing.T) {
+			policy, profile, management, workload, probe := collectorFixture(t)
+			probe.response = mutateJSON(t, probe.response, func(value map[string]any) {
+				value["nodes"] = rawNodes
+			})
+			collector := mustNetworkCollector(t, policy, management, workload, probe)
+			_, err := collector.Observe(context.Background(), policy, profile)
+			if err == nil || IsTransientNetworkSourceError(err) != wantTransient {
+				t.Fatalf("unexpected unpublished Node classification: transient=%t err=%v", IsTransientNetworkSourceError(err), err)
+			}
+		})
+	}
+}
+
 const managementPathHCP = "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/disposable-ok141/helmchartproxies/disposable-ok141-cilium"
 const managementPathHRP = "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/disposable-ok141/helmreleaseproxies?labelSelector=cluster.x-k8s.io%2Fcluster-name%3Ddisposable-ok141%2Chelmreleaseproxy.addons.cluster.x-k8s.io%2Fhelmchartproxy-name%3Ddisposable-ok141-cilium"
 
