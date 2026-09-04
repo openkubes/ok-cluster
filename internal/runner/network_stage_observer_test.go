@@ -96,6 +96,23 @@ func TestNetworkStageObserverDefersKnownMVPWarmupAcrossReasonChanges(t *testing.
 	}
 
 	current = time.Date(2026, 8, 16, 21, 0, 0, 0, time.UTC)
+	source = &fakeNetworkStageSource{statuses: []string{"False"}, reasons: []string{"FunctionalProbeStale"}}
+	observer, err = NewNetworkStageObserver(NetworkStageObserverConfig{
+		Plan: plan, ReceiptPrefix: prefix, TargetClusterUID: runtimeUID, Source: source,
+		Profile: networkStageProfile(plan), PollInterval: time.Minute, PollTimeout: 6 * time.Minute,
+		Clock:                  func() time.Time { return current },
+		Wait:                   func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
+		AllowMVPWarmupDeferral: true, MVPWarmupDeferralDelay: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = observer.Observe(context.Background())
+	if err != nil || result.Outcome != "SUCCEEDED" || source.calls != 2 {
+		t.Fatalf("stale functional probe was not deferred: %#v calls=%d err=%v", result, source.calls, err)
+	}
+
+	current = time.Date(2026, 8, 16, 21, 0, 0, 0, time.UTC)
 	source = &fakeNetworkStageSource{statuses: []string{"False"}, reasons: []string{"FunctionalProbeFailed"}}
 	observer, err = NewNetworkStageObserver(NetworkStageObserverConfig{
 		Plan: plan, ReceiptPrefix: prefix, TargetClusterUID: runtimeUID, Source: source,

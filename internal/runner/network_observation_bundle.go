@@ -124,14 +124,15 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 }
 
 func mvpNetworkWarmupDeferralDelay(interval, timeout time.Duration) time.Duration {
-	delay := 5 * time.Minute
-	if half := timeout / 2; half < delay {
-		delay = half
+	// The deferred evidence is intentionally emitted after one full polling
+	// interval. The bounded observation has already established the CAPI,
+	// CAAPH, Node and Cilium-rollout predicates before it can classify only the
+	// functional probe cache as stale. Waiting another five minutes adds no
+	// safety signal for the MVP continuation and repeatedly expires launches.
+	if interval <= 0 || timeout < interval {
+		return 0
 	}
-	if delay < interval {
-		return interval
-	}
-	return delay
+	return interval
 }
 
 func (stage OpenedNetworkObservationStage) Run(ctx context.Context) (execution.ObservationStageRunReceipt, error) {
