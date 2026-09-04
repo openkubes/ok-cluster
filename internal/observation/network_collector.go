@@ -13,6 +13,8 @@ import (
 
 const maximumNetworkSourceBytes = 4 * 1024 * 1024
 
+var errNetworkProbePathPending = errors.New("functional probe path is pending")
+
 // NetworkRawGetter deliberately exposes only GET. Concrete management and
 // workload adapters must each bind their own credential and API endpoint.
 type NetworkRawGetter interface {
@@ -164,6 +166,13 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	}
 	probe, err := normalizeNetworkProbe(probeRaw, nodeNames)
 	if err != nil {
+		// Cilium can return a successful JSON document before every fixed
+		// primary-address path has been populated. That shape is a normal
+		// cache-warmup state and is safe to poll. All other schema and identity
+		// failures remain terminal.
+		if errors.Is(err, errNetworkProbePathPending) {
+			return NetworkSnapshot{}, transientNetworkSourceError{cause: errNetworkProbePathPending}
+		}
 		return NetworkSnapshot{}, err
 	}
 	snapshot.Probe = probe
@@ -489,7 +498,7 @@ func normalizeNetworkProbe(raw []byte, nodeNames map[string]string) (NetworkProb
 			for _, protocol := range []string{"http", "icmp"} {
 				path, ok := address[protocol].(map[string]any)
 				if !ok {
-					return NetworkProbe{}, errors.New("functional probe path is missing")
+					return NetworkProbe{}, errNetworkProbePathPending
 				}
 				statusRaw, present := path["status"]
 				status := ""

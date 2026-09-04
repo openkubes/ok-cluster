@@ -258,6 +258,20 @@ func TestNetworkSourceCollectorClassifiesProbeExecutionFailureAsTransient(t *tes
 	}
 }
 
+func TestNetworkSourceCollectorClassifiesMissingWarmupProbePathAsTransient(t *testing.T) {
+	policy, profile, management, workload, probe := collectorFixture(t)
+	probe.response = mutateJSON(t, probe.response, func(value map[string]any) {
+		node := value["nodes"].([]any)[0].(map[string]any)
+		address := node["host"].(map[string]any)["primary-address"].(map[string]any)
+		delete(address, "http")
+	})
+	collector := mustNetworkCollector(t, policy, management, workload, probe)
+	_, err := collector.Observe(context.Background(), policy, profile)
+	if err == nil || !IsTransientNetworkSourceError(err) {
+		t.Fatalf("missing warmup probe path was not transient: %v", err)
+	}
+}
+
 const managementPathHCP = "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/disposable-ok141/helmchartproxies/disposable-ok141-cilium"
 const managementPathHRP = "/apis/addons.cluster.x-k8s.io/v1alpha1/namespaces/disposable-ok141/helmreleaseproxies?labelSelector=cluster.x-k8s.io%2Fcluster-name%3Ddisposable-ok141%2Chelmreleaseproxy.addons.cluster.x-k8s.io%2Fhelmchartproxy-name%3Ddisposable-ok141-cilium"
 
