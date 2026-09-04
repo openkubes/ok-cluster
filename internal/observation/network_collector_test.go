@@ -258,6 +258,16 @@ func TestNetworkSourceCollectorClassifiesProbeExecutionFailureAsTransient(t *tes
 	}
 }
 
+func TestNetworkSourceCollectorNormalizesProbeWarmupExitAsPending(t *testing.T) {
+	policy, profile, management, workload, probe := collectorFixture(t)
+	probe.err = NewFunctionalProbePendingError(errors.New("sensitive raw failure"))
+	collector := mustNetworkCollector(t, policy, management, workload, probe)
+	evidence, err := collector.Observe(context.Background(), policy, profile)
+	if err != nil || evidence.Status != "Unknown" || evidence.Reason != "FunctionalProbePending" {
+		t.Fatalf("probe warmup exit was not normalized as pending: %#v %v", evidence, err)
+	}
+}
+
 func TestNetworkSourceCollectorNormalizesMissingWarmupProbePathAsPending(t *testing.T) {
 	policy, profile, management, workload, probe := collectorFixture(t)
 	probe.response = mutateJSON(t, probe.response, func(value map[string]any) {

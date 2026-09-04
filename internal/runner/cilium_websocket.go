@@ -16,6 +16,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	kubeexec "k8s.io/client-go/util/exec"
 )
 
 const (
@@ -109,11 +110,15 @@ func (executor *KubernetesCiliumWebSocketExecutor) Exec(ctx context.Context, req
 	stderr := newBoundedExecBuffer(maximumCiliumExecErrorBytes)
 	streamErr := stream.StreamWithContext(bounded, remotecommand.StreamOptions{Stdout: stdout, Stderr: stderr, Tty: false})
 	postErr := executor.verifyPodUID(bounded, request.PodName, request.PodUID)
-	if streamErr != nil {
-		return nil, errors.New("fixed Cilium WebSocket stream failed")
-	}
 	if postErr != nil {
 		return nil, postErr
+	}
+	if streamErr != nil {
+		var exitError kubeexec.ExitError
+		if errors.As(streamErr, &exitError) && exitError.Exited() {
+			return nil, observation.NewFunctionalProbePendingError(errors.New("fixed Cilium command exited non-zero"))
+		}
+		return nil, errors.New("fixed Cilium WebSocket stream failed")
 	}
 	if stderr.Len() != 0 || stderr.Exceeded() {
 		return nil, errors.New("fixed Cilium WebSocket stream returned stderr")

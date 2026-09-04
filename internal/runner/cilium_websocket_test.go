@@ -19,6 +19,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	kubeexec "k8s.io/client-go/util/exec"
 )
 
 func TestKubernetesCiliumWebSocketExecutorUsesRemoteCommandV5(t *testing.T) {
@@ -211,6 +212,41 @@ func TestKubernetesCiliumWebSocketExecutorRejectsForeignInitialPod(t *testing.T)
 	}
 	if _, err := executor.Exec(context.Background(), validCiliumExecRequest()); err == nil || factoryCalls != 0 {
 		t.Fatalf("foreign initial Pod reached WebSocket exec: factory=%d err=%v", factoryCalls, err)
+	}
+}
+
+func TestKubernetesCiliumWebSocketExecutorClassifiesCommandExitAsProbePending(t *testing.T) {
+	client := &http.Client{Transport: ciliumRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return ciliumPodResponse("cilium-abc12", "pod-uid-1", "41"), nil
+	})}
+	executor := newTestCiliumWebSocketExecutor(t, client)
+	stream := &fakeRemoteCommandExecutor{err: kubeexec.CodeExitError{Err: errors.New("sensitive command failure"), Code: 1}}
+	executor.factory = func(*rest.Config, string, string) (remotecommand.Executor, error) { return stream, nil }
+	_, err := executor.Exec(context.Background(), validCiliumExecRequest())
+	if err == nil || !observation.IsFunctionalProbePendingError(err) {
+		t.Fatalf("command exit was not classified as probe pending: %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("raw command error leaked: %v", err)
+	}
+}
+
+func TestKubernetesCiliumWebSocketExecutorPrioritizesIdentityRaceOverCommandExit(t *testing.T) {
+	identityCalls := 0
+	client := &http.Client{Transport: ciliumRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		identityCalls++
+		uid := "pod-uid-1"
+		if identityCalls == 2 {
+			uid = "replacement-uid"
+		}
+		return ciliumPodResponse("cilium-abc12", uid, "41"), nil
+	})}
+	executor := newTestCiliumWebSocketExecutor(t, client)
+	stream := &fakeRemoteCommandExecutor{err: kubeexec.CodeExitError{Err: errors.New("sensitive command failure"), Code: 1}}
+	executor.factory = func(*rest.Config, string, string) (remotecommand.Executor, error) { return stream, nil }
+	_, err := executor.Exec(context.Background(), validCiliumExecRequest())
+	if err == nil || observation.IsFunctionalProbePendingError(err) || !strings.Contains(err.Error(), "runtime identity") {
+		t.Fatalf("Pod identity race did not override probe-pending classification: %v", err)
 	}
 }
 
