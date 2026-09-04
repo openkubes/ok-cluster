@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -96,9 +97,13 @@ func (execution *ObservabilityEvidenceAuthorityExecution) Run(ctx context.Contex
 	defer cancel()
 	identity, err := WaitForObservabilityIndependentEvidenceIdentity(bounded, ObservabilityIndependentEvidenceIdentityWaitConfig{
 		IdentityPath: execution.activation.IdentityPath, ReceiptPath: execution.activation.IdentityReceiptPath,
+		ExecutorTerminalPath:   filepath.Join(filepath.Dir(execution.activation.IdentityPath), FullRunExecutorTerminalMarkerName),
 		ExpectedManifestDigest: execution.activation.ExpectedManifestDigest,
 		PollInterval:           pollInterval, Timeout: waitTimeout, Wait: execution.wait,
 	})
+	if errors.Is(err, errFullRunExecutorTerminatedBeforeEvidenceIdentity) {
+		return receipt, nil
+	}
 	if err != nil {
 		return receipt, errors.New("load runtime-bound observability evidence identity")
 	}

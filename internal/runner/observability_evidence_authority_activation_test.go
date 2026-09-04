@@ -128,3 +128,49 @@ func TestOpenObservabilityEvidenceAuthorityActivationFailsClosed(t *testing.T) {
 		t.Fatal("tampered evidence authority activation was accepted")
 	}
 }
+
+func TestObservabilityEvidenceAuthorityActivationStopsCleanlyWithExecutor(t *testing.T) {
+	config, cleanup := observabilityEvidenceAuthorityPackageFixture(t)
+	defer cleanup()
+	runtimeRoot := t.TempDir()
+	if err := os.Chmod(runtimeRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	authorityRoot, handoffRoot := filepath.Join(runtimeRoot, "authority"), filepath.Join(runtimeRoot, "handoff")
+	for _, directory := range []string{authorityRoot, handoffRoot} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config.RuntimeAuthorityRoot, config.RuntimeHandoffRoot = authorityRoot, handoffRoot
+	config.IdentityPollInterval, config.IdentityWaitTimeout = time.Millisecond, time.Second
+	packaged, err := BuildObservabilityEvidenceAuthorityPackage(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := packaged.PrivateBytes()
+	var secret postRuntimeActivationSecret
+	if err := json.Unmarshal(raw, &secret); err != nil {
+		t.Fatal(err)
+	}
+	for key, encoded := range secret.Data {
+		content, decodeErr := base64.StdEncoding.DecodeString(encoded)
+		if decodeErr != nil || os.WriteFile(filepath.Join(authorityRoot, key), content, 0o600) != nil {
+			t.Fatal("materialize authority fixture")
+		}
+	}
+	if err := WriteFullRunExecutorTerminalMarker(filepath.Join(handoffRoot, FullRunExecutorTerminalMarkerName)); err != nil {
+		t.Fatal(err)
+	}
+	execution, err := OpenObservabilityEvidenceAuthorityActivation(
+		filepath.Join(authorityRoot, observabilityEvidenceAuthorityActivationKey),
+		ObservabilityEvidenceAuthorityActivationRuntime{Clock: time.Now, Wait: WaitWithTimer},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err != nil || receipt.State != "STOPPED_ZERO_WRITE" {
+		t.Fatalf("authority did not stop cleanly with executor: receipt=%#v err=%v", receipt, err)
+	}
+}

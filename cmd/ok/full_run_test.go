@@ -295,14 +295,25 @@ func TestFullRunMaterializeRequiresExplicitBoundIdentity(t *testing.T) {
 func TestFullRunExecuteRequiresPreparedIdentityAndRunsOnce(t *testing.T) {
 	previous := openKubernetesObservabilityFullRunActivation
 	previousPrepare := prepareFullRunExecutionManifest
+	previousMarker := writeFullRunExecutorTerminalMarker
 	defer func() {
 		openKubernetesObservabilityFullRunActivation = previous
 		prepareFullRunExecutionManifest = previousPrepare
+		writeFullRunExecutorTerminalMarker = previousMarker
 	}()
+	markers := 0
+	writeFullRunExecutorTerminalMarker = func(path string) error {
+		if path != "/private/executor-terminal" {
+			t.Fatalf("terminal marker path differs: %q", path)
+		}
+		markers++
+		return nil
+	}
 	prepareFullRunExecutionManifest = func(string) (runner.FullRunExecutionManifestReceipt, error) {
 		return fullRunCLITestManifestReceipt("VERIFIED"), nil
 	}
 	runs := 0
+	runFails := false
 	openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
 		if path != "/private/full-run.json" || publicKeyPath != "/private/evidence.pub" {
 			t.Fatalf("concrete activation input differs: path=%q key=%q", path, publicKeyPath)
@@ -313,10 +324,15 @@ func TestFullRunExecuteRequiresPreparedIdentityAndRunsOnce(t *testing.T) {
 				if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > fullRunExecutionTimeout {
 					t.Fatalf("full-run execution was not bounded: %v %v", deadline, ok)
 				}
-				return runner.FullRunExecutionActivationReceipt{
+				receipt := runner.FullRunExecutionActivationReceipt{
 					Format: runner.FullRunExecutionActivationReceiptFormat, State: "SUCCEEDED",
 					Manifest: fullRunCLITestManifestReceipt("VERIFIED"),
-				}, nil
+				}
+				if runFails {
+					receipt.State = "STOPPED"
+					return receipt, errors.New("bounded executor stopped")
+				}
+				return receipt, nil
 			}), runner.FullRunExecutionActivationReceipt{
 				Format: runner.FullRunExecutionActivationReceiptFormat, State: "PREPARED",
 				Manifest: fullRunCLITestManifestReceipt("VERIFIED"),
@@ -324,30 +340,38 @@ func TestFullRunExecuteRequiresPreparedIdentityAndRunsOnce(t *testing.T) {
 	}
 	arguments := []string{
 		"cluster", "stage", "run", "full", "execute", "--manifest", "/private/full-run.json",
-		"--expected-manifest-digest", testSHA("1"), "--independent-evidence-public-key", "/private/evidence.pub", "--execute",
+		"--expected-manifest-digest", testSHA("1"), "--independent-evidence-public-key", "/private/evidence.pub",
+		"--terminal-marker", "/private/executor-terminal", "--execute",
 	}
 	var stdout bytes.Buffer
 	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var receipt runner.FullRunExecutionActivationReceipt
-	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "SUCCEEDED" || runs != 1 {
-		t.Fatalf("unexpected full-run execution receipt: %#v runs=%d err=%v", receipt, runs, err)
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil || receipt.State != "SUCCEEDED" || runs != 1 || markers != 1 {
+		t.Fatalf("unexpected full-run execution receipt: %#v runs=%d markers=%d err=%v", receipt, runs, markers, err)
 	}
 	for _, forbidden := range []string{"/private/", "token", "endpoint", "kubeconfig", "certificate", "targetidentity"} {
 		if strings.Contains(strings.ToLower(stdout.String()), forbidden) {
 			t.Fatalf("full-run execution disclosed %q: %s", forbidden, stdout.String())
 		}
 	}
+	runFails = true
+	if err := run(arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || runs != 2 || markers != 2 {
+		t.Fatalf("stopped executor did not persist terminal marker: runs=%d markers=%d err=%v", runs, markers, err)
+	}
 }
 
 func TestFullRunExecuteFailsClosedBeforeRun(t *testing.T) {
 	previous := openKubernetesObservabilityFullRunActivation
 	previousPrepare := prepareFullRunExecutionManifest
+	previousMarker := writeFullRunExecutorTerminalMarker
 	defer func() {
 		openKubernetesObservabilityFullRunActivation = previous
 		prepareFullRunExecutionManifest = previousPrepare
+		writeFullRunExecutorTerminalMarker = previousMarker
 	}()
+	writeFullRunExecutorTerminalMarker = func(string) error { return nil }
 	prepareFullRunExecutionManifest = func(string) (runner.FullRunExecutionManifestReceipt, error) {
 		return fullRunCLITestManifestReceipt("VERIFIED"), nil
 	}
@@ -364,7 +388,8 @@ func TestFullRunExecuteFailsClosedBeforeRun(t *testing.T) {
 	}
 	valid := []string{
 		"cluster", "stage", "run", "full", "execute", "--manifest", "/private/full-run.json",
-		"--expected-manifest-digest", testSHA("1"), "--independent-evidence-public-key", "/private/evidence.pub", "--execute",
+		"--expected-manifest-digest", testSHA("1"), "--independent-evidence-public-key", "/private/evidence.pub",
+		"--terminal-marker", "/private/executor-terminal", "--execute",
 	}
 	for name, arguments := range map[string][]string{
 		"missing execute":    removeArgument(valid, "--execute"),
@@ -372,6 +397,7 @@ func TestFullRunExecuteFailsClosedBeforeRun(t *testing.T) {
 		"bad digest":         replaceArgument(valid, "--expected-manifest-digest", "sha256:bad"),
 		"wrong digest":       replaceArgument(valid, "--expected-manifest-digest", testSHA("2")),
 		"missing public key": removeArgument(valid, "/private/evidence.pub"),
+		"missing marker":     removeArgumentWithValue(valid, "--terminal-marker"),
 		"positional":         append(append([]string(nil), valid...), "extra"),
 	} {
 		t.Run(name, func(t *testing.T) {

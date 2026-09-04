@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,6 +151,31 @@ func TestWaitForObservabilityIndependentEvidenceIdentityIsBoundedAndFailClosed(t
 		},
 	}); err == nil {
 		t.Fatal("invalid existing receipt was accepted")
+	}
+}
+
+func TestWaitForObservabilityIndependentEvidenceIdentityStopsAtExecutorTerminalMarker(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(root, "identity.json")
+	receiptPath := filepath.Join(root, "identity-receipt.json")
+	terminalPath := filepath.Join(root, FullRunExecutorTerminalMarkerName)
+	if err := WriteFullRunExecutorTerminalMarker(terminalPath); err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	_, err := WaitForObservabilityIndependentEvidenceIdentity(context.Background(), ObservabilityIndependentEvidenceIdentityWaitConfig{
+		IdentityPath: identityPath, ReceiptPath: receiptPath, ExecutorTerminalPath: terminalPath,
+		ExpectedManifestDigest: evidenceIdentitySHA("1"), PollInterval: time.Millisecond, Timeout: time.Second,
+		Wait: func(context.Context, time.Duration) error { waits++; return nil },
+	})
+	if !errors.Is(err, errFullRunExecutorTerminatedBeforeEvidenceIdentity) || waits != 0 {
+		t.Fatalf("terminal executor did not close identity wait: waits=%d err=%v", waits, err)
+	}
+	if err := WriteFullRunExecutorTerminalMarker(terminalPath); err == nil {
+		t.Fatal("terminal marker was overwritten")
 	}
 }
 

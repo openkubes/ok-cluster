@@ -90,6 +90,8 @@ var openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath stri
 	})
 }
 
+var writeFullRunExecutorTerminalMarker = runner.WriteFullRunExecutorTerminalMarker
+
 type fullRunActivationPackageFlags struct {
 	manifest, evidencePublicKey, activationSecret                 *string
 	evidenceAuthoritySecret, evidencePrivateKey                   *string
@@ -352,12 +354,13 @@ func runClusterStageRunFullMaterialize(arguments []string, stdout, stderr io.Wri
 	return err
 }
 
-func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdout, stderr io.Writer) (returnErr error) {
 	flags := flag.NewFlagSet("ok cluster stage run full execute", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	manifestPath := flags.String("manifest", "", "path to the private 0600 full-run execution manifest")
 	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact semantic digest emitted by prepare")
 	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent Observability evidence public key")
+	terminalMarker := flags.String("terminal-marker", "", "create-only private executor terminal marker")
 	execute := flags.Bool("execute", false, "perform the exact single-use Stage 1-12 full run")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -368,9 +371,18 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 	if !*execute {
 		return errors.New("full-run mutation requires explicit --execute")
 	}
-	if *manifestPath == "" || *evidencePublicKey == "" || !sha256DigestPattern.MatchString(*expectedManifestDigest) {
-		return errors.New("--manifest, --independent-evidence-public-key and a lowercase SHA-256 --expected-manifest-digest are required")
+	if *manifestPath == "" || *evidencePublicKey == "" || *terminalMarker == "" || !sha256DigestPattern.MatchString(*expectedManifestDigest) {
+		return errors.New("--manifest, --independent-evidence-public-key, --terminal-marker and a lowercase SHA-256 --expected-manifest-digest are required")
 	}
+	defer func() {
+		if markerErr := writeFullRunExecutorTerminalMarker(*terminalMarker); markerErr != nil {
+			if returnErr == nil {
+				returnErr = markerErr
+			} else {
+				returnErr = errors.New("full-run execution stopped and terminal marker could not be persisted")
+			}
+		}
+	}()
 	verified, err := prepareFullRunExecutionManifest(*manifestPath)
 	if err != nil {
 		return fmt.Errorf("prepare full-run manifest: %w", err)

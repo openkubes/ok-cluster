@@ -150,6 +150,8 @@ spec:
             - "${OK147_MANIFEST_DIGEST}"
             - --independent-evidence-public-key
             - /var/run/openkubes/workspace/input/independent-evidence.pub
+            - --terminal-marker
+            - /var/run/openkubes/handoff/executor-terminal
             - --execute
           resources:
             requests: {cpu: 50m, memory: 96Mi, ephemeral-storage: 32Mi}

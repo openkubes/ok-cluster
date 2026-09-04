@@ -19,7 +19,10 @@ const (
 	ObservabilityIndependentEvidenceIdentityFormat        = "ok147-observability-independent-evidence-identity/v1"
 	ObservabilityIndependentEvidenceIdentityReceiptFormat = "ok147-observability-independent-evidence-identity-receipt/v1"
 	maximumObservabilityEvidenceIdentityBytes             = 32 * 1024
+	FullRunExecutorTerminalMarkerName                     = "executor-terminal"
 )
+
+var errFullRunExecutorTerminatedBeforeEvidenceIdentity = errors.New("full-run executor terminated before evidence identity")
 
 // ObservabilityIndependentEvidenceIdentityMaterial is a private handoff. The
 // target UID must never be copied into public receipts or command arguments.
@@ -57,6 +60,7 @@ type ObservabilityIndependentEvidenceIdentityMaterialConfig struct {
 type ObservabilityIndependentEvidenceIdentityWaitConfig struct {
 	IdentityPath           string
 	ReceiptPath            string
+	ExecutorTerminalPath   string
 	ExpectedManifestDigest string
 	PollInterval           time.Duration
 	Timeout                time.Duration
@@ -245,6 +249,11 @@ func WaitForObservabilityIndependentEvidenceIdentity(ctx context.Context, config
 		validateObservabilityIdentityWaitPath(config.IdentityPath) != nil || validateObservabilityIdentityWaitPath(config.ReceiptPath) != nil {
 		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence identity wait binding is invalid")
 	}
+	if config.ExecutorTerminalPath != "" && (filepath.Base(config.ExecutorTerminalPath) != FullRunExecutorTerminalMarkerName ||
+		filepath.Dir(config.ExecutorTerminalPath) != filepath.Dir(config.IdentityPath) ||
+		validateObservabilityIdentityWaitPath(config.ExecutorTerminalPath) != nil) {
+		return ObservabilityCapabilityObservationIdentity{}, errors.New("observability evidence terminal marker binding is invalid")
+	}
 	bounded, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
 	for {
@@ -255,10 +264,39 @@ func WaitForObservabilityIndependentEvidenceIdentity(ctx context.Context, config
 		if !errors.Is(err, os.ErrNotExist) {
 			return ObservabilityCapabilityObservationIdentity{}, errors.New("inspect observability evidence identity receipt")
 		}
+		if config.ExecutorTerminalPath != "" {
+			terminal, terminalErr := os.Lstat(config.ExecutorTerminalPath)
+			if terminalErr == nil {
+				if !terminal.Mode().IsRegular() || terminal.Mode()&os.ModeSymlink != 0 || terminal.Mode().Perm() != 0o600 {
+					return ObservabilityCapabilityObservationIdentity{}, errors.New("full-run executor terminal marker is unsafe")
+				}
+				raw, readErr := readBoundedRegular(config.ExecutorTerminalPath, 32)
+				if readErr != nil || !bytes.Equal(raw, []byte("TERMINAL\n")) {
+					return ObservabilityCapabilityObservationIdentity{}, errors.New("full-run executor terminal marker is invalid")
+				}
+				return ObservabilityCapabilityObservationIdentity{}, errFullRunExecutorTerminatedBeforeEvidenceIdentity
+			}
+			if !errors.Is(terminalErr, os.ErrNotExist) {
+				return ObservabilityCapabilityObservationIdentity{}, errors.New("inspect full-run executor terminal marker")
+			}
+		}
 		if err := config.Wait(bounded, config.PollInterval); err != nil {
 			return ObservabilityCapabilityObservationIdentity{}, errors.New("wait for observability evidence identity receipt")
 		}
 	}
+}
+
+// WriteFullRunExecutorTerminalMarker closes the private inter-container wait
+// without granting either container Kubernetes read access. The fixed marker
+// is create-only and contains no execution result or credential.
+func WriteFullRunExecutorTerminalMarker(path string) error {
+	if filepath.Base(path) != FullRunExecutorTerminalMarkerName || validateRuntimeBindingOutputPath(path) != nil {
+		return errors.New("full-run executor terminal marker destination is invalid")
+	}
+	if err := writeExclusivePrivateMaterial(path, []byte("TERMINAL\n")); err != nil {
+		return errors.New("persist full-run executor terminal marker")
+	}
+	return nil
 }
 
 func validateObservabilityIdentityWaitPath(path string) error {
