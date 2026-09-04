@@ -229,6 +229,9 @@ func networkRuntimeReadyForProbe(nodes []NetworkNode, components []NetworkCompon
 func getNetworkObject(ctx context.Context, source NetworkRawGetter, path string) (map[string]any, error) {
 	raw, err := source.Get(ctx, path)
 	if err != nil {
+		if IsTransientNetworkSourceError(err) {
+			return nil, fmt.Errorf("bounded network source GET failed: %w", err)
+		}
 		return nil, errors.New("bounded network source GET failed")
 	}
 	if len(raw) == 0 || len(raw) > maximumNetworkSourceBytes {

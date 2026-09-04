@@ -258,6 +258,21 @@ func TestNetworkSourceCollectorClassifiesProbeExecutionFailureAsTransient(t *tes
 	}
 }
 
+func TestNetworkSourceCollectorPreservesTransientGETClassification(t *testing.T) {
+	policy, profile, management, workload, probe := collectorFixture(t)
+	management.errors = map[string]error{
+		managementPathHCP: transientNetworkSourceError{cause: errors.New("sensitive transport detail")},
+	}
+	collector := mustNetworkCollector(t, policy, management, workload, probe)
+	_, err := collector.Observe(context.Background(), policy, profile)
+	if err == nil || !IsTransientNetworkSourceError(err) {
+		t.Fatalf("transient GET classification was lost: %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("raw GET error leaked: %v", err)
+	}
+}
+
 func TestNetworkSourceCollectorNormalizesProbeWarmupExitAsPending(t *testing.T) {
 	policy, profile, management, workload, probe := collectorFixture(t)
 	probe.err = NewFunctionalProbePendingError(errors.New("sensitive raw failure"))
