@@ -119,14 +119,14 @@ func TestNetworkStageObserverDefersKnownMVPWarmupAcrossReasonChanges(t *testing.
 		Profile: networkStageProfile(plan), PollInterval: time.Minute, PollTimeout: 6 * time.Minute,
 		Clock:                  func() time.Time { return current },
 		Wait:                   func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
-		AllowMVPWarmupDeferral: true, MVPWarmupDeferralDelay: 5 * time.Minute,
+		AllowMVPWarmupDeferral: true, MVPWarmupDeferralDelay: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err = observer.Observe(context.Background())
-	if err != nil || result.Outcome != "FAILED" {
-		t.Fatalf("real functional probe failure was deferred: %#v err=%v", result, err)
+	if err != nil || result.Outcome != "SUCCEEDED" || source.calls != 2 {
+		t.Fatalf("transient functional probe failure was not deferred: %#v calls=%d err=%v", result, source.calls, err)
 	}
 
 	current = time.Date(2026, 8, 16, 21, 0, 0, 0, time.UTC)

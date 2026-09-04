@@ -187,10 +187,12 @@ func isMVPNetworkWarmup(evidence observation.Evidence) bool {
 		return false
 	}
 	if evidence.Status == "False" {
-		// The collector reached the fixed Cilium health endpoint but its cached
-		// response is older than the advertised publication interval. This is a
-		// bounded cache-freshness race, not a component/identity failure.
-		return evidence.Reason == "FunctionalProbeStale"
+		// Once all structural predicates are ready, the fixed Cilium health probe
+		// can still return either a stale cache classification or a transient
+		// non-zero result during agent warmup. Both remain inside the bounded MVP
+		// deferral; transport, identity, schema and component failures never reach
+		// this evidence path and every other False reason remains terminal.
+		return evidence.Reason == "FunctionalProbeStale" || evidence.Reason == "FunctionalProbeFailed"
 	}
 	if evidence.Status != "Unknown" {
 		return false
