@@ -120,11 +120,17 @@ func (executor *KubernetesCiliumWebSocketExecutor) Exec(ctx context.Context, req
 		}
 		return nil, errors.New("fixed Cilium WebSocket stream failed")
 	}
-	if stderr.Len() != 0 || stderr.Exceeded() {
-		return nil, errors.New("fixed Cilium WebSocket stream returned stderr")
+	if stderr.Exceeded() {
+		return nil, errors.New("fixed Cilium WebSocket stderr size is invalid")
 	}
-	if stdout.Len() == 0 || stdout.Exceeded() {
+	if stderr.Len() != 0 {
+		return nil, observation.NewFunctionalProbePendingError(errors.New("fixed Cilium command returned temporary stderr"))
+	}
+	if stdout.Exceeded() {
 		return nil, errors.New("fixed Cilium WebSocket stdout size is invalid")
+	}
+	if stdout.Len() == 0 {
+		return nil, observation.NewFunctionalProbePendingError(errors.New("fixed Cilium command returned no output"))
 	}
 	return append([]byte(nil), stdout.Bytes()...), nil
 }
