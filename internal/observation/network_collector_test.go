@@ -258,7 +258,7 @@ func TestNetworkSourceCollectorClassifiesProbeExecutionFailureAsTransient(t *tes
 	}
 }
 
-func TestNetworkSourceCollectorClassifiesMissingWarmupProbePathAsTransient(t *testing.T) {
+func TestNetworkSourceCollectorNormalizesMissingWarmupProbePathAsPending(t *testing.T) {
 	policy, profile, management, workload, probe := collectorFixture(t)
 	probe.response = mutateJSON(t, probe.response, func(value map[string]any) {
 		node := value["nodes"].([]any)[0].(map[string]any)
@@ -266,18 +266,17 @@ func TestNetworkSourceCollectorClassifiesMissingWarmupProbePathAsTransient(t *te
 		delete(address, "http")
 	})
 	collector := mustNetworkCollector(t, policy, management, workload, probe)
-	_, err := collector.Observe(context.Background(), policy, profile)
-	if err == nil || !IsTransientNetworkSourceError(err) {
-		t.Fatalf("missing warmup probe path was not transient: %v", err)
+	evidence, err := collector.Observe(context.Background(), policy, profile)
+	if err != nil || evidence.Status != "Unknown" || evidence.Reason != "FunctionalProbePending" {
+		t.Fatalf("missing warmup probe path was not normalized as pending: %#v %v", evidence, err)
 	}
 }
 
 func TestNetworkSourceCollectorClassifiesUnpublishedWarmupNodesAsTransient(t *testing.T) {
 	for _, rawNodes := range []any{nil, "invalid"} {
 		name := "null"
-		wantTransient := true
 		if rawNodes != nil {
-			name, wantTransient = "invalid-type", false
+			name = "invalid-type"
 		}
 		t.Run(name, func(t *testing.T) {
 			policy, profile, management, workload, probe := collectorFixture(t)
@@ -285,9 +284,13 @@ func TestNetworkSourceCollectorClassifiesUnpublishedWarmupNodesAsTransient(t *te
 				value["nodes"] = rawNodes
 			})
 			collector := mustNetworkCollector(t, policy, management, workload, probe)
-			_, err := collector.Observe(context.Background(), policy, profile)
-			if err == nil || IsTransientNetworkSourceError(err) != wantTransient {
-				t.Fatalf("unexpected unpublished Node classification: transient=%t err=%v", IsTransientNetworkSourceError(err), err)
+			evidence, err := collector.Observe(context.Background(), policy, profile)
+			if rawNodes == nil {
+				if err != nil || evidence.Status != "Unknown" || evidence.Reason != "FunctionalProbePending" {
+					t.Fatalf("null warmup Nodes were not normalized as pending: %#v %v", evidence, err)
+				}
+			} else if err == nil {
+				t.Fatal("invalid warmup Node representation was accepted")
 			}
 		})
 	}

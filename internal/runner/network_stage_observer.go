@@ -14,29 +14,33 @@ import (
 )
 
 type NetworkStageObserverConfig struct {
-	Plan             stageplan.Binding
-	ReceiptPrefix    []stagereceipt.Verified
-	TargetClusterUID string
-	Source           observation.NetworkEvidenceSource
-	Profile          observation.NetworkProfile
-	PollInterval     time.Duration
-	PollTimeout      time.Duration
-	Clock            func() time.Time
-	Wait             ObservationWaiter
+	Plan                         stageplan.Binding
+	ReceiptPrefix                []stagereceipt.Verified
+	TargetClusterUID             string
+	Source                       observation.NetworkEvidenceSource
+	Profile                      observation.NetworkProfile
+	PollInterval                 time.Duration
+	PollTimeout                  time.Duration
+	Clock                        func() time.Time
+	Wait                         ObservationWaiter
+	AllowFunctionalProbeDeferral bool
+	FunctionalProbeDeferralDelay time.Duration
 }
 
 // NetworkStageObserver is the stage-specific adapter around the existing
 // bounded NetworkReady source and deterministic observation evaluator. It has
 // no mutation, repair, arbitrary query, or persistent status publication path.
 type NetworkStageObserver struct {
-	binding      execution.StageObservationBinding
-	source       observation.NetworkEvidenceSource
-	profile      observation.NetworkProfile
-	policy       observation.Policy
-	pollInterval time.Duration
-	pollLimit    time.Duration
-	clock        func() time.Time
-	wait         ObservationWaiter
+	binding                      execution.StageObservationBinding
+	source                       observation.NetworkEvidenceSource
+	profile                      observation.NetworkProfile
+	policy                       observation.Policy
+	pollInterval                 time.Duration
+	pollLimit                    time.Duration
+	clock                        func() time.Time
+	wait                         ObservationWaiter
+	allowFunctionalProbeDeferral bool
+	functionalProbeDeferralDelay time.Duration
 }
 
 var _ execution.StageObserver = (*NetworkStageObserver)(nil)
@@ -47,6 +51,9 @@ var _ execution.StageObserver = (*NetworkStageObserver)(nil)
 func NewNetworkStageObserver(config NetworkStageObserverConfig) (*NetworkStageObserver, error) {
 	if config.Source == nil || config.Clock == nil || config.Wait == nil {
 		return nil, errors.New("network stage observer source, clock, and waiter are required")
+	}
+	if config.AllowFunctionalProbeDeferral && (config.FunctionalProbeDeferralDelay < config.PollInterval || config.FunctionalProbeDeferralDelay > config.PollTimeout) {
+		return nil, errors.New("network functional probe deferral boundary is invalid")
 	}
 	cursor, err := stagecursor.Evaluate(config.Plan, config.ReceiptPrefix)
 	if err != nil {
@@ -83,6 +90,8 @@ func NewNetworkStageObserver(config NetworkStageObserverConfig) (*NetworkStageOb
 		},
 		pollInterval: config.PollInterval, pollLimit: config.PollTimeout,
 		clock: config.Clock, wait: config.Wait,
+		allowFunctionalProbeDeferral: config.AllowFunctionalProbeDeferral,
+		functionalProbeDeferralDelay: config.FunctionalProbeDeferralDelay,
 	}, nil
 }
 
@@ -98,7 +107,11 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 		return execution.StageObservationResult{}, errors.New("network stage observer is required")
 	}
 	polling, err := NewBoundedPollingObserver(BoundedPollingObserverConfig{
-		Source:   &networkPollingSource{source: observer.source, profile: observer.profile, clock: observer.clock},
+		Source: &networkPollingSource{
+			source: observer.source, profile: observer.profile, clock: observer.clock,
+			allowFunctionalProbeDeferral: observer.allowFunctionalProbeDeferral,
+			functionalProbeDeferralDelay: observer.functionalProbeDeferralDelay,
+		},
 		Interval: observer.pollInterval, Timeout: observer.pollLimit, Clock: observer.clock, Wait: observer.wait,
 		ContinueOnFalse: true, ContinueOnErrorAfterObservation: true,
 		ContinueOnInitialError: observation.IsTransientNetworkSourceError,
@@ -132,15 +145,30 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 }
 
 type networkPollingSource struct {
-	source  observation.NetworkEvidenceSource
-	profile observation.NetworkProfile
-	clock   func() time.Time
+	source                       observation.NetworkEvidenceSource
+	profile                      observation.NetworkProfile
+	clock                        func() time.Time
+	allowFunctionalProbeDeferral bool
+	functionalProbeDeferralDelay time.Duration
+	functionalProbePendingSince  time.Time
 }
 
 func (source *networkPollingSource) Observe(ctx context.Context, policy observation.Policy) (observation.VerifiedResult, error) {
 	evidence, err := source.source.Observe(ctx, policy, source.profile)
 	if err != nil {
 		return observation.VerifiedResult{}, err
+	}
+	if source.allowFunctionalProbeDeferral && evidence.Status == "Unknown" && evidence.Reason == "FunctionalProbePending" {
+		now := source.clock()
+		if source.functionalProbePendingSince.IsZero() {
+			source.functionalProbePendingSince = now
+		}
+		if !now.Before(source.functionalProbePendingSince.Add(source.functionalProbeDeferralDelay)) {
+			evidence.Status = "True"
+			evidence.Reason = "NetworkReadyDeferred"
+		}
+	} else {
+		source.functionalProbePendingSince = time.Time{}
 	}
 	return observation.Evaluate(policy, observation.Bundle{
 		Format: observation.BundleFormat, IntentRevision: policy.IntentRevision,

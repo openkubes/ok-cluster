@@ -131,6 +131,28 @@ func TestEvaluateNetworkSnapshotUsesBoundedDynamicCacheFreshness(t *testing.T) {
 	}
 }
 
+func TestEvaluateNetworkSnapshotKeepsAbsentFunctionalProbePending(t *testing.T) {
+	policy, profile, snapshot := validNetworkFixture(t)
+	snapshot.Probe = NetworkProbe{}
+	evidence, err := EvaluateNetworkSnapshot(policy, profile, snapshot)
+	if err != nil || evidence.Status != "Unknown" || evidence.Reason != "FunctionalProbePending" {
+		t.Fatalf("absent functional probe did not remain fail-closed pending: %#v %v", evidence, err)
+	}
+	policy.Required = []string{"NetworkReady"}
+	bundle := Bundle{
+		Format: BundleFormat, IntentRevision: policy.IntentRevision,
+		EvaluatedAt: snapshot.ObservedAt, Evidence: []Evidence{evidence},
+	}
+	result, err := Evaluate(policy, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := result.Receipt()
+	if err != nil || receipt.Ready != "Unknown" {
+		t.Fatalf("final aggregate accepted a deferred functional probe: %#v %v", receipt, err)
+	}
+}
+
 func TestEvaluateNetworkSnapshotRejectsMalformedUnboundedInput(t *testing.T) {
 	for name, mutate := range map[string]func(*NetworkProfile, *NetworkSnapshot){
 		"mutable profile image": func(profile *NetworkProfile, _ *NetworkSnapshot) {

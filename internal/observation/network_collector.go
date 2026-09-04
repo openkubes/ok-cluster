@@ -167,11 +167,12 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	probe, err := normalizeNetworkProbe(probeRaw, nodeNames)
 	if err != nil {
 		// Cilium can return a successful JSON document before every fixed
-		// primary-address path has been populated. That shape is a normal
-		// cache-warmup state and is safe to poll. All other schema and identity
-		// failures remain terminal.
+		// primary-address path has been populated. Normalize only that successful
+		// warmup document as an absent probe; the evaluator keeps it Unknown and
+		// the pre-runtime adapter may defer it explicitly. All other schema and
+		// identity failures remain terminal.
 		if errors.Is(err, errNetworkProbePathPending) {
-			return NetworkSnapshot{}, transientNetworkSourceError{cause: errNetworkProbePathPending}
+			return snapshot, nil
 		}
 		return NetworkSnapshot{}, err
 	}

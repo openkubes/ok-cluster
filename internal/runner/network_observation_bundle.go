@@ -112,6 +112,7 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 		Plan: bundle.plan, ReceiptPrefix: bundle.prefix, TargetClusterUID: binding.TargetClusterUID,
 		Source: source, Profile: loadedProfile.Profile,
 		PollInterval: config.PollInterval, PollTimeout: config.PollTimeout, Clock: config.Clock, Wait: config.Wait,
+		AllowFunctionalProbeDeferral: true, FunctionalProbeDeferralDelay: functionalProbeDeferralDelay(config.PollInterval, config.PollTimeout),
 	})
 	if err != nil {
 		return OpenedNetworkObservationStage{}, err
@@ -120,6 +121,17 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 		operation: execution.ObservationStageOperation{Ledger: store, Observer: observer},
 		plan:      bundle.plan, cursor: bundle.cursor, verified: true,
 	}, nil
+}
+
+func functionalProbeDeferralDelay(interval, timeout time.Duration) time.Duration {
+	delay := 5 * time.Minute
+	if half := timeout / 2; half < delay {
+		delay = half
+	}
+	if delay < interval {
+		return interval
+	}
+	return delay
 }
 
 func (stage OpenedNetworkObservationStage) Run(ctx context.Context) (execution.ObservationStageRunReceipt, error) {
