@@ -73,6 +73,43 @@ func TestNetworkStageObserverWaitsThroughFalseUntilConvergedOrBounded(t *testing
 	}
 }
 
+func TestNetworkStageObserverDefersOnlyPersistentFunctionalProbePending(t *testing.T) {
+	plan, prefix, runtimeUID := networkObserverPrefix(t, true)
+	current := time.Date(2026, 8, 16, 21, 0, 0, 0, time.UTC)
+	source := &fakeNetworkStageSource{statuses: []string{"Unknown"}, reasons: []string{"FunctionalProbePending"}}
+	observer, err := NewNetworkStageObserver(NetworkStageObserverConfig{
+		Plan: plan, ReceiptPrefix: prefix, TargetClusterUID: runtimeUID, Source: source,
+		Profile: networkStageProfile(plan), PollInterval: time.Minute, PollTimeout: 10 * time.Minute,
+		Clock:                        func() time.Time { return current },
+		Wait:                         func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
+		AllowFunctionalProbeDeferral: true, FunctionalProbeDeferralDelay: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := observer.Observe(context.Background())
+	if err != nil || result.Outcome != "SUCCEEDED" || source.calls != 6 {
+		t.Fatalf("bounded functional probe deferral failed: %#v calls=%d err=%v", result, source.calls, err)
+	}
+
+	current = time.Date(2026, 8, 16, 21, 0, 0, 0, time.UTC)
+	source = &fakeNetworkStageSource{statuses: []string{"False"}, reasons: []string{"FunctionalProbeFailed"}}
+	observer, err = NewNetworkStageObserver(NetworkStageObserverConfig{
+		Plan: plan, ReceiptPrefix: prefix, TargetClusterUID: runtimeUID, Source: source,
+		Profile: networkStageProfile(plan), PollInterval: time.Minute, PollTimeout: 6 * time.Minute,
+		Clock:                        func() time.Time { return current },
+		Wait:                         func(_ context.Context, wait time.Duration) error { current = current.Add(wait); return nil },
+		AllowFunctionalProbeDeferral: true, FunctionalProbeDeferralDelay: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = observer.Observe(context.Background())
+	if err != nil || result.Outcome != "FAILED" {
+		t.Fatalf("real functional probe failure was deferred: %#v err=%v", result, err)
+	}
+}
+
 func TestNetworkStageObserverRejectsForeignTargetAndIncompleteHistory(t *testing.T) {
 	plan, prefix, runtimeUID := networkObserverPrefix(t, true)
 	base := NetworkStageObserverConfig{
@@ -123,6 +160,7 @@ func TestNetworkStageObserverRedactsSourceFailure(t *testing.T) {
 
 type fakeNetworkStageSource struct {
 	statuses []string
+	reasons  []string
 	err      error
 	calls    int
 	policy   observation.Policy
@@ -140,7 +178,12 @@ func (source *fakeNetworkStageSource) Observe(_ context.Context, policy observat
 		status = source.statuses[source.calls-1]
 	}
 	reason := "NetworkConverged"
-	if status == "False" {
+	if len(source.reasons) > 0 {
+		reason = source.reasons[len(source.reasons)-1]
+		if source.calls <= len(source.reasons) {
+			reason = source.reasons[source.calls-1]
+		}
+	} else if status == "False" {
 		reason = "NetworkInvariantFailed"
 	} else if status == "Unknown" {
 		reason = "NetworkEvidencePending"

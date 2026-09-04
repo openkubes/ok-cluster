@@ -356,6 +356,13 @@ func evaluateNetworkComponents(profile NetworkProfile, components []NetworkCompo
 }
 
 func evaluateNetworkProbe(profile NetworkProfile, snapshot NetworkSnapshot, nodeUIDs map[string]struct{}) (string, string) {
+	// An entirely absent probe is the normalized state of a ready Cilium
+	// rollout whose health cache has not published a usable response yet.
+	// Final aggregate evaluation keeps this Unknown; only the pre-runtime MVP
+	// adapter may explicitly defer it after a bounded grace period.
+	if snapshot.Probe.ResponseTimestamp == "" && snapshot.Probe.ProbeIntervalMilliseconds == 0 && len(snapshot.Probe.Paths) == 0 {
+		return "Unknown", "FunctionalProbePending"
+	}
 	observedAt, _ := time.Parse(time.RFC3339Nano, snapshot.ObservedAt)
 	responseAt, err := time.Parse(time.RFC3339Nano, snapshot.Probe.ResponseTimestamp)
 	if err != nil || snapshot.Probe.ProbeIntervalMilliseconds <= 0 || snapshot.Probe.ProbeIntervalMilliseconds > maximumAdvertisedProbeIntervalSeconds*1000 {
