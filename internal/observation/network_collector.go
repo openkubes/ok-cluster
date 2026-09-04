@@ -157,6 +157,9 @@ func (collector *NetworkSourceCollector) Collect(ctx context.Context, policy Pol
 	}
 	probeRaw, err := collector.probe.Probe(ctx, selectedName, selectedUID)
 	if err != nil {
+		if IsFunctionalProbePendingError(err) {
+			return snapshot, nil
+		}
 		// The command, Pod identity and container are fixed by the probe
 		// boundary. A non-zero execution while Cilium's health cache is still
 		// warming is therefore an operational convergence signal, not an

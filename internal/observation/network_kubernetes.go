@@ -36,6 +36,28 @@ type transientNetworkSourceError struct {
 	cause error
 }
 
+type functionalProbePendingError struct {
+	cause error
+}
+
+func (err functionalProbePendingError) Error() string {
+	return "fixed Cilium functional probe is not ready"
+}
+func (err functionalProbePendingError) Unwrap() error { return err.cause }
+
+// NewFunctionalProbePendingError marks only a successfully reached fixed
+// Cilium command that exited non-zero while its runtime cache was converging.
+// Transport, identity, authorization and schema failures must not use it.
+func NewFunctionalProbePendingError(cause error) error {
+	return functionalProbePendingError{cause: cause}
+}
+
+// IsFunctionalProbePendingError identifies the narrow probe warm-up outcome.
+func IsFunctionalProbePendingError(err error) bool {
+	var pending functionalProbePendingError
+	return errors.As(err, &pending)
+}
+
 func (err transientNetworkSourceError) Error() string {
 	return "temporary bounded network source failure"
 }
@@ -201,6 +223,9 @@ func (probe *KubernetesFixedCiliumProbe) Probe(ctx context.Context, podName, pod
 	}
 	raw, err := probe.executor.Exec(ctx, request)
 	if err != nil {
+		if IsFunctionalProbePendingError(err) {
+			return nil, NewFunctionalProbePendingError(errors.New("fixed Cilium command exited non-zero"))
+		}
 		return nil, errors.New("fixed Cilium Pod exec failed")
 	}
 	if len(raw) == 0 || len(raw) > maximumNetworkSourceBytes {
