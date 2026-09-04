@@ -53,6 +53,11 @@ func (err *ObservationStageResultError) Error() string {
 	return "observation stage completed with " + err.State
 }
 
+type stageObservationFailure struct{ cause error }
+
+func (err *stageObservationFailure) Error() string { return "bounded stage observation failed" }
+func (err *stageObservationFailure) Unwrap() error { return err.cause }
+
 // Run invokes at most one prebound read-only observer. An already persisted
 // receipt is returned without observing again, making process termination
 // after receipt persistence safe to resume.
@@ -115,7 +120,7 @@ func (operation ObservationStageOperation) run(ctx context.Context, plan stagepl
 
 	result, observeErr := operation.Observer.Observe(ctx)
 	if observeErr != nil {
-		return receipt, errors.New("bounded stage observation failed")
+		return receipt, &stageObservationFailure{cause: observeErr}
 	}
 	if !oneOf(result.Outcome, "SUCCEEDED", "FAILED", "STOPPED") || !stagedDigestPattern.MatchString(result.EvidenceDigest) || result.CompletedAt.IsZero() {
 		return receipt, errors.New("stage observer returned an invalid redaction-safe result")

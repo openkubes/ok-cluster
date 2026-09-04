@@ -179,7 +179,7 @@ func (continuation *concretePreRuntimeContinuation) Run(ctx context.Context) (Pr
 	}
 	receipt, err := continuation.executor.Run(ctx)
 	converted := PreRuntimeOrchestrationReceipt{
-		Format: receipt.Format, State: receipt.State, PlanDigest: receipt.PlanDigest, StoppedAt: receipt.StoppedAt,
+		Format: receipt.Format, State: receipt.State, PlanDigest: receipt.PlanDigest, StoppedAt: receipt.StoppedAt, StopCategory: receipt.StopCategory,
 		Checkpoints: append([]PreRuntimeStageCheckpoint(nil), receipt.Checkpoints...),
 	}
 	if receipt.Format == PreRuntimeExecutionReceiptFormat {

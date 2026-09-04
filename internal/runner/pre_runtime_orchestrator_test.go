@@ -2,7 +2,9 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -136,6 +138,25 @@ func TestPreRuntimeOrchestrationPreservesProviderFailureCause(t *testing.T) {
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" ||
 		!strings.Contains(err.Error(), "safe provider authorization cause") {
 		t.Fatalf("provider failure cause was not preserved: %#v err=%v", receipt, err)
+	}
+}
+
+func TestPreRuntimeOrchestrationReportsRedactedNetworkStopCategory(t *testing.T) {
+	orchestration := successfulPreRuntimeOrchestration(nil)
+	orchestration.RunNetworkObservation = func(context.Context, execution.StagedOperationReceipt) (execution.ObservationStageRunReceipt, error) {
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat,
+			State:  "PREOBSERVATION", PlanDigest: runnerStageSHA("a"), StageID: "network-observation",
+		}, fmt.Errorf("safe wrapper: %w", newRedactedObservationError("OBSERVATION_SOURCE_ERROR", "redacted source failure"))
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "network-observation" ||
+		receipt.StopCategory != "OBSERVATION_SOURCE_ERROR" || len(receipt.Checkpoints) != 4 {
+		t.Fatalf("network stop category was not preserved: %#v err=%v", receipt, err)
+	}
+	encoded, marshalErr := json.Marshal(receipt)
+	if marshalErr != nil || strings.Contains(string(encoded), "redacted source failure") {
+		t.Fatalf("receipt exposed the underlying cause: %s err=%v", encoded, marshalErr)
 	}
 }
 

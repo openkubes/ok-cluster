@@ -19,6 +19,15 @@ type fakePostRuntimeContinuation struct {
 	calls   atomic.Int32
 }
 
+type fakePreRuntimeContinuation struct {
+	receipt PreRuntimeOrchestrationReceipt
+	err     error
+}
+
+func (continuation *fakePreRuntimeContinuation) Run(context.Context) (PreRuntimeOrchestrationReceipt, error) {
+	return continuation.receipt, continuation.err
+}
+
 func (continuation *fakePostRuntimeContinuation) ContinuationBinding() (PostRuntimeContinuationBinding, error) {
 	if continuation == nil {
 		return PostRuntimeContinuationBinding{}, errors.New("missing continuation")
@@ -118,6 +127,48 @@ func TestFullRunOrchestrationStopsBeforeContinuationWhenPrefixStops(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "private failure") {
 		t.Fatalf("prefix failure cause was not preserved: %v", err)
+	}
+}
+
+func TestFullRunOrchestrationPropagatesPrefixStopCategory(t *testing.T) {
+	prefix := successfulPreRuntimeOrchestration(nil)
+	prefix.RunNetworkObservation = func(context.Context, execution.StagedOperationReceipt) (execution.ObservationStageRunReceipt, error) {
+		return execution.ObservationStageRunReceipt{
+			Format: execution.ObservationStageReceiptFormat,
+			State:  "PREOBSERVATION", PlanDigest: runnerStageSHA("a"), StageID: "network-observation",
+		}, newRedactedObservationError("OBSERVATION_SOURCE_ERROR", "redacted source failure")
+	}
+	orchestration := &FullRunOrchestration{
+		PreRuntime: prefix,
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			t.Fatal("stopped prefix reached continuation")
+			return nil, nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.StoppedAt != "network-observation" || receipt.StopCategory != "OBSERVATION_SOURCE_ERROR" || len(receipt.Checkpoints) != 4 {
+		t.Fatalf("full-run stop category was not propagated: %#v err=%v", receipt, err)
+	}
+}
+
+func TestFullRunOrchestrationRejectsUnboundedPrefixStopCategory(t *testing.T) {
+	prefix := &fakePreRuntimeContinuation{
+		receipt: PreRuntimeOrchestrationReceipt{
+			Format: PreRuntimeOrchestrationReceiptFormat, State: "STOPPED", PlanDigest: runnerStageSHA("a"),
+			StoppedAt: "provider-prerequisites", StopCategory: "sensitive arbitrary detail",
+			Checkpoints: []PreRuntimeStageCheckpoint{},
+		},
+	}
+	orchestration := &FullRunOrchestration{
+		PreRuntime: prefix,
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			t.Fatal("invalid prefix reached continuation")
+			return nil, nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || strings.Contains(receipt.StopCategory, "sensitive") {
+		t.Fatalf("unbounded prefix category was accepted: %#v err=%v", receipt, err)
 	}
 }
 
