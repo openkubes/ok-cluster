@@ -178,11 +178,21 @@ func (source *networkPollingSource) Observe(ctx context.Context, policy observat
 
 // isMVPNetworkWarmup is deliberately narrower than Status=Unknown. It permits
 // only the normal CAAPH/Cilium rollout states already proven to converge late
-// in DEV. Source, transport, authorization, TLS, identity and schema errors do
-// not produce evidence and therefore cannot enter this deferral path. False
-// evidence remains terminal as well.
+// in DEV, plus the fixed Cilium cache-freshness classification. Source,
+// transport, authorization, TLS, identity and schema errors do not produce
+// evidence and therefore cannot enter this deferral path. All other False
+// evidence remains terminal.
 func isMVPNetworkWarmup(evidence observation.Evidence) bool {
-	if evidence.Type != "NetworkReady" || evidence.Source != "BoundedNetworkEvaluator" || evidence.Status != "Unknown" {
+	if evidence.Type != "NetworkReady" || evidence.Source != "BoundedNetworkEvaluator" {
+		return false
+	}
+	if evidence.Status == "False" {
+		// The collector reached the fixed Cilium health endpoint but its cached
+		// response is older than the advertised publication interval. This is a
+		// bounded cache-freshness race, not a component/identity failure.
+		return evidence.Reason == "FunctionalProbeStale"
+	}
+	if evidence.Status != "Unknown" {
 		return false
 	}
 	switch evidence.Reason {
