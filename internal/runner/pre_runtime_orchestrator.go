@@ -121,7 +121,10 @@ func (orchestration PreRuntimeOrchestration) Run(ctx context.Context) (PreRuntim
 
 	runtimeBindingReceipt, runErr := orchestration.RunRuntimeBinding(ctx, networkObservationReceipt)
 	if err := appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[5], execution.BindingStageReceiptFormat, runtimeBindingReceipt.Format, runtimeBindingReceipt.State, runtimeBindingReceipt.PlanDigest, runtimeBindingReceipt.StageID, runtimeBindingReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[5])
+		if runErr != nil {
+			return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[5], runErr)
+		}
+		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[5], err)
 	}
 	if err := ctx.Err(); err != nil {
 		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[6])
@@ -177,7 +180,8 @@ func redactedStopCategory(cause error) string {
 	var categorized redactedStopCategorizer
 	if errors.As(cause, &categorized) {
 		switch category := categorized.RedactedStopCategory(); category {
-		case "OBSERVATION_SOURCE_ERROR", "OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED":
+		case "OBSERVATION_SOURCE_ERROR", "OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED",
+			"RUNTIME_BINDING_SOURCE_STOPPED", "RUNTIME_BINDING_MATERIALIZATION_STOPPED", "RUNTIME_BINDING_MATERIAL_VERIFICATION_STOPPED", "RUNTIME_BINDING_PERSISTENCE_STOPPED", "RUNTIME_BINDING_WRITER_OPEN_STOPPED":
 			return category
 		}
 	}
@@ -192,7 +196,8 @@ func validRedactedStopCategory(category string) bool {
 	switch category {
 	case "ORCHESTRATION_STOPPED", "STAGE_EXECUTION_ERROR", "OBSERVATION_SOURCE_ERROR",
 		"OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED", "OBSERVATION_COMPLETED_FAILED",
-		"OBSERVATION_COMPLETED_STOPPED":
+		"OBSERVATION_COMPLETED_STOPPED", "RUNTIME_BINDING_SOURCE_STOPPED", "RUNTIME_BINDING_MATERIALIZATION_STOPPED",
+		"RUNTIME_BINDING_MATERIAL_VERIFICATION_STOPPED", "RUNTIME_BINDING_PERSISTENCE_STOPPED", "RUNTIME_BINDING_WRITER_OPEN_STOPPED":
 		return true
 	default:
 		return false

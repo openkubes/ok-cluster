@@ -152,6 +152,7 @@ func (bundle VerifiedRuntimeBindingStageBundle) open(ledgerConfig KubernetesLedg
 	if err != nil {
 		return OpenedRuntimeBindingStage{}, errors.New("open bounded runtime binding source")
 	}
+	source.clock = clock
 	if sameSecret(ledgerToken, workloadToken) || persistenceToken != "" && (sameSecret(persistenceToken, ledgerToken) || sameSecret(persistenceToken, workloadToken)) {
 		return OpenedRuntimeBindingStage{}, errors.New("runtime binding stage credentials must be pairwise distinct")
 	}
@@ -289,7 +290,11 @@ func (binder *runtimeBindingStageBinder) finish(evidence RuntimeBindingStageEvid
 	binder.mu.Lock()
 	binder.evidence, binder.hasEvidence = evidence, true
 	binder.mu.Unlock()
-	return execution.StageBindingResult{Outcome: outcome, EvidenceDigest: evidenceDigest, CompletedAt: at}, nil
+	category := ""
+	if evidence.FailureCategory != "" {
+		category = "RUNTIME_BINDING_" + evidence.FailureCategory
+	}
+	return execution.StageBindingResult{Outcome: outcome, EvidenceDigest: evidenceDigest, CompletedAt: at, FailureCategory: category}, nil
 }
 
 func (binder *runtimeBindingStageBinder) evidenceReceipt() (RuntimeBindingStageEvidenceReceipt, error) {

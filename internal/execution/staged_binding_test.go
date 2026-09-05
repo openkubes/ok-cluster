@@ -37,12 +37,15 @@ func TestBindingStagePersistsTerminalResultWithoutRawError(t *testing.T) {
 	store, _ := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
 	binder := &fakeStageBinder{
 		binding: binderBinding(t, plan, "runtime-binding"),
-		result:  StageBindingResult{Outcome: "STOPPED", EvidenceDigest: stagedSHA("f"), CompletedAt: at},
+		result:  StageBindingResult{Outcome: "STOPPED", EvidenceDigest: stagedSHA("f"), CompletedAt: at, FailureCategory: "RUNTIME_BINDING_SOURCE_STOPPED"},
 	}
 	receipt, err := (BindingStageOperation{Ledger: store, Binder: binder}).Run(context.Background(), plan, cursor)
 	var resultErr *BindingStageResultError
 	if !errors.As(err, &resultErr) || receipt.State != "COMPLETED_STOPPED" || receipt.StageReceiptDigest == "" {
 		t.Fatalf("terminal binding was not retained: %#v %v", receipt, err)
+	}
+	if resultErr.RedactedStopCategory() != "RUNTIME_BINDING_SOURCE_STOPPED" {
+		t.Fatalf("redacted binding failure category was lost: %#v", resultErr)
 	}
 }
 

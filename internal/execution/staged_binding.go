@@ -26,9 +26,10 @@ type StageBinderBinding struct {
 // StageBindingResult is the redaction-safe result of producing one private,
 // digest-bound runtime correlation artifact.
 type StageBindingResult struct {
-	Outcome        string
-	EvidenceDigest string
-	CompletedAt    time.Time
+	Outcome         string
+	EvidenceDigest  string
+	CompletedAt     time.Time
+	FailureCategory string
 }
 
 // StageBinder is preconstructed for exactly one local binding stage. It has no
@@ -53,10 +54,17 @@ type BindingStageRunReceipt struct {
 	StageReceiptDigest string `json:"stageReceiptDigest,omitempty"`
 }
 
-type BindingStageResultError struct{ State string }
+type BindingStageResultError struct {
+	State           string
+	FailureCategory string
+}
 
 func (err *BindingStageResultError) Error() string {
 	return "binding stage completed with " + err.State
+}
+
+func (err *BindingStageResultError) RedactedStopCategory() string {
+	return err.FailureCategory
 }
 
 // Run invokes at most one prebound local binder. An already persisted receipt
@@ -121,7 +129,8 @@ func (operation BindingStageOperation) run(ctx context.Context, plan stageplan.B
 	if bindErr != nil {
 		return receipt, errors.New("bounded runtime binding failed")
 	}
-	if !oneOf(result.Outcome, "SUCCEEDED", "FAILED", "STOPPED") || !stagedDigestPattern.MatchString(result.EvidenceDigest) || result.CompletedAt.IsZero() {
+	if !oneOf(result.Outcome, "SUCCEEDED", "FAILED", "STOPPED") || !stagedDigestPattern.MatchString(result.EvidenceDigest) || result.CompletedAt.IsZero() ||
+		(result.Outcome == "SUCCEEDED" && result.FailureCategory != "") || (result.FailureCategory != "" && !validBindingFailureCategory(result.FailureCategory)) {
 		return receipt, errors.New("stage binder returned an invalid redaction-safe result")
 	}
 	verified, err := stagereceipt.New(plan, decision.StageID, predecessors, result.Outcome, "NOT_APPLICABLE", "", result.EvidenceDigest, result.CompletedAt)
@@ -131,10 +140,23 @@ func (operation BindingStageOperation) run(ctx context.Context, plan stageplan.B
 	if _, err := operation.Ledger.StoreStageReceipt(ctx, plan, verified, predecessors); err != nil {
 		return receipt, err
 	}
-	return finalizeBindingRunReceipt(receipt, verified)
+	return finalizeBindingRunReceiptWithCategory(receipt, verified, result.FailureCategory)
+}
+
+func validBindingFailureCategory(category string) bool {
+	switch category {
+	case "RUNTIME_BINDING_SOURCE_STOPPED", "RUNTIME_BINDING_MATERIALIZATION_STOPPED", "RUNTIME_BINDING_MATERIAL_VERIFICATION_STOPPED", "RUNTIME_BINDING_PERSISTENCE_STOPPED", "RUNTIME_BINDING_WRITER_OPEN_STOPPED":
+		return true
+	default:
+		return false
+	}
 }
 
 func finalizeBindingRunReceipt(receipt BindingStageRunReceipt, verified stagereceipt.Verified) (BindingStageRunReceipt, error) {
+	return finalizeBindingRunReceiptWithCategory(receipt, verified, "")
+}
+
+func finalizeBindingRunReceiptWithCategory(receipt BindingStageRunReceipt, verified stagereceipt.Verified, category string) (BindingStageRunReceipt, error) {
 	stageReceipt, err := verified.Receipt()
 	if err != nil {
 		return receipt, err
@@ -146,7 +168,7 @@ func finalizeBindingRunReceipt(receipt BindingStageRunReceipt, verified stagerec
 	receipt.StageReceiptDigest = digest
 	receipt.State = "COMPLETED_" + stageReceipt.State
 	if stageReceipt.State != "SUCCEEDED" {
-		return receipt, &BindingStageResultError{State: receipt.State}
+		return receipt, &BindingStageResultError{State: receipt.State, FailureCategory: category}
 	}
 	return receipt, nil
 }
