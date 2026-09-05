@@ -105,7 +105,10 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
   the private target endpoint, CA and raw runtime UIDs to the five-receipt
   prefix while exposing only digest identities publicly. A bounded source now
   performs only the exact `kube-system` and `local-path` GETs after proving the
-  workload authority, and an exclusive private writer creates and verifies one
+  workload authority. Talos KubeVirt lifecycle artifacts bootstrap the exact
+  `local-path` identity from a vendored, digest-pinned inline manifest, so this
+  prerequisite is part of the staged plan rather than a manual post-create
+  mutation. An exclusive private writer creates and verifies one
   `0600` binding file without overwrite or cleanup. These capabilities are now
   composed with the runner-owned crash-safe stage operation and immutable
   ledger receipt. `ok cluster stage bind runtime --execute` is the first local,
