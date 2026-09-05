@@ -65,6 +65,31 @@ func TestLoadFullRunExecutionManifestV4BindsExecutionAttempt(t *testing.T) {
 	}
 }
 
+func TestLoadFullRunExecutionManifestBindsDeferredMVPNetworkObservation(t *testing.T) {
+	manifestPath, cleanup := fullRunExecutionManifestFixtureWithNetworkMode(t, "deferred-mvp/v1")
+	defer cleanup()
+
+	manifest, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "VERIFIED" || manifest.plan.NetworkObservationMode != "deferred-mvp/v1" {
+		t.Fatalf("deferred network observation mode was not bound at the full-run manifest edge: %#v", receipt)
+	}
+
+	manifest.plan.NetworkObservationMode = ""
+	_, err = manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
+		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
+			return nil, nil
+		}),
+		Clock: time.Now,
+		Wait:  WaitWithTimer,
+	})
+	if err == nil || !strings.Contains(err.Error(), "plan changed after loading") {
+		t.Fatalf("in-memory network observation mode mutation was accepted: %v", err)
+	}
+}
+
 func TestFullRunExecutionManifestAttemptFormatFailsClosed(t *testing.T) {
 	tests := map[string]func(*fullRunExecutionManifestDocument, map[string]any){
 		"v3 cannot acquire attempt": func(document *fullRunExecutionManifestDocument, plan map[string]any) {
@@ -382,8 +407,12 @@ func TestFullRunExecutionManifestDigestIsFormattingIndependent(t *testing.T) {
 }
 
 func fullRunExecutionManifestFixture(t *testing.T) (string, func()) {
+	return fullRunExecutionManifestFixtureWithNetworkMode(t, "")
+}
+
+func fullRunExecutionManifestFixtureWithNetworkMode(t *testing.T, networkObservationMode string) (string, func()) {
 	t.Helper()
-	postManifest, _, cleanup := postRuntimeManifestFixture(t)
+	postManifest, _, cleanup := postRuntimeManifestFixtureWithNetworkMode(t, networkObservationMode)
 	post, _, err := loadPostRuntimeExecutionManifest(postManifest)
 	if err != nil {
 		cleanup()

@@ -49,6 +49,19 @@ func TestOpenPostRuntimeExecutionManifestBindsExactPrivateActivation(t *testing.
 	}
 }
 
+func TestOpenPostRuntimeExecutionManifestBindsDeferredMVPNetworkObservation(t *testing.T) {
+	manifest, factories, cleanup := postRuntimeManifestFixtureWithNetworkMode(t, "deferred-mvp/v1")
+	defer cleanup()
+
+	executor, receipt, err := openPostRuntimeExecutionManifest(manifest, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor == nil || receipt.State != "VERIFIED" {
+		t.Fatalf("deferred network observation mode was not bound at the post-runtime manifest edge: %#v", receipt)
+	}
+}
+
 func TestPostRuntimeExecutionManifestFailsClosedBeforeActivation(t *testing.T) {
 	manifest, factories, cleanup := postRuntimeManifestFixture(t)
 	defer cleanup()
@@ -234,6 +247,10 @@ func postRuntimeRecoveryManifestFixture(t *testing.T, manifest string, includeRe
 }
 
 func postRuntimeManifestFixture(t *testing.T) (string, postRuntimeExecutionFactories, func()) {
+	return postRuntimeManifestFixtureWithNetworkMode(t, "")
+}
+
+func postRuntimeManifestFixtureWithNetworkMode(t *testing.T, networkObservationMode string) (string, postRuntimeExecutionFactories, func()) {
 	t.Helper()
 	root := t.TempDir()
 	at := time.Date(2026, 8, 18, 8, 0, 0, 0, time.UTC)
@@ -242,6 +259,7 @@ func postRuntimeManifestFixture(t *testing.T) (string, postRuntimeExecutionFacto
 		IntentRevision:   runnerStageSHA("a"), EnablementRevision: runnerStageSHA("b"),
 		PlatformRevision: runnerStageSHA("c"), ExecutionFixture: runnerStageSHA("d"),
 		InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt", GitOpsAuthority: "ok-shared",
+		NetworkObservationMode: networkObservationMode,
 	}
 	targetAccess := runnerTargetAccessYAML()
 	policy := targetCredentialPolicyDocument{
@@ -404,6 +422,7 @@ func postRuntimeManifestFixture(t *testing.T) (string, postRuntimeExecutionFacto
 				ContractIdentity: plan.ContractIdentity, IntentRevision: plan.IntentRevision, EnablementRevision: plan.EnablementRevision,
 				PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
 				InfrastructureAuthority: plan.Authorities.Infrastructure, ManagementAuthority: plan.Authorities.Management, GitOpsAuthority: plan.Authorities.GitOps,
+				NetworkObservationMode: plan.NetworkObservationMode,
 			},
 			ReceiptPrefixPath: prefixPath, ReceiptPrefixDigest: fileSHA(t, prefixPath),
 		},

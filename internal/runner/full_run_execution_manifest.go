@@ -280,7 +280,8 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	expected := fullRunPlanExpected(document.Plan.Expected)
 	if plan.PlanDigest != manifest.receipt.PlanDigest || plan.IntentRevision != expected.IntentRevision ||
 		plan.EnablementRevision != expected.EnablementRevision || plan.PlatformRevision != expected.PlatformRevision ||
-		plan.ExecutionFixture != expected.ExecutionFixture || plan.ExecutionAttempt != expected.ExecutionAttemptDigest {
+		plan.ExecutionFixture != expected.ExecutionFixture || plan.ExecutionAttempt != expected.ExecutionAttemptDigest ||
+		plan.NetworkObservationMode != expected.NetworkObservationMode {
 		return FullRunExecutionConfig{}, errors.New("verified full-run manifest plan changed after loading")
 	}
 	lifecycleInterval, lifecycleTimeout, err := parsePostRuntimePolling(document.LifecycleObservation.PollInterval, document.LifecycleObservation.PollTimeout)
@@ -491,14 +492,7 @@ func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest
 		return VerifiedFullRunExecutionManifest{}, receipt, err
 	}
 	receipt.ManifestDigest = manifestDigest
-	expected := stageplan.Expected{
-		ContractIdentity: document.Plan.Expected.ContractIdentity,
-		IntentRevision:   document.Plan.Expected.IntentRevision, EnablementRevision: document.Plan.Expected.EnablementRevision,
-		PlatformRevision: document.Plan.Expected.PlatformRevision, ExecutionFixture: document.Plan.Expected.ExecutionFixture,
-		ExecutionAttemptDigest:  document.Plan.Expected.ExecutionAttemptDigest,
-		InfrastructureAuthority: document.Plan.Expected.InfrastructureAuthority,
-		ManagementAuthority:     document.Plan.Expected.ManagementAuthority, GitOpsAuthority: document.Plan.Expected.GitOpsAuthority,
-	}
+	expected := fullRunPlanExpected(document.Plan.Expected)
 	plan, err := stageplan.Load(document.Plan.Path, expected)
 	if err != nil {
 		return VerifiedFullRunExecutionManifest{}, receipt, errors.New("load full-run staged plan")

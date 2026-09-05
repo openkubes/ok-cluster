@@ -199,14 +199,7 @@ func openPostRuntimeExecutionManifest(path string, factories postRuntimeExecutio
 		return nil, receipt, err
 	}
 	receipt.ManifestDigest = manifestDigest
-	expected := stageplan.Expected{
-		ContractIdentity: document.Plan.Expected.ContractIdentity,
-		IntentRevision:   document.Plan.Expected.IntentRevision, EnablementRevision: document.Plan.Expected.EnablementRevision,
-		PlatformRevision: document.Plan.Expected.PlatformRevision, ExecutionFixture: document.Plan.Expected.ExecutionFixture,
-		ExecutionAttemptDigest:  document.Plan.Expected.ExecutionAttemptDigest,
-		InfrastructureAuthority: document.Plan.Expected.InfrastructureAuthority, ManagementAuthority: document.Plan.Expected.ManagementAuthority,
-		GitOpsAuthority: document.Plan.Expected.GitOpsAuthority,
-	}
+	expected := fullRunPlanExpected(document.Plan.Expected)
 	receipts, err := LoadStageReceiptPrefix(document.Plan.ReceiptPrefixPath, document.Plan.ReceiptPrefixDigest)
 	if err != nil {
 		return nil, receipt, errors.New("load post-runtime receipt prefix")
