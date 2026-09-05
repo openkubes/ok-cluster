@@ -160,6 +160,22 @@ func TestPreRuntimeOrchestrationReportsRedactedNetworkStopCategory(t *testing.T)
 	}
 }
 
+func TestPreRuntimeOrchestrationReportsRedactedRuntimeBindingStopCategory(t *testing.T) {
+	orchestration := successfulPreRuntimeOrchestration(nil)
+	orchestration.RunRuntimeBinding = func(context.Context, execution.ObservationStageRunReceipt) (execution.BindingStageRunReceipt, error) {
+		return execution.BindingStageRunReceipt{Format: execution.BindingStageReceiptFormat, State: "COMPLETED_STOPPED", PlanDigest: runnerStageSHA("a"), StageID: "runtime-binding", StageReceiptDigest: runnerStageSHA("6")},
+			&execution.BindingStageResultError{State: "COMPLETED_STOPPED", FailureCategory: "RUNTIME_BINDING_SOURCE_STOPPED"}
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "runtime-binding" || receipt.StopCategory != "RUNTIME_BINDING_SOURCE_STOPPED" || len(receipt.Checkpoints) != 5 {
+		t.Fatalf("runtime binding stop category was not preserved: %#v err=%v", receipt, err)
+	}
+	encoded, marshalErr := json.Marshal(receipt)
+	if marshalErr != nil || strings.Contains(string(encoded), "private") {
+		t.Fatalf("runtime binding receipt exposed a private cause: %s err=%v", encoded, marshalErr)
+	}
+}
+
 func TestPreRuntimeOrchestrationRejectsMalformedAndForeignReceipts(t *testing.T) {
 	for name, mutate := range map[string]func(*execution.ObservationStageRunReceipt){
 		"wrong format": func(receipt *execution.ObservationStageRunReceipt) { receipt.Format = execution.StagedReceiptFormat },

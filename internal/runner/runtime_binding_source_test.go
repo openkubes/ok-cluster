@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 )
@@ -117,5 +118,180 @@ func TestRuntimeBindingSourceFailsClosed(t *testing.T) {
 	}
 	if _, err := (&KubernetesRuntimeBindingSource{}).Observe(context.Background()); err == nil {
 		t.Fatal("unopened runtime binding source could observe")
+	}
+}
+
+func TestRuntimeBindingSourcePollsTransientAbsenceThenSucceeds(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			response.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if request.URL.Path == runtimeBindingKubeSystemPath {
+			fmt.Fprint(response, `{"kind":"Namespace","metadata":{"uid":"kube-system-runtime-uid"}}`)
+			return
+		}
+		fmt.Fprint(response, `{"kind":"StorageClass","metadata":{"uid":"local-path-runtime-uid"},"provisioner":"rancher.io/local-path"}`)
+	}))
+	defer server.Close()
+	source, err := newKubernetesRuntimeBindingSource(server.URL, "runtime-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	source.wait = func(context.Context, time.Duration) error { waits++; return nil }
+	if _, err := source.Observe(context.Background()); err != nil || waits != 1 || requests != 3 {
+		t.Fatalf("transient convergence did not succeed: requests=%d waits=%d err=%v", requests, waits, err)
+	}
+}
+
+func TestRuntimeBindingSourceFailsWhenSeenIdentityDisappears(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		switch requests {
+		case 1:
+			fmt.Fprint(response, `{"kind":"Namespace","metadata":{"uid":"kube-system-runtime-uid"}}`)
+		case 2:
+			response.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	source, err := newKubernetesRuntimeBindingSource(server.URL, "runtime-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	source.wait = func(context.Context, time.Duration) error { waits++; return nil }
+	if _, err := source.Observe(context.Background()); err == nil || waits != 1 || requests != 3 {
+		t.Fatalf("seen-then-missing identity was retried: requests=%d waits=%d err=%v", requests, waits, err)
+	}
+}
+
+func TestRuntimeBindingSourceFailsWhenSeenIdentityChanges(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == runtimeBindingLocalPathPath {
+			response.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		uid := "kube-system-runtime-uid-a"
+		if requests > 2 {
+			uid = "kube-system-runtime-uid-b"
+		}
+		fmt.Fprintf(response, `{"kind":"Namespace","metadata":{"uid":%q}}`, uid)
+	}))
+	defer server.Close()
+	source, err := newKubernetesRuntimeBindingSource(server.URL, "runtime-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	source.wait = func(context.Context, time.Duration) error { waits++; return nil }
+	if _, err := source.Observe(context.Background()); err == nil || waits != 1 || requests != 3 {
+		t.Fatalf("changed identity was retried: requests=%d waits=%d err=%v", requests, waits, err)
+	}
+}
+
+func TestRuntimeBindingSourceBoundsTransientPollingByAttempts(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	source, err := newKubernetesRuntimeBindingSource(server.URL, "runtime-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.maximumAttempts = 2
+	waits := 0
+	source.wait = func(context.Context, time.Duration) error { waits++; return nil }
+	if _, err := source.Observe(context.Background()); err == nil || waits != 1 || requests != 2 {
+		t.Fatalf("attempt bound was not enforced: requests=%d waits=%d err=%v", requests, waits, err)
+	}
+}
+
+func TestRuntimeBindingSourcePermanentHTTPFailuresAreNotPolled(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotImplemented} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				requests++
+				response.Header().Set("Content-Type", "application/json")
+				response.WriteHeader(status)
+			}))
+			defer server.Close()
+			source, err := newKubernetesRuntimeBindingSource(server.URL, "runtime-token", server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.wait = func(context.Context, time.Duration) error { t.Fatal("permanent failure reached waiter"); return nil }
+			if _, err := source.Observe(context.Background()); err == nil || requests != 1 {
+				t.Fatalf("permanent HTTP failure was accepted or retried: requests=%d err=%v", requests, err)
+			}
+		})
+	}
+}
+
+func TestRuntimeBindingSourceHTTPTransientAllowlistIsExact(t *testing.T) {
+	transient := map[int]bool{
+		http.StatusNotFound: true, http.StatusTooManyRequests: true, http.StatusInternalServerError: true,
+		http.StatusBadGateway: true, http.StatusServiceUnavailable: true, http.StatusGatewayTimeout: true,
+	}
+	for _, status := range []int{400, 401, 403, 404, 408, 409, 422, 429, 500, 501, 502, 503, 504, 505} {
+		if got := transientRuntimeBindingStatus(status); got != transient[status] {
+			t.Fatalf("HTTP %d transient=%t want=%t", status, got, transient[status])
+		}
+	}
+}
+
+func TestRuntimeBindingSourceBoundsTransientPollingByDeadline(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	source, err := newKubernetesRuntimeBindingSource(server.URL, "runtime-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 5, 8, 0, 0, 0, time.UTC)
+	source.clock = func() time.Time { return now }
+	source.interval, source.timeout, source.maximumAttempts = time.Second, 2*time.Second, 20
+	waits := 0
+	source.wait = func(_ context.Context, duration time.Duration) error { waits++; now = now.Add(duration); return nil }
+	if _, err := source.Observe(context.Background()); err == nil || waits != 2 || requests != 3 {
+		t.Fatalf("deadline bound was not enforced: requests=%d waits=%d err=%v", requests, waits, err)
+	}
+}
+
+func TestRuntimeBindingSourceContextCancellationIsTerminal(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	source, err := newKubernetesRuntimeBindingSource(server.URL, "runtime-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	source.wait = func(context.Context, time.Duration) error { cancel(); return context.Canceled }
+	if _, err := source.Observe(ctx); err == nil || requests != 1 {
+		t.Fatalf("cancelled convergence was accepted or retried: requests=%d err=%v", requests, err)
 	}
 }

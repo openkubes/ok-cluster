@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,16 +18,34 @@ import (
 )
 
 const (
-	runtimeBindingKubeSystemPath = "/api/v1/namespaces/kube-system"
-	runtimeBindingLocalPathPath  = "/apis/storage.k8s.io/v1/storageclasses/local-path"
-	maximumRuntimeBindingSource  = 1024 * 1024
+	runtimeBindingKubeSystemPath  = "/api/v1/namespaces/kube-system"
+	runtimeBindingLocalPathPath   = "/apis/storage.k8s.io/v1/storageclasses/local-path"
+	maximumRuntimeBindingSource   = 1024 * 1024
+	runtimeBindingPollInterval    = 5 * time.Second
+	runtimeBindingPollTimeout     = 30 * time.Minute
+	runtimeBindingMaximumAttempts = 361
 )
+
+type runtimeBindingWaiter func(context.Context, time.Duration) error
+
+type runtimeBindingSourceError struct {
+	transient bool
+	missing   bool
+	resource  string
+}
+
+func (err *runtimeBindingSourceError) Error() string { return "bounded runtime binding source stopped" }
 
 type KubernetesRuntimeBindingSource struct {
 	endpoint          *url.URL
 	token             string
 	clientCertificate bool
 	client            *http.Client
+	clock             func() time.Time
+	wait              runtimeBindingWaiter
+	interval          time.Duration
+	timeout           time.Duration
+	maximumAttempts   int
 }
 
 // OpenKubernetesRuntimeBindingSource opens one short-lived, read-only workload
@@ -88,34 +108,75 @@ func newKubernetesRuntimeBindingSourceWithTransport(endpoint string, transport b
 	parsed.Path, parsed.RawPath = "", ""
 	return &KubernetesRuntimeBindingSource{
 		endpoint: parsed, token: transport.bearerToken, clientCertificate: transport.clientCertificate, client: &bounded,
+		clock: time.Now, wait: WaitWithTimer, interval: runtimeBindingPollInterval, timeout: runtimeBindingPollTimeout,
+		maximumAttempts: runtimeBindingMaximumAttempts,
 	}, nil
 }
 
-// Observe performs exactly the namespace GET followed by the StorageClass GET.
-// It exposes only the immutable fields consumed by runtime materialization.
+// Observe polls only the two fixed read-only identities within hard time and
+// attempt bounds. Permanent identity or response failures remain fail-closed.
 func (source *KubernetesRuntimeBindingSource) Observe(ctx context.Context) (RuntimeBindingObservation, error) {
-	if source == nil || source.endpoint == nil || source.client == nil {
+	if source == nil || source.endpoint == nil || source.client == nil || source.clock == nil || source.wait == nil ||
+		source.interval < time.Second || source.timeout < source.interval || source.maximumAttempts < 1 {
 		return RuntimeBindingObservation{}, errors.New("runtime binding source is required")
 	}
+	deadline := source.clock().Add(source.timeout)
+	namespaceSeen, storageSeen := false, false
+	namespaceUID := ""
+	for attempt := 1; attempt <= source.maximumAttempts; attempt++ {
+		previousNamespaceSeen, previousStorageSeen := namespaceSeen, storageSeen
+		observation, namespaceObserved, storageObserved, err := source.observeOnce(ctx, namespaceUID)
+		if namespaceObserved {
+			namespaceUID = observation.KubeSystemUID
+		}
+		namespaceSeen = namespaceSeen || namespaceObserved
+		storageSeen = storageSeen || storageObserved
+		if err == nil {
+			return observation, nil
+		}
+		var sourceErr *runtimeBindingSourceError
+		categorized := errors.As(err, &sourceErr)
+		regressedMissing := categorized && sourceErr.missing &&
+			(sourceErr.resource == runtimeBindingKubeSystemPath && previousNamespaceSeen || sourceErr.resource == runtimeBindingLocalPathPath && previousStorageSeen)
+		if !categorized || !sourceErr.transient || regressedMissing {
+			return RuntimeBindingObservation{}, errors.New("bounded runtime binding source stopped")
+		}
+		now := source.clock()
+		if attempt == source.maximumAttempts || !now.Before(deadline) {
+			return RuntimeBindingObservation{}, errors.New("bounded runtime binding convergence exhausted")
+		}
+		wait := source.interval
+		if remaining := deadline.Sub(now); remaining < wait {
+			wait = remaining
+		}
+		if err := source.wait(ctx, wait); err != nil {
+			return RuntimeBindingObservation{}, errors.New("bounded runtime binding convergence interrupted")
+		}
+	}
+	return RuntimeBindingObservation{}, errors.New("bounded runtime binding convergence exhausted")
+}
+
+func (source *KubernetesRuntimeBindingSource) observeOnce(ctx context.Context, expectedNamespaceUID string) (RuntimeBindingObservation, bool, bool, error) {
 	namespaceRaw, err := source.get(ctx, runtimeBindingKubeSystemPath)
 	if err != nil {
-		return RuntimeBindingObservation{}, errors.New("read bounded kube-system identity")
+		return RuntimeBindingObservation{}, false, false, err
 	}
 	namespace, err := decodeRuntimeBindingObject(namespaceRaw)
 	if err != nil || namespace.kind != "Namespace" || !runtimeInputUIDPattern.MatchString(namespace.uid) {
-		return RuntimeBindingObservation{}, errors.New("kube-system identity is invalid")
+		return RuntimeBindingObservation{}, true, false, errors.New("kube-system identity is invalid")
+	}
+	if expectedNamespaceUID != "" && namespace.uid != expectedNamespaceUID {
+		return RuntimeBindingObservation{}, true, false, errors.New("kube-system identity changed during convergence")
 	}
 	storageRaw, err := source.get(ctx, runtimeBindingLocalPathPath)
 	if err != nil {
-		return RuntimeBindingObservation{}, errors.New("read bounded local-path identity")
+		return RuntimeBindingObservation{KubeSystemUID: namespace.uid}, true, false, err
 	}
 	storage, err := decodeRuntimeBindingObject(storageRaw)
 	if err != nil || storage.kind != "StorageClass" || !runtimeInputUIDPattern.MatchString(storage.uid) || storage.provisioner != "rancher.io/local-path" {
-		return RuntimeBindingObservation{}, errors.New("local-path identity is invalid")
+		return RuntimeBindingObservation{}, true, true, errors.New("local-path identity is invalid")
 	}
-	return RuntimeBindingObservation{
-		KubeSystemUID: namespace.uid, LocalPathStorageClassUID: storage.uid, LocalPathProvisioner: storage.provisioner,
-	}, nil
+	return RuntimeBindingObservation{KubeSystemUID: namespace.uid, LocalPathStorageClassUID: storage.uid, LocalPathProvisioner: storage.provisioner}, true, true, nil
 }
 
 func (source *KubernetesRuntimeBindingSource) get(ctx context.Context, path string) ([]byte, error) {
@@ -134,7 +195,7 @@ func (source *KubernetesRuntimeBindingSource) get(ctx context.Context, path stri
 	}
 	response, err := source.client.Do(request)
 	if err != nil {
-		return nil, errors.New("bounded runtime binding request failed")
+		return nil, &runtimeBindingSourceError{transient: transientRuntimeBindingTransportError(err), resource: path}
 	}
 	defer response.Body.Close()
 	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumRuntimeBindingSource+1))
@@ -142,13 +203,38 @@ func (source *KubernetesRuntimeBindingSource) get(ctx context.Context, path stri
 		return nil, errors.New("bounded runtime binding response exceeds accepted size")
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bounded runtime binding request returned HTTP %d", response.StatusCode)
+		return nil, &runtimeBindingSourceError{transient: transientRuntimeBindingStatus(response.StatusCode), missing: response.StatusCode == http.StatusNotFound, resource: path}
 	}
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		return nil, errors.New("bounded runtime binding response is not JSON")
 	}
 	return raw, nil
+}
+
+func transientRuntimeBindingStatus(status int) bool {
+	switch status {
+	case http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func transientRuntimeBindingTransportError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	var certificateInvalid x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	var recordHeader tls.RecordHeaderError
+	var verification *tls.CertificateVerificationError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &certificateInvalid) || errors.As(err, &hostname) || errors.As(err, &recordHeader) || errors.As(err, &verification) {
+		return false
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError)
 }
 
 type runtimeBindingObject struct {
