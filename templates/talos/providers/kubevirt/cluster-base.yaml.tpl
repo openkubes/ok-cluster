@@ -129,6 +129,10 @@ spec:
             kind: Namespace
             metadata:
               name: local-path-storage
+              labels:
+                pod-security.kubernetes.io/enforce: privileged
+                pod-security.kubernetes.io/warn: privileged
+                pod-security.kubernetes.io/audit: privileged
 
             ---
             apiVersion: v1

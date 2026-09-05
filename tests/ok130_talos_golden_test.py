@@ -241,6 +241,12 @@ def main() -> int:
             == "local-path-provisioner-v0.0.30"
             and "name: local-path" in local_path_manifest
             and "provisioner: rancher.io/local-path" in local_path_manifest
+            and "pod-security.kubernetes.io/enforce: privileged"
+            in local_path_manifest
+            and "pod-security.kubernetes.io/warn: privileged"
+            in local_path_manifest
+            and "pod-security.kubernetes.io/audit: privileged"
+            in local_path_manifest
             and "rancher/local-path-provisioner@sha256:9b914881170048f80ae9302f36e5b99b4a6b18af73a38adc1c66d12f65d360be"
             in local_path_manifest
             and "busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
