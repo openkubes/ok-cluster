@@ -585,6 +585,7 @@ func fullRunPlanExpected(document postRuntimePlanExpectedDocument) stageplan.Exp
 		ExecutionFixture: document.ExecutionFixture, ExecutionAttemptDigest: document.ExecutionAttemptDigest,
 		InfrastructureAuthority: document.InfrastructureAuthority,
 		ManagementAuthority:     document.ManagementAuthority, GitOpsAuthority: document.GitOpsAuthority,
+		NetworkObservationMode: document.NetworkObservationMode,
 	}
 }
 

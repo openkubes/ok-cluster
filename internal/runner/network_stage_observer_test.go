@@ -42,6 +42,26 @@ func TestNetworkStageObserverBindsHistoricalTargetAndConverges(t *testing.T) {
 	}
 }
 
+func TestNetworkStageObserverUsesPlanBoundMVPDeferralWithoutReadingSource(t *testing.T) {
+	fixture := submissionBundleFixtureWithNetworkMode(t, "deferred-mvp/v1")
+	plan, prefix, runtimeUID := networkObserverPrefixForPlan(t, fixture.plan, true)
+	at := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	source := &fakeNetworkStageSource{err: errors.New("source must not be called")}
+	observer, err := NewNetworkStageObserver(NetworkStageObserverConfig{
+		Plan: plan, ReceiptPrefix: prefix,
+		TargetClusterUID: runtimeUID, Source: source, Profile: networkStageProfile(plan),
+		PollInterval: time.Second, PollTimeout: time.Minute, Clock: func() time.Time { return at },
+		Wait: func(context.Context, time.Duration) error { return errors.New("wait must not be called") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := observer.Observe(context.Background())
+	if err != nil || result.Outcome != "SUCCEEDED" || !platformInputDigestPattern.MatchString(result.EvidenceDigest) || source.calls != 0 {
+		t.Fatalf("unexpected plan-bound MVP deferral: %#v calls=%d err=%v", result, source.calls, err)
+	}
+}
+
 func TestNetworkStageObserverWaitsThroughFalseUntilConvergedOrBounded(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		statuses []string
@@ -235,7 +255,11 @@ func (source *fakeNetworkStageSource) Observe(_ context.Context, policy observat
 
 func networkObserverPrefix(t *testing.T, withTargetDigest bool) (stageplan.Binding, []stagereceipt.Verified, string) {
 	t.Helper()
-	plan := submissionBundleFixture(t, false, "").plan
+	return networkObserverPrefixForPlan(t, submissionBundleFixture(t, false, "").plan, withTargetDigest)
+}
+
+func networkObserverPrefixForPlan(t *testing.T, plan stageplan.Binding, withTargetDigest bool) (stageplan.Binding, []stagereceipt.Verified, string) {
+	t.Helper()
 	at := time.Date(2026, 8, 16, 19, 0, 0, 0, time.UTC)
 	const runtimeUID = "cluster-runtime-uid-147"
 	provider, err := stagereceipt.New(plan, "provider-prerequisites", []stagereceipt.Verified{}, "SUCCEEDED", "ATTEMPTED", bundleSHA("1"), bundleSHA("2"), at)
