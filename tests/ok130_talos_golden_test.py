@@ -223,6 +223,34 @@ def main() -> int:
         rendered = base.read_text(encoding="utf-8")
         rendered_legacy = legacy.read_text(encoding="utf-8")
         resources = docs(base)
+        control_plane = next(
+            item for item in resources if item["kind"] == "TalosControlPlane"
+        )
+        patches = control_plane["spec"]["controlPlaneConfig"]["controlplane"][
+            "configPatches"
+        ]
+        inline_patch = next(
+            item for item in patches
+            if item.get("path") == "/cluster/inlineManifests"
+        )
+        inline_manifests = inline_patch["value"]
+        local_path_manifest = inline_manifests[0]["contents"]
+        check(
+            len(inline_manifests) == 1
+            and inline_manifests[0]["name"]
+            == "local-path-provisioner-v0.0.30"
+            and "name: local-path" in local_path_manifest
+            and "provisioner: rancher.io/local-path" in local_path_manifest
+            and "rancher/local-path-provisioner@sha256:9b914881170048f80ae9302f36e5b99b4a6b18af73a38adc1c66d12f65d360be"
+            in local_path_manifest
+            and "busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
+            in local_path_manifest
+            and 'mkdir -m 0777 -p "$VOL_DIR"' in local_path_manifest
+            and 'rm -rf "$VOL_DIR"' in local_path_manifest
+            and "rancher/local-path-provisioner:v0.0.30"
+            not in local_path_manifest,
+            "Talos bootstrap binds the exact digest-pinned local-path runtime storage",
+        )
         roles = [item for item in resources if item["kind"] == "Role"]
         bindings = [
             item for item in resources if item["kind"] == "RoleBinding"
