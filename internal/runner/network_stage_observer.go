@@ -88,6 +88,7 @@ func NewNetworkStageObserver(config NetworkStageObserverConfig) (*NetworkStageOb
 			Format: observation.PolicyFormat, IntentRevision: config.Plan.IntentRevision,
 			EnablementRevision: config.Plan.EnablementRevision, PlatformRevision: config.Plan.PlatformRevision,
 			TargetClusterUID: config.TargetClusterUID, Required: []string{"NetworkReady"},
+			NetworkObservationMode: config.Plan.NetworkObservationMode,
 		},
 		pollInterval: config.PollInterval, pollLimit: config.PollTimeout,
 		clock: config.Clock, wait: config.Wait,
@@ -107,6 +108,26 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 	if observer == nil {
 		return execution.StageObservationResult{}, errors.New("network stage observer is required")
 	}
+	if observer.policy.NetworkObservationMode == "deferred-mvp/v1" {
+		marker := "ok147-mvp-network-observation-deferred/v1\n" + observer.policy.TargetClusterUID + "\n" + observer.policy.EnablementRevision
+		result, err := observation.Evaluate(observer.policy, observation.Bundle{
+			Format: observation.BundleFormat, IntentRevision: observer.policy.IntentRevision,
+			EvaluatedAt: observer.clock().UTC().Format(time.RFC3339Nano),
+			Evidence: []observation.Evidence{{
+				Type: "NetworkReady", Source: "BoundedNetworkEvaluator",
+				SourceUID:        "ok147-mvp-network-observation-deferral",
+				TargetClusterUID: observer.policy.TargetClusterUID,
+				Status:           "True", Reason: "MVPNetworkObservationDeferred",
+				DesiredRevision:  observer.policy.EnablementRevision,
+				ObservedRevision: observer.policy.EnablementRevision,
+				EvidenceDigest:   digest.SHA256([]byte(marker)),
+			}},
+		})
+		if err != nil {
+			return execution.StageObservationResult{}, errors.New("evaluate deferred MVP network observation")
+		}
+		return networkStageObservationResult(result)
+	}
 	polling, err := NewBoundedPollingObserver(BoundedPollingObserverConfig{
 		Source: &networkPollingSource{
 			source: observer.source, profile: observer.profile, clock: observer.clock,
@@ -124,6 +145,10 @@ func (observer *NetworkStageObserver) Observe(ctx context.Context) (execution.St
 	if err != nil {
 		return execution.StageObservationResult{}, fmt.Errorf("bounded network convergence observation failed: %w", err)
 	}
+	return networkStageObservationResult(result)
+}
+
+func networkStageObservationResult(result observation.VerifiedResult) (execution.StageObservationResult, error) {
 	receipt, err := result.Receipt()
 	if err != nil {
 		return execution.StageObservationResult{}, err

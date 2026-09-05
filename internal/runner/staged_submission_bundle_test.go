@@ -134,14 +134,18 @@ type submissionBundleTestFixture struct {
 }
 
 func submissionBundleFixture(t *testing.T, completedProvider bool, overrideProviderDigest string) submissionBundleTestFixture {
-	return submissionBundleFixtureOptions(t, completedProvider, overrideProviderDigest, false)
+	return submissionBundleFixtureOptions(t, completedProvider, overrideProviderDigest, false, "")
 }
 
 func submissionBundleFixtureWithProviderAccess(t *testing.T) submissionBundleTestFixture {
-	return submissionBundleFixtureOptions(t, true, "", true)
+	return submissionBundleFixtureOptions(t, true, "", true, "")
 }
 
-func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overrideProviderDigest string, providerAccess bool) submissionBundleTestFixture {
+func submissionBundleFixtureWithNetworkMode(t *testing.T, mode string) submissionBundleTestFixture {
+	return submissionBundleFixtureOptions(t, false, "", false, mode)
+}
+
+func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overrideProviderDigest string, providerAccess bool, networkMode string) submissionBundleTestFixture {
 	t.Helper()
 	root := t.TempDir()
 	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
@@ -188,6 +192,7 @@ func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overri
 	expected := stageplan.Expected{
 		ContractIdentity: identity, IntentRevision: revision, EnablementRevision: bundleSHA("b"), PlatformRevision: bundleSHA("c"), ExecutionFixture: bundleSHA("d"),
 		InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt", GitOpsAuthority: "ok-shared",
+		NetworkObservationMode: networkMode,
 	}
 	providerAccessPath := ""
 	providerAccessDigest := ""
@@ -273,13 +278,17 @@ func submissionBundlePlanWithProviderAccess(t *testing.T, expected stageplan.Exp
 			stages[index]["grantOperation"] = operations[index]
 		}
 	}
-	return mustJSON(t, map[string]any{
+	document := map[string]any{
 		"format": stageplan.Format, "contractIdentity": expected.ContractIdentity,
 		"intentRevision": expected.IntentRevision, "enablementRevision": expected.EnablementRevision, "platformRevision": expected.PlatformRevision, "executionFixture": expected.ExecutionFixture,
 		"authorizationState": "NO-GO",
 		"authorities":        map[string]any{"infrastructure": expected.InfrastructureAuthority, "management": expected.ManagementAuthority, "gitOps": expected.GitOpsAuthority, "workloadIdentityMode": "capi-cluster-uid/v1", "runnerIdentityMode": "bounded-job/v1"},
 		"stages":             stages,
-	})
+	}
+	if expected.NetworkObservationMode != "" {
+		document["networkObservationMode"] = expected.NetworkObservationMode
+	}
+	return mustJSON(t, document)
 }
 
 func providerAccessBundleKubeconfig() []byte {

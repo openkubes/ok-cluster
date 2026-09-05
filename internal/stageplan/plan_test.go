@@ -66,6 +66,30 @@ func TestVerifyV2BindsOneExecutionAttempt(t *testing.T) {
 	}
 }
 
+func TestVerifyBindsExplicitMVPNetworkObservationMode(t *testing.T) {
+	plan := validDocument()
+	plan.Format = FormatV2
+	plan.ExecutionAttempt = sha("5")
+	plan.NetworkObservationMode = "deferred-mvp/v1"
+	want := expected()
+	want.ExecutionAttemptDigest = plan.ExecutionAttempt
+	want.NetworkObservationMode = plan.NetworkObservationMode
+	binding, err := Verify(planJSON(t, plan), want)
+	if err != nil || binding.NetworkObservationMode != plan.NetworkObservationMode {
+		t.Fatalf("explicit network mode was not bound: %#v err=%v", binding, err)
+	}
+	withoutMode := want
+	withoutMode.NetworkObservationMode = ""
+	if _, err := Verify(planJSON(t, plan), withoutMode); err == nil {
+		t.Fatal("plan selected deferred network mode without an independent expected binding")
+	}
+	plan.NetworkObservationMode = "skip-everything/v1"
+	want.NetworkObservationMode = plan.NetworkObservationMode
+	if _, err := Verify(planJSON(t, plan), want); err == nil {
+		t.Fatal("unsupported network mode was accepted")
+	}
+}
+
 func TestRequireInputBindsExactArtifactIdentity(t *testing.T) {
 	binding, err := Verify(planJSON(t, validDocument()), expected())
 	if err != nil {

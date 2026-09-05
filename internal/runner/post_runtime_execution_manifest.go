@@ -34,6 +34,7 @@ type postRuntimePlanExpectedDocument struct {
 	InfrastructureAuthority string            `json:"infrastructureAuthority"`
 	ManagementAuthority     string            `json:"managementAuthority"`
 	GitOpsAuthority         string            `json:"gitOpsAuthority"`
+	NetworkObservationMode  string            `json:"networkObservationMode,omitempty"`
 }
 
 type postRuntimePlanDocument struct {

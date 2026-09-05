@@ -30,12 +30,13 @@ var supportedConditions = map[string]struct{}{
 
 // Policy is derived from the normalized Contract and therefore bound by R.
 type Policy struct {
-	Format             string   `json:"format"`
-	IntentRevision     string   `json:"intentRevision"`
-	EnablementRevision string   `json:"enablementRevision"`
-	PlatformRevision   string   `json:"platformRevision"`
-	TargetClusterUID   string   `json:"targetClusterUid"`
-	Required           []string `json:"required"`
+	Format                 string   `json:"format"`
+	IntentRevision         string   `json:"intentRevision"`
+	EnablementRevision     string   `json:"enablementRevision"`
+	PlatformRevision       string   `json:"platformRevision"`
+	TargetClusterUID       string   `json:"targetClusterUid"`
+	Required               []string `json:"required"`
+	NetworkObservationMode string   `json:"networkObservationMode,omitempty"`
 }
 
 // Evidence is one normalized statement from an authoritative source-specific
@@ -258,6 +259,12 @@ func validatePolicy(policy Policy, requireTarget bool) error {
 	}
 	if requireTarget && !validUID(policy.TargetClusterUID) {
 		return errors.New("observation policy has no valid target Cluster UID")
+	}
+	if policy.NetworkObservationMode != "" && policy.NetworkObservationMode != "deferred-mvp/v1" {
+		return errors.New("observation policy network mode is unsupported")
+	}
+	if policy.NetworkObservationMode != "" && (len(policy.Required) != 1 || policy.Required[0] != "NetworkReady") {
+		return errors.New("observation policy network mode requires only NetworkReady")
 	}
 	seen := map[string]struct{}{}
 	for _, name := range policy.Required {
