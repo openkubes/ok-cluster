@@ -112,6 +112,91 @@ func TestStageAuthorizationHTTPResolverReportsOnlySafeHTTPStatus(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "HTTP 403") || strings.Contains(err.Error(), "sensitive authority detail") || strings.Contains(err.Error(), server.URL) {
 		t.Fatalf("unsafe or incomplete HTTP error: %v", err)
 	}
+	if redactedStopCategory(err) != "AUTHORIZATION_HTTP_REJECTED" {
+		t.Fatalf("HTTP rejection category=%q", redactedStopCategory(err))
+	}
+}
+
+func TestStageAuthorizationHTTPResolverPollsOnlyTransientStatusWithinBounds(t *testing.T) {
+	fixture := targetCredentialBundleFixture(t)
+	resume := StageResumeConfig{PlanPath: fixture.config.PlanPath, PlanExpected: fixture.config.PlanExpected, Receipts: fixture.config.Receipts}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 6, 7, 25, 0, 0, time.UTC)
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		requests++
+		if requests < 3 {
+			response.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		var request StageAuthorizationRequest
+		if err := json.NewDecoder(httpRequest.Body).Decode(&request); err != nil {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		response.Header().Set("Content-Type", stageAuthorizationResponseMediaType)
+		response.WriteHeader(http.StatusCreated)
+		_, _ = response.Write(stageAuthorizationEnvelopeForRequest(t, request, publicKey, privateKey))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
+		Endpoint: server.URL + "/v1/stage-authorizations", TokenFile: writeBundleFile(t, root, "token", []byte("authority-token")),
+		CAFile: writeRuntimeBindingServerCA(t, root, "ca.crt", server), PublicKeyPath: writeBundleFile(t, root, "authority.pub", []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n")),
+		OutputDirectory: root, Clock: func() time.Time { return time.Date(2026, 8, 18, 8, 5, 0, 0, time.UTC) },
+		PollClock: func() time.Time { return at }, PollInterval: time.Second, PollTimeout: 5 * time.Second, MaxAttempts: 3,
+		PollWait: func(ctx context.Context, duration time.Duration) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			at = at.Add(duration)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveStageAuthorization(context.Background(), resume, resolver); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 3 {
+		t.Fatalf("authority requests=%d, want 3", requests)
+	}
+}
+
+func TestStageAuthorizationHTTPResolverDoesNotPollTerminalStatus(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	resolver, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
+		Endpoint: server.URL + "/v1/stage-authorizations", TokenFile: writeBundleFile(t, root, "token", []byte("authority-token")),
+		CAFile: writeRuntimeBindingServerCA(t, root, "ca.crt", server), PublicKeyPath: writeBundleFile(t, root, "authority.pub", []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n")),
+		OutputDirectory: root, Clock: time.Now, PollInterval: time.Millisecond, PollTimeout: time.Second, MaxAttempts: 3,
+		PollWait: func(context.Context, time.Duration) error { waits++; return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolver.resolve(context.Background(), "sha256:"+strings.Repeat("b", 64), []byte(`{}`), stageAuthorizationRequestMediaType)
+	if err == nil || waits != 0 || redactedStopCategory(err) != "AUTHORIZATION_HTTP_REJECTED" {
+		t.Fatalf("terminal status was retried: waits=%d category=%q err=%v", waits, redactedStopCategory(err), err)
+	}
 }
 
 func TestStageAuthorizationHTTPResolverRejectsRedirectAndUnsafeConfiguration(t *testing.T) {

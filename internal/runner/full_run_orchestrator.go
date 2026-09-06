@@ -125,7 +125,7 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 		return stopFullRunOrchestration(receipt, nextFullRunStage(receipt.Checkpoints))
 	}
 	if suffixErr != nil || suffix.State != "SUCCEEDED" {
-		return stopFullRunOrchestration(receipt, suffix.StoppedAt)
+		return stopFullRunOrchestrationWithCategory(receipt, suffix.StoppedAt, suffix.StopCategory, suffixErr)
 	}
 	receipt.State = "SUCCEEDED"
 	return receipt, nil
@@ -171,6 +171,9 @@ func appendFullRunSuffix(receipt *FullRunOrchestrationReceipt, suffix PostRuntim
 	if suffix.State == "STOPPED" {
 		if !validStoppedStage(postRuntimeStageOrder, len(suffix.Checkpoints), suffix.StoppedAt) {
 			return errors.New("stopped full-run suffix is inconsistent")
+		}
+		if suffix.StopCategory != "" && !validRedactedStopCategory(suffix.StopCategory) {
+			return errors.New("stopped full-run suffix category is invalid")
 		}
 	}
 	for index, checkpoint := range suffix.Checkpoints {

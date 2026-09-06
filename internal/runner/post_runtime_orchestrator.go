@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
 )
@@ -26,11 +27,12 @@ type PostRuntimeStageCheckpoint struct {
 // PostRuntimeOrchestrationReceipt is a redaction-safe summary. It contains no
 // credential, endpoint, target UID, CA or local path.
 type PostRuntimeOrchestrationReceipt struct {
-	Format      string                       `json:"format"`
-	State       string                       `json:"state"`
-	PlanDigest  string                       `json:"planDigest,omitempty"`
-	StoppedAt   string                       `json:"stoppedAt,omitempty"`
-	Checkpoints []PostRuntimeStageCheckpoint `json:"checkpoints"`
+	Format       string                       `json:"format"`
+	State        string                       `json:"state"`
+	PlanDigest   string                       `json:"planDigest,omitempty"`
+	StoppedAt    string                       `json:"stoppedAt,omitempty"`
+	StopCategory string                       `json:"stopCategory,omitempty"`
+	Checkpoints  []PostRuntimeStageCheckpoint `json:"checkpoints"`
 }
 
 // PostRuntimeOrchestration composes only the already bounded Stage 8-12
@@ -66,37 +68,52 @@ func (orchestration PostRuntimeOrchestration) Run(ctx context.Context) (PostRunt
 	credentialReceipt, handoff, runErr := orchestration.RunTargetCredential(ctx)
 	if err := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[0], execution.StagedReceiptFormat, credentialReceipt.Format, credentialReceipt.State, credentialReceipt.PlanDigest, credentialReceipt.StageID, credentialReceipt.StageReceiptDigest); err != nil || runErr != nil || handoff == nil {
 		discardTargetCredentialHandoff(handoff)
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[0])
+		if runErr != nil {
+			return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[0], runErr)
+		}
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[0], err)
 	}
 	defer discardTargetCredentialHandoff(handoff)
 
 	if err := ctx.Err(); err != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[1])
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[1], err)
 	}
 	registrationReceipt, runErr := orchestration.RunTargetRegistration(ctx, handoff, credentialReceipt)
-	if err := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[1], execution.StagedReceiptFormat, registrationReceipt.Format, registrationReceipt.State, registrationReceipt.PlanDigest, registrationReceipt.StageID, registrationReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[1])
+	if appendErr := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[1], execution.StagedReceiptFormat, registrationReceipt.Format, registrationReceipt.State, registrationReceipt.PlanDigest, registrationReceipt.StageID, registrationReceipt.StageReceiptDigest); appendErr != nil || runErr != nil {
+		if runErr != nil {
+			return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[1], runErr)
+		}
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[1], appendErr)
 	}
 	if err := ctx.Err(); err != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[2])
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[2], err)
 	}
 	applicationReceipt, runErr := orchestration.RunPlatformApplications(ctx, registrationReceipt)
-	if err := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[2], execution.StagedReceiptFormat, applicationReceipt.Format, applicationReceipt.State, applicationReceipt.PlanDigest, applicationReceipt.StageID, applicationReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[2])
+	if appendErr := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[2], execution.StagedReceiptFormat, applicationReceipt.Format, applicationReceipt.State, applicationReceipt.PlanDigest, applicationReceipt.StageID, applicationReceipt.StageReceiptDigest); appendErr != nil || runErr != nil {
+		if runErr != nil {
+			return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[2], runErr)
+		}
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[2], appendErr)
 	}
 	if err := ctx.Err(); err != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[3])
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[3], err)
 	}
 	observationReceipt, runErr := orchestration.RunPlatformObservation(ctx, applicationReceipt)
-	if err := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[3], execution.ObservationStageReceiptFormat, observationReceipt.Format, observationReceipt.State, observationReceipt.PlanDigest, observationReceipt.StageID, observationReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[3])
+	if appendErr := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[3], execution.ObservationStageReceiptFormat, observationReceipt.Format, observationReceipt.State, observationReceipt.PlanDigest, observationReceipt.StageID, observationReceipt.StageReceiptDigest); appendErr != nil || runErr != nil {
+		if runErr != nil {
+			return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[3], runErr)
+		}
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[3], appendErr)
 	}
 	if err := ctx.Err(); err != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[4])
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[4], err)
 	}
 	evaluationReceipt, runErr := orchestration.RunAggregateEvidence(ctx, observationReceipt)
-	if err := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[4], execution.EvaluationStageReceiptFormat, evaluationReceipt.Format, evaluationReceipt.State, evaluationReceipt.PlanDigest, evaluationReceipt.StageID, evaluationReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPostRuntimeOrchestration(receipt, postRuntimeStageOrder[4])
+	if appendErr := appendPostRuntimeCheckpoint(&receipt, postRuntimeStageOrder[4], execution.EvaluationStageReceiptFormat, evaluationReceipt.Format, evaluationReceipt.State, evaluationReceipt.PlanDigest, evaluationReceipt.StageID, evaluationReceipt.StageReceiptDigest); appendErr != nil || runErr != nil {
+		if runErr != nil {
+			return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[4], runErr)
+		}
+		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[4], appendErr)
 	}
 	receipt.State = "SUCCEEDED"
 	return receipt, nil
@@ -120,7 +137,17 @@ func appendPostRuntimeCheckpoint(receipt *PostRuntimeOrchestrationReceipt, expec
 
 func stopPostRuntimeOrchestration(receipt PostRuntimeOrchestrationReceipt, stageID string) (PostRuntimeOrchestrationReceipt, error) {
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	receipt.StopCategory = "ORCHESTRATION_STOPPED"
 	return receipt, errors.New("post-runtime orchestration stopped at " + stageID)
+}
+
+func stopPostRuntimeOrchestrationWithCause(receipt PostRuntimeOrchestrationReceipt, stageID string, cause error) (PostRuntimeOrchestrationReceipt, error) {
+	receipt.State, receipt.StoppedAt = "STOPPED", stageID
+	receipt.StopCategory = redactedStopCategory(cause)
+	if cause == nil {
+		return receipt, errors.New("post-runtime orchestration stopped at " + stageID)
+	}
+	return receipt, fmt.Errorf("post-runtime orchestration stopped at %s: %w", stageID, cause)
 }
 
 func discardTargetCredentialHandoff(handoff *VerifiedTargetCredentialStageHandoff) {

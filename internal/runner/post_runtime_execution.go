@@ -88,6 +88,7 @@ type PostRuntimeExecutionReceipt struct {
 	State                                     string                                                  `json:"state"`
 	PlanDigest                                string                                                  `json:"planDigest,omitempty"`
 	StoppedAt                                 string                                                  `json:"stoppedAt,omitempty"`
+	StopCategory                              string                                                  `json:"stopCategory,omitempty"`
 	Checkpoints                               []PostRuntimeStageCheckpoint                            `json:"checkpoints"`
 	ResolvedAuthorizations                    []ResolvedStageAuthorizationReceipt                     `json:"resolvedAuthorizations"`
 	ResolvedRecoveryAuthorization             *ResolvedTargetCredentialRecoveryAuthorizationReceipt   `json:"resolvedRecoveryAuthorization,omitempty"`
@@ -456,7 +457,7 @@ func (executor *PostRuntimeExecution) Run(ctx context.Context) (PostRuntimeExecu
 	orchestrationReceipt, err := orchestration.Run(ctx)
 	result := PostRuntimeExecutionReceipt{
 		Format: PostRuntimeExecutionReceiptFormat, State: orchestrationReceipt.State,
-		PlanDigest: orchestrationReceipt.PlanDigest, StoppedAt: orchestrationReceipt.StoppedAt,
+		PlanDigest: orchestrationReceipt.PlanDigest, StoppedAt: orchestrationReceipt.StoppedAt, StopCategory: orchestrationReceipt.StopCategory,
 		Checkpoints:                   append([]PostRuntimeStageCheckpoint(nil), orchestrationReceipt.Checkpoints...),
 		ResolvedAuthorizations:        append([]ResolvedStageAuthorizationReceipt(nil), authorizations...),
 		ResolvedRecoveryAuthorization: recoveryAuthorization, TargetCredentialRecovery: recoveryReceipt,
