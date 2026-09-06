@@ -141,6 +141,30 @@ func TestPostRuntimeOrchestrationStopsWithoutRetryAndDiscardsCredential(t *testi
 	}
 }
 
+func TestPostRuntimeOrchestrationPropagatesRedactedAuthorizationCategory(t *testing.T) {
+	orchestration := PostRuntimeOrchestration{
+		RunTargetCredential: func(context.Context) (execution.StagedOperationReceipt, *VerifiedTargetCredentialStageHandoff, error) {
+			return execution.StagedOperationReceipt{}, nil, newStageAuthorizationStop("AUTHORIZATION_TRANSPORT_STOPPED", "private transport detail")
+		},
+		RunTargetRegistration: func(context.Context, *VerifiedTargetCredentialStageHandoff, execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
+			return execution.StagedOperationReceipt{}, nil
+		},
+		RunPlatformApplications: func(context.Context, execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
+			return execution.StagedOperationReceipt{}, nil
+		},
+		RunPlatformObservation: func(context.Context, execution.StagedOperationReceipt) (execution.ObservationStageRunReceipt, error) {
+			return execution.ObservationStageRunReceipt{}, nil
+		},
+		RunAggregateEvidence: func(context.Context, execution.ObservationStageRunReceipt) (execution.EvaluationStageRunReceipt, error) {
+			return execution.EvaluationStageRunReceipt{}, nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" || receipt.StopCategory != "AUTHORIZATION_TRANSPORT_STOPPED" {
+		t.Fatalf("authorization category was not propagated: %#v %v", receipt, err)
+	}
+}
+
 func TestPostRuntimeOrchestrationRejectsMalformedOrForeignReceipts(t *testing.T) {
 	for name, mutate := range map[string]func(*execution.StagedOperationReceipt){
 		"wrong format": func(receipt *execution.StagedOperationReceipt) {

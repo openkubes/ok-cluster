@@ -183,10 +183,10 @@ func ResolveStageAuthorization(ctx context.Context, resume StageResumeConfig, re
 		return ResolvedStageAuthorization{}, fmt.Errorf("resolve stage authorization: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return ResolvedStageAuthorization{}, errors.New("stage authorization context became unavailable")
+		return ResolvedStageAuthorization{}, newStageAuthorizationStop("AUTHORIZATION_INTERRUPTED", "stage authorization context became unavailable")
 	}
 	if source.GrantPath == "" || source.PublicKeyPath == "" || source.EvaluationTime.IsZero() {
-		return ResolvedStageAuthorization{}, errors.New("resolved stage authorization source is incomplete")
+		return ResolvedStageAuthorization{}, newStageAuthorizationStop("AUTHORIZATION_RESPONSE_INVALID", "resolved stage authorization source is incomplete")
 	}
 	predecessors, err := cursor.Predecessors()
 	if err != nil {
@@ -194,10 +194,10 @@ func ResolveStageAuthorization(ctx context.Context, resume StageResumeConfig, re
 	}
 	grant, err := authorization.LoadStage(source.GrantPath, source.PublicKeyPath, plan, decision.StageID, predecessors, source.EvaluationTime)
 	if err != nil {
-		return ResolvedStageAuthorization{}, errors.New("verify resolved stage authorization")
+		return ResolvedStageAuthorization{}, newStageAuthorizationStop("AUTHORIZATION_RESPONSE_INVALID", "verify resolved stage authorization")
 	}
 	if _, err := authorization.BindStageGrant(grant, plan, decision.StageID, predecessors); err != nil {
-		return ResolvedStageAuthorization{}, errors.New("bind resolved stage authorization")
+		return ResolvedStageAuthorization{}, newStageAuthorizationStop("AUTHORIZATION_RESPONSE_INVALID", "bind resolved stage authorization")
 	}
 	grantReceipt := grant.Receipt()
 	receiptFormat := ResolvedStageAuthorizationReceiptFormat

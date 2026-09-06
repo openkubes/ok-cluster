@@ -3,9 +3,12 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +21,12 @@ import (
 )
 
 const maximumStageAuthorizationHTTPResponseBytes = 128 * 1024
+
+const (
+	defaultStageAuthorizationPollInterval = time.Second
+	defaultStageAuthorizationPollTimeout  = 30 * time.Second
+	defaultStageAuthorizationMaxAttempts  = 30
+)
 
 const (
 	stageAuthorizationRequestMediaType                      = "application/vnd.openkubes.stage-authorization-request+json"
@@ -33,6 +42,11 @@ type StageAuthorizationHTTPResolverConfig struct {
 	PublicKeyPath   string
 	OutputDirectory string
 	Clock           func() time.Time
+	PollClock       func() time.Time
+	PollWait        func(context.Context, time.Duration) error
+	PollInterval    time.Duration
+	PollTimeout     time.Duration
+	MaxAttempts     int
 }
 
 type StageAuthorizationHTTPResolver struct {
@@ -42,6 +56,11 @@ type StageAuthorizationHTTPResolver struct {
 	outputDirectory string
 	client          *http.Client
 	clock           func() time.Time
+	pollClock       func() time.Time
+	pollWait        func(context.Context, time.Duration) error
+	pollInterval    time.Duration
+	pollTimeout     time.Duration
+	maxAttempts     int
 	mu              sync.Mutex
 	used            map[string]struct{}
 }
@@ -68,6 +87,24 @@ func newStageAuthorizationHTTPResolver(config StageAuthorizationHTTPResolverConf
 	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") || config.PublicKeyPath == "" || config.OutputDirectory == "" || config.Clock == nil || client == nil {
 		return nil, errors.New("stage authorization HTTP resolver configuration is incomplete")
 	}
+	if config.PollClock == nil {
+		config.PollClock = time.Now
+	}
+	if config.PollWait == nil {
+		config.PollWait = waitForStageAuthorizationPoll
+	}
+	if config.PollInterval == 0 {
+		config.PollInterval = defaultStageAuthorizationPollInterval
+	}
+	if config.PollTimeout == 0 {
+		config.PollTimeout = defaultStageAuthorizationPollTimeout
+	}
+	if config.MaxAttempts == 0 {
+		config.MaxAttempts = defaultStageAuthorizationMaxAttempts
+	}
+	if config.PollInterval < time.Millisecond || config.PollTimeout < config.PollInterval || config.PollTimeout > time.Minute || config.MaxAttempts < 1 || config.MaxAttempts > 60 {
+		return nil, errors.New("stage authorization polling boundary is invalid")
+	}
 	keyInfo, err := os.Lstat(config.PublicKeyPath)
 	if err != nil || !keyInfo.Mode().IsRegular() || keyInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("stage authorization trust key metadata is invalid")
@@ -84,6 +121,8 @@ func newStageAuthorizationHTTPResolver(config StageAuthorizationHTTPResolverConf
 	return &StageAuthorizationHTTPResolver{
 		endpoint: endpoint, token: token, publicKeyPath: config.PublicKeyPath,
 		outputDirectory: config.OutputDirectory, client: &bounded, clock: config.Clock,
+		pollClock: config.PollClock, pollWait: config.PollWait, pollInterval: config.PollInterval,
+		pollTimeout: config.PollTimeout, maxAttempts: config.MaxAttempts,
 		used: map[string]struct{}{},
 	}, nil
 }
@@ -132,48 +171,65 @@ func (resolver *StageAuthorizationHTTPResolver) resolve(ctx context.Context, req
 	if err := validateRuntimeBindingOutputPath(outputPath); err != nil {
 		return StageAuthorizationSource{}, errors.New("stage authorization grant destination is invalid")
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, resolver.endpoint.String(), bytes.NewReader(requestRaw))
-	if err != nil {
-		return StageAuthorizationSource{}, errors.New("create stage authorization request")
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+resolver.token)
-	httpRequest.Header.Set("Content-Type", contentType)
-	httpRequest.Header.Set("Accept", stageAuthorizationResponseMediaType)
-	response, err := resolver.client.Do(httpRequest)
-	if err != nil {
-		return StageAuthorizationSource{}, errors.New("perform stage authorization request")
-	}
-	defer response.Body.Close()
-	grantRaw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumStageAuthorizationHTTPResponseBytes+1))
-	if response.StatusCode != http.StatusCreated {
-		return StageAuthorizationSource{}, fmt.Errorf("stage authorization authority returned HTTP %d", response.StatusCode)
-	}
-	if readErr != nil || len(grantRaw) == 0 || len(grantRaw) > maximumStageAuthorizationHTTPResponseBytes ||
-		response.Header.Get("Content-Type") != stageAuthorizationResponseMediaType {
-		return StageAuthorizationSource{}, errors.New("stage authorization authority response is not accepted")
+	deadline := resolver.pollClock().Add(resolver.pollTimeout)
+	var grantRaw []byte
+	for attempt := 1; attempt <= resolver.maxAttempts; attempt++ {
+		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, resolver.endpoint.String(), bytes.NewReader(requestRaw))
+		if err != nil {
+			return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_RESPONSE_INVALID", "create stage authorization request")
+		}
+		httpRequest.Header.Set("Authorization", "Bearer "+resolver.token)
+		httpRequest.Header.Set("Content-Type", contentType)
+		httpRequest.Header.Set("Accept", stageAuthorizationResponseMediaType)
+		response, requestErr := resolver.client.Do(httpRequest)
+		if requestErr != nil {
+			if !transientStageAuthorizationTransportError(requestErr) || !resolver.canPollAgain(ctx, attempt, deadline) {
+				return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_TRANSPORT_STOPPED", "perform stage authorization request")
+			}
+			if err := resolver.pollWait(ctx, resolver.pollInterval); err != nil {
+				return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_INTERRUPTED", "stage authorization polling interrupted")
+			}
+			continue
+		}
+		grantRaw, err = io.ReadAll(io.LimitReader(response.Body, maximumStageAuthorizationHTTPResponseBytes+1))
+		closeErr := response.Body.Close()
+		if response.StatusCode != http.StatusCreated {
+			if transientStageAuthorizationHTTPStatus(response.StatusCode) && resolver.canPollAgain(ctx, attempt, deadline) {
+				if err := resolver.pollWait(ctx, resolver.pollInterval); err != nil {
+					return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_INTERRUPTED", "stage authorization polling interrupted")
+				}
+				continue
+			}
+			return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_HTTP_REJECTED", fmt.Sprintf("stage authorization authority returned HTTP %d", response.StatusCode))
+		}
+		if err != nil || closeErr != nil || len(grantRaw) == 0 || len(grantRaw) > maximumStageAuthorizationHTTPResponseBytes ||
+			response.Header.Get("Content-Type") != stageAuthorizationResponseMediaType {
+			return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_RESPONSE_INVALID", "stage authorization authority response is not accepted")
+		}
+		break
 	}
 	file, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return StageAuthorizationSource{}, errors.New("create exclusive stage authorization grant")
+		return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_PERSISTENCE_STOPPED", "create exclusive stage authorization grant")
 	}
 	if _, err := file.Write(grantRaw); err != nil {
 		file.Close()
-		return StageAuthorizationSource{}, errors.New("write stage authorization grant")
+		return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_PERSISTENCE_STOPPED", "write stage authorization grant")
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return StageAuthorizationSource{}, errors.New("sync stage authorization grant")
+		return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_PERSISTENCE_STOPPED", "sync stage authorization grant")
 	}
 	if err := file.Close(); err != nil {
-		return StageAuthorizationSource{}, errors.New("close stage authorization grant")
+		return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_PERSISTENCE_STOPPED", "close stage authorization grant")
 	}
 	info, err := os.Lstat(outputPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || info.Size() != int64(len(grantRaw)) {
-		return StageAuthorizationSource{}, errors.New("persisted stage authorization grant metadata differs")
+		return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_PERSISTENCE_STOPPED", "persisted stage authorization grant metadata differs")
 	}
 	stored, err := readBoundedRegular(outputPath, maximumStageAuthorizationHTTPResponseBytes)
 	if err != nil || digest.SHA256(stored) != digest.SHA256(grantRaw) {
-		return StageAuthorizationSource{}, errors.New("persisted stage authorization grant differs")
+		return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_PERSISTENCE_STOPPED", "persisted stage authorization grant differs")
 	}
 	evaluationTime := resolver.clock().UTC()
 	if evaluationTime.IsZero() {
@@ -182,6 +238,61 @@ func (resolver *StageAuthorizationHTTPResolver) resolve(ctx context.Context, req
 	return StageAuthorizationSource{
 		GrantPath: outputPath, PublicKeyPath: resolver.publicKeyPath, EvaluationTime: evaluationTime,
 	}, nil
+}
+
+type stageAuthorizationStopError struct {
+	category string
+	message  string
+}
+
+func (err *stageAuthorizationStopError) Error() string                { return err.message }
+func (err *stageAuthorizationStopError) RedactedStopCategory() string { return err.category }
+
+func newStageAuthorizationStop(category, message string) error {
+	return &stageAuthorizationStopError{category: category, message: message}
+}
+
+func (resolver *StageAuthorizationHTTPResolver) canPollAgain(ctx context.Context, attempt int, deadline time.Time) bool {
+	return ctx.Err() == nil && attempt < resolver.maxAttempts && resolver.pollClock().Add(resolver.pollInterval).Before(deadline)
+}
+
+func transientStageAuthorizationHTTPStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func transientStageAuthorizationTransportError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	var certificateInvalid x509.CertificateInvalidError
+	var hostnameError x509.HostnameError
+	var recordHeader tls.RecordHeaderError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &certificateInvalid) || errors.As(err, &hostnameError) || errors.As(err, &recordHeader) {
+		return false
+	}
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) {
+		return dnsError.IsTimeout || dnsError.IsTemporary
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func waitForStageAuthorizationPoll(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 var _ StageAuthorizationResolver = (*StageAuthorizationHTTPResolver)(nil)

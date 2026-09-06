@@ -151,6 +151,25 @@ func TestFullRunOrchestrationPropagatesPrefixStopCategory(t *testing.T) {
 	}
 }
 
+func TestFullRunOrchestrationPropagatesSuffixStopCategory(t *testing.T) {
+	continuation := successfulFakePostRuntimeContinuation()
+	continuation.receipt.State = "STOPPED"
+	continuation.receipt.StoppedAt = "target-credential"
+	continuation.receipt.StopCategory = "AUTHORIZATION_TRANSPORT_STOPPED"
+	continuation.receipt.Checkpoints = nil
+	continuation.err = newStageAuthorizationStop("AUTHORIZATION_TRANSPORT_STOPPED", "private transport detail")
+	orchestration := &FullRunOrchestration{
+		PreRuntime: successfulPreRuntimeOrchestration(nil),
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			return continuation, nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" || receipt.StopCategory != "AUTHORIZATION_TRANSPORT_STOPPED" {
+		t.Fatalf("suffix authorization category was not propagated: %#v %v", receipt, err)
+	}
+}
+
 func TestFullRunOrchestrationRejectsUnboundedPrefixStopCategory(t *testing.T) {
 	prefix := &fakePreRuntimeContinuation{
 		receipt: PreRuntimeOrchestrationReceipt{
