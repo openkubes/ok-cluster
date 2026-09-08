@@ -172,7 +172,7 @@ func TestObservabilityCollectorPostPrefixStopsBeforeBuildOnForeignRuntime(t *tes
 		ReceiptPrefix: make([]StageReceiptSource, 7), TargetIdentity: digest.SHA256([]byte("collector-target-cluster-uid")),
 		Workload: WorkloadAuthorityFileResolverConfig{CAFile: config.Activation.ObserverCredential.CAFile},
 	})
-	if err == nil || buildCalls != 0 || activator.Receipt().State != "STOPPED" {
+	if err == nil || redactedStopCategory(err) != "POST_PREFIX_WORKLOAD_AUTHORITY_INVALID" || buildCalls != 0 || activator.Receipt().State != "STOPPED" {
 		t.Fatalf("foreign runtime reached package build: calls=%d receipt=%#v err=%v", buildCalls, activator.Receipt(), err)
 	}
 }
@@ -218,7 +218,8 @@ func TestObservabilityCollectorPostPrefixStopsAfterAuthorityFailureBeforeCredent
 	})
 	receipt := activator.Receipt()
 	if err == nil || issueCalls != 0 || receipt.State != "STOPPED" || receipt.RuntimeAuthorityCreatedObjects != 2 ||
-		!stageReceiptPrefixDigestPattern.MatchString(receipt.RuntimeAuthorityReceiptDigest) {
+		!stageReceiptPrefixDigestPattern.MatchString(receipt.RuntimeAuthorityReceiptDigest) ||
+		redactedStopCategory(err) != "POST_PREFIX_RUNTIME_AUTHORITY_INSTALL_STOPPED" {
 		t.Fatalf("authority failure crossed credential boundary: %#v issue=%d err=%v", receipt, issueCalls, err)
 	}
 }

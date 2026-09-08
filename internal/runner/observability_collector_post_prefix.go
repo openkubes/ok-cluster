@@ -110,7 +110,7 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	if err := ctx.Err(); err != nil || len(prefix.ReceiptPrefix) != len(preRuntimeStageOrder) ||
 		!stageReceiptPrefixDigestPattern.MatchString(prefix.TargetIdentity) {
 		activation.stop()
-		return errors.New("observability collector post-prefix binding is invalid")
+		return newFixedRedactedStop("POST_PREFIX_BINDING_INVALID", errors.New("observability collector post-prefix binding is invalid"))
 	}
 	binding, authority, err := activation.resolve(prefix.Workload)
 	expectedCA := activation.config.Package.Activation.ObserverCredential.CABundleDigest
@@ -118,24 +118,24 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 		(expectedCA != "" && authority.CABundleDigest != expectedCA) ||
 		prefix.Workload.CAFile != activation.config.Package.Activation.ObserverCredential.CAFile {
 		activation.stop()
-		return errors.New("observability collector installer differs from runtime workload authority")
+		return newFixedRedactedStop("POST_PREFIX_WORKLOAD_AUTHORITY_INVALID", errors.New("observability collector installer differs from runtime workload authority"))
 	}
 	authorityConfig := activation.config.RuntimeAuthority
 	authorityConfig.TargetIdentityDigest = prefix.TargetIdentity
 	authorityPackage, err := activation.buildAuthority(authorityConfig)
 	if err != nil {
 		activation.stop()
-		return errors.New("build observability collector runtime authority package")
+		return newFixedRedactedStop("POST_PREFIX_RUNTIME_AUTHORITY_BUILD_STOPPED", errors.New("build observability collector runtime authority package"))
 	}
 	authorityPackageReceipt, err := authorityPackage.Receipt()
 	if err != nil || authorityPackageReceipt.TargetIdentityDigest != prefix.TargetIdentity {
 		activation.stop()
-		return errors.New("verify observability collector runtime authority package")
+		return newFixedRedactedStop("POST_PREFIX_RUNTIME_AUTHORITY_BUILD_STOPPED", errors.New("verify observability collector runtime authority package"))
 	}
 	authorityInstaller, err := activation.openAuthority(prefix.Workload, authorityPackage)
 	if err != nil {
 		activation.stop()
-		return errors.New("open observability collector runtime authority installer")
+		return newFixedRedactedStop("POST_PREFIX_RUNTIME_AUTHORITY_INSTALL_STOPPED", errors.New("open observability collector runtime authority installer"))
 	}
 	authorityInstallReceipt, err := authorityInstaller.Install(ctx)
 	authorityInstallReceiptRaw, encodeErr := json.Marshal(authorityInstallReceipt)
@@ -149,24 +149,24 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	if err != nil || encodeErr != nil || authorityInstallReceipt.State != "INSTALLED" || len(authorityInstallReceipt.Results) != 5 ||
 		authorityInstallReceipt.TargetIdentityDigest != prefix.TargetIdentity || authorityInstallReceipt.PackageDigest != authorityPackageReceipt.PackageDigest {
 		activation.stop()
-		return errors.New("install observability collector runtime authority")
+		return newFixedRedactedStop("POST_PREFIX_RUNTIME_AUTHORITY_INSTALL_STOPPED", errors.New("install observability collector runtime authority"))
 	}
 	observerCredential, err := activation.issueObserver(ctx, ObservabilityCollectorObserverCredentialConfig{
 		Workload: prefix.Workload, ExpectedTargetDigest: prefix.TargetIdentity, Clock: activation.config.Clock,
 	})
 	if err != nil {
 		activation.stop()
-		return errors.New("issue observability collector observer credential")
+		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", errors.New("issue observability collector observer credential"))
 	}
 	observerSource, observerToken, observerReceipt, err := observerCredential.Material()
 	if err != nil || observerSource.AuthorityIdentity != prefix.TargetIdentity || observerSource.CABundleDigest != authority.CABundleDigest {
 		activation.stop()
-		return errors.New("verify observability collector observer credential")
+		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", errors.New("verify observability collector observer credential"))
 	}
 	observerReceiptRaw, err := json.Marshal(observerReceipt)
 	if err != nil {
 		activation.stop()
-		return errors.New("encode observability collector observer credential receipt")
+		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", errors.New("encode observability collector observer credential receipt"))
 	}
 	packageConfig := activation.config.Package
 	packageConfig.Activation.RuntimeBinding.Bundle.Receipts = append([]StageReceiptSource(nil), prefix.ReceiptPrefix[:6]...)
@@ -176,44 +176,44 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	packaged, err := activation.build(packageConfig)
 	if err != nil {
 		activation.stop()
-		return errors.New("build observability collector post-prefix package")
+		return newFixedRedactedStop("POST_PREFIX_PACKAGE_BUILD_STOPPED", errors.New("build observability collector post-prefix package"))
 	}
 	packageReceipt, err := packaged.Receipt()
 	if err != nil {
 		activation.stop()
-		return errors.New("verify observability collector post-prefix package")
+		return newFixedRedactedStop("POST_PREFIX_PACKAGE_BUILD_STOPPED", errors.New("verify observability collector post-prefix package"))
 	}
 	plan, err := PlanObservabilityCollectorRuntimeInstallation(packaged)
 	if err != nil || plan.TargetIdentityDigest != prefix.TargetIdentity || plan.RuntimeBindingDigest != packageReceipt.RuntimeBindingDigest {
 		activation.stop()
-		return errors.New("observability collector package differs from fresh runtime prefix")
+		return newFixedRedactedStop("POST_PREFIX_PACKAGE_BUILD_STOPPED", errors.New("observability collector package differs from fresh runtime prefix"))
 	}
 	credential, err := activation.issue(ctx, ObservabilityCollectorInstallerCredentialConfig{
 		Workload: prefix.Workload, ExpectedTargetDigest: prefix.TargetIdentity, Clock: activation.config.Clock,
 	})
 	if err != nil {
 		activation.stop()
-		return errors.New("issue observability collector installer credential")
+		return newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_STOPPED", errors.New("issue observability collector installer credential"))
 	}
 	credentialReceipt, err := credential.Receipt()
 	if err != nil || credentialReceipt.TargetIdentityDigest != prefix.TargetIdentity || credentialReceipt.CABundleDigest != authority.CABundleDigest {
 		activation.stop()
-		return errors.New("verify observability collector installer credential")
+		return newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_STOPPED", errors.New("verify observability collector installer credential"))
 	}
 	credentialReceiptRaw, err := json.Marshal(credentialReceipt)
 	if err != nil {
 		activation.stop()
-		return errors.New("encode observability collector installer credential receipt")
+		return newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_STOPPED", errors.New("encode observability collector installer credential receipt"))
 	}
 	launcherConfig, err := credential.launcherConfig()
 	if err != nil {
 		activation.stop()
-		return errors.New("bind observability collector installer credential")
+		return newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_STOPPED", errors.New("bind observability collector installer credential"))
 	}
 	launcher, err := activation.open(launcherConfig, packaged)
 	if err != nil {
 		activation.stop()
-		return errors.New("open observability collector post-prefix launcher")
+		return newFixedRedactedStop("POST_PREFIX_LAUNCH_STOPPED", errors.New("open observability collector post-prefix launcher"))
 	}
 	launchReceipt, err := launcher.Launch(ctx)
 	activation.mu.Lock()
@@ -231,7 +231,7 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	}
 	activation.mu.Unlock()
 	if err != nil || launchReceipt.State != "ACTIVATED" || len(launchReceipt.Results) != 4 {
-		return errors.New("activate observability collector post-prefix package")
+		return newFixedRedactedStop("POST_PREFIX_LAUNCH_STOPPED", errors.New("activate observability collector post-prefix package"))
 	}
 	return nil
 }
