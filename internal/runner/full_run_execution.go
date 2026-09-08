@@ -107,29 +107,29 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 		BindPostRuntime: func(ctx context.Context, completed PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			privatePrefix, prefixErr := preRuntime.ReceiptPrefix()
 			if prefixErr != nil || len(privatePrefix) != len(completed.Checkpoints) || len(privatePrefix) != len(preRuntimeStageOrder) {
-				return nil, errors.New("load full-run private receipt prefix")
+				return nil, newFixedRedactedStop("POST_RUNTIME_PREFIX_UNAVAILABLE", prefixErr)
 			}
 			for index := range privatePrefix {
 				if privatePrefix[index].Digest != completed.Checkpoints[index].StageReceiptDigest {
-					return nil, errors.New("full-run private receipt prefix differs from completed execution")
+					return nil, newFixedRedactedStop("POST_RUNTIME_PREFIX_MISMATCH", nil)
 				}
 			}
 			targetIdentity, targetErr := preRuntime.RuntimeTargetIdentity()
 			if targetErr != nil || !stageReceiptPrefixDigestPattern.MatchString(targetIdentity) {
-				return nil, errors.New("full-run lifecycle target identity is unavailable")
+				return nil, newFixedRedactedStop("POST_RUNTIME_TARGET_IDENTITY_UNAVAILABLE", targetErr)
 			}
 			workloadAuthority, workloadErr := preRuntime.RuntimeWorkloadAuthority()
 			if workloadErr != nil {
-				return nil, errors.New("full-run lifecycle workload authority is unavailable")
+				return nil, newFixedRedactedStop("POST_RUNTIME_WORKLOAD_AUTHORITY_UNAVAILABLE", workloadErr)
 			}
 			if config.WorkloadAuthorityBinder != nil {
 				if bindErr := config.WorkloadAuthorityBinder.BindFullRunWorkloadAuthority(workloadAuthority); bindErr != nil {
-					return nil, errors.New("bind full-run capability workload authority")
+					return nil, newFixedRedactedStop("POST_RUNTIME_WORKLOAD_AUTHORITY_BIND_STOPPED", bindErr)
 				}
 			}
 			if config.EvidenceIdentityBinder != nil {
 				if bindErr := config.EvidenceIdentityBinder.BindFullRunEvidenceIdentity(append([]StageReceiptSource(nil), privatePrefix[:6]...)); bindErr != nil {
-					return nil, errors.New("bind full-run independent evidence identity")
+					return nil, newFixedRedactedStop("POST_RUNTIME_EVIDENCE_IDENTITY_BIND_STOPPED", bindErr)
 				}
 			}
 			if config.PostPrefixActivator != nil {
@@ -139,7 +139,7 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 					Workload:       workloadAuthority,
 				}
 				if activateErr := config.PostPrefixActivator.ActivateFullRunPostPrefix(ctx, activation); activateErr != nil {
-					return nil, errors.New("activate full-run post-prefix prerequisites")
+					return nil, newFixedRedactedStop("POST_RUNTIME_ACTIVATION_STOPPED", activateErr)
 				}
 			}
 			bound := clonePostRuntimeExecutionConfigForFullRun(postRuntime)
@@ -155,7 +155,7 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 			}
 			continuation, openErr := factories.postRuntime(bound)
 			if openErr != nil || continuation == nil {
-				return nil, errors.New("open full-run post-runtime execution")
+				return nil, newFixedRedactedStop("POST_RUNTIME_EXECUTION_OPEN_STOPPED", openErr)
 			}
 			return continuation, nil
 		},
