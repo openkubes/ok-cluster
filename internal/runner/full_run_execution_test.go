@@ -230,6 +230,17 @@ func TestFullRunExecutionStopsBeforeSuffixWhenPostPrefixActivationFails(t *testi
 	}
 }
 
+func TestPostPrefixActivationStopCategoryBoundary(t *testing.T) {
+	trusted := newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", errors.New("private observer detail"))
+	if got := redactedStopCategory(postPrefixActivationStopOrFallback(trusted)); got != "POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED" {
+		t.Fatalf("trusted post-prefix category was lost: %s", got)
+	}
+	untrusted := newFixedRedactedStop("AUTHORIZATION_HTTP_REJECTED", errors.New("private unrelated detail"))
+	if got := redactedStopCategory(postPrefixActivationStopOrFallback(untrusted)); got != "POST_RUNTIME_ACTIVATION_STOPPED" {
+		t.Fatalf("untrusted category crossed post-prefix boundary: %s", got)
+	}
+}
+
 type recordingFullRunWorkloadAuthorityBinder struct {
 	bound WorkloadAuthorityFileResolverConfig
 	calls int

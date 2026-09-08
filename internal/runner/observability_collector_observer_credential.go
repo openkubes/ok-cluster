@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
-	"github.com/openkubes/ok-cluster/internal/jsonstrict"
 )
 
 const (
@@ -78,6 +76,11 @@ type KubernetesObservabilityCollectorObserverCredentialIssuer struct {
 	targetIdentity    string
 	client            *http.Client
 	clock             func() time.Time
+	pollClock         func() time.Time
+	wait              func(context.Context, time.Duration) error
+	pollInterval      time.Duration
+	pollTimeout       time.Duration
+	maxAttempts       int
 	request           []byte
 }
 
@@ -133,7 +136,10 @@ func newKubernetesObservabilityCollectorObserverCredentialIssuer(config observab
 	return &KubernetesObservabilityCollectorObserverCredentialIssuer{
 		endpoint: parsed, authorityToken: config.BearerToken, clientCertificate: config.ClientCertificate,
 		caBundleDigest: config.CABundleDigest, caFile: config.CAFile, targetIdentity: config.TargetIdentity,
-		client: &client, clock: config.Clock, request: requestRaw,
+		client: &client, clock: config.Clock, pollClock: time.Now, wait: WaitWithTimer,
+		pollInterval: observabilityCollectorCredentialPollInterval,
+		pollTimeout:  observabilityCollectorCredentialPollTimeout,
+		maxAttempts:  observabilityCollectorCredentialMaxAttempts, request: requestRaw,
 	}, nil
 }
 
@@ -148,40 +154,18 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) Issue(ct
 	}
 	issuer.used = true
 	issuer.mu.Unlock()
-	now := issuer.clock().UTC().Truncate(time.Second)
 	requestURL := *issuer.endpoint
 	requestURL.Path = fmt.Sprintf("/api/v1/namespaces/ok-observability/serviceaccounts/%s/token", observabilityCollectorObserverSA)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), bytes.NewReader(issuer.request))
+	value, err := issueObservabilityCollectorCredential(ctx, observabilityCollectorCredentialPollConfig{
+		client: issuer.client, endpoint: requestURL, authorityToken: issuer.authorityToken,
+		clientCertificate: issuer.clientCertificate, request: issuer.request,
+		pollClock: issuer.pollClock, wait: issuer.wait, pollInterval: issuer.pollInterval,
+		pollTimeout: issuer.pollTimeout, maxAttempts: issuer.maxAttempts,
+	})
 	if err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("construct collector observer TokenRequest")
+		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer TokenRequest stopped")
 	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Content-Type", "application/json")
-	if !issuer.clientCertificate {
-		request.Header.Set("Authorization", "Bearer "+issuer.authorityToken)
-	}
-	response, err := issuer.client.Do(request)
-	if err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer TokenRequest failed")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusCreated {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maximumTargetCredentialResponse))
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer TokenRequest was not created")
-	}
-	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer TokenRequest response media type is invalid")
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumTargetCredentialResponse+1))
-	if err != nil || len(raw) == 0 || len(raw) > maximumTargetCredentialResponse {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("read bounded collector observer TokenRequest response")
-	}
-	var value targetCredentialTokenResponse
-	if err := jsonstrict.Decode(raw, &value); err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("decode collector observer TokenRequest response")
-	}
-	return issuer.verifyResponse(value, now)
+	return issuer.verifyResponse(value, issuer.clock().UTC().Truncate(time.Second))
 }
 
 func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyResponse(value targetCredentialTokenResponse, now time.Time) (VerifiedObservabilityCollectorObserverCredential, error) {

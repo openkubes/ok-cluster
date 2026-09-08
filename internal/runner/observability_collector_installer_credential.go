@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,7 +13,6 @@ import (
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
-	"github.com/openkubes/ok-cluster/internal/jsonstrict"
 )
 
 const (
@@ -80,8 +77,9 @@ type observabilityCollectorInstallerClientConfig struct {
 }
 
 // KubernetesObservabilityCollectorInstallerCredentialIssuer performs one
-// exact TokenRequest after Stage 7. The resulting workload credential is held
-// only in memory for the immediately following collector launch.
+// bounded issuance operation after Stage 7. The operation may poll the exact
+// TokenRequest edge for transient convergence; the resulting workload
+// credential is held only in memory for the immediately following launch.
 type KubernetesObservabilityCollectorInstallerCredentialIssuer struct {
 	mu                sync.Mutex
 	used              bool
@@ -92,6 +90,11 @@ type KubernetesObservabilityCollectorInstallerCredentialIssuer struct {
 	targetIdentity    string
 	client            *http.Client
 	clock             func() time.Time
+	pollClock         func() time.Time
+	wait              func(context.Context, time.Duration) error
+	pollInterval      time.Duration
+	pollTimeout       time.Duration
+	maxAttempts       int
 	request           []byte
 }
 
@@ -145,7 +148,10 @@ func newKubernetesObservabilityCollectorInstallerCredentialIssuer(config observa
 	return &KubernetesObservabilityCollectorInstallerCredentialIssuer{
 		endpoint: parsed, authorityToken: config.BearerToken, clientCertificate: config.ClientCertificate,
 		caBundleDigest: config.CABundleDigest, targetIdentity: config.TargetIdentity,
-		client: &client, clock: config.Clock, request: requestRaw,
+		client: &client, clock: config.Clock, pollClock: time.Now, wait: WaitWithTimer,
+		pollInterval: observabilityCollectorCredentialPollInterval,
+		pollTimeout:  observabilityCollectorCredentialPollTimeout,
+		maxAttempts:  observabilityCollectorCredentialMaxAttempts, request: requestRaw,
 	}, nil
 }
 
@@ -161,40 +167,18 @@ func (issuer *KubernetesObservabilityCollectorInstallerCredentialIssuer) Issue(c
 	issuer.used = true
 	issuer.mu.Unlock()
 
-	now := issuer.clock().UTC().Truncate(time.Second)
 	requestURL := *issuer.endpoint
 	requestURL.Path = fmt.Sprintf("/api/v1/namespaces/%s/serviceaccounts/%s/token", observabilityCollectorInstallerNamespace, observabilityCollectorInstallerServiceAccount)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), bytes.NewReader(issuer.request))
+	value, err := issueObservabilityCollectorCredential(ctx, observabilityCollectorCredentialPollConfig{
+		client: issuer.client, endpoint: requestURL, authorityToken: issuer.authorityToken,
+		clientCertificate: issuer.clientCertificate, request: issuer.request,
+		pollClock: issuer.pollClock, wait: issuer.wait, pollInterval: issuer.pollInterval,
+		pollTimeout: issuer.pollTimeout, maxAttempts: issuer.maxAttempts,
+	})
 	if err != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("construct collector installer TokenRequest")
+		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer TokenRequest stopped")
 	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Content-Type", "application/json")
-	if !issuer.clientCertificate {
-		request.Header.Set("Authorization", "Bearer "+issuer.authorityToken)
-	}
-	response, err := issuer.client.Do(request)
-	if err != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer TokenRequest failed")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusCreated {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maximumTargetCredentialResponse))
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer TokenRequest was not created")
-	}
-	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer TokenRequest response media type is invalid")
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumTargetCredentialResponse+1))
-	if err != nil || len(raw) == 0 || len(raw) > maximumTargetCredentialResponse {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("read bounded collector installer TokenRequest response")
-	}
-	var value targetCredentialTokenResponse
-	if err := jsonstrict.Decode(raw, &value); err != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("decode collector installer TokenRequest response")
-	}
-	return issuer.verifyResponse(value, now)
+	return issuer.verifyResponse(value, issuer.clock().UTC().Truncate(time.Second))
 }
 
 func (issuer *KubernetesObservabilityCollectorInstallerCredentialIssuer) verifyResponse(value targetCredentialTokenResponse, now time.Time) (VerifiedObservabilityCollectorInstallerCredential, error) {

@@ -139,7 +139,7 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 					Workload:       workloadAuthority,
 				}
 				if activateErr := config.PostPrefixActivator.ActivateFullRunPostPrefix(ctx, activation); activateErr != nil {
-					return nil, newFixedRedactedStop("POST_RUNTIME_ACTIVATION_STOPPED", activateErr)
+					return nil, postPrefixActivationStopOrFallback(activateErr)
 				}
 			}
 			bound := clonePostRuntimeExecutionConfigForFullRun(postRuntime)
