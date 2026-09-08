@@ -39,8 +39,14 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 	}
 	deadline := config.pollClock().Add(config.pollTimeout)
 	for attempt := 1; attempt <= config.maxAttempts; attempt++ {
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.endpoint.String(), bytes.NewReader(config.request))
+		remaining := deadline.Sub(config.pollClock())
+		if ctx.Err() != nil || remaining <= 0 {
+			return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest convergence exhausted")
+		}
+		requestContext, cancelRequest := context.WithTimeout(ctx, remaining)
+		request, err := http.NewRequestWithContext(requestContext, http.MethodPost, config.endpoint.String(), bytes.NewReader(config.request))
 		if err != nil {
+			cancelRequest()
 			return targetCredentialTokenResponse{}, errors.New("construct collector credential TokenRequest")
 		}
 		request.Header.Set("Accept", "application/json")
@@ -50,6 +56,7 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 		}
 		response, requestErr := config.client.Do(request)
 		if requestErr != nil {
+			cancelRequest()
 			if !transientStageAuthorizationTransportError(requestErr) || !collectorCredentialCanPollAgain(ctx, config, attempt, deadline) {
 				return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest transport stopped")
 			}
@@ -60,6 +67,7 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumTargetCredentialResponse+1))
 		closeErr := response.Body.Close()
+		cancelRequest()
 		if response.StatusCode != http.StatusCreated {
 			if readErr != nil || closeErr != nil || len(raw) > maximumTargetCredentialResponse ||
 				!transientObservabilityCollectorCredentialStatus(response.StatusCode) ||
@@ -77,6 +85,9 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 		}
 		if readErr != nil || closeErr != nil || len(raw) == 0 || len(raw) > maximumTargetCredentialResponse {
 			return targetCredentialTokenResponse{}, errors.New("read bounded collector credential TokenRequest response")
+		}
+		if !config.pollClock().Before(deadline) {
+			return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest convergence exhausted")
 		}
 		var value targetCredentialTokenResponse
 		if err := jsonstrict.Decode(raw, &value); err != nil {

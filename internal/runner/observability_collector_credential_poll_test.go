@@ -153,6 +153,46 @@ func TestObservabilityCollectorCredentialPollingRejectsOversizedTransientRespons
 	}
 }
 
+func TestObservabilityCollectorCredentialPollingRejectsSuccessAfterDeadline(t *testing.T) {
+	requests := 0
+	clock := time.Unix(1_700_000_000, 0)
+	client := &http.Client{Transport: collectorCredentialRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		clock = clock.Add(30 * time.Second)
+		return collectorCredentialResponse(http.StatusCreated, `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenRequest","metadata":{},"spec":{"expirationSeconds":3600},"status":{"token":"token","expirationTimestamp":"2026-09-08T20:00:00Z"}}`), nil
+	})}
+	_, err := issueObservabilityCollectorCredential(context.Background(), collectorCredentialPollConfig(t, client, &clock, func(context.Context, time.Duration) error {
+		t.Fatal("late success must not wait")
+		return nil
+	}))
+	if err == nil || requests != 1 {
+		t.Fatalf("late success was accepted: err=%v requests=%d", err, requests)
+	}
+}
+
+func TestObservabilityCollectorCredentialPollingCancelsInFlightRequestAtDeadline(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: collectorCredentialRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})}
+	clock := time.Now
+	endpoint, err := url.Parse("https://workload.example.invalid/token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = issueObservabilityCollectorCredential(context.Background(), observabilityCollectorCredentialPollConfig{
+		client: client, endpoint: *endpoint, authorityToken: "authority", request: []byte(`{}`),
+		pollClock: clock, wait: func(context.Context, time.Duration) error { return nil },
+		pollInterval: time.Millisecond, pollTimeout: 10 * time.Millisecond, maxAttempts: 30,
+	})
+	if err == nil || requests != 1 || time.Since(started) > 250*time.Millisecond {
+		t.Fatalf("in-flight request was not deadline-bounded: err=%v requests=%d elapsed=%s", err, requests, time.Since(started))
+	}
+}
+
 func collectorCredentialPollConfig(t *testing.T, client *http.Client, clock *time.Time, wait func(context.Context, time.Duration) error) observabilityCollectorCredentialPollConfig {
 	t.Helper()
 	endpoint, err := url.Parse("https://workload.example.invalid/token")
