@@ -71,6 +71,9 @@ func (orchestration PostRuntimeOrchestration) Run(ctx context.Context) (PostRunt
 		if runErr != nil {
 			return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[0], runErr)
 		}
+		if err == nil && handoff == nil {
+			return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[0], newFixedRedactedStop("TARGET_CREDENTIAL_HANDOFF_MISSING", nil))
+		}
 		return stopPostRuntimeOrchestrationWithCause(receipt, postRuntimeStageOrder[0], err)
 	}
 	defer discardTargetCredentialHandoff(handoff)

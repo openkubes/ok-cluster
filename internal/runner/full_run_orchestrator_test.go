@@ -13,10 +13,11 @@ import (
 )
 
 type fakePostRuntimeContinuation struct {
-	binding PostRuntimeContinuationBinding
-	receipt PostRuntimeExecutionReceipt
-	err     error
-	calls   atomic.Int32
+	binding    PostRuntimeContinuationBinding
+	bindingErr error
+	receipt    PostRuntimeExecutionReceipt
+	err        error
+	calls      atomic.Int32
 }
 
 type fakePreRuntimeContinuation struct {
@@ -31,6 +32,9 @@ func (continuation *fakePreRuntimeContinuation) Run(context.Context) (PreRuntime
 func (continuation *fakePostRuntimeContinuation) ContinuationBinding() (PostRuntimeContinuationBinding, error) {
 	if continuation == nil {
 		return PostRuntimeContinuationBinding{}, errors.New("missing continuation")
+	}
+	if continuation.bindingErr != nil {
+		return PostRuntimeContinuationBinding{}, continuation.bindingErr
 	}
 	return continuation.binding.clone(), nil
 }
@@ -236,8 +240,47 @@ func TestFullRunOrchestrationRejectsForeignContinuationBeforeRun(t *testing.T) {
 				},
 			}
 			receipt, err := orchestration.Run(context.Background())
-			if err == nil || receipt.StoppedAt != "target-credential" || len(receipt.Checkpoints) != 7 || continuation.calls.Load() != 0 {
+			if err == nil || receipt.StoppedAt != "target-credential" || receipt.StopCategory != "CONTINUATION_BINDING_INVALID" || len(receipt.Checkpoints) != 7 || continuation.calls.Load() != 0 {
 				t.Fatalf("foreign continuation ran: %#v calls=%d err=%v", receipt, continuation.calls.Load(), err)
+			}
+		})
+	}
+}
+
+func TestFullRunOrchestrationClassifiesPostRuntimeContinuationSetupStops(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		bind func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error)
+		want string
+	}{
+		"binder error": {
+			bind: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+				return nil, errors.New("private binder detail")
+			},
+			want: "POST_RUNTIME_BIND_STOPPED",
+		},
+		"nil continuation": {
+			bind: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+				return nil, nil
+			},
+			want: "POST_RUNTIME_BIND_STOPPED",
+		},
+		"binding unavailable": {
+			bind: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+				continuation := successfulFakePostRuntimeContinuation()
+				continuation.bindingErr = errors.New("private binding detail")
+				return continuation, nil
+			},
+			want: "CONTINUATION_BINDING_UNAVAILABLE",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			orchestration := &FullRunOrchestration{PreRuntime: successfulPreRuntimeOrchestration(nil), BindPostRuntime: testCase.bind}
+			receipt, err := orchestration.Run(context.Background())
+			if err == nil || receipt.StoppedAt != "target-credential" || receipt.StopCategory != testCase.want || len(receipt.Checkpoints) != 7 {
+				t.Fatalf("continuation setup stop was not classified: %#v err=%v", receipt, err)
+			}
+			if strings.Contains(err.Error(), "private") {
+				t.Fatalf("private continuation detail escaped: %v", err)
 			}
 		})
 	}

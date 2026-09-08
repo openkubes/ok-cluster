@@ -165,6 +165,20 @@ func TestPostRuntimeOrchestrationPropagatesRedactedAuthorizationCategory(t *test
 	}
 }
 
+func TestPostRuntimeOrchestrationClassifiesMissingTargetCredentialHandoff(t *testing.T) {
+	orchestration := successfulPostRuntimeOrchestration()
+	base := orchestration.RunTargetCredential
+	orchestration.RunTargetCredential = func(ctx context.Context) (execution.StagedOperationReceipt, *VerifiedTargetCredentialStageHandoff, error) {
+		receipt, handoff, err := base(ctx)
+		discardTargetCredentialHandoff(handoff)
+		return receipt, nil, err
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" || receipt.StopCategory != "TARGET_CREDENTIAL_HANDOFF_MISSING" || len(receipt.Checkpoints) != 1 {
+		t.Fatalf("missing target-credential handoff was not classified: %#v err=%v", receipt, err)
+	}
+}
+
 func TestPostRuntimeOrchestrationRejectsMalformedOrForeignReceipts(t *testing.T) {
 	for name, mutate := range map[string]func(*execution.StagedOperationReceipt){
 		"wrong format": func(receipt *execution.StagedOperationReceipt) {
