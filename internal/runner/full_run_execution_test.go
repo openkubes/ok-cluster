@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,7 +125,8 @@ func TestFullRunExecutionStopsBeforeSuffixWhenCapabilityAuthorityBindingFails(t 
 		t.Fatal(err)
 	}
 	receipt, err := execution.Run(context.Background())
-	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" || len(receipt.Checkpoints) != 7 || binder.calls != 1 || postCalls != 0 {
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		receipt.StopCategory != "POST_RUNTIME_WORKLOAD_AUTHORITY_BIND_STOPPED" || len(receipt.Checkpoints) != 7 || binder.calls != 1 || postCalls != 0 {
 		t.Fatalf("failed capability binding opened suffix: receipt=%#v binder=%#v post=%d err=%v", receipt, binder, postCalls, err)
 	}
 }
@@ -172,6 +174,7 @@ func TestFullRunExecutionStopsBeforeSuffixWhenEvidenceIdentityBindingFails(t *te
 	}
 	receipt, err := execution.Run(context.Background())
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		receipt.StopCategory != "POST_RUNTIME_EVIDENCE_IDENTITY_BIND_STOPPED" ||
 		len(receipt.Checkpoints) != 7 || binder.calls != 1 || postCalls != 0 {
 		t.Fatalf("failed evidence identity binding opened suffix: receipt=%#v binder=%#v post=%d err=%v", receipt, binder, postCalls, err)
 	}
@@ -221,6 +224,7 @@ func TestFullRunExecutionStopsBeforeSuffixWhenPostPrefixActivationFails(t *testi
 	}
 	receipt, err := execution.Run(context.Background())
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		receipt.StopCategory != "POST_RUNTIME_ACTIVATION_STOPPED" ||
 		len(receipt.Checkpoints) != 7 || activator.calls != 1 || postCalls != 0 {
 		t.Fatalf("failed post-prefix activation opened suffix: receipt=%#v activator=%#v post=%d err=%v", receipt, activator, postCalls, err)
 	}
@@ -343,7 +347,8 @@ func TestFullRunExecutionRejectsPrivatePrefixDifferentFromPublicCheckpoints(t *t
 		t.Fatal(err)
 	}
 	receipt, err := execution.Run(context.Background())
-	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" || len(receipt.Checkpoints) != 7 || postCalls != 0 {
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		receipt.StopCategory != "POST_RUNTIME_PREFIX_MISMATCH" || len(receipt.Checkpoints) != 7 || postCalls != 0 {
 		t.Fatalf("foreign private prefix opened the suffix: %#v post=%d err=%v", receipt, postCalls, err)
 	}
 }
@@ -365,6 +370,7 @@ func TestFullRunExecutionDoesNotOpenSuffixWithoutLifecycleTargetIdentity(t *test
 	}
 	receipt, err := execution.Run(context.Background())
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		receipt.StopCategory != "POST_RUNTIME_TARGET_IDENTITY_UNAVAILABLE" ||
 		len(receipt.Checkpoints) != 7 || postCalls != 0 {
 		t.Fatalf("missing lifecycle identity opened suffix: %#v post=%d err=%v", receipt, postCalls, err)
 	}
@@ -387,8 +393,58 @@ func TestFullRunExecutionDoesNotOpenSuffixWithoutLifecycleWorkloadAuthority(t *t
 	}
 	receipt, err := execution.Run(context.Background())
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+		receipt.StopCategory != "POST_RUNTIME_WORKLOAD_AUTHORITY_UNAVAILABLE" ||
 		len(receipt.Checkpoints) != 7 || postCalls != 0 {
 		t.Fatalf("missing workload authority opened suffix: %#v post=%d err=%v", receipt, postCalls, err)
+	}
+}
+
+func TestFullRunExecutionClassifiesRemainingPostRuntimeBindStops(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		mutatePre func(*fakeConcretePreRuntimeExecution)
+		post      func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error)
+		want      string
+	}{
+		"prefix unavailable": {
+			mutatePre: func(preRuntime *fakeConcretePreRuntimeExecution) {
+				preRuntime.prefixErr = errors.New("private prefix failure")
+			},
+			want: "POST_RUNTIME_PREFIX_UNAVAILABLE",
+		},
+		"post-runtime execution open stopped": {
+			post: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+				return nil, errors.New("private open failure")
+			},
+			want: "POST_RUNTIME_EXECUTION_OPEN_STOPPED",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+			if testCase.mutatePre != nil {
+				testCase.mutatePre(preRuntime)
+			}
+			post := testCase.post
+			if post == nil {
+				post = func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+					return successfulFakePostRuntimeContinuation(), nil
+				}
+			}
+			execution, err := openFullRunExecution(testFullRunExecutionConfig(), fullRunExecutionFactories{
+				preRuntime:  func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+				postRuntime: post,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, runErr := execution.Run(context.Background())
+			if runErr == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "target-credential" ||
+				receipt.StopCategory != testCase.want || len(receipt.Checkpoints) != 7 {
+				t.Fatalf("post-runtime bind stop was not classified: receipt=%#v err=%v", receipt, runErr)
+			}
+			if strings.Contains(runErr.Error(), "private") {
+				t.Fatalf("private bind detail escaped: %v", runErr)
+			}
+		})
 	}
 }
 

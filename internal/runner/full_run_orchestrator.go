@@ -110,7 +110,7 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 
 	continuation, err := orchestration.BindPostRuntime(ctx, prefix)
 	if err != nil || continuation == nil {
-		return stopFullRunOrchestrationWithCause(receipt, postRuntimeStageOrder[0], newFixedRedactedStop("POST_RUNTIME_BIND_STOPPED", err))
+		return stopFullRunOrchestrationWithCause(receipt, postRuntimeStageOrder[0], redactedStopOrFallback("POST_RUNTIME_BIND_STOPPED", err))
 	}
 	binding, err := continuation.ContinuationBinding()
 	if err != nil {

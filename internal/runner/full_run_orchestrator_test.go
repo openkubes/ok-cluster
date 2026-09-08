@@ -264,6 +264,18 @@ func TestFullRunOrchestrationClassifiesPostRuntimeContinuationSetupStops(t *test
 			},
 			want: "POST_RUNTIME_BIND_STOPPED",
 		},
+		"trusted detailed binder category": {
+			bind: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+				return nil, newFixedRedactedStop("POST_RUNTIME_ACTIVATION_STOPPED", errors.New("private activation detail"))
+			},
+			want: "POST_RUNTIME_ACTIVATION_STOPPED",
+		},
+		"untrusted detailed binder category": {
+			bind: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+				return nil, newFixedRedactedStop("OBSERVATION_SOURCE_ERROR", errors.New("private endpoint detail"))
+			},
+			want: "POST_RUNTIME_BIND_STOPPED",
+		},
 		"binding unavailable": {
 			bind: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 				continuation := successfulFakePostRuntimeContinuation()
