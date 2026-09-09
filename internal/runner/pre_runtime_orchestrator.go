@@ -190,8 +190,11 @@ func newFixedRedactedStop(category string, cause error) error {
 
 func redactedStopOrFallback(fallback string, cause error) error {
 	var categorized redactedStopCategorizer
-	if errors.As(cause, &categorized) && validPostRuntimeBindStopCategory(categorized.RedactedStopCategory()) {
-		return cause
+	if errors.As(cause, &categorized) {
+		category := categorized.RedactedStopCategory()
+		if validPostRuntimeBindStopCategory(category) || validPostPrefixActivationStopCategory(category) {
+			return cause
+		}
 	}
 	return newFixedRedactedStop(fallback, cause)
 }

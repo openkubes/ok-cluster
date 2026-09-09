@@ -235,9 +235,15 @@ func TestPostPrefixActivationStopCategoryBoundary(t *testing.T) {
 	if got := redactedStopCategory(postPrefixActivationStopOrFallback(trusted)); got != "POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED" {
 		t.Fatalf("trusted post-prefix category was lost: %s", got)
 	}
+	if got := redactedStopCategory(redactedStopOrFallback("POST_RUNTIME_BIND_STOPPED", postPrefixActivationStopOrFallback(trusted))); got != "POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED" {
+		t.Fatalf("trusted post-prefix category was lost at orchestration boundary: %s", got)
+	}
 	untrusted := newFixedRedactedStop("AUTHORIZATION_HTTP_REJECTED", errors.New("private unrelated detail"))
 	if got := redactedStopCategory(postPrefixActivationStopOrFallback(untrusted)); got != "POST_RUNTIME_ACTIVATION_STOPPED" {
 		t.Fatalf("untrusted category crossed post-prefix boundary: %s", got)
+	}
+	if got := redactedStopCategory(redactedStopOrFallback("POST_RUNTIME_BIND_STOPPED", untrusted)); got != "POST_RUNTIME_BIND_STOPPED" {
+		t.Fatalf("untrusted category crossed orchestration boundary: %s", got)
 	}
 }
 
