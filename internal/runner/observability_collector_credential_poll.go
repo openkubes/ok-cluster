@@ -41,7 +41,7 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 	for attempt := 1; attempt <= config.maxAttempts; attempt++ {
 		remaining := deadline.Sub(config.pollClock())
 		if ctx.Err() != nil || remaining <= 0 {
-			return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest convergence exhausted")
+			return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED", errors.New("collector credential TokenRequest convergence exhausted"))
 		}
 		requestContext, cancelRequest := context.WithTimeout(ctx, remaining)
 		request, err := http.NewRequestWithContext(requestContext, http.MethodPost, config.endpoint.String(), bytes.NewReader(config.request))
@@ -57,8 +57,11 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 		response, requestErr := config.client.Do(request)
 		if requestErr != nil {
 			cancelRequest()
-			if !transientStageAuthorizationTransportError(requestErr) || !collectorCredentialCanPollAgain(ctx, config, attempt, deadline) {
-				return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest transport stopped")
+			if !transientStageAuthorizationTransportError(requestErr) {
+				return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_TRANSPORT_STOPPED", errors.New("collector credential TokenRequest transport stopped"))
+			}
+			if !collectorCredentialCanPollAgain(ctx, config, attempt, deadline) {
+				return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED", errors.New("collector credential TokenRequest convergence exhausted"))
 			}
 			if err := config.wait(ctx, config.pollInterval); err != nil {
 				return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest interrupted")
@@ -70,9 +73,11 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 		cancelRequest()
 		if response.StatusCode != http.StatusCreated {
 			if readErr != nil || closeErr != nil || len(raw) > maximumTargetCredentialResponse ||
-				!transientObservabilityCollectorCredentialStatus(response.StatusCode) ||
-				!collectorCredentialCanPollAgain(ctx, config, attempt, deadline) {
-				return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest was not created")
+				!transientObservabilityCollectorCredentialStatus(response.StatusCode) {
+				return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID", errors.New("collector credential TokenRequest was not created"))
+			}
+			if !collectorCredentialCanPollAgain(ctx, config, attempt, deadline) {
+				return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED", errors.New("collector credential TokenRequest convergence exhausted"))
 			}
 			if err := config.wait(ctx, config.pollInterval); err != nil {
 				return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest interrupted")
@@ -81,21 +86,21 @@ func issueObservabilityCollectorCredential(ctx context.Context, config observabi
 		}
 		mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 		if mediaErr != nil || mediaType != "application/json" {
-			return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest response media type is invalid")
+			return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID", errors.New("collector credential TokenRequest response media type is invalid"))
 		}
 		if readErr != nil || closeErr != nil || len(raw) == 0 || len(raw) > maximumTargetCredentialResponse {
-			return targetCredentialTokenResponse{}, errors.New("read bounded collector credential TokenRequest response")
+			return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID", errors.New("read bounded collector credential TokenRequest response"))
 		}
 		if !config.pollClock().Before(deadline) {
-			return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest convergence exhausted")
+			return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED", errors.New("collector credential TokenRequest convergence exhausted"))
 		}
 		var value targetCredentialTokenResponse
 		if err := jsonstrict.Decode(raw, &value); err != nil {
-			return targetCredentialTokenResponse{}, errors.New("decode collector credential TokenRequest response")
+			return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID", errors.New("decode collector credential TokenRequest response"))
 		}
 		return value, nil
 	}
-	return targetCredentialTokenResponse{}, errors.New("collector credential TokenRequest convergence exhausted")
+	return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED", errors.New("collector credential TokenRequest convergence exhausted"))
 }
 
 func collectorCredentialCanPollAgain(ctx context.Context, config observabilityCollectorCredentialPollConfig, attempt int, deadline time.Time) bool {

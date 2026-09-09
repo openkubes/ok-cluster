@@ -107,7 +107,7 @@ func TestObservabilityCollectorCredentialPollingBoundsTransientFailure(t *testin
 	})
 	config.maxAttempts = 3
 	_, err := issueObservabilityCollectorCredential(context.Background(), config)
-	if err == nil || requests != 3 {
+	if err == nil || requests != 3 || redactedStopCategory(err) != "POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED" {
 		t.Fatalf("transient failure was not attempt-bounded: err=%v requests=%d", err, requests)
 	}
 }
@@ -117,9 +117,10 @@ func TestObservabilityCollectorCredentialPollingClassifiesTransportErrors(t *tes
 		name      string
 		transport error
 		wantCalls int
+		want      string
 	}{
-		{name: "temporary", transport: &net.DNSError{IsTemporary: true}, wantCalls: 2},
-		{name: "tls", transport: x509.UnknownAuthorityError{}, wantCalls: 1},
+		{name: "temporary", transport: &net.DNSError{IsTemporary: true}, wantCalls: 2, want: "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID"},
+		{name: "tls", transport: x509.UnknownAuthorityError{}, wantCalls: 1, want: "POST_PREFIX_OBSERVER_CREDENTIAL_TRANSPORT_STOPPED"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -132,12 +133,12 @@ func TestObservabilityCollectorCredentialPollingClassifiesTransportErrors(t *tes
 				}
 				return collectorCredentialResponse(http.StatusUnauthorized, `{}`), nil
 			})}
-			_, _ = issueObservabilityCollectorCredential(context.Background(), collectorCredentialPollConfig(t, client, &clock, func(context.Context, time.Duration) error {
+			_, err := issueObservabilityCollectorCredential(context.Background(), collectorCredentialPollConfig(t, client, &clock, func(context.Context, time.Duration) error {
 				clock = clock.Add(time.Second)
 				return nil
 			}))
-			if requests != test.wantCalls {
-				t.Fatalf("unexpected transport retry count: got %d want %d", requests, test.wantCalls)
+			if requests != test.wantCalls || redactedStopCategory(err) != test.want {
+				t.Fatalf("unexpected transport result: calls=%d category=%q", requests, redactedStopCategory(err))
 			}
 		})
 	}
@@ -162,7 +163,7 @@ func TestObservabilityCollectorCredentialPollingRejectsMalformedSuccessWithoutRe
 				t.Fatal("malformed success must not wait")
 				return nil
 			}))
-			if err == nil || requests != 1 {
+			if err == nil || requests != 1 || redactedStopCategory(err) != "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID" {
 				t.Fatalf("malformed success retried: err=%v requests=%d", err, requests)
 			}
 		})
