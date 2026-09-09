@@ -41,55 +41,51 @@ var observerAuthorityIdentities = []observerAuthorityIdentity{
 
 // awaitObserverAuthority performs only live GETs. Two identical consecutive
 // snapshots are required before the sole TokenRequest is allowed.
-func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) awaitObserverAuthority(ctx context.Context) (string, error) {
+func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) awaitObserverAuthority(ctx context.Context) error {
 	deadline := issuer.pollClock().Add(issuer.pollTimeout)
 	previous := map[string]string{}
 	seen := map[string]string{}
 	for attempt := 1; attempt <= issuer.maxAttempts; attempt++ {
 		if ctx.Err() != nil || !issuer.pollClock().Before(deadline) {
-			return "", observerAuthorityExhausted()
+			return observerAuthorityExhausted()
 		}
 		current := map[string]string{}
 		transient := false
 		for _, identity := range observerAuthorityIdentities {
 			uid, retry, err := issuer.readObserverAuthorityObject(ctx, deadline, identity)
 			if err != nil {
-				return "", err
+				return err
 			}
 			if retry {
 				if seen[identity.kind] != "" {
-					return "", newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority object disappeared after becoming visible"))
+					return newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority object disappeared after becoming visible"))
 				}
 				transient = true
 				break
 			}
 			if firstUID := seen[identity.kind]; firstUID != "" && firstUID != uid {
-				return "", newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority object identity changed"))
+				return newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority object identity changed"))
 			}
 			seen[identity.kind] = uid
 			current[identity.kind] = uid
 		}
 		if !transient && sameObserverAuthoritySnapshot(previous, current) {
-			uid := current["ServiceAccount"]
-			if uid == "" {
-				return "", newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer service account identity is absent"))
-			}
-			return uid, nil
+			return nil
 		}
 		if len(previous) != 0 {
-			return "", newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority regressed after becoming visible"))
+			return newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority regressed after becoming visible"))
 		}
 		if !transient {
 			previous = current
 		}
 		if attempt == issuer.maxAttempts || !issuer.pollClock().Add(issuer.pollInterval).Before(deadline) {
-			return "", observerAuthorityExhausted()
+			return observerAuthorityExhausted()
 		}
 		if err := issuer.wait(ctx, issuer.pollInterval); err != nil {
-			return "", observerAuthorityExhausted()
+			return observerAuthorityExhausted()
 		}
 	}
-	return "", observerAuthorityExhausted()
+	return observerAuthorityExhausted()
 }
 
 func observerAuthorityExhausted() error {
