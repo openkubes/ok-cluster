@@ -97,18 +97,18 @@ func TestObservabilityCollectorObserverCredentialRejectsDifferentReturnedAudienc
 	}
 }
 
-func TestObservabilityCollectorObserverCredentialBindsReturnedObjectReference(t *testing.T) {
+func TestObservabilityCollectorObserverCredentialRequiresNullReturnedObjectReference(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	token := string(stageCredentialJWT(t, "https://kubernetes.default.svc.cluster.local", "system:serviceaccount:ok-observability:"+observabilityCollectorObserverSA,
 		[]string{observabilityCollectorObserverAudience}, now, now.Add(time.Hour), 'o'))
 	for _, test := range []struct {
-		name, field, value, want string
+		name  string
+		value any
 	}{
-		{name: "missing", field: "missing", want: "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID"},
-		{name: "api version", field: "apiVersion", value: "v2", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
-		{name: "kind", field: "kind", value: "User", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
-		{name: "name", field: "name", value: "foreign", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
-		{name: "uid", field: "uid", value: "foreign-uid", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
+		{name: "missing"},
+		{name: "object", value: map[string]any{"apiVersion": "v1", "kind": "ServiceAccount", "name": observabilityCollectorObserverSA, "uid": "uid"}},
+		{name: "string", value: "null"},
+		{name: "array", value: []any{}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -116,10 +116,10 @@ func TestObservabilityCollectorObserverCredentialBindsReturnedObjectReference(t 
 					return observerAuthorityTestResponse(request.URL.Path), nil
 				}
 				spec := observerCredentialResponseSpec([]string{observabilityCollectorObserverAudience})
-				if test.field == "missing" {
+				if test.name == "missing" {
 					delete(spec, "boundObjectRef")
 				} else {
-					spec["boundObjectRef"].(map[string]any)[test.field] = test.value
+					spec["boundObjectRef"] = test.value
 				}
 				return targetCredentialTestResponse(http.StatusCreated, map[string]any{
 					"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{}, "spec": spec,
@@ -133,7 +133,7 @@ func TestObservabilityCollectorObserverCredentialBindsReturnedObjectReference(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := issuer.Issue(context.Background()); err == nil || redactedStopCategory(err) != test.want {
+			if _, err := issuer.Issue(context.Background()); err == nil || redactedStopCategory(err) != "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID" {
 				t.Fatalf("bound object mismatch accepted: category=%q", redactedStopCategory(err))
 			}
 		})
@@ -400,9 +400,6 @@ func observerAuthorityTestResponse(path string) *http.Response {
 func observerCredentialResponseSpec(audiences []string) map[string]any {
 	return map[string]any{
 		"audiences": audiences, "expirationSeconds": 3600,
-		"boundObjectRef": map[string]any{
-			"apiVersion": "v1", "kind": "ServiceAccount", "name": observabilityCollectorObserverSA,
-			"uid": "uid-/api/v1/namespaces/ok-observability/serviceaccounts/ok147-observability-autonomy",
-		},
+		"boundObjectRef": nil,
 	}
 }

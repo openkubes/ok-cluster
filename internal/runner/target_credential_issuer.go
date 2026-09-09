@@ -101,16 +101,9 @@ type targetCredentialTokenRequest struct {
 }
 
 type targetCredentialTokenRequestSpec struct {
-	Audiences         []string                                    `json:"audiences,omitempty"`
-	ExpirationSeconds int64                                       `json:"expirationSeconds"`
-	BoundObjectRef    *targetCredentialTokenRequestBoundObjectRef `json:"boundObjectRef,omitempty"`
-}
-
-type targetCredentialTokenRequestBoundObjectRef struct {
-	Kind       string `json:"kind"`
-	APIVersion string `json:"apiVersion"`
-	Name       string `json:"name"`
-	UID        string `json:"uid"`
+	Audiences         []string        `json:"audiences,omitempty"`
+	ExpirationSeconds int64           `json:"expirationSeconds"`
+	BoundObjectRef    json.RawMessage `json:"boundObjectRef,omitempty"`
 }
 
 type targetCredentialTokenResponse struct {

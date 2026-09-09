@@ -162,8 +162,7 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) Issue(ct
 	issuer.mu.Unlock()
 	boundedContext, cancel := context.WithTimeout(ctx, issuer.pollTimeout)
 	defer cancel()
-	observerServiceAccountUID, err := issuer.awaitObserverAuthority(boundedContext)
-	if err != nil {
+	if err := issuer.awaitObserverAuthority(boundedContext); err != nil {
 		return VerifiedObservabilityCollectorObserverCredential{}, err
 	}
 	requestURL := observerCredentialEndpoint(*issuer.endpoint)
@@ -175,20 +174,15 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) Issue(ct
 	if err != nil {
 		return VerifiedObservabilityCollectorObserverCredential{}, err
 	}
-	return issuer.verifyResponse(value, issuer.clock().UTC().Truncate(time.Second), observerServiceAccountUID)
+	return issuer.verifyResponse(value, issuer.clock().UTC().Truncate(time.Second))
 }
 
-func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyResponse(value targetCredentialTokenResponse, now time.Time, observerServiceAccountUID string) (VerifiedObservabilityCollectorObserverCredential, error) {
+func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyResponse(value targetCredentialTokenResponse, now time.Time) (VerifiedObservabilityCollectorObserverCredential, error) {
 	if value.APIVersion != "authentication.k8s.io/v1" || value.Kind != "TokenRequest" || len(value.Status.Token) < 80 ||
 		strings.TrimSpace(value.Status.Token) != value.Status.Token || strings.ContainsAny(value.Status.Token, "\r\n") ||
 		value.Spec.ExpirationSeconds != int64(observabilityCollectorObserverLifetime/time.Second) || len(value.Spec.Audiences) == 0 ||
-		value.Spec.BoundObjectRef == nil {
+		!bytes.Equal(bytes.TrimSpace(value.Spec.BoundObjectRef), []byte("null")) {
 		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID", errors.New("collector observer TokenRequest response is invalid"))
-	}
-	if value.Spec.BoundObjectRef.APIVersion != "v1" || value.Spec.BoundObjectRef.Kind != "ServiceAccount" ||
-		value.Spec.BoundObjectRef.Name != observabilityCollectorObserverSA || observerServiceAccountUID == "" ||
-		value.Spec.BoundObjectRef.UID != observerServiceAccountUID {
-		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector observer TokenRequest bound object identity differs"))
 	}
 	expiresAt, err := time.Parse(time.RFC3339, value.Status.ExpirationTimestamp)
 	if err != nil {
