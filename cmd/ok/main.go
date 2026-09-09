@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/authorization"
 	"github.com/openkubes/ok-cluster/internal/contract"
+	"github.com/openkubes/ok-cluster/internal/dryrun"
 	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/executor"
 	"github.com/openkubes/ok-cluster/internal/ledger"
@@ -694,6 +696,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
 		return runClusterCreate(arguments[2:], stdout, stderr)
 	}
+	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "dry-run" && arguments[2] == "serve" {
+		return runClusterDryRunServe(ctx, arguments[3:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "inspect" {
 		return runClusterStageInspect(arguments[3:], stdout, stderr)
 	}
@@ -851,6 +856,33 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
 	return errors.New("usage: ok authority stage policy ... | ok authority stage package ... | ok authority stage materialize ... | ok authority stage launch prepare ... | ok authority stage launch execute ... | ok authority stage serve ... | ok evidence observability serve ... | ok cluster create ... | ok cluster stage attempt verify ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage receipt materialize ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage evidence observability identity materialize ... | ok cluster stage evidence observability authority materialize ... | ok cluster stage evidence observability collector package ... | ok cluster stage evidence observability collector launch prepare ... | ok cluster stage evidence observability collector launch execute ... | ok cluster stage evidence observability collector materialize ... | ok cluster stage evidence observability produce ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run full bind-v3 ... | ok cluster stage run full prepare ... | ok cluster stage run full package ... | ok cluster stage run full launch prepare ... | ok cluster stage run full launch execute ... | ok cluster stage run full materialize ... | ok cluster stage run full execute ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime package ... | ok cluster stage run post-runtime materialize ... | ok cluster stage run post-runtime launch prepare ... | ok cluster stage run post-runtime launch execute ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+}
+
+func runClusterDryRunServe(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok cluster dry-run serve", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	listen := flags.String("listen", "127.0.0.1:8790", "address for the read-only dry-run HTTP service")
+	schemaPath := flags.String("schema", "", "path to the versioned contract schema")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if *schemaPath == "" {
+		return errors.New("--schema is required")
+	}
+	schema, err := os.ReadFile(*schemaPath)
+	if err != nil {
+		return fmt.Errorf("read schema: %w", err)
+	}
+	server := &http.Server{Addr: *listen, Handler: dryrun.Handler{Schema: schema}}
+	go func() { <-ctx.Done(); _ = server.Shutdown(context.Background()) }()
+	fmt.Fprintf(stdout, "OK-147 dry-run service listening on %s\n", *listen)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func runClusterCreate(arguments []string, stdout, stderr io.Writer) error {
