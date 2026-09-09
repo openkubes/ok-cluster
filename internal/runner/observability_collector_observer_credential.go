@@ -19,6 +19,8 @@ import (
 
 const (
 	ObservabilityCollectorObserverCredentialReceiptFormat = "ok147-observability-collector-observer-credential-receipt/v1"
+	observabilityCollectorObserverAudience                = "https://kubernetes.default.svc"
+	observabilityCollectorObserverAudienceMode            = "explicit/v1"
 	observabilityCollectorObserverLifetime                = time.Hour
 	minimumObservabilityCollectorObserverLifetime         = 55 * time.Minute
 	observabilityCollectorObserverCredentialPollTimeout   = 5 * time.Minute
@@ -121,7 +123,10 @@ func newKubernetesObservabilityCollectorObserverCredentialIssuer(config observab
 	}
 	requestRaw, err := json.Marshal(targetCredentialTokenRequest{
 		APIVersion: "authentication.k8s.io/v1", Kind: "TokenRequest",
-		Spec: targetCredentialTokenRequestSpec{ExpirationSeconds: int64(observabilityCollectorObserverLifetime / time.Second)},
+		Spec: targetCredentialTokenRequestSpec{
+			Audiences:         []string{observabilityCollectorObserverAudience},
+			ExpirationSeconds: int64(observabilityCollectorObserverLifetime / time.Second),
+		},
 	})
 	if err != nil {
 		return nil, errors.New("encode collector observer TokenRequest")
@@ -208,7 +213,8 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyRe
 	audiences, audienceErr := tokenAudiences(claims.Audience)
 	exp, expErr := exactJWTUnix(claims.ExpiresAt)
 	nbf, nbfErr := exactJWTUnix(claims.NotBefore)
-	if audienceErr != nil || len(audiences) != 1 || audiences[0] != "https://kubernetes.default.svc" ||
+	if audienceErr != nil || len(audiences) != 1 || audiences[0] != observabilityCollectorObserverAudience ||
+		len(value.Spec.Audiences) != 1 || value.Spec.Audiences[0] != observabilityCollectorObserverAudience ||
 		expErr != nil || nbfErr != nil || claims.Issuer == "" || claims.Subject != wantSubject || exp != expiresAt.Unix() ||
 		nbf != issuedAtUnix || issuedAt.After(now.Add(5*time.Second)) || issuedAt.Before(now.Add(-5*time.Minute)) ||
 		lifetime < minimumObservabilityCollectorObserverLifetime || lifetime > observabilityCollectorObserverLifetime {
@@ -218,7 +224,7 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyRe
 		Format: ObservabilityCollectorObserverCredentialReceiptFormat, State: "ISSUED",
 		TargetIdentityDigest:         issuer.targetIdentity,
 		ServiceAccountIdentityDigest: digest.SHA256([]byte(wantSubject)), RequestDigest: digest.SHA256(issuer.request),
-		CABundleDigest: issuer.caBundleDigest, AudienceMode: "server-default",
+		CABundleDigest: issuer.caBundleDigest, AudienceMode: observabilityCollectorObserverAudienceMode,
 		IssuedAt: issuedAt.Format(time.RFC3339), ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 		LifetimeSeconds: int64(lifetime / time.Second), CredentialBytesInReceipt: false, MutationState: "ATTEMPTED",
 	}
@@ -229,7 +235,7 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyRe
 	source := SubmissionStageCredentialSource{
 		AuthorityIdentity: issuer.targetIdentity, TokenDigest: digest.SHA256([]byte(value.Status.Token)),
 		CAFile: issuer.caFile, CABundleDigest: issuer.caBundleDigest, TokenRequestEvidenceDigest: digest.SHA256(receiptRaw),
-		ExpectedIssuer: claims.Issuer, ExpectedSubject: wantSubject, ExpectedAudiences: []string{"https://kubernetes.default.svc"},
+		ExpectedIssuer: claims.Issuer, ExpectedSubject: wantSubject, ExpectedAudiences: []string{observabilityCollectorObserverAudience},
 		IssuedAt: issuedAt, ExpiresAt: expiresAt.UTC(),
 	}
 	if _, err := verifyStageCredentialJWTWithSubject([]byte(value.Status.Token), source, now, func(subject string) bool {

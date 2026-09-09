@@ -134,7 +134,7 @@ func collectorObserverCredentialFixture(t *testing.T, config ObservabilityCollec
 		Format: ObservabilityCollectorObserverCredentialReceiptFormat, State: "ISSUED",
 		TargetIdentityDigest:         source.AuthorityIdentity,
 		ServiceAccountIdentityDigest: digest.SHA256([]byte(source.ExpectedSubject)),
-		RequestDigest:                runnerStageSHA("c"), CABundleDigest: source.CABundleDigest, AudienceMode: "server-default",
+		RequestDigest:                runnerStageSHA("c"), CABundleDigest: source.CABundleDigest, AudienceMode: observabilityCollectorObserverAudienceMode,
 		IssuedAt: source.IssuedAt.UTC().Format(time.RFC3339), ExpiresAt: source.ExpiresAt.UTC().Format(time.RFC3339),
 		LifetimeSeconds: int64(source.ExpiresAt.Sub(source.IssuedAt) / time.Second), CredentialBytesInReceipt: false, MutationState: "ATTEMPTED",
 	}
