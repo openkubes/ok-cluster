@@ -101,8 +101,16 @@ type targetCredentialTokenRequest struct {
 }
 
 type targetCredentialTokenRequestSpec struct {
-	Audiences         []string `json:"audiences,omitempty"`
-	ExpirationSeconds int64    `json:"expirationSeconds"`
+	Audiences         []string                                    `json:"audiences,omitempty"`
+	ExpirationSeconds int64                                       `json:"expirationSeconds"`
+	BoundObjectRef    *targetCredentialTokenRequestBoundObjectRef `json:"boundObjectRef,omitempty"`
+}
+
+type targetCredentialTokenRequestBoundObjectRef struct {
+	Kind       string `json:"kind"`
+	APIVersion string `json:"apiVersion"`
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
 }
 
 type targetCredentialTokenResponse struct {
@@ -246,7 +254,7 @@ func (issuer *KubernetesTargetCredentialIssuer) verifyResponse(value targetCrede
 	if value.APIVersion != "authentication.k8s.io/v1" || value.Kind != "TokenRequest" || len(value.Status.Token) < 80 || strings.TrimSpace(value.Status.Token) != value.Status.Token || strings.ContainsAny(value.Status.Token, "\r\n") {
 		return VerifiedTargetCredentialMaterial{}, errors.New("target-credential response identity or token is invalid")
 	}
-	if value.Spec.ExpirationSeconds != int64(issuer.policy.ExpirationSeconds) || len(value.Spec.Audiences) == 0 {
+	if value.Spec.ExpirationSeconds != int64(issuer.policy.ExpirationSeconds) || len(value.Spec.Audiences) == 0 || value.Spec.BoundObjectRef != nil {
 		return VerifiedTargetCredentialMaterial{}, errors.New("target-credential response did not apply the bounded request")
 	}
 	expiresAt, err := time.Parse(time.RFC3339, value.Status.ExpirationTimestamp)
