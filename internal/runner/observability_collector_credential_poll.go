@@ -32,6 +32,41 @@ type observabilityCollectorCredentialPollConfig struct {
 	maxAttempts       int
 }
 
+func issueObservabilityCollectorCredentialOnce(ctx context.Context, config observabilityCollectorCredentialPollConfig) (targetCredentialTokenResponse, error) {
+	if config.client == nil || config.pollClock == nil || len(config.request) == 0 || config.pollTimeout <= 0 {
+		return targetCredentialTokenResponse{}, errors.New("collector credential request configuration is invalid")
+	}
+	requestContext, cancel := context.WithTimeout(ctx, config.pollTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, config.endpoint.String(), bytes.NewReader(config.request))
+	if err != nil {
+		return targetCredentialTokenResponse{}, errors.New("construct collector credential TokenRequest")
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	if !config.clientCertificate {
+		request.Header.Set("Authorization", "Bearer "+config.authorityToken)
+	}
+	response, err := config.client.Do(request)
+	if err != nil {
+		return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_TRANSPORT_STOPPED", errors.New("collector credential TokenRequest transport stopped"))
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumTargetCredentialResponse+1))
+	closeErr := response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_HTTP_REJECTED", errors.New("collector credential TokenRequest was rejected"))
+	}
+	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if readErr != nil || closeErr != nil || len(raw) == 0 || len(raw) > maximumTargetCredentialResponse || mediaErr != nil || mediaType != "application/json" {
+		return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_ENVELOPE_INVALID", errors.New("collector credential TokenRequest response envelope is invalid"))
+	}
+	var value targetCredentialTokenResponse
+	if jsonstrict.Decode(raw, &value) != nil {
+		return targetCredentialTokenResponse{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_ENVELOPE_INVALID", errors.New("decode collector credential TokenRequest response"))
+	}
+	return value, nil
+}
+
 func issueObservabilityCollectorCredential(ctx context.Context, config observabilityCollectorCredentialPollConfig) (targetCredentialTokenResponse, error) {
 	if config.client == nil || config.pollClock == nil || config.wait == nil || len(config.request) == 0 ||
 		config.pollInterval <= 0 || config.pollTimeout <= 0 || config.maxAttempts < 1 {
