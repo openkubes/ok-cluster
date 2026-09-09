@@ -43,6 +43,38 @@ func TestObservabilityCollectorCredentialPollingConvergesOnlyOnAllowedStatuses(t
 	}
 }
 
+func TestObservabilityCollectorObserverCredentialDefaultWindowConvergesAfterSlowAuthorityInstallation(t *testing.T) {
+	const transientAttempts = 45
+	requests := 0
+	waits := 0
+	clock := time.Unix(1_700_000_000, 0)
+	client := &http.Client{Transport: collectorCredentialRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		if requests <= transientAttempts {
+			return collectorCredentialResponse(http.StatusNotFound, `{}`), nil
+		}
+		return collectorCredentialResponse(http.StatusCreated, `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenRequest","metadata":{},"spec":{"expirationSeconds":3600},"status":{"token":"token","expirationTimestamp":"2026-09-08T20:00:00Z"}}`), nil
+	})}
+	endpoint, err := url.Parse("https://workload.example.invalid/token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := issueObservabilityCollectorCredential(context.Background(), observabilityCollectorCredentialPollConfig{
+		client: client, endpoint: *endpoint, authorityToken: "authority", request: []byte(`{}`),
+		pollClock: func() time.Time { return clock }, wait: func(_ context.Context, delay time.Duration) error {
+			waits++
+			clock = clock.Add(delay)
+			return nil
+		},
+		pollInterval: observabilityCollectorCredentialPollInterval,
+		pollTimeout:  observabilityCollectorObserverCredentialPollTimeout,
+		maxAttempts:  observabilityCollectorObserverCredentialMaxAttempts,
+	})
+	if err != nil || value.Kind != "TokenRequest" || requests != transientAttempts+1 || waits != transientAttempts {
+		t.Fatalf("slow authority installation did not converge: value=%+v err=%v requests=%d waits=%d", value, err, requests, waits)
+	}
+}
+
 func TestObservabilityCollectorCredentialPollingRejectsTerminalStatusesWithoutRetry(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotImplemented} {
 		t.Run(http.StatusText(status), func(t *testing.T) {

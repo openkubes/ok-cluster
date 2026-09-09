@@ -21,6 +21,8 @@ const (
 	ObservabilityCollectorObserverCredentialReceiptFormat = "ok147-observability-collector-observer-credential-receipt/v1"
 	observabilityCollectorObserverLifetime                = time.Hour
 	minimumObservabilityCollectorObserverLifetime         = 55 * time.Minute
+	observabilityCollectorObserverCredentialPollTimeout   = 5 * time.Minute
+	observabilityCollectorObserverCredentialMaxAttempts   = 300
 )
 
 type ObservabilityCollectorObserverCredentialConfig struct {
@@ -138,8 +140,8 @@ func newKubernetesObservabilityCollectorObserverCredentialIssuer(config observab
 		caBundleDigest: config.CABundleDigest, caFile: config.CAFile, targetIdentity: config.TargetIdentity,
 		client: &client, clock: config.Clock, pollClock: time.Now, wait: WaitWithTimer,
 		pollInterval: observabilityCollectorCredentialPollInterval,
-		pollTimeout:  observabilityCollectorCredentialPollTimeout,
-		maxAttempts:  observabilityCollectorCredentialMaxAttempts, request: requestRaw,
+		pollTimeout:  observabilityCollectorObserverCredentialPollTimeout,
+		maxAttempts:  observabilityCollectorObserverCredentialMaxAttempts, request: requestRaw,
 	}, nil
 }
 
