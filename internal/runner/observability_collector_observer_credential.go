@@ -170,7 +170,7 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) Issue(ct
 		pollTimeout: issuer.pollTimeout, maxAttempts: issuer.maxAttempts,
 	})
 	if err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer TokenRequest stopped")
+		return VerifiedObservabilityCollectorObserverCredential{}, err
 	}
 	return issuer.verifyResponse(value, issuer.clock().UTC().Truncate(time.Second))
 }
@@ -179,25 +179,25 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyRe
 	if value.APIVersion != "authentication.k8s.io/v1" || value.Kind != "TokenRequest" || len(value.Status.Token) < 80 ||
 		strings.TrimSpace(value.Status.Token) != value.Status.Token || strings.ContainsAny(value.Status.Token, "\r\n") ||
 		value.Spec.ExpirationSeconds != int64(observabilityCollectorObserverLifetime/time.Second) || len(value.Spec.Audiences) == 0 {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer TokenRequest response is invalid")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID", errors.New("collector observer TokenRequest response is invalid"))
 	}
 	expiresAt, err := time.Parse(time.RFC3339, value.Status.ExpirationTimestamp)
 	if err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer credential expiration is invalid")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector observer credential expiration is invalid"))
 	}
 	parts := strings.Split(value.Status.Token, ".")
 	if len(parts) != 3 {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("decode collector observer credential claims")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("decode collector observer credential claims"))
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("decode collector observer credential claims")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("decode collector observer credential claims"))
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
 	var claims submissionStageTokenClaims
 	if err := decoder.Decode(&claims); err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("decode collector observer credential claims")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("decode collector observer credential claims"))
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
@@ -205,7 +205,7 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyRe
 	}
 	issuedAtUnix, err := exactJWTUnix(claims.IssuedAt)
 	if err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer credential issued-at is invalid")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector observer credential issued-at is invalid"))
 	}
 	issuedAt := time.Unix(issuedAtUnix, 0).UTC()
 	lifetime := expiresAt.Sub(issuedAt)
@@ -218,7 +218,7 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyRe
 		expErr != nil || nbfErr != nil || claims.Issuer == "" || claims.Subject != wantSubject || exp != expiresAt.Unix() ||
 		nbf != issuedAtUnix || issuedAt.After(now.Add(5*time.Second)) || issuedAt.Before(now.Add(-5*time.Minute)) ||
 		lifetime < minimumObservabilityCollectorObserverLifetime || lifetime > observabilityCollectorObserverLifetime {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("collector observer credential claims differ from bounded identity")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector observer credential claims differ from bounded identity"))
 	}
 	receipt := ObservabilityCollectorObserverCredentialReceipt{
 		Format: ObservabilityCollectorObserverCredentialReceiptFormat, State: "ISSUED",
@@ -241,7 +241,7 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) verifyRe
 	if _, err := verifyStageCredentialJWTWithSubject([]byte(value.Status.Token), source, now, func(subject string) bool {
 		return subject == wantSubject
 	}); err != nil {
-		return VerifiedObservabilityCollectorObserverCredential{}, errors.New("verify collector observer credential")
+		return VerifiedObservabilityCollectorObserverCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("verify collector observer credential"))
 	}
 	return VerifiedObservabilityCollectorObserverCredential{
 		token: []byte(value.Status.Token), caFile: issuer.caFile, targetIdentity: issuer.targetIdentity,

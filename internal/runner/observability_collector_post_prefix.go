@@ -156,17 +156,17 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	})
 	if err != nil {
 		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", errors.New("issue observability collector observer credential"))
+		return postPrefixObserverCredentialStopOrFallback(err)
 	}
 	observerSource, observerToken, observerReceipt, err := observerCredential.Material()
 	if err != nil || observerSource.AuthorityIdentity != prefix.TargetIdentity || observerSource.CABundleDigest != authority.CABundleDigest {
 		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", errors.New("verify observability collector observer credential"))
+		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_MATERIALIZATION_STOPPED", errors.New("verify observability collector observer credential"))
 	}
 	observerReceiptRaw, err := json.Marshal(observerReceipt)
 	if err != nil {
 		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", errors.New("encode observability collector observer credential receipt"))
+		return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_MATERIALIZATION_STOPPED", errors.New("encode observability collector observer credential receipt"))
 	}
 	packageConfig := activation.config.Package
 	packageConfig.Activation.RuntimeBinding.Bundle.Receipts = append([]StageReceiptSource(nil), prefix.ReceiptPrefix[:6]...)

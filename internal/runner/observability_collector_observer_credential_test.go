@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,8 +83,34 @@ func TestObservabilityCollectorObserverCredentialRejectsDifferentReturnedAudienc
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := issuer.Issue(context.Background()); err == nil {
+	if _, err := issuer.Issue(context.Background()); err == nil || redactedStopCategory(err) != "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH" {
 		t.Fatal("observer credential with a different returned audience was accepted")
+	}
+}
+
+func TestObserverCredentialSubcategoriesAreRedactedAndAccepted(t *testing.T) {
+	private := "https://private-workload.example.invalid bearer-secret"
+	for _, category := range []string{
+		"POST_PREFIX_OBSERVER_CREDENTIAL_TRANSPORT_STOPPED",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_MATERIALIZATION_STOPPED",
+	} {
+		err := newFixedRedactedStop(category, errors.New(private))
+		if !validPostPrefixActivationStopCategory(category) || !validRedactedStopCategory(category) ||
+			redactedStopCategory(postPrefixObserverCredentialStopOrFallback(err)) != category {
+			t.Fatalf("observer credential category was not preserved: %s", category)
+		}
+		if strings.Contains(err.Error(), private) {
+			t.Fatalf("observer credential category exposed private cause: %s", category)
+		}
+	}
+	for _, category := range []string{"AUTHORIZATION_HTTP_REJECTED", "POST_PREFIX_LAUNCH_STOPPED"} {
+		foreign := newFixedRedactedStop(category, errors.New(private))
+		if got := redactedStopCategory(postPrefixObserverCredentialStopOrFallback(foreign)); got != "POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED" {
+			t.Fatalf("foreign category crossed observer boundary: source=%q got=%q", category, got)
+		}
 	}
 }
 
