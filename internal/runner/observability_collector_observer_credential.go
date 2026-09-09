@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -161,13 +160,16 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) Issue(ct
 	}
 	issuer.used = true
 	issuer.mu.Unlock()
-	requestURL := *issuer.endpoint
-	requestURL.Path = fmt.Sprintf("/api/v1/namespaces/ok-observability/serviceaccounts/%s/token", observabilityCollectorObserverSA)
-	value, err := issueObservabilityCollectorCredential(ctx, observabilityCollectorCredentialPollConfig{
+	boundedContext, cancel := context.WithTimeout(ctx, issuer.pollTimeout)
+	defer cancel()
+	if err := issuer.awaitObserverAuthority(boundedContext); err != nil {
+		return VerifiedObservabilityCollectorObserverCredential{}, err
+	}
+	requestURL := observerCredentialEndpoint(*issuer.endpoint)
+	value, err := issueObservabilityCollectorCredentialOnce(boundedContext, observabilityCollectorCredentialPollConfig{
 		client: issuer.client, endpoint: requestURL, authorityToken: issuer.authorityToken,
 		clientCertificate: issuer.clientCertificate, request: issuer.request,
-		pollClock: issuer.pollClock, wait: issuer.wait, pollInterval: issuer.pollInterval,
-		pollTimeout: issuer.pollTimeout, maxAttempts: issuer.maxAttempts,
+		pollClock: issuer.pollClock, pollTimeout: issuer.pollTimeout,
 	})
 	if err != nil {
 		return VerifiedObservabilityCollectorObserverCredential{}, err
