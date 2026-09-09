@@ -696,7 +696,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
 		return runClusterCreate(arguments[2:], stdout, stderr)
 	}
-	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "dry-run" && arguments[2] == "serve" {
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "dry-run" && arguments[2] == "serve" {
 		return runClusterDryRunServe(ctx, arguments[3:], stdout, stderr)
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "inspect" {
