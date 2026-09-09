@@ -186,7 +186,7 @@ func BuildObservabilityCollectorActivationPackage(config ObservabilityCollectorA
 	if config.ObserverCredential.AuthorityIdentity != targetAuthority ||
 		config.ObserverCredential.ExpectedSubject != expectedSubject ||
 		len(config.ObserverCredential.ExpectedAudiences) != 1 ||
-		config.ObserverCredential.ExpectedAudiences[0] != "https://kubernetes.default.svc" ||
+		config.ObserverCredential.ExpectedAudiences[0] != observabilityCollectorObserverAudience ||
 		config.ObserverCredential.CABundleDigest != runtimeBinding.material.Target.WorkloadAPICADigest {
 		return VerifiedObservabilityCollectorActivationPackage{}, errors.New("observability collector observer credential identity is invalid")
 	}
@@ -530,7 +530,7 @@ func loadObservabilityCollectorObserverCredential(source SubmissionStageCredenti
 		return observabilityCollectorObserverCredential{}, nil, err
 	}
 	audiences, err := tokenAudiences(claims.Audience)
-	if err != nil || len(audiences) != 1 || audiences[0] != "https://kubernetes.default.svc" {
+	if err != nil || len(audiences) != 1 || audiences[0] != observabilityCollectorObserverAudience {
 		return observabilityCollectorObserverCredential{}, nil, errors.New("observability collector observer audience differs")
 	}
 	return observabilityCollectorObserverCredential{
