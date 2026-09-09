@@ -106,9 +106,11 @@ func TestObserverCredentialSubcategoriesAreRedactedAndAccepted(t *testing.T) {
 			t.Fatalf("observer credential category exposed private cause: %s", category)
 		}
 	}
-	foreign := newFixedRedactedStop("AUTHORIZATION_HTTP_REJECTED", errors.New(private))
-	if got := redactedStopCategory(postPrefixObserverCredentialStopOrFallback(foreign)); got != "POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED" {
-		t.Fatalf("foreign category crossed observer boundary: %q", got)
+	for _, category := range []string{"AUTHORIZATION_HTTP_REJECTED", "POST_PREFIX_LAUNCH_STOPPED"} {
+		foreign := newFixedRedactedStop(category, errors.New(private))
+		if got := redactedStopCategory(postPrefixObserverCredentialStopOrFallback(foreign)); got != "POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED" {
+			t.Fatalf("foreign category crossed observer boundary: source=%q got=%q", category, got)
+		}
 	}
 }
 

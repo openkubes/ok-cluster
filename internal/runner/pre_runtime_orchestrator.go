@@ -234,10 +234,23 @@ func validPostPrefixActivationStopCategory(category string) bool {
 
 func postPrefixObserverCredentialStopOrFallback(cause error) error {
 	var categorized redactedStopCategorizer
-	if errors.As(cause, &categorized) && validPostPrefixActivationStopCategory(categorized.RedactedStopCategory()) {
+	if errors.As(cause, &categorized) && validPostPrefixObserverCredentialStopCategory(categorized.RedactedStopCategory()) {
 		return cause
 	}
 	return newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_STOPPED", cause)
+}
+
+func validPostPrefixObserverCredentialStopCategory(category string) bool {
+	switch category {
+	case "POST_PREFIX_OBSERVER_CREDENTIAL_TRANSPORT_STOPPED",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_MATERIALIZATION_STOPPED":
+		return true
+	default:
+		return false
+	}
 }
 
 func redactedStopCategory(cause error) string {
