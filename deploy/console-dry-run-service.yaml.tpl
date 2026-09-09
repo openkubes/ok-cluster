@@ -32,7 +32,7 @@ spec:
             - name: dry-run
               containerPort: 8790
           readinessProbe:
-            httpGet: {path: /, port: dry-run}
+            tcpSocket: {port: dry-run}
             periodSeconds: 5
           securityContext:
             allowPrivilegeEscalation: false
