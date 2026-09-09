@@ -29,12 +29,13 @@ func TestObservabilityCollectorObserverCredentialIssuesOnceInMemory(t *testing.T
 		requests++
 		body, _ := io.ReadAll(request.Body)
 		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/namespaces/ok-observability/serviceaccounts/ok147-observability-autonomy/token" ||
-			request.Header.Get("Authorization") != "Bearer workload-admin" || !bytes.Contains(body, []byte(`"audiences":["https://kubernetes.default.svc"]`)) {
+			request.Header.Get("Authorization") != "Bearer workload-admin" || !bytes.Contains(body, []byte(`"audiences":["https://kubernetes.default.svc"]`)) ||
+			bytes.Contains(body, []byte(`"boundObjectRef"`)) {
 			t.Fatalf("unexpected collector observer TokenRequest: %s %s %s", request.Method, request.URL.Path, body)
 		}
 		return targetCredentialTestResponse(http.StatusCreated, map[string]any{
 			"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-			"spec":   map[string]any{"audiences": []string{"https://kubernetes.default.svc"}, "expirationSeconds": 3600},
+			"spec":   observerCredentialResponseSpec([]string{"https://kubernetes.default.svc"}),
 			"status": map[string]any{"token": token, "expirationTimestamp": now.Add(time.Hour).Format(time.RFC3339)},
 		}), nil
 	})}
@@ -80,7 +81,7 @@ func TestObservabilityCollectorObserverCredentialRejectsDifferentReturnedAudienc
 		}
 		return targetCredentialTestResponse(http.StatusCreated, map[string]any{
 			"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-			"spec":   map[string]any{"audiences": []string{foreignAudience}, "expirationSeconds": 3600},
+			"spec":   observerCredentialResponseSpec([]string{foreignAudience}),
 			"status": map[string]any{"token": token, "expirationTimestamp": now.Add(time.Hour).Format(time.RFC3339)},
 		}), nil
 	})}
@@ -93,6 +94,49 @@ func TestObservabilityCollectorObserverCredentialRejectsDifferentReturnedAudienc
 	}
 	if _, err := issuer.Issue(context.Background()); err == nil || redactedStopCategory(err) != "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH" {
 		t.Fatal("observer credential with a different returned audience was accepted")
+	}
+}
+
+func TestObservabilityCollectorObserverCredentialBindsReturnedObjectReference(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	token := string(stageCredentialJWT(t, "https://kubernetes.default.svc.cluster.local", "system:serviceaccount:ok-observability:"+observabilityCollectorObserverSA,
+		[]string{observabilityCollectorObserverAudience}, now, now.Add(time.Hour), 'o'))
+	for _, test := range []struct {
+		name, field, value, want string
+	}{
+		{name: "missing", field: "missing", want: "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID"},
+		{name: "api version", field: "apiVersion", value: "v2", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
+		{name: "kind", field: "kind", value: "User", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
+		{name: "name", field: "name", value: "foreign", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
+		{name: "uid", field: "uid", value: "foreign-uid", want: "POST_PREFIX_OBSERVER_CREDENTIAL_CLAIMS_MISMATCH"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodGet {
+					return observerAuthorityTestResponse(request.URL.Path), nil
+				}
+				spec := observerCredentialResponseSpec([]string{observabilityCollectorObserverAudience})
+				if test.field == "missing" {
+					delete(spec, "boundObjectRef")
+				} else {
+					spec["boundObjectRef"].(map[string]any)[test.field] = test.value
+				}
+				return targetCredentialTestResponse(http.StatusCreated, map[string]any{
+					"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{}, "spec": spec,
+					"status": map[string]any{"token": token, "expirationTimestamp": now.Add(time.Hour).Format(time.RFC3339)},
+				}), nil
+			})}
+			issuer, err := newKubernetesObservabilityCollectorObserverCredentialIssuer(observabilityCollectorObserverIssuerClientConfig{
+				Endpoint: "https://127.0.0.1:12345", BearerToken: "workload-admin", CABundleDigest: runnerStageSHA("a"),
+				CAFile: "/private/tmp/workload-ca.crt", TargetIdentity: digest.SHA256([]byte("target")), Client: client, Clock: func() time.Time { return now },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := issuer.Issue(context.Background()); err == nil || redactedStopCategory(err) != test.want {
+				t.Fatalf("bound object mismatch accepted: category=%q", redactedStopCategory(err))
+			}
+		})
 	}
 }
 
@@ -142,7 +186,7 @@ func TestObservabilityCollectorObserverCredentialFailsClosed(t *testing.T) {
 				}
 				return targetCredentialTestResponse(http.StatusCreated, map[string]any{
 					"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-					"spec":   map[string]any{"audiences": []string{"https://kubernetes.default.svc"}, "expirationSeconds": 3600},
+					"spec":   observerCredentialResponseSpec([]string{"https://kubernetes.default.svc"}),
 					"status": map[string]any{"token": token, "expirationTimestamp": now.Add(time.Hour).Format(time.RFC3339)},
 				}), nil
 			})}
@@ -180,7 +224,7 @@ func TestObserverAuthorityConvergesBeforeExactlyOneTokenRequest(t *testing.T) {
 		postCalls++
 		return targetCredentialTestResponse(http.StatusCreated, map[string]any{
 			"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-			"spec":   map[string]any{"audiences": []string{observabilityCollectorObserverAudience}, "expirationSeconds": 3600},
+			"spec":   observerCredentialResponseSpec([]string{observabilityCollectorObserverAudience}),
 			"status": map[string]any{"token": token, "expirationTimestamp": now.Add(time.Hour).Format(time.RFC3339)},
 		}), nil
 	})}
@@ -351,4 +395,14 @@ func observerAuthorityTestResponse(path string) *http.Response {
 		return targetCredentialTestResponse(http.StatusNotFound, map[string]any{})
 	}
 	return targetCredentialTestResponse(http.StatusOK, object)
+}
+
+func observerCredentialResponseSpec(audiences []string) map[string]any {
+	return map[string]any{
+		"audiences": audiences, "expirationSeconds": 3600,
+		"boundObjectRef": map[string]any{
+			"apiVersion": "v1", "kind": "ServiceAccount", "name": observabilityCollectorObserverSA,
+			"uid": "uid-/api/v1/namespaces/ok-observability/serviceaccounts/ok147-observability-autonomy",
+		},
+	}
 }
