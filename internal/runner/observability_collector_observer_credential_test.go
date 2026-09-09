@@ -253,6 +253,52 @@ func TestObserverAuthorityUIDChangeIsTerminalBeforeTokenRequest(t *testing.T) {
 	}
 }
 
+func TestPartiallyVisibleObserverAuthorityCannotDisappearOrChangeUID(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		secondStatus int
+		secondUID    string
+	}{
+		{name: "disappears", secondStatus: http.StatusNotFound},
+		{name: "changes UID", secondStatus: http.StatusOK, secondUID: "uid-namespace-2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+			namespaceGets, postCalls := 0, 0
+			client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodPost {
+					postCalls++
+					return targetCredentialTestResponse(http.StatusCreated, map[string]any{}), nil
+				}
+				if request.URL.Path == "/api/v1/namespaces/ok-observability" {
+					namespaceGets++
+					if namespaceGets == 2 {
+						return targetCredentialTestResponse(test.secondStatus, map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "ok-observability", "uid": test.secondUID}}), nil
+					}
+					return targetCredentialTestResponse(http.StatusOK, map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "ok-observability", "uid": "uid-namespace-1"}}), nil
+				}
+				if strings.Contains(request.URL.Path, "/roles/") && !strings.Contains(request.URL.Path, "/rolebindings/") {
+					return targetCredentialTestResponse(http.StatusNotFound, map[string]any{}), nil
+				}
+				return observerAuthorityTestResponse(request.URL.Path), nil
+			})}
+			issuer, err := newKubernetesObservabilityCollectorObserverCredentialIssuer(observabilityCollectorObserverIssuerClientConfig{
+				Endpoint: "https://127.0.0.1:12345", BearerToken: "workload-admin", CABundleDigest: runnerStageSHA("a"), CAFile: "/private/tmp/workload-ca.crt",
+				TargetIdentity: digest.SHA256([]byte("target")), Client: client, Clock: func() time.Time { return now },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock := now
+			issuer.pollClock = func() time.Time { return clock }
+			issuer.wait = func(_ context.Context, delay time.Duration) error { clock = clock.Add(delay); return nil }
+			if _, err := issuer.Issue(context.Background()); err == nil || redactedStopCategory(err) != "POST_PREFIX_OBSERVER_AUTHORITY_INVALID" || postCalls != 0 {
+				t.Fatalf("partial authority regression was not terminal: category=%q posts=%d", redactedStopCategory(err), postCalls)
+			}
+		})
+	}
+}
+
 func TestObserverCredentialSingleRequestSeparatesHTTPAndEnvelopeFailures(t *testing.T) {
 	for _, test := range []struct {
 		name                    string

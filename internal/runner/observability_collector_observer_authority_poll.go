@@ -44,6 +44,7 @@ var observerAuthorityIdentities = []observerAuthorityIdentity{
 func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) awaitObserverAuthority(ctx context.Context) error {
 	deadline := issuer.pollClock().Add(issuer.pollTimeout)
 	previous := map[string]string{}
+	seen := map[string]string{}
 	for attempt := 1; attempt <= issuer.maxAttempts; attempt++ {
 		if ctx.Err() != nil || !issuer.pollClock().Before(deadline) {
 			return observerAuthorityExhausted()
@@ -56,9 +57,16 @@ func (issuer *KubernetesObservabilityCollectorObserverCredentialIssuer) awaitObs
 				return err
 			}
 			if retry {
+				if seen[identity.kind] != "" {
+					return newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority object disappeared after becoming visible"))
+				}
 				transient = true
 				break
 			}
+			if firstUID := seen[identity.kind]; firstUID != "" && firstUID != uid {
+				return newFixedRedactedStop("POST_PREFIX_OBSERVER_AUTHORITY_INVALID", errors.New("observer authority object identity changed"))
+			}
+			seen[identity.kind] = uid
 			current[identity.kind] = uid
 		}
 		if !transient && sameObserverAuthoritySnapshot(previous, current) {
