@@ -58,8 +58,14 @@ func Canonicalize(raw, schemaRaw []byte) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := validateClusterSemantics(normalized); err != nil {
-		return Result{}, err
+	// Console intent contracts are deliberately a separate, bounded input
+	// contract. They are validated structurally by their own schema, but do
+	// not claim to be complete OK-141 cluster contracts and therefore must not
+	// be subjected to the production cluster semantic checks below.
+	if id, _ := schema["$id"].(string); !strings.HasPrefix(id, "https://openkubes.io/schemas/console-intent/") {
+		if err := validateClusterSemantics(normalized); err != nil {
+			return Result{}, err
+		}
 	}
 	semantic, included, err := semanticProjection(normalized, schema)
 	if err != nil {
