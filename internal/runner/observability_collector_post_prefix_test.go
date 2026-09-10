@@ -250,11 +250,33 @@ func TestObservabilityCollectorPostPrefixPackageVerificationUsesRedactedSubcateg
 		"POST_PREFIX_PACKAGE_CONSTRUCTION_STOPPED",
 		"POST_PREFIX_PACKAGE_RECEIPT_INVALID",
 		"POST_PREFIX_PACKAGE_PREFIX_MISMATCH",
+		"POST_PREFIX_PACKAGE_CONFIG_INVALID",
+		"POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED",
+		"POST_PREFIX_JOB_ENVELOPE_BUILD_STOPPED",
+		"POST_PREFIX_PACKAGE_VERIFICATION_STOPPED",
 	} {
 		if !validPostPrefixActivationStopCategory(category) || !validRedactedStopCategory(category) ||
 			redactedStopCategory(newFixedRedactedStop(category, errors.New("private detail"))) != category {
 			t.Fatalf("package subcategory is not propagated safely: %s", category)
 		}
+	}
+}
+
+func TestPostPrefixPackageConstructionPropagatesOnlyBoundedSubcategories(t *testing.T) {
+	for _, category := range []string{
+		"POST_PREFIX_PACKAGE_CONFIG_INVALID",
+		"POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED",
+		"POST_PREFIX_JOB_ENVELOPE_BUILD_STOPPED",
+		"POST_PREFIX_PACKAGE_VERIFICATION_STOPPED",
+	} {
+		err := postPrefixPackageConstructionStopOrFallback(newFixedRedactedStop(category, errors.New("private detail")))
+		if redactedStopCategory(err) != category {
+			t.Fatalf("construction subcategory was not preserved: %s", category)
+		}
+	}
+	foreign := postPrefixPackageConstructionStopOrFallback(newFixedRedactedStop("FOREIGN", errors.New("private detail")))
+	if redactedStopCategory(foreign) != "POST_PREFIX_PACKAGE_CONSTRUCTION_STOPPED" {
+		t.Fatalf("foreign construction category escaped: %v", foreign)
 	}
 }
 
