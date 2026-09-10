@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"strings"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
@@ -100,7 +101,7 @@ func BuildObservabilityCollectorRuntimePackage(config ObservabilityCollectorRunt
 	}
 	activationPackage, err := BuildObservabilityCollectorActivationPackage(config.Activation)
 	if err != nil {
-		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED", err)
+		return VerifiedObservabilityCollectorRuntimePackage{}, classifyObservabilityCollectorActivationPackageBuildStop(err)
 	}
 	activationReceipt, err := activationPackage.Receipt()
 	if err != nil {
@@ -151,6 +152,30 @@ func BuildObservabilityCollectorRuntimePackage(config ObservabilityCollectorRunt
 		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_PACKAGE_VERIFICATION_STOPPED", err)
 	}
 	return packaged, nil
+}
+
+func classifyObservabilityCollectorActivationPackageBuildStop(cause error) error {
+	category := "POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED"
+	detail := cause.Error()
+	switch {
+	case strings.Contains(detail, "activation identity"):
+		category = "POST_PREFIX_ACTIVATION_IDENTITY_INVALID"
+	case strings.Contains(detail, "observer credential"):
+		category = "POST_PREFIX_ACTIVATION_OBSERVER_CREDENTIAL_INVALID"
+	case strings.Contains(detail, "workload CA"):
+		category = "POST_PREFIX_ACTIVATION_WORKLOAD_CA_INVALID"
+	case strings.Contains(detail, "runtime binding"):
+		category = "POST_PREFIX_ACTIVATION_RUNTIME_BINDING_INVALID"
+	case strings.Contains(detail, "manifest") || strings.Contains(detail, " plan "):
+		category = "POST_PREFIX_ACTIVATION_MANIFEST_BINDING_INVALID"
+	case strings.Contains(detail, "authority") || strings.Contains(detail, "authorities"):
+		category = "POST_PREFIX_ACTIVATION_AUTHORITIES_INVALID"
+	case strings.Contains(detail, "TLS") || strings.Contains(detail, "certificate") || strings.Contains(detail, "endpoint") || strings.Contains(detail, "listen"):
+		category = "POST_PREFIX_ACTIVATION_TLS_NETWORK_INVALID"
+	case strings.Contains(detail, "record age") || strings.Contains(detail, "profile") || strings.Contains(detail, "bounded size"):
+		category = "POST_PREFIX_ACTIVATION_POLICY_OR_SIZE_INVALID"
+	}
+	return newFixedRedactedStop(category, cause)
 }
 
 func (packaged VerifiedObservabilityCollectorRuntimePackage) PrivateBytes() ([]byte, error) {
