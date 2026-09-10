@@ -2,11 +2,41 @@ package runner
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 )
+
+func TestClassifyObservabilityCollectorActivationPackageBuildStop(t *testing.T) {
+	tests := []struct {
+		detail   string
+		category string
+	}{
+		{"observability collector activation identity is invalid", "POST_PREFIX_ACTIVATION_IDENTITY_INVALID"},
+		{"observability collector manifest receipt is invalid", "POST_PREFIX_ACTIVATION_MANIFEST_BINDING_INVALID"},
+		{"observability collector runtime binding differs from manifest", "POST_PREFIX_ACTIVATION_RUNTIME_BINDING_INVALID"},
+		{"verify observability collector observer credential", "POST_PREFIX_ACTIVATION_OBSERVER_CREDENTIAL_INVALID"},
+		{"observability collector workload CA differs from runtime binding", "POST_PREFIX_ACTIVATION_WORKLOAD_CA_INVALID"},
+		{"observability collector authorities must be distinct", "POST_PREFIX_ACTIVATION_AUTHORITIES_INVALID"},
+		{"observability collector TLS certificate is invalid", "POST_PREFIX_ACTIVATION_TLS_NETWORK_INVALID"},
+		{"observability collector record age is invalid", "POST_PREFIX_ACTIVATION_POLICY_OR_SIZE_INVALID"},
+		{"private detail that must not define a category", "POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED"},
+	}
+	for _, test := range tests {
+		t.Run(test.category, func(t *testing.T) {
+			err := classifyObservabilityCollectorActivationPackageBuildStop(errors.New(test.detail))
+			if got := redactedStopCategory(err); got != test.category {
+				t.Fatalf("unexpected category: got %s want %s", got, test.category)
+			}
+			if got := redactedStopCategory(err); strings.Contains(got, "private") || !validPostPrefixPackageConstructionStopCategory(got) || !validRedactedStopCategory(got) {
+				t.Fatalf("category is not safely propagated: %q", got)
+			}
+		})
+	}
+}
 
 func TestBuildObservabilityCollectorRuntimePackageBindsFourObjects(t *testing.T) {
 	config := observabilityCollectorRuntimePackageFixture(t)
