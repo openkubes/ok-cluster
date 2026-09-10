@@ -176,17 +176,12 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	packaged, err := activation.build(packageConfig)
 	if err != nil {
 		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_PACKAGE_BUILD_STOPPED", errors.New("build observability collector post-prefix package"))
+		return newFixedRedactedStop("POST_PREFIX_PACKAGE_CONSTRUCTION_STOPPED", errors.New("build observability collector post-prefix package"))
 	}
-	packageReceipt, err := packaged.Receipt()
+	packageReceipt, err := verifyObservabilityCollectorPostPrefixPackage(packaged, prefix)
 	if err != nil {
 		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_PACKAGE_BUILD_STOPPED", errors.New("verify observability collector post-prefix package"))
-	}
-	plan, err := PlanObservabilityCollectorRuntimeInstallation(packaged)
-	if err != nil || plan.TargetIdentityDigest != prefix.TargetIdentity || plan.RuntimeBindingDigest != packageReceipt.RuntimeBindingDigest {
-		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_PACKAGE_BUILD_STOPPED", errors.New("observability collector package differs from fresh runtime prefix"))
+		return err
 	}
 	credential, err := activation.issue(ctx, ObservabilityCollectorInstallerCredentialConfig{
 		Workload: prefix.Workload, ExpectedTargetDigest: prefix.TargetIdentity, Clock: activation.config.Clock,
@@ -234,6 +229,18 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 		return newFixedRedactedStop("POST_PREFIX_LAUNCH_STOPPED", errors.New("activate observability collector post-prefix package"))
 	}
 	return nil
+}
+
+func verifyObservabilityCollectorPostPrefixPackage(packaged VerifiedObservabilityCollectorRuntimePackage, prefix FullRunPostPrefixActivation) (ObservabilityCollectorRuntimePackageReceipt, error) {
+	packageReceipt, err := packaged.Receipt()
+	if err != nil {
+		return ObservabilityCollectorRuntimePackageReceipt{}, newFixedRedactedStop("POST_PREFIX_PACKAGE_RECEIPT_INVALID", errors.New("verify observability collector post-prefix package"))
+	}
+	plan, err := PlanObservabilityCollectorRuntimeInstallation(packaged)
+	if err != nil || plan.TargetIdentityDigest != prefix.TargetIdentity || plan.RuntimeBindingDigest != packageReceipt.RuntimeBindingDigest {
+		return ObservabilityCollectorRuntimePackageReceipt{}, newFixedRedactedStop("POST_PREFIX_PACKAGE_PREFIX_MISMATCH", errors.New("observability collector package differs from fresh runtime prefix"))
+	}
+	return packageReceipt, nil
 }
 
 func (activation *KubernetesObservabilityCollectorPostPrefix) Receipt() ObservabilityCollectorPostPrefixReceipt {

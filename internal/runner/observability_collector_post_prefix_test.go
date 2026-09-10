@@ -224,6 +224,40 @@ func TestObservabilityCollectorPostPrefixStopsAfterAuthorityFailureBeforeCredent
 	}
 }
 
+func TestObservabilityCollectorPostPrefixPackageVerificationUsesRedactedSubcategories(t *testing.T) {
+	config := observabilityCollectorRuntimePackageFixture(t)
+	packaged, err := BuildObservabilityCollectorRuntimePackage(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanObservabilityCollectorRuntimeInstallation(packaged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := FullRunPostPrefixActivation{TargetIdentity: plan.TargetIdentityDigest}
+
+	if _, err := verifyObservabilityCollectorPostPrefixPackage(VerifiedObservabilityCollectorRuntimePackage{}, prefix); err == nil ||
+		redactedStopCategory(err) != "POST_PREFIX_PACKAGE_RECEIPT_INVALID" {
+		t.Fatalf("invalid receipt was not classified precisely: %v", err)
+	}
+	prefix.TargetIdentity = digest.SHA256([]byte("foreign-target"))
+	if _, err := verifyObservabilityCollectorPostPrefixPackage(packaged, prefix); err == nil ||
+		redactedStopCategory(err) != "POST_PREFIX_PACKAGE_PREFIX_MISMATCH" {
+		t.Fatalf("foreign prefix was not classified precisely: %v", err)
+	}
+
+	for _, category := range []string{
+		"POST_PREFIX_PACKAGE_CONSTRUCTION_STOPPED",
+		"POST_PREFIX_PACKAGE_RECEIPT_INVALID",
+		"POST_PREFIX_PACKAGE_PREFIX_MISMATCH",
+	} {
+		if !validPostPrefixActivationStopCategory(category) || !validRedactedStopCategory(category) ||
+			redactedStopCategory(newFixedRedactedStop(category, errors.New("private detail"))) != category {
+			t.Fatalf("package subcategory is not propagated safely: %s", category)
+		}
+	}
+}
+
 func collectorRuntimeAuthorityPostPrefixConfig(t *testing.T) ObservabilityCollectorRuntimeAuthorityPackageConfig {
 	t.Helper()
 	raw := collectorRuntimeAuthorityManifest(t)
