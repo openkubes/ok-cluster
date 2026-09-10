@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openkubes.io/schemas/console-intent/v0alpha1",
+  "title": "OpenKubes Console cluster intent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "platform.openkubes.io/v1alpha1"},
+    "kind": {"const": "OpenKubesCluster"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "namespace"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "minLength": 1, "maxLength": 63},
+        "namespace": {"type": "string", "minLength": 1, "maxLength": 63}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "implementationProfile", "capabilities"],
+      "properties": {
+        "role": {"const": "workload"},
+        "implementationProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "profile"],
+          "properties": {
+            "provider": {"type": "string", "minLength": 1},
+            "profile": {"type": "string", "minLength": 1}
+          }
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required"],
+          "properties": {
+            "required": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+          }
+        }
+      }
+    }
+  }
+}
