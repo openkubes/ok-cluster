@@ -176,7 +176,7 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	packaged, err := activation.build(packageConfig)
 	if err != nil {
 		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_PACKAGE_CONSTRUCTION_STOPPED", errors.New("build observability collector post-prefix package"))
+		return postPrefixPackageConstructionStopOrFallback(err)
 	}
 	packageReceipt, err := verifyObservabilityCollectorPostPrefixPackage(packaged, prefix)
 	if err != nil {
@@ -229,6 +229,24 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 		return newFixedRedactedStop("POST_PREFIX_LAUNCH_STOPPED", errors.New("activate observability collector post-prefix package"))
 	}
 	return nil
+}
+
+func postPrefixPackageConstructionStopOrFallback(cause error) error {
+	var categorized redactedStopCategorizer
+	if errors.As(cause, &categorized) && validPostPrefixPackageConstructionStopCategory(categorized.RedactedStopCategory()) {
+		return cause
+	}
+	return newFixedRedactedStop("POST_PREFIX_PACKAGE_CONSTRUCTION_STOPPED", errors.New("build observability collector post-prefix package"))
+}
+
+func validPostPrefixPackageConstructionStopCategory(category string) bool {
+	switch category {
+	case "POST_PREFIX_PACKAGE_CONFIG_INVALID", "POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED",
+		"POST_PREFIX_JOB_ENVELOPE_BUILD_STOPPED", "POST_PREFIX_PACKAGE_VERIFICATION_STOPPED":
+		return true
+	default:
+		return false
+	}
 }
 
 func verifyObservabilityCollectorPostPrefixPackage(packaged VerifiedObservabilityCollectorRuntimePackage, prefix FullRunPostPrefixActivation) (ObservabilityCollectorRuntimePackageReceipt, error) {

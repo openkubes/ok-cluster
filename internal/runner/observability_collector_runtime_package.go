@@ -96,25 +96,25 @@ func LoadObservabilityCollectorRuntimePackage(config ObservabilityCollectorRunti
 func BuildObservabilityCollectorRuntimePackage(config ObservabilityCollectorRuntimePackageConfig) (VerifiedObservabilityCollectorRuntimePackage, error) {
 	if !stageReceiptPrefixDigestPattern.MatchString(config.JobTemplateDigest) ||
 		digest.SHA256(config.JobTemplate) != config.JobTemplateDigest {
-		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("observability collector Job template differs from expected identity")
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_PACKAGE_CONFIG_INVALID", errors.New("observability collector Job template differs from expected identity"))
 	}
 	activationPackage, err := BuildObservabilityCollectorActivationPackage(config.Activation)
 	if err != nil {
-		return VerifiedObservabilityCollectorRuntimePackage{}, err
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED", err)
 	}
 	activationReceipt, err := activationPackage.Receipt()
 	if err != nil {
-		return VerifiedObservabilityCollectorRuntimePackage{}, err
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED", err)
 	}
 	activationObject, err := activationPackage.PrivateBytes()
 	if err != nil {
-		return VerifiedObservabilityCollectorRuntimePackage{}, err
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED", err)
 	}
 	activation, err := observabilityCollectorActivationFromSecret(activationObject)
 	if err != nil || activation.ManifestDigest != activationReceipt.ManifestDigest ||
 		activation.RuntimeBindingDigest != activationReceipt.RuntimeBindingDigest ||
 		digest.SHA256([]byte(activation.PublicEndpoint)) != activationReceipt.PublicEndpointDigest {
-		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("observability collector runtime activation differs")
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_ACTIVATION_PACKAGE_BUILD_STOPPED", errors.New("observability collector runtime activation differs"))
 	}
 	jobEnvelope, err := RenderObservabilityCollectorJobTemplate(config.JobTemplate, ObservabilityCollectorJobValues{
 		RunID: config.RunID, ImageDigest: config.ImageDigest, ActivationSecret: activationReceipt.ActivationSecret,
@@ -124,15 +124,15 @@ func BuildObservabilityCollectorRuntimePackage(config ObservabilityCollectorRunt
 		WorkloadAPICIDR: config.WorkloadAPICIDR, AlertSourceCIDR: config.AlertSourceCIDR,
 	})
 	if err != nil {
-		return VerifiedObservabilityCollectorRuntimePackage{}, err
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_JOB_ENVELOPE_BUILD_STOPPED", err)
 	}
 	jobObjects := bytes.Split(jobEnvelope, []byte("\n---\n"))
 	if len(jobObjects) != 3 {
-		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("observability collector Job envelope object count differs")
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_JOB_ENVELOPE_BUILD_STOPPED", errors.New("observability collector Job envelope object count differs"))
 	}
 	packageRaw := bytes.Join([][]byte{activationObject, jobEnvelope}, []byte("\n---\n"))
 	if len(packageRaw) > maximumObservabilityCollectorRuntimeBytes {
-		return VerifiedObservabilityCollectorRuntimePackage{}, errors.New("observability collector runtime package exceeds size limit")
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_PACKAGE_VERIFICATION_STOPPED", errors.New("observability collector runtime package exceeds size limit"))
 	}
 	receipt := ObservabilityCollectorRuntimePackageReceipt{
 		Format: ObservabilityCollectorRuntimePackageFormat, State: "VERIFIED",
@@ -148,7 +148,7 @@ func BuildObservabilityCollectorRuntimePackage(config ObservabilityCollectorRunt
 	}
 	packaged := VerifiedObservabilityCollectorRuntimePackage{raw: packageRaw, receipt: receipt, verified: true}
 	if err := verifyObservabilityCollectorRuntimePackage(packaged); err != nil {
-		return VerifiedObservabilityCollectorRuntimePackage{}, err
+		return VerifiedObservabilityCollectorRuntimePackage{}, newFixedRedactedStop("POST_PREFIX_PACKAGE_VERIFICATION_STOPPED", err)
 	}
 	return packaged, nil
 }
