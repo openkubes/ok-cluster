@@ -280,6 +280,85 @@ func TestPostPrefixPackageConstructionPropagatesOnlyBoundedSubcategories(t *test
 	}
 }
 
+func TestObservabilityCollectorPostPrefixInstallerCredentialUsesRedactedSubcategories(t *testing.T) {
+	for _, category := range []string{
+		"POST_PREFIX_INSTALLER_CREDENTIAL_ISSUANCE_STOPPED",
+		"POST_PREFIX_INSTALLER_CREDENTIAL_RECEIPT_INVALID",
+		"POST_PREFIX_INSTALLER_CREDENTIAL_RECEIPT_ENCODING_STOPPED",
+		"POST_PREFIX_INSTALLER_CREDENTIAL_MATERIALIZATION_STOPPED",
+	} {
+		if !validPostPrefixActivationStopCategory(category) || !validRedactedStopCategory(category) ||
+			redactedStopCategory(newFixedRedactedStop(category, errors.New("private detail"))) != category {
+			t.Fatalf("installer credential subcategory is not propagated safely: %s", category)
+		}
+	}
+
+	t.Run("issuance", func(t *testing.T) {
+		activator, prefix := collectorPostPrefixBeforeInstallerCredential(t)
+		activator.issue = func(context.Context, ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error) {
+			return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("private issuance failure")
+		}
+		err := activator.ActivateFullRunPostPrefix(context.Background(), prefix)
+		if redactedStopCategory(err) != "POST_PREFIX_INSTALLER_CREDENTIAL_ISSUANCE_STOPPED" || activator.Receipt().State != "STOPPED" {
+			t.Fatalf("issuance failure was not classified precisely: receipt=%#v err=%v", activator.Receipt(), err)
+		}
+	})
+
+	t.Run("receipt", func(t *testing.T) {
+		activator, prefix := collectorPostPrefixBeforeInstallerCredential(t)
+		activator.issue = func(context.Context, ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error) {
+			return VerifiedObservabilityCollectorInstallerCredential{}, nil
+		}
+		err := activator.ActivateFullRunPostPrefix(context.Background(), prefix)
+		if redactedStopCategory(err) != "POST_PREFIX_INSTALLER_CREDENTIAL_RECEIPT_INVALID" || activator.Receipt().State != "STOPPED" {
+			t.Fatalf("invalid receipt was not classified precisely: receipt=%#v err=%v", activator.Receipt(), err)
+		}
+	})
+}
+
+func collectorPostPrefixBeforeInstallerCredential(t *testing.T) (*KubernetesObservabilityCollectorPostPrefix, FullRunPostPrefixActivation) {
+	t.Helper()
+	config := observabilityCollectorRuntimePackageFixture(t)
+	packaged, err := BuildObservabilityCollectorRuntimePackage(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := digest.SHA256([]byte("collector-target-cluster-uid"))
+	activator, err := NewKubernetesObservabilityCollectorPostPrefix(ObservabilityCollectorPostPrefixConfig{
+		Package: config, RuntimeAuthority: collectorRuntimeAuthorityPostPrefixConfig(t),
+		Clock: func() time.Time { return config.Activation.MaterializationTime },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activator.resolve = func(WorkloadAuthorityFileResolverConfig) (WorkloadAuthorityBinding, KubernetesAuthorityConfig, error) {
+		return WorkloadAuthorityBinding{TargetClusterUID: "collector-target-cluster-uid"}, KubernetesAuthorityConfig{
+			Endpoint: "https://192.0.2.147:6443", CABundleDigest: config.Activation.ObserverCredential.CABundleDigest,
+		}, nil
+	}
+	activator.openAuthority = func(_ WorkloadAuthorityFileResolverConfig, authorityPackage VerifiedObservabilityCollectorRuntimeAuthorityPackage) (observabilityCollectorRuntimeAuthorityInstaller, error) {
+		receipt, receiptErr := authorityPackage.Receipt()
+		if receiptErr != nil {
+			return nil, receiptErr
+		}
+		return &fakeCollectorRuntimeAuthorityInstaller{receipt: ObservabilityCollectorRuntimeAuthorityInstallationReceipt{
+			Format: ObservabilityCollectorRuntimeAuthorityReceiptFormat, PackageDigest: receipt.PackageDigest,
+			TargetIdentityDigest: target, State: "INSTALLED", MutationState: "ATTEMPTED",
+			Results: make([]SubmissionStageInstalledObject, 5),
+		}}, nil
+	}
+	activator.issueObserver = func(context.Context, ObservabilityCollectorObserverCredentialConfig) (VerifiedObservabilityCollectorObserverCredential, error) {
+		return collectorObserverCredentialFixture(t, config), nil
+	}
+	activator.build = func(ObservabilityCollectorRuntimePackageConfig) (VerifiedObservabilityCollectorRuntimePackage, error) {
+		return packaged, nil
+	}
+	return activator, FullRunPostPrefixActivation{
+		ReceiptPrefix: make([]StageReceiptSource, 7), TargetIdentity: target,
+		Workload: WorkloadAuthorityFileResolverConfig{CAFile: config.Activation.ObserverCredential.CAFile},
+	}
+}
+
 func collectorRuntimeAuthorityPostPrefixConfig(t *testing.T) ObservabilityCollectorRuntimeAuthorityPackageConfig {
 	t.Helper()
 	raw := collectorRuntimeAuthorityManifest(t)
