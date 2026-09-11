@@ -22,7 +22,7 @@ def profile(**write_overrides):
     write = {
         "scope": "namespaces",
         "namespaces": ["kagent-lab"],
-        "resources": ["configmaps"],
+        "resources": {"configmaps": ["get", "patch"]},
         "requireApproval": True,
         "toolServer": {
             "namespace": "kagent-write",
@@ -58,20 +58,26 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(access.AccessError, "requireApproval=true"):
             access.validate_ok129(profile(requireApproval=False))
 
-    def test_supported_resource_subset_is_allowed(self):
-        access.validate_ok129(profile(resources=["deployments", "pods", "services"]))
+    def test_supported_resource_verbs_are_allowed(self):
+        access.validate_ok129(
+            profile(resources={"deployments": ["get", "patch"], "pods": ["get", "delete"], "services": ["get", "update"]})
+        )
 
     def test_unsupported_resource_is_refused(self):
         with self.assertRaisesRegex(access.AccessError, "unsupported resource"):
-            access.validate_ok129(profile(resources=["configmaps", "widgets"]))
+            access.validate_ok129(profile(resources={"configmaps": ["get"], "widgets": ["get"]}))
 
-    def test_empty_resource_list_is_refused(self):
-        with self.assertRaisesRegex(access.AccessError, "non-empty list"):
-            access.validate_ok129(profile(resources=[]))
+    def test_empty_resource_mapping_is_refused(self):
+        with self.assertRaisesRegex(access.AccessError, "non-empty mapping"):
+            access.validate_ok129(profile(resources={}))
 
-    def test_duplicate_resource_is_refused(self):
-        with self.assertRaisesRegex(access.AccessError, "duplicate"):
-            access.validate_ok129(profile(resources=["pods", "pods"]))
+    def test_duplicate_resource_verb_is_refused(self):
+        with self.assertRaisesRegex(access.AccessError, "duplicate verb"):
+            access.validate_ok129(profile(resources={"pods": ["get", "get"]}))
+
+    def test_unsupported_resource_verb_is_refused(self):
+        with self.assertRaisesRegex(access.AccessError, "unsupported verb"):
+            access.validate_ok129(profile(resources={"pods": ["exec"]}))
 
     def test_non_lab_namespace_is_refused(self):
         with self.assertRaisesRegex(access.AccessError, "exactly: kagent-lab"):
@@ -215,7 +221,7 @@ class MatrixTests(unittest.TestCase):
                 {
                     "kind": "Role",
                     "metadata": {"name": "tools", "namespace": namespace},
-                    "rules": [{"resources": ["configmaps"], "verbs": ["patch"]}],
+                    "rules": [{"resources": ["configmaps"], "verbs": ["get", "patch"]}],
                 }
             )
             docs.append(
@@ -248,7 +254,7 @@ class MatrixTests(unittest.TestCase):
             {
                 "kind": "Role",
                 "metadata": {"name": "tools", "namespace": "kagent-lab"},
-                "rules": [{"resources": ["configmaps"], "verbs": ["patch"]}],
+                "rules": [{"resources": ["configmaps"], "verbs": ["get", "patch"]}],
             },
             {
                 "kind": "RoleBinding",
@@ -290,6 +296,25 @@ class MatrixTests(unittest.TestCase):
             rbac = Path(directory) / "rbac.yaml"
             rbac.write_text(yaml.safe_dump_all([role, binding]), encoding="utf-8")
             with self.assertRaisesRegex(access.AccessError, "non-configured"):
+                access.verification_matrix(profile(), rbac)
+
+    def test_rendered_verbs_must_match_the_resource_mapping(self):
+        role = {
+            "kind": "Role",
+            "metadata": {"name": "tools", "namespace": "kagent-lab"},
+            "rules": [{"resources": ["configmaps"], "verbs": ["get", "patch", "delete"]}],
+        }
+        binding = {
+            "kind": "RoleBinding",
+            "metadata": {"name": "tools", "namespace": "kagent-lab"},
+            "subjects": [
+                {"kind": "ServiceAccount", "name": "tools", "namespace": "write"}
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            rbac = Path(directory) / "rbac.yaml"
+            rbac.write_text(yaml.safe_dump_all([role, binding]), encoding="utf-8")
+            with self.assertRaisesRegex(access.AccessError, "does not match the configured resource verbs"):
                 access.verification_matrix(profile(), rbac)
 
 
