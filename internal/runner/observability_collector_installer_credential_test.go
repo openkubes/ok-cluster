@@ -67,6 +67,56 @@ func TestObservabilityCollectorInstallerCredentialIssuesOnceInMemory(t *testing.
 	}
 }
 
+func TestObservabilityCollectorInstallerCredentialConvergesAfterRuntimeAuthorityInstallation(t *testing.T) {
+	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	target := digest.SHA256([]byte("collector-installer-target"))
+	ca := []byte("collector-installer-ca")
+	token := targetCredentialTestJWT(t, now, now.Add(observabilityCollectorInstallerLifetime),
+		"system:serviceaccount:"+observabilityCollectorInstallerNamespace+":"+observabilityCollectorInstallerServiceAccount)
+	const transientAttempts = 45
+	requests := 0
+	waits := 0
+	pollNow := now
+	client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		if requests <= transientAttempts {
+			return targetCredentialTestResponse(http.StatusNotFound, map[string]any{}), nil
+		}
+		return targetCredentialTestResponse(http.StatusCreated, map[string]any{
+			"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
+			"spec": map[string]any{
+				"audiences": []string{"https://kubernetes.default.svc"}, "expirationSeconds": 1800,
+			},
+			"status": map[string]any{
+				"token": token, "expirationTimestamp": now.Add(observabilityCollectorInstallerLifetime).Format(time.RFC3339),
+			},
+		}), nil
+	})}
+	issuer, err := newKubernetesObservabilityCollectorInstallerCredentialIssuer(observabilityCollectorInstallerClientConfig{
+		Endpoint: "https://127.0.0.1:12345", BearerToken: "workload-admin", CABundle: ca, CABundleDigest: digest.SHA256(ca),
+		TargetIdentity: target, Client: client, Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issuer.pollTimeout != 5*time.Minute || issuer.maxAttempts != 300 {
+		t.Fatalf("unexpected installer convergence bounds: timeout=%s attempts=%d", issuer.pollTimeout, issuer.maxAttempts)
+	}
+	issuer.pollClock = func() time.Time { return pollNow }
+	issuer.wait = func(_ context.Context, delay time.Duration) error {
+		waits++
+		pollNow = pollNow.Add(delay)
+		return nil
+	}
+	material, err := issuer.Issue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := material.Receipt(); err != nil || requests != transientAttempts+1 || waits != transientAttempts {
+		t.Fatalf("installer credential did not converge: requests=%d waits=%d err=%v", requests, waits, err)
+	}
+}
+
 func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
 	target := digest.SHA256([]byte("collector-installer-target"))
@@ -86,7 +136,9 @@ func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			token := targetCredentialTestJWT(t, now, test.expires, test.subject)
+			requests := 0
 			client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests++
 				return targetCredentialTestResponse(test.status, map[string]any{
 					"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
 					"spec":   map[string]any{"audiences": test.audiences, "expirationSeconds": 1800},
@@ -100,8 +152,8 @@ func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := issuer.Issue(context.Background()); err == nil {
-				t.Fatal("invalid collector installer credential response was accepted")
+			if _, err := issuer.Issue(context.Background()); err == nil || requests != 1 {
+				t.Fatalf("invalid collector installer credential response was accepted or retried: requests=%d err=%v", requests, err)
 			}
 		})
 	}
