@@ -22,6 +22,8 @@ const (
 	observabilityCollectorRuntimeServiceAccount            = "ok147-contract-executor-runtime"
 	observabilityCollectorInstallerLifetime                = 30 * time.Minute
 	minimumObservabilityCollectorInstallerLifetime         = 25 * time.Minute
+	observabilityCollectorInstallerCredentialPollTimeout   = 5 * time.Minute
+	observabilityCollectorInstallerCredentialMaxAttempts   = 300
 )
 
 type ObservabilityCollectorInstallerCredentialConfig struct {
@@ -150,8 +152,8 @@ func newKubernetesObservabilityCollectorInstallerCredentialIssuer(config observa
 		caBundleDigest: config.CABundleDigest, targetIdentity: config.TargetIdentity,
 		client: &client, clock: config.Clock, pollClock: time.Now, wait: WaitWithTimer,
 		pollInterval: observabilityCollectorCredentialPollInterval,
-		pollTimeout:  observabilityCollectorCredentialPollTimeout,
-		maxAttempts:  observabilityCollectorCredentialMaxAttempts, request: requestRaw,
+		pollTimeout:  observabilityCollectorInstallerCredentialPollTimeout,
+		maxAttempts:  observabilityCollectorInstallerCredentialMaxAttempts, request: requestRaw,
 	}, nil
 }
 
