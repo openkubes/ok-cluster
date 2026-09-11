@@ -188,7 +188,7 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	})
 	if err != nil {
 		activation.stop()
-		return newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_ISSUANCE_STOPPED", errors.New("issue observability collector installer credential"))
+		return postPrefixInstallerCredentialStopOrFallback(err)
 	}
 	credentialReceipt, err := credential.Receipt()
 	if err != nil || credentialReceipt.TargetIdentityDigest != prefix.TargetIdentity || credentialReceipt.CABundleDigest != authority.CABundleDigest {
