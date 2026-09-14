@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -283,6 +284,9 @@ func TestPostPrefixPackageConstructionPropagatesOnlyBoundedSubcategories(t *test
 func TestObservabilityCollectorPostPrefixInstallerCredentialUsesRedactedSubcategories(t *testing.T) {
 	for _, category := range []string{
 		"POST_PREFIX_INSTALLER_CREDENTIAL_ISSUANCE_STOPPED",
+		"POST_PREFIX_INSTALLER_CREDENTIAL_TRANSPORT_STOPPED",
+		"POST_PREFIX_INSTALLER_CREDENTIAL_CONVERGENCE_EXHAUSTED",
+		"POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_RECEIPT_INVALID",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_RECEIPT_ENCODING_STOPPED",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_MATERIALIZATION_STOPPED",
@@ -293,6 +297,21 @@ func TestObservabilityCollectorPostPrefixInstallerCredentialUsesRedactedSubcateg
 		}
 	}
 
+	for source, want := range map[string]string{
+		"POST_PREFIX_OBSERVER_CREDENTIAL_TRANSPORT_STOPPED":     "POST_PREFIX_INSTALLER_CREDENTIAL_TRANSPORT_STOPPED",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED": "POST_PREFIX_INSTALLER_CREDENTIAL_CONVERGENCE_EXHAUSTED",
+		"POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID":      "POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID",
+	} {
+		err := postPrefixInstallerCredentialStopOrFallback(newFixedRedactedStop(source, errors.New("private endpoint and credential detail")))
+		if got := redactedStopCategory(err); got != want || strings.Contains(got, "private") {
+			t.Fatalf("installer credential category mapping %s: got %q want %q", source, got, want)
+		}
+	}
+	foreign := postPrefixInstallerCredentialStopOrFallback(newFixedRedactedStop("FOREIGN_PRIVATE_CATEGORY", errors.New("private detail")))
+	if got := redactedStopCategory(foreign); got != "POST_PREFIX_INSTALLER_CREDENTIAL_ISSUANCE_STOPPED" {
+		t.Fatalf("foreign installer credential category escaped: %q", got)
+	}
+
 	t.Run("issuance", func(t *testing.T) {
 		activator, prefix := collectorPostPrefixBeforeInstallerCredential(t)
 		activator.issue = func(context.Context, ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error) {
@@ -301,6 +320,17 @@ func TestObservabilityCollectorPostPrefixInstallerCredentialUsesRedactedSubcateg
 		err := activator.ActivateFullRunPostPrefix(context.Background(), prefix)
 		if redactedStopCategory(err) != "POST_PREFIX_INSTALLER_CREDENTIAL_ISSUANCE_STOPPED" || activator.Receipt().State != "STOPPED" {
 			t.Fatalf("issuance failure was not classified precisely: receipt=%#v err=%v", activator.Receipt(), err)
+		}
+	})
+
+	t.Run("recognized issuance cause", func(t *testing.T) {
+		activator, prefix := collectorPostPrefixBeforeInstallerCredential(t)
+		activator.issue = func(context.Context, ObservabilityCollectorInstallerCredentialConfig) (VerifiedObservabilityCollectorInstallerCredential, error) {
+			return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID", errors.New("private response"))
+		}
+		err := activator.ActivateFullRunPostPrefix(context.Background(), prefix)
+		if redactedStopCategory(err) != "POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID" || activator.Receipt().State != "STOPPED" {
+			t.Fatalf("recognized issuance failure was not mapped precisely: receipt=%#v err=%v", activator.Receipt(), err)
 		}
 	})
 
