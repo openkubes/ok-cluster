@@ -178,7 +178,7 @@ func (issuer *KubernetesObservabilityCollectorInstallerCredentialIssuer) Issue(c
 		pollTimeout: issuer.pollTimeout, maxAttempts: issuer.maxAttempts,
 	})
 	if err != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer TokenRequest stopped")
+		return VerifiedObservabilityCollectorInstallerCredential{}, err
 	}
 	return issuer.verifyResponse(value, issuer.clock().UTC().Truncate(time.Second))
 }
