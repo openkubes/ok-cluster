@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -64,6 +65,42 @@ func TestObservabilityCollectorInstallerCredentialIssuesOnceInMemory(t *testing.
 	}
 	if _, err := issuer.Issue(context.Background()); err == nil || requests != 1 {
 		t.Fatal("single-use collector installer credential issuer retried")
+	}
+}
+
+func TestObservabilityCollectorInstallerCredentialPreservesRedactedPollingCause(t *testing.T) {
+	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	target := digest.SHA256([]byte("collector-installer-target"))
+	ca := []byte("collector-installer-ca")
+	tests := map[string]struct {
+		response  *http.Response
+		transport error
+		want      string
+	}{
+		"transport":   {transport: x509.UnknownAuthorityError{}, want: "POST_PREFIX_OBSERVER_CREDENTIAL_TRANSPORT_STOPPED"},
+		"convergence": {response: targetCredentialTestResponse(http.StatusNotFound, map[string]any{}), want: "POST_PREFIX_OBSERVER_CREDENTIAL_CONVERGENCE_EXHAUSTED"},
+		"response":    {response: targetCredentialTestResponse(http.StatusForbidden, map[string]any{}), want: "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests++
+				return test.response, test.transport
+			})}
+			issuer, err := newKubernetesObservabilityCollectorInstallerCredentialIssuer(observabilityCollectorInstallerClientConfig{
+				Endpoint: "https://127.0.0.1:12345", BearerToken: "private-workload-admin", CABundle: ca, CABundleDigest: digest.SHA256(ca),
+				TargetIdentity: target, Client: client, Clock: func() time.Time { return now },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			issuer.maxAttempts = 1
+			_, err = issuer.Issue(context.Background())
+			if err == nil || requests != 1 || redactedStopCategory(err) != test.want || err.Error() != "stage orchestration stopped" {
+				t.Fatalf("polling cause was not preserved safely: requests=%d category=%q err=%v", requests, redactedStopCategory(err), err)
+			}
+		})
 	}
 }
 
