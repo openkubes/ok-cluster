@@ -51,6 +51,7 @@ ALLOWED_WRITE_RESOURCES = {
     "ingresses",
 }
 READ_VERBS = {"get", "list", "watch"}
+ALLOWED_RESOURCE_VERBS = READ_VERBS | {"create", "update", "patch", "delete"}
 
 # Candidate detector only. Other teams may install the same upstream chart, so
 # this prefix must never be treated as ownership evidence by itself. The bundled
@@ -119,23 +120,47 @@ def validate_ok129(raw: dict[str, Any]) -> None:
             "OK-129 write.namespaces must be exactly: "
             + ", ".join(sorted(ALLOWED_WRITE_NAMESPACES))
         )
-    if not isinstance(resources, list) or not resources:
+    if not isinstance(resources, dict) or not resources:
         raise AccessError(
-            "OK-129 write.resources must be a non-empty list"
+            "OK-129 write.resources must be a non-empty mapping of resource names to verb lists"
         )
-    if any(not isinstance(resource, str) for resource in resources):
-        raise AccessError("OK-129 write.resources entries must be strings")
-    normalized_resources = [resource.lower() for resource in resources]
-    if len(normalized_resources) != len(set(normalized_resources)):
-        raise AccessError("OK-129 write.resources contains a duplicate entry")
-    unsupported = sorted(set(normalized_resources) - ALLOWED_WRITE_RESOURCES)
-    if unsupported:
-        raise AccessError(
-            "OK-129 write.resources contains unsupported resource(s): "
-            + ", ".join(unsupported)
-            + ". Supported: "
-            + ", ".join(sorted(ALLOWED_WRITE_RESOURCES))
-        )
+    normalized_resources: set[str] = set()
+    for resource, verbs in resources.items():
+        if not isinstance(resource, str):
+            raise AccessError("OK-129 write.resources keys must be strings")
+        normalized = resource.lower()
+        if normalized in normalized_resources:
+            raise AccessError(
+                "OK-129 write.resources contains a duplicate resource after normalization: "
+                + normalized
+            )
+        normalized_resources.add(normalized)
+        if normalized not in ALLOWED_WRITE_RESOURCES:
+            raise AccessError(
+                "OK-129 write.resources contains unsupported resource: "
+                + normalized
+                + ". Supported: "
+                + ", ".join(sorted(ALLOWED_WRITE_RESOURCES))
+            )
+        if not isinstance(verbs, list) or not verbs:
+            raise AccessError(
+                f"OK-129 write.resources.{normalized} must be a non-empty verb list"
+            )
+        if any(not isinstance(verb, str) for verb in verbs):
+            raise AccessError(
+                f"OK-129 write.resources.{normalized} verbs must be strings"
+            )
+        normalized_verbs = [verb.lower() for verb in verbs]
+        if len(normalized_verbs) != len(set(normalized_verbs)):
+            raise AccessError(
+                f"OK-129 write.resources.{normalized} contains a duplicate verb"
+            )
+        unsupported_verbs = sorted(set(normalized_verbs) - ALLOWED_RESOURCE_VERBS)
+        if unsupported_verbs:
+            raise AccessError(
+                f"OK-129 write.resources.{normalized} contains unsupported verb(s): "
+                + ", ".join(unsupported_verbs)
+            )
     if approval is not True:
         raise AccessError("OK-129 requires write.requireApproval=true")
 
@@ -220,7 +245,7 @@ def _matrix_row(
 
 
 def _declared_verbs(
-    docs: list[dict[str, Any]], namespace: str, resources: set[str]
+    docs: list[dict[str, Any]], namespace: str, expected: dict[str, set[str]]
 ) -> dict[str, set[str]]:
     """Read the verbs the rendered Role actually grants in one namespace."""
     roles = [
@@ -234,7 +259,7 @@ def _declared_verbs(
             f"expected exactly one rendered Role in {namespace}, found {len(roles)}"
         )
 
-    declared: dict[str, set[str]] = {resource: set() for resource in resources}
+    declared: dict[str, set[str]] = {resource: set() for resource in expected}
     nonconfigured_mutating: set[str] = set()
     for rule in roles[0].get("rules") or []:
         verbs = {str(verb) for verb in (rule.get("verbs") or [])}
@@ -254,6 +279,16 @@ def _declared_verbs(
         raise AccessError(
             f"rendered Role in {namespace} grants mutations to non-configured resource(s): "
             + ", ".join(sorted(nonconfigured_mutating))
+        )
+    mismatches = {
+        resource: {"configured": sorted(expected[resource]), "rendered": sorted(verbs)}
+        for resource, verbs in declared.items()
+        if verbs != expected[resource]
+    }
+    if mismatches:
+        raise AccessError(
+            f"rendered Role in {namespace} does not match the configured resource verbs: "
+            + json.dumps(mismatches, sort_keys=True)
         )
     return declared
 
@@ -305,7 +340,10 @@ def verification_matrix(
 
     write = raw["write"]
     namespaces = [str(value) for value in write["namespaces"]]
-    resources = {str(resource).lower() for resource in write["resources"]}
+    resources = {
+        str(resource).lower(): {str(verb).lower() for verb in verbs}
+        for resource, verbs in write["resources"].items()
+    }
     docs = yaml_documents(rbac_path)
     writers: set[str] = set()
 
@@ -336,7 +374,7 @@ def verification_matrix(
                 if verb not in READ_VERBS:
                     mutating_verbs.add(verb)
 
-        unconfigured = sorted(ALLOWED_WRITE_RESOURCES - resources)
+        unconfigured = sorted(ALLOWED_WRITE_RESOURCES - set(resources))
         if unconfigured:
             for verb in sorted(mutating_verbs):
                 rows.append(
