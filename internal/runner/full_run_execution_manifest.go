@@ -2,9 +2,12 @@ package runner
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -936,15 +939,72 @@ func validFullRunAuthority(document postRuntimeAuthorityDocument) bool {
 func validFullRunAuthorization(document postRuntimeAuthorizationDocument) bool {
 	endpoint, err := url.Parse(document.Endpoint)
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Port() == "" || endpoint.User != nil ||
-		endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "/v1/stage-authorizations" {
+		endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "/v1/stage-authorizations" ||
+		endpoint.Hostname() != boundedStageAuthorityDNSName {
 		return false
 	}
 	if !validFullRunAbsolutePath(document.TokenFile) || !validFullRunAbsolutePath(document.CAFile) ||
 		!validFullRunAbsolutePath(document.PublicKeyPath) || !validFullRunAbsolutePath(document.OutputDirectory) {
 		return false
 	}
+	if !authorizationCABindsExactServerIdentity(document.CAFile, endpoint.Hostname()) {
+		return false
+	}
 	info, err := os.Lstat(document.OutputDirectory)
 	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0o077 == 0
+}
+
+func authorizationCABindsExactServerIdentity(path, hostname string) bool {
+	raw, err := readBoundedRegular(path, 128*1024)
+	if err != nil {
+		return false
+	}
+	for len(raw) > 0 {
+		block, rest := pem.Decode(raw)
+		if block == nil {
+			return false
+		}
+		raw = rest
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil || !certificateContainsExactHost(certificate, hostname) || !containsServerAuth(certificate.ExtKeyUsage) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func certificateContainsExactHost(certificate *x509.Certificate, hostname string) bool {
+	if address := net.ParseIP(hostname); address != nil {
+		for _, candidate := range certificate.IPAddresses {
+			if candidate.Equal(address) {
+				return true
+			}
+		}
+		return false
+	}
+	return containsExactString(certificate.DNSNames, hostname)
+}
+
+func containsExactString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsServerAuth(values []x509.ExtKeyUsage) bool {
+	for _, value := range values {
+		if value == x509.ExtKeyUsageServerAuth {
+			return true
+		}
+	}
+	return false
 }
 
 func validFullRunKubernetesEndpoint(raw string) bool {

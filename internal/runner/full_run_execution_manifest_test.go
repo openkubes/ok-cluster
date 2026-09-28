@@ -45,6 +45,33 @@ func TestLoadFullRunExecutionManifestBindsFreshPrivateContract(t *testing.T) {
 	}
 }
 
+func TestAuthorizationCABindsExactServerIdentity(t *testing.T) {
+	now := time.Now().UTC()
+	valid, _ := authorityServerCredential(t, now, boundedStageAuthorityDNSName, true)
+	validPath := writeBundleFile(t, t.TempDir(), "valid-authority.crt", valid)
+	if !authorizationCABindsExactServerIdentity(validPath, boundedStageAuthorityDNSName) {
+		t.Fatal("expected exact DNS SAN with serverAuth to be accepted")
+	}
+
+	wrongName, _ := authorityServerCredential(t, now, "other.openkubes-execution-system.svc", true)
+	wrongNamePath := writeBundleFile(t, t.TempDir(), "wrong-name.crt", wrongName)
+	if authorizationCABindsExactServerIdentity(wrongNamePath, boundedStageAuthorityDNSName) {
+		t.Fatal("expected a different DNS SAN to be rejected")
+	}
+
+	noServerAuth, _ := authorityServerCredential(t, now, boundedStageAuthorityDNSName, false)
+	noServerAuthPath := writeBundleFile(t, t.TempDir(), "no-server-auth.crt", noServerAuth)
+	if authorizationCABindsExactServerIdentity(noServerAuthPath, boundedStageAuthorityDNSName) {
+		t.Fatal("expected a certificate without serverAuth to be rejected")
+	}
+
+	wildcard, _ := authorityServerCredential(t, now, "*.openkubes-execution-system.svc", true)
+	wildcardPath := writeBundleFile(t, t.TempDir(), "wildcard.crt", wildcard)
+	if authorizationCABindsExactServerIdentity(wildcardPath, boundedStageAuthorityDNSName) {
+		t.Fatal("expected a wildcard DNS SAN to be rejected")
+	}
+}
+
 func TestLoadFullRunExecutionManifestV4BindsExecutionAttempt(t *testing.T) {
 	manifest, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
@@ -418,6 +445,7 @@ func fullRunExecutionManifestFixtureWithNetworkMode(t *testing.T, networkObserva
 		cleanup()
 		t.Fatal(err)
 	}
+	post.Authorization.Endpoint = "https://ok147-stage-authority.openkubes-execution-system.svc:8443/v1/stage-authorizations"
 	root := filepath.Dir(postManifest)
 	expected := post.Plan.Expected
 
@@ -527,6 +555,9 @@ func fullRunExecutionManifestFixtureWithNetworkMode(t *testing.T, networkObserva
 	collectorCertificate, collectorKey := collectorServerCredential(t, time.Now().UTC(), net.ParseIP("192.0.2.44"))
 	collectorCertificatePath := writeBundleFile(t, root, "collector-tls.crt", collectorCertificate)
 	collectorKeyPath := writeBundleFile(t, root, "collector-tls.key", collectorKey)
+	authorityCertificate, _ := authorityServerCredential(t, time.Now().UTC(), boundedStageAuthorityDNSName, true)
+	post.Authorization.Endpoint = "https://" + boundedStageAuthorityDNSName + ":8443/v1/stage-authorizations"
+	post.Authorization.CAFile = writeBundleFile(t, root, "stage-authority-tls.crt", authorityCertificate)
 	document := fullRunExecutionManifestDocument{
 		Format:                FullRunExecutionManifestFormat,
 		Plan:                  fullRunPlanDocument{Path: planPath, Expected: expected},

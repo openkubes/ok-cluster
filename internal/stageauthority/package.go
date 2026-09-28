@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net/netip"
 	"regexp"
 	"strings"
 
@@ -37,7 +36,7 @@ type RuntimePackageConfig struct {
 	PrivateSecret        string
 	StorageClass         string
 	StorageRequest       string
-	ServiceIP            string
+	ServiceDNSName       string
 }
 
 type RuntimePackageReceipt struct {
@@ -70,7 +69,7 @@ func BuildRuntimePackage(config RuntimePackageConfig) (VerifiedRuntimePackage, e
 		digest.SHA256(config.Template) != config.TemplateDigest || !imageDigestPattern.MatchString(config.ImageDigest) ||
 		config.Namespace != "openkubes-execution-system" || config.Name != "ok147-stage-authority" ||
 		config.PrivateSecret != "ok147-stage-authority-private" || !dnsLabelPattern.MatchString(config.StorageClass) ||
-		!storageRequestPattern.MatchString(config.StorageRequest) || !validRuntimeServiceIP(config.ServiceIP) {
+		!storageRequestPattern.MatchString(config.StorageRequest) || !validRuntimeServiceDNSName(config.ServiceDNSName, config.Name, config.Namespace) {
 		return VerifiedRuntimePackage{}, errors.New("bounded stage authority runtime package binding is invalid")
 	}
 	policyRaw, err := readPrivateRegular(config.PolicyPath, maximumPolicyBytes, false)
@@ -110,8 +109,8 @@ func BuildRuntimePackage(config RuntimePackageConfig) (VerifiedRuntimePackage, e
 		return VerifiedRuntimePackage{}, errors.New("bounded stage authority package TLS identity is invalid")
 	}
 	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
-	if err != nil || !certificateBindsRuntimeServiceIP(leaf, config.ServiceIP) {
-		return VerifiedRuntimePackage{}, errors.New("bounded stage authority TLS identity does not bind the Service IP")
+	if err != nil || !certificateBindsRuntimeServiceDNSName(leaf, config.ServiceDNSName) {
+		return VerifiedRuntimePackage{}, errors.New("bounded stage authority TLS identity does not bind the Service DNS name for server authentication")
 	}
 	secret := map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "immutable": true, "type": "Opaque",
@@ -132,7 +131,7 @@ func BuildRuntimePackage(config RuntimePackageConfig) (VerifiedRuntimePackage, e
 	}
 	runtimeRaw, err := RenderRuntimeTemplate(config.Template, RuntimeTemplateValues{
 		ImageDigest: config.ImageDigest, Namespace: config.Namespace, Name: config.Name, PrivateSecret: config.PrivateSecret,
-		PolicyDigest: policyDigest, KeyID: keyID, StorageClass: config.StorageClass, StorageRequest: config.StorageRequest, ServiceIP: config.ServiceIP,
+		PolicyDigest: policyDigest, KeyID: keyID, StorageClass: config.StorageClass, StorageRequest: config.StorageRequest, ServiceDNSName: config.ServiceDNSName,
 	})
 	if err != nil {
 		return VerifiedRuntimePackage{}, err
@@ -142,7 +141,7 @@ func BuildRuntimePackage(config RuntimePackageConfig) (VerifiedRuntimePackage, e
 		Format: RuntimePackageFormat, State: "VERIFIED", PackageDigest: digest.SHA256(packageRaw),
 		SecretObjectDigest: digest.SHA256(secretRaw), RuntimeObjectsDigest: digest.SHA256(runtimeRaw), TemplateDigest: config.TemplateDigest,
 		PolicyDigest: policyDigest, KeyID: keyID, TLSIdentityDigest: digest.SHA256(certificate.Certificate[0]),
-		ServiceIdentityDigest: digest.SHA256([]byte(config.ServiceIP)), ImageDigest: config.ImageDigest,
+		ServiceIdentityDigest: digest.SHA256([]byte(config.ServiceDNSName)), ImageDigest: config.ImageDigest,
 		PrivateFileCount: 5, ObjectKinds: []string{"Secret", "ServiceAccount", "PersistentVolumeClaim", "Service", "NetworkPolicy", "StatefulSet"}, MutationAllowed: false,
 	}
 	return VerifiedRuntimePackage{raw: packageRaw, receipt: receipt, verified: true}, nil
@@ -191,14 +190,14 @@ type RuntimeTemplateValues struct {
 	KeyID          string
 	StorageClass   string
 	StorageRequest string
-	ServiceIP      string
+	ServiceDNSName string
 }
 
 func RenderRuntimeTemplate(template []byte, values RuntimeTemplateValues) ([]byte, error) {
 	if len(template) == 0 || len(template) > 512*1024 || !imageDigestPattern.MatchString(values.ImageDigest) ||
 		values.Namespace != "openkubes-execution-system" || values.Name != "ok147-stage-authority" || values.PrivateSecret != "ok147-stage-authority-private" ||
 		!digestPattern.MatchString(values.PolicyDigest) || !digestPattern.MatchString(values.KeyID) || !dnsLabelPattern.MatchString(values.StorageClass) ||
-		!storageRequestPattern.MatchString(values.StorageRequest) || !validRuntimeServiceIP(values.ServiceIP) {
+		!storageRequestPattern.MatchString(values.StorageRequest) || !validRuntimeServiceDNSName(values.ServiceDNSName, values.Name, values.Namespace) {
 		return nil, errors.New("bounded stage authority runtime template input is invalid")
 	}
 	replacements := map[string]string{
@@ -206,7 +205,7 @@ func RenderRuntimeTemplate(template []byte, values RuntimeTemplateValues) ([]byt
 		"${OK147_AUTHORITY_NAME}": values.Name, "${OK147_PRIVATE_SECRET}": values.PrivateSecret,
 		"${OK147_POLICY_DIGEST}": values.PolicyDigest, "${OK147_KEY_ID}": values.KeyID,
 		"${OK147_STORAGE_CLASS}": values.StorageClass, "${OK147_STORAGE_REQUEST}": values.StorageRequest,
-		"${OK147_AUTHORITY_SERVICE_IP}": values.ServiceIP,
+		"${OK147_AUTHORITY_SERVICE_DNS_NAME}": values.ServiceDNSName,
 	}
 	result := string(template)
 	for placeholder, value := range replacements {
@@ -221,19 +220,16 @@ func RenderRuntimeTemplate(template []byte, values RuntimeTemplateValues) ([]byt
 	return []byte(result), nil
 }
 
-func validRuntimeServiceIP(raw string) bool {
-	address, err := netip.ParseAddr(raw)
-	return err == nil && address.Is4() && address.IsPrivate() && !address.IsLoopback() && !address.IsUnspecified()
+func validRuntimeServiceDNSName(raw, name, namespace string) bool {
+	return raw == name+"."+namespace+".svc" && len(raw) <= 253
 }
 
-func certificateBindsRuntimeServiceIP(certificate *x509.Certificate, raw string) bool {
-	expected, err := netip.ParseAddr(raw)
-	if err != nil || certificate == nil {
+func certificateBindsRuntimeServiceDNSName(certificate *x509.Certificate, raw string) bool {
+	if certificate == nil || certificate.VerifyHostname(raw) != nil {
 		return false
 	}
-	for _, value := range certificate.IPAddresses {
-		observed, ok := netip.AddrFromSlice(value)
-		if ok && observed.Unmap() == expected.Unmap() {
+	for _, usage := range certificate.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageServerAuth {
 			return true
 		}
 	}

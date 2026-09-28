@@ -26,7 +26,7 @@ func TestBuildRuntimePackageBindsPrivateSecretAndRestartSafeRuntime(t *testing.T
 		t.Fatal(err)
 	}
 	if receipt.Format != RuntimePackageFormat || receipt.State != "VERIFIED" || receipt.PackageDigest != digest.SHA256(raw) || receipt.PolicyDigest != config.ExpectedPolicyDigest ||
-		receipt.ServiceIdentityDigest != digest.SHA256([]byte(config.ServiceIP)) ||
+		receipt.ServiceIdentityDigest != digest.SHA256([]byte(config.ServiceDNSName)) ||
 		receipt.PrivateFileCount != 5 || len(receipt.ObjectKinds) != 6 || receipt.MutationAllowed {
 		t.Fatalf("unexpected package receipt: %#v", receipt)
 	}
@@ -40,7 +40,7 @@ func TestBuildRuntimePackageBindsPrivateSecretAndRestartSafeRuntime(t *testing.T
 	}
 	runtime := string(parts[1])
 	for _, required := range []string{
-		"kind: PersistentVolumeClaim", "kind: StatefulSet", "replicas: 1", "automountServiceAccountToken: false", "clusterIP: \"" + config.ServiceIP + "\"",
+		"kind: PersistentVolumeClaim", "kind: StatefulSet", "replicas: 1", "automountServiceAccountToken: false", "openkubes.io/service-dns-name: \"" + config.ServiceDNSName + "\"",
 		"readOnlyRootFilesystem: true", "egress: []", "authority\n            - stage\n            - materialize",
 		"/var/lib/openkubes/stage-authority/claims", config.ImageDigest, config.ExpectedPolicyDigest,
 	} {
@@ -65,14 +65,14 @@ func TestBuildRuntimePackageRejectsChangedTemplateAndMutableIdentity(t *testing.
 		t.Fatal("mutable image was accepted")
 	}
 	config = runtimePackageFixture(t)
-	config.ServiceIP = "authority.openkubes-execution-system.svc"
+	config.ServiceDNSName = "authority.openkubes-execution-system.svc"
 	if _, err := BuildRuntimePackage(config); err == nil {
-		t.Fatal("non-IP authority Service identity was accepted")
+		t.Fatal("non-canonical authority Service DNS identity was accepted")
 	}
 	config = runtimePackageFixture(t)
-	config.ServiceIP = "10.43.250.148"
+	config.ServiceDNSName = "other.openkubes-execution-system.svc"
 	if _, err := BuildRuntimePackage(config); err == nil {
-		t.Fatal("TLS identity that does not bind the Service IP was accepted")
+		t.Fatal("TLS identity that does not bind the Service DNS name was accepted")
 	}
 }
 
@@ -93,6 +93,6 @@ func runtimePackageFixture(t *testing.T) RuntimePackageConfig {
 		TLSCertPath: certPath, TLSKeyPath: tlsKeyPath, Template: template, TemplateDigest: digest.SHA256(template),
 		ImageDigest: "ghcr.io/openkubes/ok-cluster-runner@sha256:" + strings.Repeat("a", 64),
 		Namespace:   "openkubes-execution-system", Name: "ok147-stage-authority", PrivateSecret: "ok147-stage-authority-private",
-		StorageClass: "local-path", StorageRequest: "64Mi", ServiceIP: "10.43.250.147",
+		StorageClass: "local-path", StorageRequest: "64Mi", ServiceDNSName: "ok147-stage-authority.openkubes-execution-system.svc",
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -265,6 +266,9 @@ func openPostRuntimeExecutionManifest(path string, factories postRuntimeExecutio
 		return nil, receipt, err
 	}
 	clock := func() time.Time { return time.Now().UTC() }
+	if !validPostRuntimeAuthorization(document.Authorization) {
+		return nil, receipt, errors.New("post-runtime authorization binding is invalid")
+	}
 	authorization, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
 		Endpoint: document.Authorization.Endpoint, TokenFile: document.Authorization.TokenFile, CAFile: document.Authorization.CAFile,
 		PublicKeyPath: document.Authorization.PublicKeyPath, OutputDirectory: document.Authorization.OutputDirectory, Clock: clock,
@@ -404,6 +408,21 @@ func openPostRuntimeExecutionManifest(path string, factories postRuntimeExecutio
 	}
 	receipt.State = "VERIFIED"
 	return executor, receipt, nil
+}
+
+func validPostRuntimeAuthorization(document postRuntimeAuthorizationDocument) bool {
+	endpoint, err := url.Parse(document.Endpoint)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Port() == "" || endpoint.User != nil ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "/v1/stage-authorizations" {
+		return false
+	}
+	if !validFullRunAbsolutePath(document.TokenFile) || !validFullRunAbsolutePath(document.CAFile) ||
+		!validFullRunAbsolutePath(document.PublicKeyPath) || !validFullRunAbsolutePath(document.OutputDirectory) ||
+		!authorizationCABindsExactServerIdentity(document.CAFile, endpoint.Hostname()) {
+		return false
+	}
+	info, err := os.Lstat(document.OutputDirectory)
+	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0o077 == 0
 }
 
 func loadPostRuntimeExecutionManifest(path string) (postRuntimeExecutionManifestDocument, string, error) {

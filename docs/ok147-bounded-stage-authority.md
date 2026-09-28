@@ -128,11 +128,16 @@ private claim directory on the PVC. Partial materialization is preserved and
 never cleaned up or overwritten automatically.
 
 The package receipt contains only component digests, public key identity,
-image identity, a digest of the fixed Service IP and object kinds. The fixed
-address lets the TLS identity, runner authorization endpoint and single-address
-NetworkPolicy egress agree before any object is created; the raw address stays
-inside the private package. The package itself contains secrets and must remain
-a private `0600` artifact.
+image identity, a digest of the stable Service DNS identity and object kinds.
+Kubernetes allocates the Service ClusterIP dynamically. The TLS certificate
+must bind the exact DNS SAN
+`ok147-stage-authority.openkubes-execution-system.svc` and explicitly permit
+`serverAuth`; the runner authorization endpoint uses the same identity. The
+currently allocated private ClusterIP is discovered separately and bound as a
+single-address CIDR in the launch package for NetworkPolicy egress. A later
+installation may therefore receive another ClusterIP without weakening or
+changing the TLS server identity. The package itself contains secrets and must
+remain a private `0600` artifact.
 
 ```bash
 ok authority stage package \
@@ -147,7 +152,7 @@ ok authority stage package \
   --image ghcr.io/openkubes/ok-cluster-runner@sha256:<image-digest> \
   --storage-class local-path \
   --storage-request 64Mi \
-  --service-ip <reviewed-unused-private-cluster-ip> \
+  --service-dns-name ok147-stage-authority.openkubes-execution-system.svc \
   --output /private/ok147-stage-authority-package.yaml
 ```
 

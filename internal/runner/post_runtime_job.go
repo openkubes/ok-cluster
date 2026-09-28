@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const boundedStageAuthorityDNSName = "ok147-stage-authority.openkubes-execution-system.svc"
+
 type PostRuntimeExecutionJobValues struct {
 	RunID                string
 	ImageDigest          string
@@ -102,17 +104,16 @@ func exactPostRuntimeAuthorizationEndpoint(rawURL, rawCIDR string) (string, stri
 	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil || endpoint.Path != "/v1/stage-authorizations" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return "", "", errors.New("post-runtime authorization URL must be the exact HTTPS authority endpoint")
 	}
-	address, err := netip.ParseAddr(endpoint.Hostname())
-	if err != nil {
-		return "", "", errors.New("post-runtime authorization URL must use an IP address")
+	if endpoint.Hostname() != boundedStageAuthorityDNSName {
+		return "", "", errors.New("post-runtime authorization URL must use the bounded stage-authority Service DNS name")
 	}
 	port, err := strconv.Atoi(endpoint.Port())
 	if err != nil || port < 1 || port > 65535 {
 		return "", "", errors.New("post-runtime authorization URL must contain an explicit valid port")
 	}
 	prefix, err := netip.ParsePrefix(rawCIDR)
-	if err != nil || prefix.Bits() != address.BitLen() || prefix.Addr() != address {
-		return "", "", errors.New("post-runtime authorization CIDR must bind only the endpoint IP")
+	if err != nil || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() || prefix.Bits() != 32 {
+		return "", "", errors.New("post-runtime authorization CIDR must bind one private Service IP")
 	}
-	return strconv.Itoa(port), netip.AddrPortFrom(address, uint16(port)).String(), nil
+	return strconv.Itoa(port), netip.AddrPortFrom(prefix.Addr(), uint16(port)).String(), nil
 }

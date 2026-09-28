@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 )
@@ -333,6 +334,9 @@ func postRuntimeActivationPackageFixture(t *testing.T) (PostRuntimeExecutionActi
 	document.AggregateEvidence.Management = management
 	document.AggregateEvidence.WorkloadTokenFile = document.TargetCredential.Workload.TokenFile
 	document.AggregateEvidence.WorkloadCAFile = document.TargetCredential.Workload.CAFile
+	authorityCertificate, _ := authorityServerCredential(t, time.Now().UTC(), boundedStageAuthorityDNSName, true)
+	document.Authorization.Endpoint = "https://" + boundedStageAuthorityDNSName + ":8443/v1/stage-authorizations"
+	document.Authorization.CAFile = writeBundleFile(t, root, "stage-authority-tls.crt", authorityCertificate)
 	writePostRuntimeActivationManifest(t, manifest, document)
 	template := postRuntimeExecutionJobTemplate(t)
 	return PostRuntimeExecutionActivationPackageConfig{
@@ -340,7 +344,7 @@ func postRuntimeActivationPackageFixture(t *testing.T) (PostRuntimeExecutionActi
 		JobTemplate: template, JobTemplateDigest: digest.SHA256(template), RunID: "ok147-post-runtime-01",
 		ImageDigest:       "ghcr.io/openkubes/ok-cluster@" + bundleSHA("a"),
 		ManagementAPICIDR: "127.0.0.1/32", WorkloadAPICIDR: "192.0.2.20/32",
-		ArgoAPICIDR: "192.0.2.11/32", AuthorizationAPICIDR: "127.0.0.1/32",
+		ArgoAPICIDR: "192.0.2.11/32", AuthorizationAPICIDR: "10.43.250.147/32",
 	}, cleanup
 }
 
