@@ -355,6 +355,31 @@ func collectorServerCredential(t *testing.T, at time.Time, address net.IP) ([]by
 	return pemEncodeCertificate(raw), pemEncodeECPrivateKey(privateRaw)
 }
 
+func authorityServerCredential(t *testing.T, at time.Time, dnsName string, serverAuth bool) ([]byte, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(403), Subject: pkix.Name{CommonName: "ok147-stage-authority"},
+		NotBefore: at.Add(-time.Hour), NotAfter: at.Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, DNSNames: []string{dnsName},
+	}
+	if serverAuth {
+		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	}
+	raw, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateRaw, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pemEncodeCertificate(raw), pemEncodeECPrivateKey(privateRaw)
+}
+
 func pemEncodeCertificate(raw []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: raw})
 }

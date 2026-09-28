@@ -34,7 +34,7 @@ func runAuthorityStagePackage(arguments []string, stdout, stderr io.Writer) erro
 	imageDigest := flags.String("image", "", "digest-pinned ok runner image")
 	storageClass := flags.String("storage-class", "", "bounded DEV storage class")
 	storageRequest := flags.String("storage-request", "", "bounded durable claim size")
-	serviceIP := flags.String("service-ip", "", "exact private ClusterIP for the bounded authority Service")
+	serviceDNSName := flags.String("service-dns-name", "", "exact stable DNS identity for the bounded authority Service")
 	output := flags.String("output", "", "new private 0600 runtime package")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -44,7 +44,7 @@ func runAuthorityStagePackage(arguments []string, stdout, stderr io.Writer) erro
 	}
 	for _, input := range []string{
 		*policyPath, *expectedPolicyDigest, *privateKeyPath, *tokenFile, *tlsCertPath, *tlsKeyPath,
-		*templatePath, *templateDigest, *imageDigest, *storageClass, *storageRequest, *serviceIP, *output,
+		*templatePath, *templateDigest, *imageDigest, *storageClass, *storageRequest, *serviceDNSName, *output,
 	} {
 		if input == "" {
 			return errors.New("all bounded stage-authority package inputs are required")
@@ -59,7 +59,7 @@ func runAuthorityStagePackage(arguments []string, stdout, stderr io.Writer) erro
 		TokenFile: *tokenFile, TLSCertPath: *tlsCertPath, TLSKeyPath: *tlsKeyPath,
 		Template: template, TemplateDigest: *templateDigest, ImageDigest: *imageDigest,
 		Namespace: "openkubes-execution-system", Name: "ok147-stage-authority", PrivateSecret: "ok147-stage-authority-private",
-		StorageClass: *storageClass, StorageRequest: *storageRequest, ServiceIP: *serviceIP,
+		StorageClass: *storageClass, StorageRequest: *storageRequest, ServiceDNSName: *serviceDNSName,
 	})
 	if err != nil {
 		return err

@@ -22,8 +22,9 @@ kind: Service
 metadata:
   name: "${OK147_AUTHORITY_NAME}"
   namespace: "${OK147_AUTHORITY_NAMESPACE}"
+  annotations:
+    openkubes.io/service-dns-name: "${OK147_AUTHORITY_SERVICE_DNS_NAME}"
 spec:
-  clusterIP: "${OK147_AUTHORITY_SERVICE_IP}"
   selector:
     app.kubernetes.io/name: "${OK147_AUTHORITY_NAME}"
   ports:

@@ -169,10 +169,12 @@ func expectedRuntimeObjectIdentity(index int, kind, name string, value map[strin
 		modes, _ := spec["accessModes"].([]any)
 		return len(modes) == 1 && modes[0] == "ReadWriteOnce"
 	case "Service":
+		metadata, _ := value["metadata"].(map[string]any)
+		annotations, _ := metadata["annotations"].(map[string]any)
 		spec, _ := value["spec"].(map[string]any)
 		selector, _ := spec["selector"].(map[string]any)
-		serviceIP, _ := spec["clusterIP"].(string)
-		return validRuntimeServiceIP(serviceIP) && digest.SHA256([]byte(serviceIP)) == receipt.ServiceIdentityDigest && selector["app.kubernetes.io/name"] == "ok147-stage-authority"
+		serviceDNSName, _ := annotations["openkubes.io/service-dns-name"].(string)
+		return spec["clusterIP"] == nil && validRuntimeServiceDNSName(serviceDNSName, name, "openkubes-execution-system") && digest.SHA256([]byte(serviceDNSName)) == receipt.ServiceIdentityDigest && selector["app.kubernetes.io/name"] == "ok147-stage-authority"
 	case "NetworkPolicy":
 		spec, _ := value["spec"].(map[string]any)
 		return spec != nil

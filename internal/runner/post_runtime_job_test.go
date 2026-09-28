@@ -140,7 +140,7 @@ func validPostRuntimeExecutionJobValues() PostRuntimeExecutionJobValues {
 		ManagementAPIURL: "https://192.0.2.12:6443", ManagementAPICIDR: "192.0.2.12/32",
 		WorkloadAPIURL: "https://192.0.2.20:6443", WorkloadAPICIDR: "192.0.2.20/32",
 		ArgoAPIURL: "https://192.0.2.30:6443", ArgoAPICIDR: "192.0.2.30/32",
-		AuthorizationAPIURL: "https://192.0.2.40:8443/v1/stage-authorizations", AuthorizationAPICIDR: "192.0.2.40/32",
+		AuthorizationAPIURL: "https://ok147-stage-authority.openkubes-execution-system.svc:8443/v1/stage-authorizations", AuthorizationAPICIDR: "10.43.250.147/32",
 	}
 }
 
