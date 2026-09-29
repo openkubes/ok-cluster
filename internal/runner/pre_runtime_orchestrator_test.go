@@ -170,6 +170,18 @@ func TestPreRuntimeOrchestrationReportsRedactedClusterLifecycleStopCategory(t *t
 	}
 }
 
+func TestSubmissionPhaseOrdinalCategoriesAreRedactedAndAccepted(t *testing.T) {
+	for _, category := range []string{
+		"SUBMISSION_OBJECT_TERMINATING_AT_02",
+		"SUBMISSION_CREATE_RESPONSE_IDENTITY_MISMATCH_AT_02",
+		"SUBMISSION_CREATE_RESPONSE_CONTENT_MISMATCH_AT_08",
+	} {
+		if !validRedactedStopCategory(category) {
+			t.Fatalf("phase-bound submission category was rejected: %s", category)
+		}
+	}
+}
+
 func TestPreRuntimeOrchestrationPreservesSafeClusterLifecycleFailureCause(t *testing.T) {
 	orchestration := successfulPreRuntimeOrchestration(nil)
 	orchestration.RunClusterLifecycle = func(context.Context, execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {

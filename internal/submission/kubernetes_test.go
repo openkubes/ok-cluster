@@ -74,6 +74,30 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		}
 	})
 
+	t.Run("terminating existing object", func(t *testing.T) {
+		api := newFakeObjectAPI(t)
+		object := apiObject(t, plan.Infrastructure.Objects[0].Raw)
+		object["metadata"].(map[string]any)["deletionTimestamp"] = "2026-09-29T14:00:00Z"
+		api.objects[plan.Infrastructure.Objects[0].ObjectPath] = object
+		client := newSubmissionClient(t, "ok-infra", api.client())
+		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
+		var stopped *SubmissionError
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_TERMINATING_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 {
+			t.Fatalf("terminating object was not distinguished: %#v %v", receipt, err)
+		}
+	})
+
+	t.Run("create response mismatch", func(t *testing.T) {
+		api := newFakeObjectAPI(t)
+		api.mutateCreateResponse = func(object map[string]any) { object["apiVersion"] = "private-value" }
+		client := newSubmissionClient(t, "ok-infra", api.client())
+		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
+		var stopped *SubmissionError
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_CREATE_RESPONSE_IDENTITY_MISMATCH_AT_01" || receipt.MutationState != "ATTEMPTED" || api.posts != 1 || strings.Contains(err.Error(), "private") {
+			t.Fatalf("create response mismatch was not phase-bound: %#v %v", receipt, err)
+		}
+	})
+
 	t.Run("create conflict after absence", func(t *testing.T) {
 		api := newFakeObjectAPI(t)
 		api.conflict = true
@@ -266,13 +290,14 @@ type recordedRequest struct {
 }
 
 type fakeObjectAPI struct {
-	t          *testing.T
-	mu         sync.Mutex
-	objects    map[string]map[string]any
-	requests   []recordedRequest
-	posts      int
-	conflict   bool
-	failStatus int
+	t                    *testing.T
+	mu                   sync.Mutex
+	objects              map[string]map[string]any
+	requests             []recordedRequest
+	posts                int
+	conflict             bool
+	failStatus           int
+	mutateCreateResponse func(map[string]any)
 }
 
 func newFakeObjectAPI(t *testing.T) *fakeObjectAPI {
@@ -316,6 +341,9 @@ func (api *fakeObjectAPI) roundTrip(request *http.Request) (*http.Response, erro
 		metadata := object["metadata"].(map[string]any)
 		metadata["uid"] = "test-uid"
 		metadata["resourceVersion"] = "1"
+		if api.mutateCreateResponse != nil {
+			api.mutateCreateResponse(object)
+		}
 		name := metadata["name"].(string)
 		path := request.URL.Path + "/" + name
 		api.objects[path] = object

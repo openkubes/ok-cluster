@@ -87,6 +87,18 @@ func TestStagedOperationPersistsRedactedNonSuccessWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestSubmissionPhaseOrdinalCategoriesAreValidStageFailures(t *testing.T) {
+	for _, category := range []string{
+		"SUBMISSION_OBJECT_TERMINATING_AT_02",
+		"SUBMISSION_CREATE_RESPONSE_IDENTITY_MISMATCH_AT_02",
+		"SUBMISSION_CREATE_RESPONSE_CONTENT_MISMATCH_AT_08",
+	} {
+		if !validStageFailureCategory(category) {
+			t.Fatalf("phase-bound submission category was rejected: %s", category)
+		}
+	}
+}
+
 func TestStagedOperationInvalidMutatorResultLeavesIndeterminateClaim(t *testing.T) {
 	plan := stagedPlan(t)
 	at := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
