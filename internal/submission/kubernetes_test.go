@@ -69,7 +69,7 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		client := newSubmissionClient(t, "ok-infra", api.client())
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
 		var stopped *SubmissionError
-		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_MISMATCH" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
 			t.Fatalf("drift accepted: %#v %v", receipt, err)
 		}
 	})
@@ -108,6 +108,31 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 			t.Fatalf("transport stop was not safely categorized: %v", err)
 		}
 	})
+}
+
+func TestObservedObjectMismatchCategoriesAreRedactedAndPhaseSpecific(t *testing.T) {
+	desired := Object{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound"},"spec":{"mode":"bound"},"data":{"key":"bound"}}`)}
+	tests := []struct {
+		name     string
+		observed string
+		want     string
+	}{
+		{name: "response", observed: `{`, want: "SUBMISSION_OBJECT_RESPONSE_INVALID"},
+		{name: "identity", observed: `{"apiVersion":"v2","kind":"ConfigMap","metadata":{"name":"bound","uid":"u","resourceVersion":"1"},"spec":{"mode":"bound"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_IDENTITY_MISMATCH"},
+		{name: "metadata", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"other","uid":"u","resourceVersion":"1"},"spec":{"mode":"bound"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_METADATA_MISMATCH"},
+		{name: "spec", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound","uid":"u","resourceVersion":"1"},"spec":{"mode":"other"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_SPEC_MISMATCH"},
+		{name: "content", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound","uid":"u","resourceVersion":"1"},"spec":{"mode":"bound"},"data":{"key":"other"}}`, want: "SUBMISSION_OBJECT_CONTENT_MISMATCH"},
+		{name: "runtime identity", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound"},"spec":{"mode":"bound"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_RUNTIME_IDENTITY_INVALID"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := verifyObservedObject([]byte(test.observed), desired)
+			var categorized interface{ RedactedStopCategory() string }
+			if err == nil || !errors.As(err, &categorized) || categorized.RedactedStopCategory() != test.want || strings.Contains(strings.ToLower(categorized.RedactedStopCategory()), "bound") {
+				t.Fatalf("category=%v err=%v, want %s", categorized, err, test.want)
+			}
+		})
+	}
 }
 
 func TestKubernetesClientAcceptsOnlyNamedOrDigestAuthority(t *testing.T) {
