@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,6 +120,21 @@ func TestProviderPrerequisitesExactExistingPlaneCompletesWithoutWrite(t *testing
 	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
 	if err != nil || result.Outcome != "SUCCEEDED" || result.MutationState != "NOT_ATTEMPTED" || result.EvidenceDigest == "" || submitter.calls != 1 {
 		t.Fatalf("exact durable provider prerequisites did not complete idempotently: %#v calls=%d err=%v", result, submitter.calls, err)
+	}
+}
+
+func TestSubmissionPlaneMutatorPreservesOnlyRedactedStopCategory(t *testing.T) {
+	plan := stagedPlan(t)
+	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
+	stopped := submission.PlaneReceipt{Format: submission.PlaneReceiptFormat, Authority: projected.Infrastructure.Identity, Role: projected.Infrastructure.Role, State: "STOPPED_PARTIAL_OR_UNKNOWN", MutationState: "NOT_ATTEMPTED", Results: []submission.ObjectResult{}}
+	submitter := &fakePlaneSubmitter{receipt: stopped, err: &submission.SubmissionError{Receipt: stopped, Cause: errors.New("private endpoint detail"), Category: "SUBMISSION_TRANSPORT_STOPPED"}}
+	mutator, err := NewSubmissionPlaneMutator(plan, "provider-prerequisites", projected, submitter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
+	if err == nil || strings.Contains(err.Error(), "private") || result.Outcome != "STOPPED" || result.MutationState != "NOT_ATTEMPTED" || result.FailureCategory != "SUBMISSION_TRANSPORT_STOPPED" {
+		t.Fatalf("submission stop category was not safely preserved: %#v err=%v", result, err)
 	}
 }
 

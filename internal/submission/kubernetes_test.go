@@ -3,8 +3,11 @@ package submission
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -65,7 +68,8 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		api.objects[plan.Infrastructure.Objects[0].ObjectPath] = object
 		client := newSubmissionClient(t, "ok-infra", api.client())
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
-		if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
+		var stopped *SubmissionError
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_MISMATCH" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
 			t.Fatalf("drift accepted: %#v %v", receipt, err)
 		}
 	})
@@ -75,7 +79,8 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		api.conflict = true
 		client := newSubmissionClient(t, "ok-infra", api.client())
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
-		if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || receipt.MutationState != "ATTEMPTED" || !strings.Contains(err.Error(), "conflicted") {
+		var stopped *SubmissionError
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_CONFLICT_STOPPED" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || receipt.MutationState != "ATTEMPTED" || strings.Contains(err.Error(), "conflicted") {
 			t.Fatalf("conflict accepted: %#v %v", receipt, err)
 		}
 	})
@@ -86,8 +91,21 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 			calls++
 			return jsonResponse(http.StatusTemporaryRedirect, nil, map[string]string{"Location": "http://127.0.0.1:12346/redirected"}), nil
 		})})
-		if _, err := client.Submit(context.Background(), plan.Infrastructure); err == nil || calls != 1 {
+		_, err := client.Submit(context.Background(), plan.Infrastructure)
+		var stopped *SubmissionError
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_HTTP_REJECTED" || calls != 1 {
 			t.Fatalf("redirect followed or accepted: calls=%d err=%v", calls, err)
+		}
+	})
+
+	t.Run("transport detail is redacted", func(t *testing.T) {
+		client := newSubmissionClient(t, "ok-infra", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("private endpoint detail")
+		})})
+		_, err := client.Submit(context.Background(), plan.Infrastructure)
+		var stopped *SubmissionError
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_TRANSPORT_STOPPED" || strings.Contains(err.Error(), "private") {
+			t.Fatalf("transport stop was not safely categorized: %v", err)
 		}
 	})
 }
@@ -107,6 +125,27 @@ func TestKubernetesClientAcceptsOnlyNamedOrDigestAuthority(t *testing.T) {
 		AuthorityIdentity: "sha256:" + strings.Repeat("a", 64), Client: client,
 	}); err != nil {
 		t.Fatalf("redacted digest authority was rejected: %v", err)
+	}
+}
+
+func TestSubmissionTransportStopCategoriesArePhaseSpecificAndRedacted(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "dns", err: &net.DNSError{Err: "private", Name: "private.example"}, want: "SUBMISSION_DNS_STOPPED"},
+		{name: "connect", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("private address")}, want: "SUBMISSION_CONNECT_STOPPED"},
+		{name: "tls", err: x509.HostnameError{Certificate: &x509.Certificate{}, Host: "private.example"}, want: "SUBMISSION_TLS_STOPPED"},
+		{name: "timeout", err: context.DeadlineExceeded, want: "SUBMISSION_TIMEOUT_STOPPED"},
+		{name: "other", err: errors.New("private transport detail"), want: "SUBMISSION_TRANSPORT_STOPPED"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := submissionTransportStopCategory(test.err); got != test.want || strings.Contains(got, "private") {
+				t.Fatalf("category=%q want=%q", got, test.want)
+			}
+		})
 	}
 }
 

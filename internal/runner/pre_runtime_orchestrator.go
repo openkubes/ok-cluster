@@ -72,10 +72,7 @@ func (orchestration PreRuntimeOrchestration) Run(ctx context.Context) (PreRuntim
 	providerReceipt, runErr := orchestration.RunProviderPrerequisites(ctx)
 	appendErr := appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[0], execution.StagedReceiptFormat, providerReceipt.Format, providerReceipt.State, providerReceipt.PlanDigest, providerReceipt.StageID, providerReceipt.StageReceiptDigest)
 	if runErr != nil {
-		if appendErr == nil || providerReceipt == (execution.StagedOperationReceipt{}) {
-			return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[0], runErr)
-		}
-		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[0], appendErr)
+		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[0], runErr)
 	}
 	if appendErr != nil {
 		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[0], appendErr)
@@ -290,6 +287,8 @@ func redactedStopCategory(cause error) string {
 	if errors.As(cause, &categorized) {
 		switch category := categorized.RedactedStopCategory(); category {
 		case "OBSERVATION_SOURCE_ERROR", "OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED",
+			"SUBMISSION_DNS_STOPPED", "SUBMISSION_CONNECT_STOPPED", "SUBMISSION_TLS_STOPPED", "SUBMISSION_TIMEOUT_STOPPED", "SUBMISSION_TRANSPORT_STOPPED",
+			"SUBMISSION_HTTP_REJECTED", "SUBMISSION_RESPONSE_INVALID", "SUBMISSION_OBJECT_MISMATCH", "SUBMISSION_CONFLICT_STOPPED",
 			"RUNTIME_BINDING_SOURCE_STOPPED", "RUNTIME_BINDING_MATERIALIZATION_STOPPED", "RUNTIME_BINDING_MATERIAL_VERIFICATION_STOPPED", "RUNTIME_BINDING_PERSISTENCE_STOPPED", "RUNTIME_BINDING_WRITER_OPEN_STOPPED",
 			"AUTHORIZATION_DNS_STOPPED", "AUTHORIZATION_CONNECT_STOPPED", "AUTHORIZATION_TLS_STOPPED", "AUTHORIZATION_TIMEOUT_STOPPED", "AUTHORIZATION_TRANSPORT_STOPPED", "AUTHORIZATION_HTTP_REJECTED", "AUTHORIZATION_RESPONSE_INVALID", "AUTHORIZATION_PERSISTENCE_STOPPED", "AUTHORIZATION_INTERRUPTED",
 			"POST_RUNTIME_BIND_STOPPED", "POST_RUNTIME_PREFIX_UNAVAILABLE", "POST_RUNTIME_PREFIX_MISMATCH", "POST_RUNTIME_TARGET_IDENTITY_UNAVAILABLE",
@@ -324,6 +323,8 @@ func redactedStopCategory(cause error) string {
 func validRedactedStopCategory(category string) bool {
 	switch category {
 	case "ORCHESTRATION_STOPPED", "STAGE_EXECUTION_ERROR", "OBSERVATION_SOURCE_ERROR",
+		"SUBMISSION_DNS_STOPPED", "SUBMISSION_CONNECT_STOPPED", "SUBMISSION_TLS_STOPPED", "SUBMISSION_TIMEOUT_STOPPED", "SUBMISSION_TRANSPORT_STOPPED",
+		"SUBMISSION_HTTP_REJECTED", "SUBMISSION_RESPONSE_INVALID", "SUBMISSION_OBJECT_MISMATCH", "SUBMISSION_CONFLICT_STOPPED",
 		"OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED", "OBSERVATION_COMPLETED_FAILED",
 		"OBSERVATION_COMPLETED_STOPPED", "RUNTIME_BINDING_SOURCE_STOPPED", "RUNTIME_BINDING_MATERIALIZATION_STOPPED",
 		"RUNTIME_BINDING_MATERIAL_VERIFICATION_STOPPED", "RUNTIME_BINDING_PERSISTENCE_STOPPED", "RUNTIME_BINDING_WRITER_OPEN_STOPPED",

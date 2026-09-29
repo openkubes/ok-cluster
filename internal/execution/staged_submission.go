@@ -89,7 +89,12 @@ func (mutator *SubmissionPlaneMutator) Mutate(ctx context.Context, request Stage
 		return StageMutationResult{}, errors.New("derive bounded submission evidence")
 	}
 	if submitErr != nil {
-		return StageMutationResult{Outcome: "STOPPED", MutationState: mutationState, EvidenceDigest: evidenceDigest}, errors.New("bounded submission stopped")
+		category := "SUBMISSION_RESPONSE_INVALID"
+		var categorized interface{ RedactedStopCategory() string }
+		if errors.As(submitErr, &categorized) && validStageFailureCategory(categorized.RedactedStopCategory()) {
+			category = categorized.RedactedStopCategory()
+		}
+		return StageMutationResult{Outcome: "STOPPED", MutationState: mutationState, EvidenceDigest: evidenceDigest, FailureCategory: category}, errors.New("bounded submission stopped")
 	}
 	if mutationState != "ATTEMPTED" {
 		// Provider prerequisites are intentionally durable across disposable
