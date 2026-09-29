@@ -184,7 +184,7 @@ func (resolver *StageAuthorizationHTTPResolver) resolve(ctx context.Context, req
 		response, requestErr := resolver.client.Do(httpRequest)
 		if requestErr != nil {
 			if !transientStageAuthorizationTransportError(requestErr) || !resolver.canPollAgain(ctx, attempt, deadline) {
-				return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_TRANSPORT_STOPPED", "perform stage authorization request")
+				return StageAuthorizationSource{}, newStageAuthorizationStop(stageAuthorizationTransportStopCategory(requestErr), "perform stage authorization request")
 			}
 			if err := resolver.pollWait(ctx, resolver.pollInterval); err != nil {
 				return StageAuthorizationSource{}, newStageAuthorizationStop("AUTHORIZATION_INTERRUPTED", "stage authorization polling interrupted")
@@ -282,6 +282,37 @@ func transientStageAuthorizationTransportError(err error) bool {
 	}
 	var networkError net.Error
 	return errors.As(err, &networkError) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// stageAuthorizationTransportStopCategory retains only the failed transport
+// phase. It must never carry the wrapped error, host, address or certificate
+// identity into a receipt.
+func stageAuthorizationTransportStopCategory(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "AUTHORIZATION_TIMEOUT_STOPPED"
+	}
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) {
+		return "AUTHORIZATION_DNS_STOPPED"
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	var certificateInvalid x509.CertificateInvalidError
+	var hostnameError x509.HostnameError
+	var recordHeader tls.RecordHeaderError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &certificateInvalid) || errors.As(err, &hostnameError) || errors.As(err, &recordHeader) {
+		return "AUTHORIZATION_TLS_STOPPED"
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return "AUTHORIZATION_TIMEOUT_STOPPED"
+	}
+	var operationError *net.OpError
+	if errors.As(err, &operationError) {
+		if operationError.Op == "dial" {
+			return "AUTHORIZATION_CONNECT_STOPPED"
+		}
+	}
+	return "AUTHORIZATION_TRANSPORT_STOPPED"
 }
 
 func waitForStageAuthorizationPoll(ctx context.Context, duration time.Duration) error {
