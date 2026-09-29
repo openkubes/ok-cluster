@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
 )
 
 const PreRuntimeOrchestrationReceiptFormat = "ok147-pre-runtime-orchestration-receipt/v1"
+
+var submissionObjectOrdinalStopCategoryPattern = regexp.MustCompile(`^SUBMISSION_OBJECT_(?:MISMATCH|RESPONSE_INVALID|PROJECTION_INVALID|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|RUNTIME_IDENTITY_INVALID)_AT_[0-9]{2}$`)
 
 var preRuntimeStageOrder = []string{
 	"provider-prerequisites",
@@ -289,6 +292,9 @@ func redactedStopCategory(cause error) string {
 	}
 	var categorized redactedStopCategorizer
 	if errors.As(cause, &categorized) {
+		if category := categorized.RedactedStopCategory(); submissionObjectOrdinalStopCategoryPattern.MatchString(category) {
+			return category
+		}
 		switch category := categorized.RedactedStopCategory(); category {
 		case "OBSERVATION_SOURCE_ERROR", "OBSERVATION_RESULT_INVALID", "OBSERVATION_INTERRUPTED",
 			"SUBMISSION_DNS_STOPPED", "SUBMISSION_CONNECT_STOPPED", "SUBMISSION_TLS_STOPPED", "SUBMISSION_TIMEOUT_STOPPED", "SUBMISSION_TRANSPORT_STOPPED",
@@ -328,6 +334,9 @@ func redactedStopCategory(cause error) string {
 }
 
 func validRedactedStopCategory(category string) bool {
+	if submissionObjectOrdinalStopCategoryPattern.MatchString(category) {
+		return true
+	}
 	switch category {
 	case "ORCHESTRATION_STOPPED", "STAGE_EXECUTION_ERROR", "OBSERVATION_SOURCE_ERROR",
 		"SUBMISSION_DNS_STOPPED", "SUBMISSION_CONNECT_STOPPED", "SUBMISSION_TLS_STOPPED", "SUBMISSION_TIMEOUT_STOPPED", "SUBMISSION_TRANSPORT_STOPPED",

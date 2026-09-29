@@ -69,7 +69,7 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		client := newSubmissionClient(t, "ok-infra", api.client())
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
 		var stopped *SubmissionError
-		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
 			t.Fatalf("drift accepted: %#v %v", receipt, err)
 		}
 	})
@@ -108,6 +108,24 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 			t.Fatalf("transport stop was not safely categorized: %v", err)
 		}
 	})
+}
+
+func TestSubmissionObjectOrdinalIsBoundWithoutIdentityDisclosure(t *testing.T) {
+	root, binding := validProjection(t)
+	plan, err := Load(root, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := newFakeObjectAPI(t)
+	object := apiObject(t, plan.Infrastructure.Objects[0].Raw)
+	object["metadata"].(map[string]any)["name"] = "private-object-name"
+	api.objects[plan.Infrastructure.Objects[0].ObjectPath] = object
+	client := newSubmissionClient(t, "ok-infra", api.client())
+	_, err = client.Submit(context.Background(), plan.Infrastructure)
+	var stopped *SubmissionError
+	if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || strings.Contains(stopped.RedactedStopCategory(), "private") || strings.Contains(err.Error(), "private") {
+		t.Fatalf("ordinal category was not redaction-safe: %v", err)
+	}
 }
 
 func TestObservedObjectMismatchCategoriesAreRedactedAndPhaseSpecific(t *testing.T) {
