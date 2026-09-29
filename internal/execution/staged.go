@@ -17,6 +17,7 @@ import (
 const StagedReceiptFormat = "ok147-staged-operation-run-receipt/v1"
 
 var stagedDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var submissionObjectStopCategoryPattern = regexp.MustCompile(`^SUBMISSION_OBJECT_(?:MISMATCH|RESPONSE_INVALID|PROJECTION_INVALID|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|RUNTIME_IDENTITY_INVALID)_AT_[0-9]{2}$`)
 
 // StageMutationBinding makes one preconstructed mutator specific to one
 // verified plan stage. The mutator is not a dynamic operation dispatcher.
@@ -201,6 +202,9 @@ func validateStageMutationResult(stageID string, result StageMutationResult, mut
 }
 
 func validStageFailureCategory(category string) bool {
+	if submissionObjectStopCategoryPattern.MatchString(category) {
+		return true
+	}
 	switch category {
 	case "SUBMISSION_DNS_STOPPED", "SUBMISSION_CONNECT_STOPPED", "SUBMISSION_TLS_STOPPED", "SUBMISSION_TIMEOUT_STOPPED", "SUBMISSION_TRANSPORT_STOPPED",
 		"SUBMISSION_HTTP_REJECTED", "SUBMISSION_HTTP_UNAUTHORIZED", "SUBMISSION_HTTP_FORBIDDEN", "SUBMISSION_HTTP_RATE_LIMITED", "SUBMISSION_HTTP_SERVER_ERROR",

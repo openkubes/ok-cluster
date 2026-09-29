@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -146,13 +147,13 @@ func (client *KubernetesClient) Submit(ctx context.Context, plane Plane) (PlaneR
 	if len(plane.Objects) == 0 {
 		return stopped(receipt, errors.New("submission plane has no objects"))
 	}
-	for _, object := range plane.Objects {
+	for index, object := range plane.Objects {
 		state, uid, mutationAttempted, err := client.submitObject(ctx, object)
 		if mutationAttempted {
 			receipt.MutationState = "ATTEMPTED"
 		}
 		if err != nil {
-			return stopped(receipt, err)
+			return stopped(receipt, bindSubmissionObjectOrdinal(err, index+1))
 		}
 		receipt.Results = append(receipt.Results, ObjectResult{
 			Identity: ObjectIdentity{APIVersion: object.Identity.APIVersion, Kind: object.Identity.Kind, Name: object.Identity.Name, Namespace: object.Identity.Namespace},
@@ -163,6 +164,17 @@ func (client *KubernetesClient) Submit(ctx context.Context, plane Plane) (PlaneR
 	}
 	receipt.State = "SUBMITTED"
 	return receipt, nil
+}
+
+// bindSubmissionObjectOrdinal adds only the one-based position in the already
+// verified projection order. It never exposes the object's kind, name,
+// namespace, API path or contents.
+func bindSubmissionObjectOrdinal(cause error, ordinal int) error {
+	var categorized interface{ RedactedStopCategory() string }
+	if !errors.As(cause, &categorized) || !strings.HasPrefix(categorized.RedactedStopCategory(), "SUBMISSION_OBJECT_") {
+		return cause
+	}
+	return newCategorizedSubmissionError(fmt.Sprintf("%s_AT_%02d", categorized.RedactedStopCategory(), ordinal), "existing Kubernetes object failed bounded verification")
 }
 
 func stopped(receipt PlaneReceipt, cause error) (PlaneReceipt, error) {
