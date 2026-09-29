@@ -82,8 +82,12 @@ func (orchestration PreRuntimeOrchestration) Run(ctx context.Context) (PreRuntim
 	}
 
 	lifecycleReceipt, runErr := orchestration.RunClusterLifecycle(ctx, providerReceipt)
-	if err := appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[1], execution.StagedReceiptFormat, lifecycleReceipt.Format, lifecycleReceipt.State, lifecycleReceipt.PlanDigest, lifecycleReceipt.StageID, lifecycleReceipt.StageReceiptDigest); err != nil || runErr != nil {
-		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[1])
+	appendErr = appendPreRuntimeCheckpoint(&receipt, preRuntimeStageOrder[1], execution.StagedReceiptFormat, lifecycleReceipt.Format, lifecycleReceipt.State, lifecycleReceipt.PlanDigest, lifecycleReceipt.StageID, lifecycleReceipt.StageReceiptDigest)
+	if runErr != nil {
+		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[1], runErr)
+	}
+	if appendErr != nil {
+		return stopPreRuntimeOrchestrationWithCause(receipt, preRuntimeStageOrder[1], appendErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return stopPreRuntimeOrchestration(receipt, preRuntimeStageOrder[2])
