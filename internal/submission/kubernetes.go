@@ -171,10 +171,10 @@ func (client *KubernetesClient) Submit(ctx context.Context, plane Plane) (PlaneR
 // namespace, API path or contents.
 func bindSubmissionObjectOrdinal(cause error, ordinal int) error {
 	var categorized interface{ RedactedStopCategory() string }
-	if !errors.As(cause, &categorized) || !strings.HasPrefix(categorized.RedactedStopCategory(), "SUBMISSION_OBJECT_") {
+	if !errors.As(cause, &categorized) || (!strings.HasPrefix(categorized.RedactedStopCategory(), "SUBMISSION_OBJECT_") && !strings.HasPrefix(categorized.RedactedStopCategory(), "SUBMISSION_CREATE_RESPONSE_")) {
 		return cause
 	}
-	return newCategorizedSubmissionError(fmt.Sprintf("%s_AT_%02d", categorized.RedactedStopCategory(), ordinal), "existing Kubernetes object failed bounded verification")
+	return newCategorizedSubmissionError(fmt.Sprintf("%s_AT_%02d", categorized.RedactedStopCategory(), ordinal), "Kubernetes object failed bounded verification")
 }
 
 func stopped(receipt PlaneReceipt, cause error) (PlaneReceipt, error) {
@@ -194,6 +194,9 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 	}
 	switch status {
 	case http.StatusOK:
+		if objectIsTerminating(response) {
+			return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_TERMINATING", "existing Kubernetes object is terminating")
+		}
 		uid, err := verifyObservedObject(response, object)
 		if err != nil {
 			category := "SUBMISSION_OBJECT_MISMATCH"
@@ -222,9 +225,24 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 	}
 	uid, err := verifyObservedObject(response, object)
 	if err != nil {
-		return "", "", true, newCategorizedSubmissionError("SUBMISSION_RESPONSE_INVALID", "created Kubernetes object response differs from projection")
+		category := "SUBMISSION_CREATE_RESPONSE_INVALID"
+		var categorized interface{ RedactedStopCategory() string }
+		if errors.As(err, &categorized) {
+			category = strings.Replace(categorized.RedactedStopCategory(), "SUBMISSION_OBJECT_", "SUBMISSION_CREATE_RESPONSE_", 1)
+		}
+		return "", "", true, newCategorizedSubmissionError(category, "created Kubernetes object response differs from projection")
 	}
 	return "CREATED", uid, true, nil
+}
+
+func objectIsTerminating(raw []byte) bool {
+	object, err := decodeJSONObject(raw)
+	if err != nil {
+		return false
+	}
+	metadata, _ := object["metadata"].(map[string]any)
+	deletionTimestamp, _ := metadata["deletionTimestamp"].(string)
+	return deletionTimestamp != ""
 }
 
 func (client *KubernetesClient) request(ctx context.Context, method, path string, body []byte) ([]byte, int, error) {
