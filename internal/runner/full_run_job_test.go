@@ -196,8 +196,15 @@ func validFullRunExecutionJobValues() FullRunExecutionJobValues {
 func assertExactDNSEgress(t *testing.T, rule map[string]any, dnsCIDR string) {
 	t.Helper()
 	peers := arrayAt(t, rule, "to")
-	if len(peers) != 1 || objectAt(t, peers[0].(map[string]any), "ipBlock")["cidr"] != dnsCIDR {
+	if len(peers) != 2 || objectAt(t, peers[0].(map[string]any), "ipBlock")["cidr"] != dnsCIDR {
 		t.Fatalf("DNS egress peer differs: %#v", peers)
+	}
+	selectedPeer := peers[1].(map[string]any)
+	if labels := objectAt(t, objectAt(t, selectedPeer, "namespaceSelector"), "matchLabels"); !reflect.DeepEqual(labels, map[string]any{"kubernetes.io/metadata.name": "kube-system"}) {
+		t.Fatalf("DNS namespace selector differs: %#v", labels)
+	}
+	if labels := objectAt(t, objectAt(t, selectedPeer, "podSelector"), "matchLabels"); !reflect.DeepEqual(labels, map[string]any{"k8s-app": "kube-dns"}) {
+		t.Fatalf("DNS Pod selector differs: %#v", labels)
 	}
 	ports := arrayAt(t, rule, "ports")
 	if !reflect.DeepEqual(ports, []any{
