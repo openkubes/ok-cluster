@@ -155,6 +155,33 @@ func TestPreRuntimeOrchestrationPrefersCategorizedProviderStopOverInvalidSuccess
 	}
 }
 
+func TestPreRuntimeOrchestrationReportsRedactedClusterLifecycleStopCategory(t *testing.T) {
+	orchestration := successfulPreRuntimeOrchestration(nil)
+	orchestration.RunClusterLifecycle = func(context.Context, execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
+		return execution.StagedOperationReceipt{
+			Format: execution.StagedReceiptFormat, State: "COMPLETED_STOPPED", PlanDigest: runnerStageSHA("a"),
+			StageID: "cluster-lifecycle", StageReceiptDigest: runnerStageSHA("2"), FailureCategory: "SUBMISSION_HTTP_UNAUTHORIZED",
+		}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: "SUBMISSION_HTTP_UNAUTHORIZED"}
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" ||
+		receipt.StopCategory != "SUBMISSION_HTTP_UNAUTHORIZED" || len(receipt.Checkpoints) != 1 {
+		t.Fatalf("categorized cluster-lifecycle stop was not preserved: %#v err=%v", receipt, err)
+	}
+}
+
+func TestPreRuntimeOrchestrationPreservesSafeClusterLifecycleFailureCause(t *testing.T) {
+	orchestration := successfulPreRuntimeOrchestration(nil)
+	orchestration.RunClusterLifecycle = func(context.Context, execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
+		return execution.StagedOperationReceipt{}, errors.New("safe cluster lifecycle cause")
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" ||
+		!strings.Contains(err.Error(), "safe cluster lifecycle cause") || len(receipt.Checkpoints) != 1 {
+		t.Fatalf("cluster-lifecycle failure cause was not preserved: %#v err=%v", receipt, err)
+	}
+}
+
 func TestPreRuntimeOrchestrationReportsRedactedNetworkStopCategory(t *testing.T) {
 	orchestration := successfulPreRuntimeOrchestration(nil)
 	orchestration.RunNetworkObservation = func(context.Context, execution.StagedOperationReceipt) (execution.ObservationStageRunReceipt, error) {
