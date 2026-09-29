@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -196,6 +199,32 @@ func TestStageAuthorizationHTTPResolverDoesNotPollTerminalStatus(t *testing.T) {
 	_, err = resolver.resolve(context.Background(), "sha256:"+strings.Repeat("b", 64), []byte(`{}`), stageAuthorizationRequestMediaType)
 	if err == nil || waits != 0 || redactedStopCategory(err) != "AUTHORIZATION_HTTP_REJECTED" {
 		t.Fatalf("terminal status was retried: waits=%d category=%q err=%v", waits, redactedStopCategory(err), err)
+	}
+}
+
+func TestStageAuthorizationTransportStopCategoryIsRedactedAndPhaseSpecific(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		category string
+	}{
+		{name: "dns", err: &net.DNSError{Err: "private resolver detail", Name: "private.example", IsTemporary: true}, category: "AUTHORIZATION_DNS_STOPPED"},
+		{name: "connect", err: &net.OpError{Op: "dial", Net: "tcp", Source: nil, Addr: nil, Err: errors.New("private address detail")}, category: "AUTHORIZATION_CONNECT_STOPPED"},
+		{name: "tls", err: tls.RecordHeaderError{RecordHeader: [5]byte{'p', 'r', 'i', 'v', 'a'}}, category: "AUTHORIZATION_TLS_STOPPED"},
+		{name: "timeout", err: context.DeadlineExceeded, category: "AUTHORIZATION_TIMEOUT_STOPPED"},
+		{name: "fallback", err: errors.New("private transport detail"), category: "AUTHORIZATION_TRANSPORT_STOPPED"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			category := stageAuthorizationTransportStopCategory(test.err)
+			if category != test.category || !validRedactedStopCategory(category) || strings.Contains(strings.ToLower(category), "private") {
+				t.Fatalf("transport category=%q, want safe %q", category, test.category)
+			}
+			redacted := newStageAuthorizationStop(category, "perform stage authorization request")
+			if strings.Contains(redacted.Error(), test.err.Error()) || redactedStopCategory(redacted) != test.category {
+				t.Fatalf("transport detail escaped redaction: category=%q err=%q", redactedStopCategory(redacted), redacted.Error())
+			}
+		})
 	}
 }
 
