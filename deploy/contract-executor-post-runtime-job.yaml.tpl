@@ -22,7 +22,14 @@ spec:
             matchLabels:
               app.kubernetes.io/name: ok147-stage-authority
       ports: [{protocol: TCP, port: ${OK147_AUTHORIZATION_API_PORT}}]
-    - to: [{ipBlock: {cidr: "${OK147_DNS_API_CIDR}"}}]
+    - to:
+        - ipBlock: {cidr: "${OK147_DNS_API_CIDR}"}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
