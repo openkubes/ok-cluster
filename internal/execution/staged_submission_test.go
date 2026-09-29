@@ -127,13 +127,13 @@ func TestSubmissionPlaneMutatorPreservesOnlyRedactedStopCategory(t *testing.T) {
 	plan := stagedPlan(t)
 	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
 	stopped := submission.PlaneReceipt{Format: submission.PlaneReceiptFormat, Authority: projected.Infrastructure.Identity, Role: projected.Infrastructure.Role, State: "STOPPED_PARTIAL_OR_UNKNOWN", MutationState: "NOT_ATTEMPTED", Results: []submission.ObjectResult{}}
-	submitter := &fakePlaneSubmitter{receipt: stopped, err: &submission.SubmissionError{Receipt: stopped, Cause: errors.New("private endpoint detail"), Category: "SUBMISSION_TRANSPORT_STOPPED"}}
+	submitter := &fakePlaneSubmitter{receipt: stopped, err: &submission.SubmissionError{Receipt: stopped, Cause: errors.New("private endpoint detail"), Category: "SUBMISSION_HTTP_FORBIDDEN"}}
 	mutator, err := NewSubmissionPlaneMutator(plan, "provider-prerequisites", projected, submitter)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
-	if err == nil || strings.Contains(err.Error(), "private") || result.Outcome != "STOPPED" || result.MutationState != "NOT_ATTEMPTED" || result.FailureCategory != "SUBMISSION_TRANSPORT_STOPPED" {
+	if err == nil || strings.Contains(err.Error(), "private") || result.Outcome != "STOPPED" || result.MutationState != "NOT_ATTEMPTED" || result.FailureCategory != "SUBMISSION_HTTP_FORBIDDEN" {
 		t.Fatalf("submission stop category was not safely preserved: %#v err=%v", result, err)
 	}
 }

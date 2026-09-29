@@ -149,6 +149,36 @@ func TestSubmissionTransportStopCategoriesArePhaseSpecificAndRedacted(t *testing
 	}
 }
 
+func TestSubmissionHTTPStopCategoriesAreSpecificAndRedacted(t *testing.T) {
+	tests := []struct {
+		status int
+		want   string
+	}{
+		{status: http.StatusUnauthorized, want: "SUBMISSION_HTTP_UNAUTHORIZED"},
+		{status: http.StatusForbidden, want: "SUBMISSION_HTTP_FORBIDDEN"},
+		{status: http.StatusTooManyRequests, want: "SUBMISSION_HTTP_RATE_LIMITED"},
+		{status: http.StatusInternalServerError, want: "SUBMISSION_HTTP_SERVER_ERROR"},
+		{status: http.StatusBadGateway, want: "SUBMISSION_HTTP_SERVER_ERROR"},
+		{status: http.StatusServiceUnavailable, want: "SUBMISSION_HTTP_SERVER_ERROR"},
+		{status: http.StatusGatewayTimeout, want: "SUBMISSION_HTTP_SERVER_ERROR"},
+		{status: http.StatusNotImplemented, want: "SUBMISSION_HTTP_REJECTED"},
+		{status: http.StatusTemporaryRedirect, want: "SUBMISSION_HTTP_REJECTED"},
+	}
+	for _, test := range tests {
+		t.Run(http.StatusText(test.status), func(t *testing.T) {
+			private := []byte(`{"reason":"private provider detail","message":"private endpoint"}`)
+			err := apiStatusError(http.MethodGet, test.status, private)
+			var categorized interface{ RedactedStopCategory() string }
+			if !errors.As(err, &categorized) || categorized.RedactedStopCategory() != test.want {
+				t.Fatalf("category=%q want=%q", categorized.RedactedStopCategory(), test.want)
+			}
+			if strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), http.MethodGet) || strings.Contains(err.Error(), http.StatusText(test.status)) {
+				t.Fatalf("HTTP stop exposed request or response detail: %q", err)
+			}
+		})
+	}
+}
+
 func TestExecutorPreservesAuthorityOrderAndPartialReceipt(t *testing.T) {
 	root, binding := validProjection(t)
 	plan, err := Load(root, binding)

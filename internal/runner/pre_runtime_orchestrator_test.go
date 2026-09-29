@@ -146,11 +146,11 @@ func TestPreRuntimeOrchestrationPrefersCategorizedProviderStopOverInvalidSuccess
 	orchestration.RunProviderPrerequisites = func(context.Context) (execution.StagedOperationReceipt, error) {
 		return execution.StagedOperationReceipt{
 			Format: execution.StagedReceiptFormat, State: "COMPLETED_STOPPED", PlanDigest: runnerStageSHA("a"),
-			StageID: "provider-prerequisites", StageReceiptDigest: runnerStageSHA("1"), FailureCategory: "SUBMISSION_TRANSPORT_STOPPED",
-		}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: "SUBMISSION_TRANSPORT_STOPPED"}
+			StageID: "provider-prerequisites", StageReceiptDigest: runnerStageSHA("1"), FailureCategory: "SUBMISSION_HTTP_FORBIDDEN",
+		}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: "SUBMISSION_HTTP_FORBIDDEN"}
 	}
 	receipt, err := orchestration.Run(context.Background())
-	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" || receipt.StopCategory != "SUBMISSION_TRANSPORT_STOPPED" || len(receipt.Checkpoints) != 0 {
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" || receipt.StopCategory != "SUBMISSION_HTTP_FORBIDDEN" || len(receipt.Checkpoints) != 0 {
 		t.Fatalf("categorized provider stop was masked by receipt validation: %#v err=%v", receipt, err)
 	}
 }
