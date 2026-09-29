@@ -26,6 +26,7 @@ type PostRuntimeExecutionJobValues struct {
 	ArgoAPICIDR          string
 	AuthorizationAPIURL  string
 	AuthorizationAPICIDR string
+	DNSAPICIDR           string
 	RecoveryMode         string
 }
 
@@ -67,6 +68,9 @@ func RenderPostRuntimeExecutionJobTemplate(template []byte, values PostRuntimeEx
 	if managementEndpoint == workloadEndpoint || managementEndpoint == argoEndpoint || workloadEndpoint == argoEndpoint {
 		return nil, errors.New("post-runtime management, workload and Argo endpoints must be distinct")
 	}
+	if err := validateExactDNSServiceCIDR(values.DNSAPICIDR); err != nil {
+		return nil, err
+	}
 	replacements := map[string]string{
 		"${OK147_RUN_ID}": values.RunID, "${OK147_IMAGE_DIGEST}": values.ImageDigest,
 		"${OK147_ACTIVATION_SECRET}": values.ActivationSecret, "${OK147_BUNDLE_DIGEST}": values.BundleDigest,
@@ -75,6 +79,7 @@ func RenderPostRuntimeExecutionJobTemplate(template []byte, values PostRuntimeEx
 		"${OK147_WORKLOAD_API_CIDR}": values.WorkloadAPICIDR, "${OK147_WORKLOAD_API_PORT}": workloadPort,
 		"${OK147_ARGO_API_CIDR}": values.ArgoAPICIDR, "${OK147_ARGO_API_PORT}": argoPort,
 		"${OK147_AUTHORIZATION_API_CIDR}": values.AuthorizationAPICIDR, "${OK147_AUTHORIZATION_API_PORT}": authorizationPort,
+		"${OK147_DNS_API_CIDR}": values.DNSAPICIDR,
 	}
 	switch values.RecoveryMode {
 	case "":
@@ -97,6 +102,14 @@ func RenderPostRuntimeExecutionJobTemplate(template []byte, values PostRuntimeEx
 		return nil, errors.New("post-runtime Job template contains an unknown placeholder")
 	}
 	return []byte(result), nil
+}
+
+func validateExactDNSServiceCIDR(rawCIDR string) error {
+	prefix, err := netip.ParsePrefix(rawCIDR)
+	if err != nil || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() || prefix.Bits() != 32 {
+		return errors.New("DNS CIDR must bind one private Service IP")
+	}
+	return nil
 }
 
 func exactPostRuntimeAuthorizationEndpoint(rawURL, rawCIDR string) (string, string, error) {

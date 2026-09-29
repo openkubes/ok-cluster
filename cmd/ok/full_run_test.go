@@ -37,6 +37,7 @@ func TestFullRunPackageMaterializesPrivateInstallationUnit(t *testing.T) {
 			config.Job.InfrastructureAPICIDR != "192.0.2.13/32" || config.Job.ManagementAPICIDR != "192.0.2.12/32" ||
 			config.Job.WorkloadAPIURL != "https://192.0.2.30:6443" || config.Job.WorkloadAPICIDR != "192.0.2.30/32" ||
 			config.Job.ArgoAPICIDR != "192.0.2.11/32" || config.Job.AuthorizationAPICIDR != "192.0.2.10/32" ||
+			config.Job.DNSAPICIDR != "10.96.0.10/32" ||
 			config.Job.CollectorAPICIDR != "192.0.2.40/32" {
 			t.Fatalf("full-run package config differs: %#v", config)
 		}
@@ -116,6 +117,7 @@ func fullRunPackageCLIArguments(templatePath, outputPath string) []string {
 		"--management-api-cidr", "192.0.2.12/32", "--workload-api-url", "https://192.0.2.30:6443",
 		"--workload-api-cidr", "192.0.2.30/32", "--argo-api-cidr", "192.0.2.11/32",
 		"--authorization-api-cidr", "192.0.2.10/32", "--collector-api-cidr", "192.0.2.40/32",
+		"--dns-api-cidr", "10.96.0.10/32",
 		"--output", outputPath,
 	}
 }

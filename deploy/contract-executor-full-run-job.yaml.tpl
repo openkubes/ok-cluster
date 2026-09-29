@@ -24,6 +24,10 @@ spec:
             matchLabels:
               app.kubernetes.io/name: ok147-stage-authority
       ports: [{protocol: TCP, port: ${OK147_AUTHORIZATION_API_PORT}}]
+    - to: [{ipBlock: {cidr: "${OK147_DNS_API_CIDR}"}}]
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
     - to: [{ipBlock: {cidr: "${OK147_COLLECTOR_API_CIDR}"}}]
       ports: [{protocol: TCP, port: ${OK147_COLLECTOR_API_PORT}}]
 ---

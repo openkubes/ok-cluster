@@ -71,10 +71,11 @@ func TestRenderPostRuntimeExecutionJobTemplateBindsPrivateInitAndSingleExecution
 		t.Fatalf("post-runtime Secret projection path set differs: %v", paths)
 	}
 	egress := arrayAt(t, objectAt(t, objects["NetworkPolicy"], "spec"), "egress")
-	if len(egress) != 4 {
+	if len(egress) != 5 {
 		t.Fatalf("post-runtime Job egress is not exact: %#v", egress)
 	}
 	assertStageAuthorityEgressPeers(t, egress[3].(map[string]any), values.AuthorizationAPICIDR)
+	assertExactDNSEgress(t, egress[4].(map[string]any), values.DNSAPICIDR)
 	text := string(raw)
 	for _, forbidden := range []string{"latest", "system:masters", "privileged: true", "automountServiceAccountToken: true", "restartPolicy: Always"} {
 		if strings.Contains(text, forbidden) {
@@ -141,6 +142,7 @@ func validPostRuntimeExecutionJobValues() PostRuntimeExecutionJobValues {
 		WorkloadAPIURL: "https://192.0.2.20:6443", WorkloadAPICIDR: "192.0.2.20/32",
 		ArgoAPIURL: "https://192.0.2.30:6443", ArgoAPICIDR: "192.0.2.30/32",
 		AuthorizationAPIURL: "https://ok147-stage-authority.openkubes-execution-system.svc:8443/v1/stage-authorizations", AuthorizationAPICIDR: "10.43.250.147/32",
+		DNSAPICIDR: "10.96.0.10/32",
 	}
 }
 

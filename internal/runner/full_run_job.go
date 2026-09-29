@@ -27,6 +27,7 @@ type FullRunExecutionJobValues struct {
 	ArgoAPICIDR              string
 	AuthorizationAPIURL      string
 	AuthorizationAPICIDR     string
+	DNSAPICIDR               string
 	CollectorAPIURL          string
 	CollectorAPICIDR         string
 }
@@ -83,6 +84,9 @@ func RenderFullRunExecutionJobTemplate(template []byte, values FullRunExecutionJ
 	if _, exists := targets[authorizationTarget]; exists {
 		return nil, errors.New("full-run authorization authority must be distinct")
 	}
+	if err := validateExactDNSServiceCIDR(values.DNSAPICIDR); err != nil {
+		return nil, err
+	}
 	replacements := map[string]string{
 		"${OK147_RUN_ID}": values.RunID, "${OK147_IMAGE_DIGEST}": values.ImageDigest,
 		"${OK147_ACTIVATION_SECRET}": values.ActivationSecret, "${OK147_EVIDENCE_AUTHORITY_SECRET}": values.EvidenceAuthoritySecret,
@@ -94,6 +98,7 @@ func RenderFullRunExecutionJobTemplate(template []byte, values FullRunExecutionJ
 		"${OK147_WORKLOAD_API_CIDR}": values.WorkloadAPICIDR, "${OK147_WORKLOAD_API_PORT}": ports["workload"],
 		"${OK147_ARGO_API_CIDR}": values.ArgoAPICIDR, "${OK147_ARGO_API_PORT}": ports["Argo"],
 		"${OK147_AUTHORIZATION_API_CIDR}": values.AuthorizationAPICIDR, "${OK147_AUTHORIZATION_API_PORT}": authorizationPort,
+		"${OK147_DNS_API_CIDR}":       values.DNSAPICIDR,
 		"${OK147_COLLECTOR_API_CIDR}": values.CollectorAPICIDR, "${OK147_COLLECTOR_API_PORT}": ports["collector"],
 	}
 	result := string(template)

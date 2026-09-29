@@ -98,7 +98,7 @@ type fullRunActivationPackageFlags struct {
 	collectorEndpoint, collectorToken, collectorCA, collectorCAID *string
 	jobTemplate, jobTemplateDigest, runID, imageDigest            *string
 	infrastructureCIDR, managementCIDR, workloadURL, workloadCIDR *string
-	argoCIDR, authorizationCIDR, collectorCIDR                    *string
+	argoCIDR, authorizationCIDR, dnsCIDR, collectorCIDR           *string
 	identityPollInterval, identityWaitTimeout                     *time.Duration
 	evidenceValidFor, collectionTimeout                           *time.Duration
 }
@@ -128,6 +128,7 @@ func addFullRunActivationPackageFlags(flags *flag.FlagSet) *fullRunActivationPac
 	values.workloadCIDR = flags.String("workload-api-cidr", "", "single-address workload API CIDR")
 	values.argoCIDR = flags.String("argo-api-cidr", "", "single-address Argo API CIDR")
 	values.authorizationCIDR = flags.String("authorization-api-cidr", "", "single-address authorization API CIDR")
+	values.dnsCIDR = flags.String("dns-api-cidr", "", "single-address management DNS Service CIDR")
 	values.collectorCIDR = flags.String("collector-api-cidr", "", "single-address evidence collector API CIDR")
 	return values
 }
@@ -143,6 +144,7 @@ func (values *fullRunActivationPackageFlags) config() (runner.FullRunExecutionAc
 		{"--infrastructure-api-cidr", *values.infrastructureCIDR}, {"--management-api-cidr", *values.managementCIDR},
 		{"--workload-api-url", *values.workloadURL}, {"--workload-api-cidr", *values.workloadCIDR},
 		{"--argo-api-cidr", *values.argoCIDR}, {"--authorization-api-cidr", *values.authorizationCIDR},
+		{"--dns-api-cidr", *values.dnsCIDR},
 		{"--collector-api-cidr", *values.collectorCIDR},
 	} {
 		if input.value == "" {
@@ -179,6 +181,7 @@ func (values *fullRunActivationPackageFlags) config() (runner.FullRunExecutionAc
 			InfrastructureAPICIDR: *values.infrastructureCIDR, ManagementAPICIDR: *values.managementCIDR,
 			WorkloadAPIURL: *values.workloadURL, WorkloadAPICIDR: *values.workloadCIDR,
 			ArgoAPICIDR: *values.argoCIDR, AuthorizationAPICIDR: *values.authorizationCIDR,
+			DNSAPICIDR:       *values.dnsCIDR,
 			CollectorAPICIDR: *values.collectorCIDR,
 		},
 	}, nil

@@ -141,6 +141,7 @@ func fullRunExecutionActivationPackageFixture(t *testing.T) FullRunExecutionActi
 			InfrastructureAPICIDR: "192.0.2.13/32", ManagementAPICIDR: "192.0.2.12/32",
 			WorkloadAPIURL: "https://192.0.2.30:6443", WorkloadAPICIDR: "192.0.2.30/32",
 			ArgoAPICIDR: "192.0.2.11/32", AuthorizationAPICIDR: "10.43.250.147/32",
+			DNSAPICIDR:       "10.96.0.10/32",
 			CollectorAPICIDR: collectorFixtureCIDR(t, evidenceConfig.CollectorEndpoint),
 		},
 	}

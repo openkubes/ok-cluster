@@ -345,6 +345,7 @@ func postRuntimeActivationPackageFixture(t *testing.T) (PostRuntimeExecutionActi
 		ImageDigest:       "ghcr.io/openkubes/ok-cluster@" + bundleSHA("a"),
 		ManagementAPICIDR: "127.0.0.1/32", WorkloadAPICIDR: "192.0.2.20/32",
 		ArgoAPICIDR: "192.0.2.11/32", AuthorizationAPICIDR: "10.43.250.147/32",
+		DNSAPICIDR: "10.96.0.10/32",
 	}, cleanup
 }
 
