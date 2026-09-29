@@ -94,9 +94,9 @@ type postRuntimeActivationLaunchPreparation struct {
 }
 
 type postRuntimeActivationPackageFlags struct {
-	manifest, activationSecret, jobTemplate, jobTemplateDigest *string
-	runID, imageDigest                                         *string
-	managementCIDR, workloadCIDR, argoCIDR, authorizationCIDR  *string
+	manifest, activationSecret, jobTemplate, jobTemplateDigest         *string
+	runID, imageDigest                                                 *string
+	managementCIDR, workloadCIDR, argoCIDR, authorizationCIDR, dnsCIDR *string
 }
 
 func addPostRuntimeActivationPackageFlags(flags *flag.FlagSet) *postRuntimeActivationPackageFlags {
@@ -111,6 +111,7 @@ func addPostRuntimeActivationPackageFlags(flags *flag.FlagSet) *postRuntimeActiv
 	values.workloadCIDR = flags.String("workload-api-cidr", "", "single-address workload API CIDR")
 	values.argoCIDR = flags.String("argo-api-cidr", "", "single-address Argo API CIDR")
 	values.authorizationCIDR = flags.String("authorization-api-cidr", "", "single-address authorization API CIDR")
+	values.dnsCIDR = flags.String("dns-api-cidr", "", "single-address management DNS Service CIDR")
 	return values
 }
 
@@ -121,6 +122,7 @@ func (values *postRuntimeActivationPackageFlags) config() (runner.PostRuntimeExe
 		{"--run-id", *values.runID}, {"--image", *values.imageDigest}, {"--management-api-cidr", *values.managementCIDR},
 		{"--workload-api-cidr", *values.workloadCIDR}, {"--argo-api-cidr", *values.argoCIDR},
 		{"--authorization-api-cidr", *values.authorizationCIDR},
+		{"--dns-api-cidr", *values.dnsCIDR},
 	} {
 		if input.value == "" {
 			return runner.PostRuntimeExecutionActivationPackageConfig{}, fmt.Errorf("%s is required", input.name)
@@ -138,6 +140,7 @@ func (values *postRuntimeActivationPackageFlags) config() (runner.PostRuntimeExe
 		JobTemplateDigest: *values.jobTemplateDigest, RunID: *values.runID, ImageDigest: *values.imageDigest,
 		ManagementAPICIDR: *values.managementCIDR, WorkloadAPICIDR: *values.workloadCIDR,
 		ArgoAPICIDR: *values.argoCIDR, AuthorizationAPICIDR: *values.authorizationCIDR,
+		DNSAPICIDR: *values.dnsCIDR,
 	}, nil
 }
 

@@ -40,6 +40,7 @@ type PostRuntimeExecutionActivationPackageConfig struct {
 	WorkloadAPICIDR      string
 	ArgoAPICIDR          string
 	AuthorizationAPICIDR string
+	DNSAPICIDR           string
 }
 
 type PostRuntimeExecutionActivationPackageReceipt struct {
@@ -172,6 +173,7 @@ func BuildPostRuntimeExecutionActivationPackage(config PostRuntimeExecutionActiv
 		WorkloadAPIURL: executor.runtime.material.Target.WorkloadAPIEndpoint, WorkloadAPICIDR: config.WorkloadAPICIDR,
 		ArgoAPIURL: document.TargetRegistration.GitOps.Endpoint, ArgoAPICIDR: config.ArgoAPICIDR,
 		AuthorizationAPIURL: document.Authorization.Endpoint, AuthorizationAPICIDR: config.AuthorizationAPICIDR,
+		DNSAPICIDR:   config.DNSAPICIDR,
 		RecoveryMode: recoveryMode,
 	})
 	if err != nil {

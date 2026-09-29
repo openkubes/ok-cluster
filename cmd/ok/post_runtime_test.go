@@ -133,6 +133,7 @@ func TestPostRuntimePackageWritesPrivateBytesAndEmitsOnlyReceipt(t *testing.T) {
 		"--run-id", "ok147-run-01", "--image", "ghcr.io/openkubes/ok-cluster@" + testSHA("3"),
 		"--management-api-cidr", "192.0.2.1/32", "--workload-api-cidr", "192.0.2.2/32",
 		"--argo-api-cidr", "192.0.2.3/32", "--authorization-api-cidr", "192.0.2.4/32",
+		"--dns-api-cidr", "10.96.0.10/32",
 	}
 	var stdout bytes.Buffer
 	if err := run(arguments, &stdout, &bytes.Buffer{}); err != nil {
@@ -248,6 +249,7 @@ func postRuntimeActivationCLIArguments(t *testing.T, action string) []string {
 		"--run-id", "ok147-run-01", "--image", "ghcr.io/openkubes/ok-cluster@" + testSHA("3"),
 		"--management-api-cidr", "192.0.2.1/32", "--workload-api-cidr", "192.0.2.2/32",
 		"--argo-api-cidr", "192.0.2.3/32", "--authorization-api-cidr", "192.0.2.4/32",
+		"--dns-api-cidr", "10.96.0.10/32",
 	}
 }
 
@@ -256,7 +258,7 @@ func assertPostRuntimeActivationCLIConfig(t *testing.T, config runner.PostRuntim
 	if config.ManifestPath != "/private/tmp/manifest.json" || config.ActivationSecret != "ok147-activation" ||
 		config.RunID != "ok147-run-01" || string(config.JobTemplate) != "job-template" || config.JobTemplateDigest != testSHA("1") ||
 		config.ManagementAPICIDR != "192.0.2.1/32" || config.WorkloadAPICIDR != "192.0.2.2/32" ||
-		config.ArgoAPICIDR != "192.0.2.3/32" || config.AuthorizationAPICIDR != "192.0.2.4/32" {
+		config.ArgoAPICIDR != "192.0.2.3/32" || config.AuthorizationAPICIDR != "192.0.2.4/32" || config.DNSAPICIDR != "10.96.0.10/32" {
 		t.Fatalf("unexpected post-runtime activation config: %#v", config)
 	}
 }

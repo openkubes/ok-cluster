@@ -98,10 +98,11 @@ func TestRenderFullRunExecutionJobTemplateIsolatesExecutorAndEvidenceAuthority(t
 		t.Fatalf("evidence authority projection differs: %#v", evidenceSecret)
 	}
 	egress := arrayAt(t, objectAt(t, objects["NetworkPolicy"], "spec"), "egress")
-	if len(egress) != 6 {
+	if len(egress) != 7 {
 		t.Fatalf("full-run egress is not exact: %#v", egress)
 	}
 	assertStageAuthorityEgressPeers(t, egress[4].(map[string]any), values.AuthorizationAPICIDR)
+	assertExactDNSEgress(t, egress[5].(map[string]any), values.DNSAPICIDR)
 	text := string(raw)
 	for _, forbidden := range []string{"latest", "system:masters", "privileged: true", "automountServiceAccountToken: true", "restartPolicy: Always"} {
 		if strings.Contains(text, forbidden) {
@@ -139,6 +140,8 @@ func TestRenderFullRunExecutionJobTemplateFailsClosed(t *testing.T) {
 			values.CollectorAPIURL, values.CollectorAPICIDR = values.ArgoAPIURL, values.ArgoAPICIDR
 		},
 		"authorization without path": func(values *FullRunExecutionJobValues) { values.AuthorizationAPIURL = "https://192.0.2.50:8443" },
+		"missing DNS CIDR":           func(values *FullRunExecutionJobValues) { values.DNSAPICIDR = "" },
+		"broad DNS CIDR":             func(values *FullRunExecutionJobValues) { values.DNSAPICIDR = "10.96.0.0/24" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid
@@ -185,7 +188,23 @@ func validFullRunExecutionJobValues() FullRunExecutionJobValues {
 		WorkloadAPIURL: "https://192.0.2.30:6443", WorkloadAPICIDR: "192.0.2.30/32",
 		ArgoAPIURL: "https://192.0.2.40:6443", ArgoAPICIDR: "192.0.2.40/32",
 		AuthorizationAPIURL: "https://ok147-stage-authority.openkubes-execution-system.svc:8443/v1/stage-authorizations", AuthorizationAPICIDR: "10.43.250.147/32",
+		DNSAPICIDR:      "10.96.0.10/32",
 		CollectorAPIURL: "https://192.0.2.60:8443", CollectorAPICIDR: "192.0.2.60/32",
+	}
+}
+
+func assertExactDNSEgress(t *testing.T, rule map[string]any, dnsCIDR string) {
+	t.Helper()
+	peers := arrayAt(t, rule, "to")
+	if len(peers) != 1 || objectAt(t, peers[0].(map[string]any), "ipBlock")["cidr"] != dnsCIDR {
+		t.Fatalf("DNS egress peer differs: %#v", peers)
+	}
+	ports := arrayAt(t, rule, "ports")
+	if !reflect.DeepEqual(ports, []any{
+		map[string]any{"protocol": "UDP", "port": 53},
+		map[string]any{"protocol": "TCP", "port": 53},
+	}) {
+		t.Fatalf("DNS egress ports differ: %#v", ports)
 	}
 }
 
