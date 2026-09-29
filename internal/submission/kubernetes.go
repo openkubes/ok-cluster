@@ -184,7 +184,12 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 	case http.StatusOK:
 		uid, err := verifyObservedObject(response, object)
 		if err != nil {
-			return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_MISMATCH", "existing Kubernetes object differs from projection")
+			category := "SUBMISSION_OBJECT_MISMATCH"
+			var categorized interface{ RedactedStopCategory() string }
+			if errors.As(err, &categorized) {
+				category = categorized.RedactedStopCategory()
+			}
+			return "", "", false, newCategorizedSubmissionError(category, "existing Kubernetes object differs from projection")
 		}
 		return "UNCHANGED", uid, false, nil
 	case http.StatusNotFound:
@@ -268,21 +273,37 @@ func submissionTransportStopCategory(err error) string {
 func verifyObservedObject(raw []byte, desired Object) (string, error) {
 	observed, err := decodeJSONObject(raw)
 	if err != nil {
-		return "", errors.New("Kubernetes API returned invalid object JSON")
+		return "", newCategorizedSubmissionError("SUBMISSION_OBJECT_RESPONSE_INVALID", "Kubernetes API returned invalid object JSON")
 	}
 	expected, err := decodeJSONObject(desired.Raw)
 	if err != nil {
-		return "", errors.New("verified projection object is invalid JSON")
+		return "", newCategorizedSubmissionError("SUBMISSION_OBJECT_PROJECTION_INVALID", "verified projection object is invalid JSON")
 	}
 	if !isSubset(expected, observed) {
-		return "", errors.New("observed object does not contain the exact projected fields")
+		return "", newCategorizedSubmissionError(objectMismatchCategory(expected, observed), "observed object does not contain the exact projected fields")
 	}
 	metadata, _ := observed["metadata"].(map[string]any)
 	uid := text(metadata["uid"])
 	if uid == "" || text(metadata["resourceVersion"]) == "" {
-		return "", errors.New("Kubernetes API response lacks UID or resourceVersion")
+		return "", newCategorizedSubmissionError("SUBMISSION_OBJECT_RUNTIME_IDENTITY_INVALID", "Kubernetes API response lacks UID or resourceVersion")
 	}
 	return uid, nil
+}
+
+// objectMismatchCategory exposes only the validation phase that rejected an
+// existing object. It deliberately does not retain field names below the
+// public Kubernetes envelope, values, object identities or raw evidence.
+func objectMismatchCategory(expected, observed map[string]any) string {
+	if !isSubset(expected["apiVersion"], observed["apiVersion"]) || !isSubset(expected["kind"], observed["kind"]) {
+		return "SUBMISSION_OBJECT_IDENTITY_MISMATCH"
+	}
+	if !isSubset(expected["metadata"], observed["metadata"]) {
+		return "SUBMISSION_OBJECT_METADATA_MISMATCH"
+	}
+	if expectedSpec, exists := expected["spec"]; exists && !isSubset(expectedSpec, observed["spec"]) {
+		return "SUBMISSION_OBJECT_SPEC_MISMATCH"
+	}
+	return "SUBMISSION_OBJECT_CONTENT_MISMATCH"
 }
 
 func decodeJSONObject(raw []byte) (map[string]any, error) {
