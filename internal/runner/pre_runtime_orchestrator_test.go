@@ -141,6 +141,20 @@ func TestPreRuntimeOrchestrationPreservesProviderFailureCause(t *testing.T) {
 	}
 }
 
+func TestPreRuntimeOrchestrationPrefersCategorizedProviderStopOverInvalidSuccessReceipt(t *testing.T) {
+	orchestration := successfulPreRuntimeOrchestration(nil)
+	orchestration.RunProviderPrerequisites = func(context.Context) (execution.StagedOperationReceipt, error) {
+		return execution.StagedOperationReceipt{
+			Format: execution.StagedReceiptFormat, State: "COMPLETED_STOPPED", PlanDigest: runnerStageSHA("a"),
+			StageID: "provider-prerequisites", StageReceiptDigest: runnerStageSHA("1"), FailureCategory: "SUBMISSION_TRANSPORT_STOPPED",
+		}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: "SUBMISSION_TRANSPORT_STOPPED"}
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" || receipt.StopCategory != "SUBMISSION_TRANSPORT_STOPPED" || len(receipt.Checkpoints) != 0 {
+		t.Fatalf("categorized provider stop was masked by receipt validation: %#v err=%v", receipt, err)
+	}
+}
+
 func TestPreRuntimeOrchestrationReportsRedactedNetworkStopCategory(t *testing.T) {
 	orchestration := successfulPreRuntimeOrchestration(nil)
 	orchestration.RunNetworkObservation = func(context.Context, execution.StagedOperationReceipt) (execution.ObservationStageRunReceipt, error) {

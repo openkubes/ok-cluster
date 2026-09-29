@@ -44,6 +44,7 @@ type StageMutationResult struct {
 	MutationState          string
 	EvidenceDigest         string
 	TargetClusterUIDDigest string
+	FailureCategory        string
 }
 
 // StageMutator is a single, preconstructed mutation capability.
@@ -70,13 +71,18 @@ type StagedOperationReceipt struct {
 	Claim              *ledger.StageClaimReceipt   `json:"claim,omitempty"`
 	Outcome            *ledger.StageOutcomeReceipt `json:"outcome,omitempty"`
 	StageReceiptDigest string                      `json:"stageReceiptDigest,omitempty"`
+	FailureCategory    string                      `json:"failureCategory,omitempty"`
 }
 
 // StageResultError means the operation reached a durable non-success outcome.
 // It never exposes a mutator's raw error.
-type StageResultError struct{ State string }
+type StageResultError struct {
+	State           string
+	FailureCategory string
+}
 
-func (err *StageResultError) Error() string { return "staged operation completed with " + err.State }
+func (err *StageResultError) Error() string                { return "staged operation completed with " + err.State }
+func (err *StageResultError) RedactedStopCategory() string { return err.FailureCategory }
 
 // Run invokes at most one mutator. A pre-existing claim without outcome is an
 // indeterminate terminal stop; a durable outcome is finalized without replay.
@@ -115,7 +121,7 @@ func (operation StagedOperation) Run(ctx context.Context, plan stageplan.Binding
 	}
 	switch inspection.State {
 	case "COMPLETED":
-		return operation.finalize(ctx, receipt, plan, grant, predecessors, inspection.Outcome)
+		return operation.finalize(ctx, receipt, plan, grant, predecessors, inspection.Outcome, "")
 	case "AVAILABLE":
 		if !inspection.ClaimAllowed {
 			return receipt, errors.New("available stage grant is not claimable")
@@ -141,15 +147,16 @@ func (operation StagedOperation) Run(ctx context.Context, plan stageplan.Binding
 	if err := validateStageMutationResult(decision.StageID, result, mutationErr); err != nil {
 		return receipt, err
 	}
+	receipt.FailureCategory = result.FailureCategory
 	outcome, err := operation.Ledger.CompleteStageWithTarget(ctx, claim, result.Outcome, result.MutationState, result.EvidenceDigest, result.TargetClusterUIDDigest, operation.Clock())
 	if err != nil {
 		return receipt, err
 	}
 	receipt.Outcome = &outcome
-	return operation.finalize(ctx, receipt, plan, grant, predecessors, &outcome)
+	return operation.finalize(ctx, receipt, plan, grant, predecessors, &outcome, result.FailureCategory)
 }
 
-func (operation StagedOperation) finalize(ctx context.Context, receipt StagedOperationReceipt, plan stageplan.Binding, grant authorization.VerifiedStageGrant, predecessors []stagereceipt.Verified, outcome *ledger.StageOutcomeReceipt) (StagedOperationReceipt, error) {
+func (operation StagedOperation) finalize(ctx context.Context, receipt StagedOperationReceipt, plan stageplan.Binding, grant authorization.VerifiedStageGrant, predecessors []stagereceipt.Verified, outcome *ledger.StageOutcomeReceipt, failureCategory string) (StagedOperationReceipt, error) {
 	if outcome == nil {
 		return receipt, errors.New("completed stage inspection has no durable outcome")
 	}
@@ -165,7 +172,7 @@ func (operation StagedOperation) finalize(ctx context.Context, receipt StagedOpe
 	receipt.StageReceiptDigest = receiptDigest
 	receipt.State = "COMPLETED_" + outcome.Outcome
 	if outcome.Outcome != "SUCCEEDED" {
-		return receipt, &StageResultError{State: receipt.State}
+		return receipt, &StageResultError{State: receipt.State, FailureCategory: failureCategory}
 	}
 	return receipt, nil
 }
@@ -180,6 +187,9 @@ func validateStageMutationResult(stageID string, result StageMutationResult, mut
 			return errors.New("stage mutator reported an inconsistent successful result")
 		}
 	}
+	if result.FailureCategory != "" && (result.Outcome == "SUCCEEDED" || !validStageFailureCategory(result.FailureCategory)) {
+		return errors.New("stage mutator returned an invalid redacted failure category")
+	}
 	if stageID == "cluster-lifecycle" && result.Outcome == "SUCCEEDED" {
 		if !stagedDigestPattern.MatchString(result.TargetClusterUIDDigest) {
 			return errors.New("successful Cluster lifecycle mutation lacks a runtime identity digest")
@@ -188,6 +198,16 @@ func validateStageMutationResult(stageID string, result StageMutationResult, mut
 		return errors.New("stage mutation returned runtime identity outside successful Cluster lifecycle")
 	}
 	return nil
+}
+
+func validStageFailureCategory(category string) bool {
+	switch category {
+	case "SUBMISSION_DNS_STOPPED", "SUBMISSION_CONNECT_STOPPED", "SUBMISSION_TLS_STOPPED", "SUBMISSION_TIMEOUT_STOPPED", "SUBMISSION_TRANSPORT_STOPPED",
+		"SUBMISSION_HTTP_REJECTED", "SUBMISSION_RESPONSE_INVALID", "SUBMISSION_OBJECT_MISMATCH", "SUBMISSION_CONFLICT_STOPPED":
+		return true
+	default:
+		return false
+	}
 }
 
 func oneOf(value string, allowed ...string) bool {

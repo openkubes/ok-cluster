@@ -68,12 +68,12 @@ func TestStagedOperationPersistsRedactedNonSuccessWithoutRetry(t *testing.T) {
 	store, _ := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
 	mutator := &fakeStageMutator{
 		binding: stagedMutationBinding(t, plan, "provider-prerequisites"),
-		result:  StageMutationResult{Outcome: "STOPPED", MutationState: "UNKNOWN", EvidenceDigest: stagedSHA("f")},
+		result:  StageMutationResult{Outcome: "STOPPED", MutationState: "UNKNOWN", EvidenceDigest: stagedSHA("f"), FailureCategory: "SUBMISSION_TRANSPORT_STOPPED"},
 		err:     errors.New("secret endpoint detail"),
 	}
 	receipt, err := (StagedOperation{Ledger: store, Mutator: mutator, Clock: stagedClock(at)}).Run(context.Background(), plan, cursor, grant)
 	var resultErr *StageResultError
-	if !errors.As(err, &resultErr) || strings.Contains(err.Error(), "secret") || receipt.State != "COMPLETED_STOPPED" || mutator.calls != 1 {
+	if !errors.As(err, &resultErr) || resultErr.RedactedStopCategory() != "SUBMISSION_TRANSPORT_STOPPED" || receipt.FailureCategory != "SUBMISSION_TRANSPORT_STOPPED" || strings.Contains(err.Error(), "secret") || receipt.State != "COMPLETED_STOPPED" || mutator.calls != 1 {
 		t.Fatalf("non-success was not durably redacted: %#v calls=%d err=%v", receipt, mutator.calls, err)
 	}
 	verified, loadErr := store.LoadStageReceipt(context.Background(), plan, "provider-prerequisites", receipt.StageReceiptDigest, []stagereceipt.Verified{})

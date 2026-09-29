@@ -3,10 +3,13 @@ package submission
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -69,14 +72,28 @@ type ObjectIdentity struct {
 
 // SubmissionError retains the redacted partial receipt and wraps the cause.
 type SubmissionError struct {
-	Receipt PlaneReceipt
-	Cause   error
+	Receipt  PlaneReceipt
+	Cause    error
+	Category string
 }
 
 func (err *SubmissionError) Error() string {
-	return fmt.Sprintf("bounded submission stopped: %v", err.Cause)
+	return "bounded submission stopped"
 }
-func (err *SubmissionError) Unwrap() error { return err.Cause }
+func (err *SubmissionError) Unwrap() error                { return err.Cause }
+func (err *SubmissionError) RedactedStopCategory() string { return err.Category }
+
+type categorizedSubmissionError struct {
+	category string
+	message  string
+}
+
+func (err *categorizedSubmissionError) Error() string                { return err.message }
+func (err *categorizedSubmissionError) RedactedStopCategory() string { return err.category }
+
+func newCategorizedSubmissionError(category, message string) error {
+	return &categorizedSubmissionError{category: category, message: message}
+}
 
 func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, error) {
 	endpoint, err := url.Parse(config.Endpoint)
@@ -151,7 +168,12 @@ func (client *KubernetesClient) Submit(ctx context.Context, plane Plane) (PlaneR
 
 func stopped(receipt PlaneReceipt, cause error) (PlaneReceipt, error) {
 	receipt.State = "STOPPED_PARTIAL_OR_UNKNOWN"
-	return receipt, &SubmissionError{Receipt: receipt, Cause: cause}
+	category := "SUBMISSION_RESPONSE_INVALID"
+	var categorized interface{ RedactedStopCategory() string }
+	if errors.As(cause, &categorized) {
+		category = categorized.RedactedStopCategory()
+	}
+	return receipt, &SubmissionError{Receipt: receipt, Cause: cause, Category: category}
 }
 
 func (client *KubernetesClient) submitObject(ctx context.Context, object Object) (string, string, bool, error) {
@@ -163,7 +185,7 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 	case http.StatusOK:
 		uid, err := verifyObservedObject(response, object)
 		if err != nil {
-			return "", "", false, fmt.Errorf("existing %s/%s differs from projection: %w", object.Identity.Kind, object.Identity.Name, err)
+			return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_MISMATCH", "existing Kubernetes object differs from projection")
 		}
 		return "UNCHANGED", uid, false, nil
 	case http.StatusNotFound:
@@ -177,14 +199,14 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 		return "", "", true, err
 	}
 	if status == http.StatusConflict {
-		return "", "", true, errors.New("Kubernetes create conflicted after exact absence observation")
+		return "", "", true, newCategorizedSubmissionError("SUBMISSION_CONFLICT_STOPPED", "Kubernetes create conflicted after exact absence observation")
 	}
 	if status != http.StatusCreated {
 		return "", "", true, apiStatusError(http.MethodPost, status, response)
 	}
 	uid, err := verifyObservedObject(response, object)
 	if err != nil {
-		return "", "", true, fmt.Errorf("created %s/%s response differs from projection: %w", object.Identity.Kind, object.Identity.Name, err)
+		return "", "", true, newCategorizedSubmissionError("SUBMISSION_RESPONSE_INVALID", "created Kubernetes object response differs from projection")
 	}
 	return "CREATED", uid, true, nil
 }
@@ -205,14 +227,43 @@ func (client *KubernetesClient) request(ctx context.Context, method, path string
 	}
 	response, err := client.client.Do(request)
 	if err != nil {
-		return nil, 0, fmt.Errorf("bounded Kubernetes %s request failed", method)
+		return nil, 0, newCategorizedSubmissionError(submissionTransportStopCategory(err), "bounded Kubernetes request failed")
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumAPIResponseBytes+1))
 	if err != nil || len(raw) > maximumAPIResponseBytes {
-		return nil, 0, errors.New("bounded Kubernetes response exceeds accepted size")
+		return nil, 0, newCategorizedSubmissionError("SUBMISSION_RESPONSE_INVALID", "bounded Kubernetes response exceeds accepted size")
 	}
 	return raw, response.StatusCode, nil
+}
+
+// submissionTransportStopCategory retains only the failed transport phase.
+// It must never carry the wrapped error, endpoint, address or certificate
+// identity into a receipt.
+func submissionTransportStopCategory(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "SUBMISSION_TIMEOUT_STOPPED"
+	}
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) {
+		return "SUBMISSION_DNS_STOPPED"
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	var certificateInvalid x509.CertificateInvalidError
+	var hostnameError x509.HostnameError
+	var recordHeader tls.RecordHeaderError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &certificateInvalid) || errors.As(err, &hostnameError) || errors.As(err, &recordHeader) {
+		return "SUBMISSION_TLS_STOPPED"
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return "SUBMISSION_TIMEOUT_STOPPED"
+	}
+	var operationError *net.OpError
+	if errors.As(err, &operationError) && operationError.Op == "dial" {
+		return "SUBMISSION_CONNECT_STOPPED"
+	}
+	return "SUBMISSION_TRANSPORT_STOPPED"
 }
 
 func verifyObservedObject(raw []byte, desired Object) (string, error) {
@@ -292,5 +343,5 @@ func apiStatusError(method string, status int, raw []byte) error {
 	if response.Reason == "" {
 		response.Reason = http.StatusText(status)
 	}
-	return fmt.Errorf("bounded Kubernetes %s returned status %d (%s)", method, status, response.Reason)
+	return newCategorizedSubmissionError("SUBMISSION_HTTP_REJECTED", fmt.Sprintf("bounded Kubernetes %s returned status %d (%s)", method, status, response.Reason))
 }
