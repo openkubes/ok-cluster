@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -336,12 +335,19 @@ func text(value any) string {
 }
 
 func apiStatusError(method string, status int, raw []byte) error {
-	var response struct {
-		Reason string `json:"reason"`
+	// The category deliberately retains only the protocol-level failure class.
+	// Neither the response body, Kubernetes Status reason, request method nor
+	// endpoint may cross the submission boundary.
+	category := "SUBMISSION_HTTP_REJECTED"
+	switch status {
+	case http.StatusUnauthorized:
+		category = "SUBMISSION_HTTP_UNAUTHORIZED"
+	case http.StatusForbidden:
+		category = "SUBMISSION_HTTP_FORBIDDEN"
+	case http.StatusTooManyRequests:
+		category = "SUBMISSION_HTTP_RATE_LIMITED"
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		category = "SUBMISSION_HTTP_SERVER_ERROR"
 	}
-	_ = json.Unmarshal(raw, &response)
-	if response.Reason == "" {
-		response.Reason = http.StatusText(status)
-	}
-	return newCategorizedSubmissionError("SUBMISSION_HTTP_REJECTED", fmt.Sprintf("bounded Kubernetes %s returned status %d (%s)", method, status, response.Reason))
+	return newCategorizedSubmissionError(category, "bounded Kubernetes request was rejected")
 }
