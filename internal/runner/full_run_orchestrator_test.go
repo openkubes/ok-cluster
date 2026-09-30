@@ -155,6 +155,59 @@ func TestFullRunOrchestrationPropagatesPrefixStopCategory(t *testing.T) {
 	}
 }
 
+func TestFullRunOrchestrationPropagatesBoundedMismatchEvidence(t *testing.T) {
+	category := "SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"
+	evidence := &execution.SubmissionMismatchEvidence{
+		FirstCategory:    "SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH",
+		LastCategory:     "SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH",
+		ObservationCount: 300, ExpectedDigest: runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
+	}
+	prefix := &fakePreRuntimeContinuation{
+		receipt: PreRuntimeOrchestrationReceipt{
+			Format: PreRuntimeOrchestrationReceiptFormat, State: "STOPPED", PlanDigest: runnerStageSHA("a"),
+			StoppedAt: "cluster-lifecycle", StopCategory: category, MismatchEvidence: evidence,
+			Checkpoints: []PreRuntimeStageCheckpoint{{StageID: "provider-prerequisites", State: "COMPLETED_SUCCEEDED", StageReceiptDigest: runnerStageSHA("1")}},
+		},
+		err: errors.New("redacted prefix stop"),
+	}
+	orchestration := &FullRunOrchestration{
+		PreRuntime: prefix,
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			t.Fatal("stopped prefix reached continuation")
+			return nil, nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.StopCategory != category || receipt.MismatchEvidence == nil || *receipt.MismatchEvidence != *evidence {
+		t.Fatalf("bounded mismatch evidence was not propagated: %#v err=%v", receipt, err)
+	}
+	if strings.Contains(err.Error(), "roleRef") || strings.Contains(err.Error(), "private") {
+		t.Fatalf("private comparator detail escaped: %v", err)
+	}
+}
+
+func TestFullRunOrchestrationRejectsMismatchEvidenceOnUnrelatedStop(t *testing.T) {
+	prefix := &fakePreRuntimeContinuation{
+		receipt: PreRuntimeOrchestrationReceipt{
+			Format: PreRuntimeOrchestrationReceiptFormat, State: "STOPPED", PlanDigest: runnerStageSHA("a"),
+			StoppedAt: "cluster-lifecycle", StopCategory: "SUBMISSION_HTTP_FORBIDDEN",
+			MismatchEvidence: &execution.SubmissionMismatchEvidence{
+				FirstCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH", LastCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH",
+				ObservationCount: 1, ExpectedDigest: runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
+			},
+			Checkpoints: []PreRuntimeStageCheckpoint{{StageID: "provider-prerequisites", State: "COMPLETED_SUCCEEDED", StageReceiptDigest: runnerStageSHA("1")}},
+		},
+		err: errors.New("redacted prefix stop"),
+	}
+	receipt, err := (&FullRunOrchestration{PreRuntime: prefix, BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+		t.Fatal("invalid prefix reached continuation")
+		return nil, nil
+	}}).Run(context.Background())
+	if err == nil || receipt.MismatchEvidence != nil || receipt.StopCategory != "ORCHESTRATION_STOPPED" {
+		t.Fatalf("mismatch evidence on unrelated stop was accepted: %#v err=%v", receipt, err)
+	}
+}
+
 func TestFullRunOrchestrationPropagatesSuffixStopCategory(t *testing.T) {
 	continuation := successfulFakePostRuntimeContinuation()
 	continuation.receipt.State = "STOPPED"

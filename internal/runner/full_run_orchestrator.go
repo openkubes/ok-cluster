@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
+	"github.com/openkubes/ok-cluster/internal/execution"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
 )
 
@@ -26,12 +28,13 @@ type FullRunStageCheckpoint struct {
 // It does not contain authorization material, credentials, endpoints, target
 // identities, raw objects or local paths.
 type FullRunOrchestrationReceipt struct {
-	Format       string                   `json:"format"`
-	State        string                   `json:"state"`
-	PlanDigest   string                   `json:"planDigest,omitempty"`
-	StoppedAt    string                   `json:"stoppedAt,omitempty"`
-	StopCategory string                   `json:"stopCategory,omitempty"`
-	Checkpoints  []FullRunStageCheckpoint `json:"checkpoints"`
+	Format           string                                `json:"format"`
+	State            string                                `json:"state"`
+	PlanDigest       string                                `json:"planDigest,omitempty"`
+	StoppedAt        string                                `json:"stoppedAt,omitempty"`
+	StopCategory     string                                `json:"stopCategory,omitempty"`
+	MismatchEvidence *execution.SubmissionMismatchEvidence `json:"mismatchEvidence,omitempty"`
+	Checkpoints      []FullRunStageCheckpoint              `json:"checkpoints"`
 }
 
 // PostRuntimeContinuationBinding proves that one already-opened Stage 8-12
@@ -96,6 +99,10 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 	prefix, prefixErr := orchestration.PreRuntime.Run(ctx)
 	if prefixErr != nil && prefix.State == "STOPPED" && prefix.StoppedAt == preRuntimeStageOrder[0] &&
 		prefix.PlanDigest == "" && len(prefix.Checkpoints) == 0 {
+		if !validOrchestrationMismatchEvidenceForCategory(prefix.StopCategory, prefix.MismatchEvidence) {
+			return stopFullRunOrchestration(receipt, fullRunOrchestrationInitialStoppedStage)
+		}
+		receipt.MismatchEvidence = cloneOrchestrationMismatchEvidence(prefix.MismatchEvidence)
 		return stopFullRunOrchestrationWithCategory(receipt, prefix.StoppedAt, prefix.StopCategory, prefixErr)
 	}
 	if err := appendFullRunPrefix(&receipt, prefix); err != nil {
@@ -150,8 +157,14 @@ func appendFullRunPrefix(receipt *FullRunOrchestrationReceipt, prefix PreRuntime
 		if prefix.StopCategory != "" && !validRedactedStopCategory(prefix.StopCategory) {
 			return errors.New("stopped full-run prefix category is invalid")
 		}
+		if !validOrchestrationMismatchEvidenceForCategory(prefix.StopCategory, prefix.MismatchEvidence) {
+			return errors.New("stopped full-run prefix mismatch evidence is invalid")
+		}
+	} else if prefix.MismatchEvidence != nil {
+		return errors.New("successful full-run prefix contains mismatch evidence")
 	}
 	receipt.PlanDigest = prefix.PlanDigest
+	receipt.MismatchEvidence = cloneOrchestrationMismatchEvidence(prefix.MismatchEvidence)
 	for index, checkpoint := range prefix.Checkpoints {
 		if checkpoint.StageID != preRuntimeStageOrder[index] || checkpoint.State != "COMPLETED_SUCCEEDED" ||
 			!stageReceiptPrefixDigestPattern.MatchString(checkpoint.StageReceiptDigest) {
@@ -160,6 +173,32 @@ func appendFullRunPrefix(receipt *FullRunOrchestrationReceipt, prefix PreRuntime
 		receipt.Checkpoints = append(receipt.Checkpoints, FullRunStageCheckpoint(checkpoint))
 	}
 	return nil
+}
+
+func cloneOrchestrationMismatchEvidence(source *execution.SubmissionMismatchEvidence) *execution.SubmissionMismatchEvidence {
+	if source == nil {
+		return nil
+	}
+	clone := *source
+	return &clone
+}
+
+func validOrchestrationMismatchEvidence(evidence *execution.SubmissionMismatchEvidence) bool {
+	if evidence == nil {
+		return true
+	}
+	return evidence.ObservationCount >= 0 && evidence.ObservationCount <= 300 &&
+		stageReceiptPrefixDigestPattern.MatchString(evidence.ExpectedDigest) &&
+		stageReceiptPrefixDigestPattern.MatchString(evidence.LastObservedDigest) &&
+		evidence.RuntimeIdentityStable &&
+		orchestrationMismatchEvidenceCategoryPattern.MatchString(evidence.FirstCategory) &&
+		orchestrationMismatchEvidenceCategoryPattern.MatchString(evidence.LastCategory)
+}
+
+func validOrchestrationMismatchEvidenceForCategory(category string, evidence *execution.SubmissionMismatchEvidence) bool {
+	required := submissionObjectOrdinalStopCategoryPattern.MatchString(category) &&
+		strings.Contains(category, "_CONVERGENCE_EXHAUSTED_AT_")
+	return (evidence != nil) == required && validOrchestrationMismatchEvidence(evidence)
 }
 
 func appendFullRunSuffix(receipt *FullRunOrchestrationReceipt, suffix PostRuntimeExecutionReceipt) error {

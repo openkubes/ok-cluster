@@ -12,12 +12,17 @@ import (
 	"github.com/openkubes/ok-cluster/internal/stagecursor"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 const StagedReceiptFormat = "ok147-staged-operation-run-receipt/v1"
 
 var stagedDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-var submissionObjectStopCategoryPattern = regexp.MustCompile(`^SUBMISSION_(?:OBJECT_(?:(?:MISMATCH|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH)(?:_CONVERGENCE_EXHAUSTED)?|RESPONSE_INVALID|PROJECTION_INVALID|RUNTIME_IDENTITY_INVALID|TERMINATING)|CREATE_RESPONSE_(?:INVALID|RESPONSE_INVALID|PROJECTION_INVALID|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|RUNTIME_IDENTITY_INVALID))_AT_[0-9]{2}$`)
+var submissionObjectStopCategoryPattern = regexp.MustCompile(`^SUBMISSION_(?:OBJECT_(?:(?:MISMATCH|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|CONTENT_(?:DATA|STRING_DATA|RULES|SUBJECTS|ROLE_REF|TYPE|OTHER)_MISMATCH)(?:_CONVERGENCE_EXHAUSTED)?|COMPARATOR_INCONSISTENT|RESPONSE_INVALID|PROJECTION_INVALID|RUNTIME_IDENTITY_INVALID|TERMINATING)|CREATE_RESPONSE_(?:INVALID|RESPONSE_INVALID|PROJECTION_INVALID|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|CONTENT_(?:DATA|STRING_DATA|RULES|SUBJECTS|ROLE_REF|TYPE|OTHER)_MISMATCH|COMPARATOR_INCONSISTENT|RUNTIME_IDENTITY_INVALID))_AT_[0-9]{2}$`)
+var submissionMismatchEvidenceCategoryPattern = regexp.MustCompile(`^SUBMISSION_OBJECT_(?:MISMATCH|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|CONTENT_(?:DATA|STRING_DATA|RULES|SUBJECTS|ROLE_REF|TYPE|OTHER)_MISMATCH)$`)
+var submissionMismatchEvidenceStopCategoryPattern = regexp.MustCompile(`^SUBMISSION_OBJECT_(?:MISMATCH|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|CONTENT_(?:DATA|STRING_DATA|RULES|SUBJECTS|ROLE_REF|TYPE|OTHER)_MISMATCH)_CONVERGENCE_EXHAUSTED_AT_[0-9]{2}$`)
+
+type SubmissionMismatchEvidence = submission.SubmissionMismatchEvidence
 
 // StageMutationBinding makes one preconstructed mutator specific to one
 // verified plan stage. The mutator is not a dynamic operation dispatcher.
@@ -46,6 +51,7 @@ type StageMutationResult struct {
 	EvidenceDigest         string
 	TargetClusterUIDDigest string
 	FailureCategory        string
+	MismatchEvidence       *SubmissionMismatchEvidence
 }
 
 // StageMutator is a single, preconstructed mutation capability.
@@ -73,17 +79,26 @@ type StagedOperationReceipt struct {
 	Outcome            *ledger.StageOutcomeReceipt `json:"outcome,omitempty"`
 	StageReceiptDigest string                      `json:"stageReceiptDigest,omitempty"`
 	FailureCategory    string                      `json:"failureCategory,omitempty"`
+	MismatchEvidence   *SubmissionMismatchEvidence `json:"mismatchEvidence,omitempty"`
 }
 
 // StageResultError means the operation reached a durable non-success outcome.
 // It never exposes a mutator's raw error.
 type StageResultError struct {
-	State           string
-	FailureCategory string
+	State            string
+	FailureCategory  string
+	MismatchEvidence *SubmissionMismatchEvidence
 }
 
 func (err *StageResultError) Error() string                { return "staged operation completed with " + err.State }
 func (err *StageResultError) RedactedStopCategory() string { return err.FailureCategory }
+func (err *StageResultError) RedactedMismatchEvidence() *SubmissionMismatchEvidence {
+	if err.MismatchEvidence == nil {
+		return nil
+	}
+	clone := *err.MismatchEvidence
+	return &clone
+}
 
 // Run invokes at most one mutator. A pre-existing claim without outcome is an
 // indeterminate terminal stop; a durable outcome is finalized without replay.
@@ -122,7 +137,7 @@ func (operation StagedOperation) Run(ctx context.Context, plan stageplan.Binding
 	}
 	switch inspection.State {
 	case "COMPLETED":
-		return operation.finalize(ctx, receipt, plan, grant, predecessors, inspection.Outcome, "")
+		return operation.finalize(ctx, receipt, plan, grant, predecessors, inspection.Outcome, "", nil)
 	case "AVAILABLE":
 		if !inspection.ClaimAllowed {
 			return receipt, errors.New("available stage grant is not claimable")
@@ -149,15 +164,16 @@ func (operation StagedOperation) Run(ctx context.Context, plan stageplan.Binding
 		return receipt, err
 	}
 	receipt.FailureCategory = result.FailureCategory
+	receipt.MismatchEvidence = cloneSubmissionMismatchEvidence(result.MismatchEvidence)
 	outcome, err := operation.Ledger.CompleteStageWithTarget(ctx, claim, result.Outcome, result.MutationState, result.EvidenceDigest, result.TargetClusterUIDDigest, operation.Clock())
 	if err != nil {
 		return receipt, err
 	}
 	receipt.Outcome = &outcome
-	return operation.finalize(ctx, receipt, plan, grant, predecessors, &outcome, result.FailureCategory)
+	return operation.finalize(ctx, receipt, plan, grant, predecessors, &outcome, result.FailureCategory, result.MismatchEvidence)
 }
 
-func (operation StagedOperation) finalize(ctx context.Context, receipt StagedOperationReceipt, plan stageplan.Binding, grant authorization.VerifiedStageGrant, predecessors []stagereceipt.Verified, outcome *ledger.StageOutcomeReceipt, failureCategory string) (StagedOperationReceipt, error) {
+func (operation StagedOperation) finalize(ctx context.Context, receipt StagedOperationReceipt, plan stageplan.Binding, grant authorization.VerifiedStageGrant, predecessors []stagereceipt.Verified, outcome *ledger.StageOutcomeReceipt, failureCategory string, mismatchEvidence *SubmissionMismatchEvidence) (StagedOperationReceipt, error) {
 	if outcome == nil {
 		return receipt, errors.New("completed stage inspection has no durable outcome")
 	}
@@ -172,8 +188,9 @@ func (operation StagedOperation) finalize(ctx context.Context, receipt StagedOpe
 	receipt.Outcome = outcome
 	receipt.StageReceiptDigest = receiptDigest
 	receipt.State = "COMPLETED_" + outcome.Outcome
+	receipt.MismatchEvidence = cloneSubmissionMismatchEvidence(mismatchEvidence)
 	if outcome.Outcome != "SUCCEEDED" {
-		return receipt, &StageResultError{State: receipt.State, FailureCategory: failureCategory}
+		return receipt, &StageResultError{State: receipt.State, FailureCategory: failureCategory, MismatchEvidence: cloneSubmissionMismatchEvidence(mismatchEvidence)}
 	}
 	return receipt, nil
 }
@@ -191,6 +208,12 @@ func validateStageMutationResult(stageID string, result StageMutationResult, mut
 	if result.FailureCategory != "" && (result.Outcome == "SUCCEEDED" || !validStageFailureCategory(result.FailureCategory)) {
 		return errors.New("stage mutator returned an invalid redacted failure category")
 	}
+	if !validSubmissionMismatchEvidence(result.MismatchEvidence) || (result.MismatchEvidence != nil && result.Outcome == "SUCCEEDED") {
+		return errors.New("stage mutator returned invalid redacted mismatch evidence")
+	}
+	if (result.MismatchEvidence != nil) != submissionMismatchEvidenceRequired(result.FailureCategory) {
+		return errors.New("stage mutator mismatch evidence differs from its stop category")
+	}
 	if stageID == "cluster-lifecycle" && result.Outcome == "SUCCEEDED" {
 		if !stagedDigestPattern.MatchString(result.TargetClusterUIDDigest) {
 			return errors.New("successful Cluster lifecycle mutation lacks a runtime identity digest")
@@ -200,6 +223,31 @@ func validateStageMutationResult(stageID string, result StageMutationResult, mut
 	}
 	return nil
 }
+
+func submissionMismatchEvidenceRequired(category string) bool {
+	return submissionMismatchEvidenceStopCategoryPattern.MatchString(category)
+}
+
+func cloneSubmissionMismatchEvidence(source *SubmissionMismatchEvidence) *SubmissionMismatchEvidence {
+	if source == nil {
+		return nil
+	}
+	clone := *source
+	return &clone
+}
+
+func validSubmissionMismatchEvidence(evidence *SubmissionMismatchEvidence) bool {
+	if evidence == nil {
+		return true
+	}
+	return submissionMismatchEvidenceCategoryPattern.MatchString(evidence.FirstCategory) &&
+		submissionMismatchEvidenceCategoryPattern.MatchString(evidence.LastCategory) &&
+		evidence.ObservationCount >= 0 && evidence.ObservationCount <= objectMismatchMaximumEvidenceObservations &&
+		stagedDigestPattern.MatchString(evidence.ExpectedDigest) && stagedDigestPattern.MatchString(evidence.LastObservedDigest) &&
+		evidence.RuntimeIdentityStable
+}
+
+const objectMismatchMaximumEvidenceObservations = 300
 
 func validStageFailureCategory(category string) bool {
 	if submissionObjectStopCategoryPattern.MatchString(category) {

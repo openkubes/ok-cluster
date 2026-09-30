@@ -13,8 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/openkubes/ok-cluster/internal/digest"
 )
 
 const (
@@ -63,12 +66,25 @@ type ObjectResult struct {
 // PlaneReceipt is useful even on failure: Results contains the exact prefix
 // completed before STOP-PRESERVE-NO-RETRY.
 type PlaneReceipt struct {
-	Format        string         `json:"format"`
-	Authority     string         `json:"authority"`
-	Role          string         `json:"role"`
-	State         string         `json:"state"`
-	MutationState string         `json:"mutationState"`
-	Results       []ObjectResult `json:"results"`
+	Format           string                      `json:"format"`
+	Authority        string                      `json:"authority"`
+	Role             string                      `json:"role"`
+	State            string                      `json:"state"`
+	MutationState    string                      `json:"mutationState"`
+	Results          []ObjectResult              `json:"results"`
+	MismatchEvidence *SubmissionMismatchEvidence `json:"mismatchEvidence,omitempty"`
+}
+
+// SubmissionMismatchEvidence is the complete public diagnostic envelope for
+// bounded mismatch convergence. It cannot carry field paths, object identity,
+// endpoints, credentials, raw responses, or wrapped private errors.
+type SubmissionMismatchEvidence struct {
+	FirstCategory         string `json:"firstCategory"`
+	LastCategory          string `json:"lastCategory"`
+	ObservationCount      int    `json:"observationCount"`
+	ExpectedDigest        string `json:"expectedDigest"`
+	LastObservedDigest    string `json:"lastObservedDigest"`
+	RuntimeIdentityStable bool   `json:"runtimeIdentityStable"`
 }
 
 // ObjectIdentity is the public, non-secret runtime identity used to correlate
@@ -96,13 +112,29 @@ func (err *SubmissionError) RedactedStopCategory() string { return err.Category 
 type categorizedSubmissionError struct {
 	category string
 	message  string
+	evidence *SubmissionMismatchEvidence
 }
 
 func (err *categorizedSubmissionError) Error() string                { return err.message }
 func (err *categorizedSubmissionError) RedactedStopCategory() string { return err.category }
+func (err *categorizedSubmissionError) RedactedMismatchEvidence() *SubmissionMismatchEvidence {
+	return cloneMismatchEvidence(err.evidence)
+}
 
 func newCategorizedSubmissionError(category, message string) error {
 	return &categorizedSubmissionError{category: category, message: message}
+}
+
+func newCategorizedSubmissionErrorWithEvidence(category, message string, evidence *SubmissionMismatchEvidence) error {
+	return &categorizedSubmissionError{category: category, message: message, evidence: cloneMismatchEvidence(evidence)}
+}
+
+func cloneMismatchEvidence(source *SubmissionMismatchEvidence) *SubmissionMismatchEvidence {
+	if source == nil {
+		return nil
+	}
+	clone := *source
+	return &clone
 }
 
 func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, error) {
@@ -216,6 +248,12 @@ func bindSubmissionObjectOrdinal(cause error, ordinal int) error {
 	if !errors.As(cause, &categorized) || (!strings.HasPrefix(categorized.RedactedStopCategory(), "SUBMISSION_OBJECT_") && !strings.HasPrefix(categorized.RedactedStopCategory(), "SUBMISSION_CREATE_RESPONSE_")) {
 		return cause
 	}
+	var evidenceSource interface {
+		RedactedMismatchEvidence() *SubmissionMismatchEvidence
+	}
+	if errors.As(cause, &evidenceSource) {
+		return newCategorizedSubmissionErrorWithEvidence(fmt.Sprintf("%s_AT_%02d", categorized.RedactedStopCategory(), ordinal), "Kubernetes object failed bounded verification", evidenceSource.RedactedMismatchEvidence())
+	}
 	return newCategorizedSubmissionError(fmt.Sprintf("%s_AT_%02d", categorized.RedactedStopCategory(), ordinal), "Kubernetes object failed bounded verification")
 }
 
@@ -225,6 +263,12 @@ func stopped(receipt PlaneReceipt, cause error) (PlaneReceipt, error) {
 	var categorized interface{ RedactedStopCategory() string }
 	if errors.As(cause, &categorized) {
 		category = categorized.RedactedStopCategory()
+	}
+	var evidenceSource interface {
+		RedactedMismatchEvidence() *SubmissionMismatchEvidence
+	}
+	if errors.As(cause, &evidenceSource) {
+		receipt.MismatchEvidence = evidenceSource.RedactedMismatchEvidence()
 	}
 	return receipt, &SubmissionError{Receipt: receipt, Cause: cause, Category: category}
 }
@@ -241,6 +285,9 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 		}
 		uid, err := verifyObservedObject(response, object)
 		if err != nil {
+			if categorizedSubmissionCategory(err) == "SUBMISSION_OBJECT_COMPARATOR_INCONSISTENT" {
+				return "", "", false, err
+			}
 			state, confirmedUID, continueCreate, confirmErr := client.confirmObservedMismatch(ctx, object, response, err)
 			if confirmErr != nil || !continueCreate {
 				return state, confirmedUID, false, confirmErr
@@ -288,6 +335,8 @@ func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, obj
 	convergenceCtx, cancel := context.WithTimeout(ctx, objectMismatchConvergenceTimeout)
 	defer cancel()
 	lastErr := firstErr
+	lastObserved := append([]byte(nil), first...)
+	observationCount := 0
 	for attempt := 0; attempt < client.mismatchConfirmationAttempts; attempt++ {
 		// The final observation is deliberately performed without another wait.
 		// This closes the narrow race between the last delayed observation and
@@ -295,7 +344,7 @@ func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, obj
 		if attempt < client.mismatchConfirmationAttempts-1 {
 			if err := client.wait(convergenceCtx, client.mismatchConfirmationDelay); err != nil {
 				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-					return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr)
+					return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr, mismatchEvidence(object, firstErr, lastErr, observationCount, lastObserved))
 				}
 				return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_RESPONSE_INVALID", "existing Kubernetes object confirmation was interrupted")
 			}
@@ -303,7 +352,7 @@ func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, obj
 		response, status, err := client.request(convergenceCtx, http.MethodGet, object.ObjectPath, nil)
 		if err != nil {
 			if errors.Is(convergenceCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-				return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr)
+				return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr, mismatchEvidence(object, firstErr, lastErr, observationCount, lastObserved))
 			}
 			return "", "", false, err
 		}
@@ -311,6 +360,8 @@ func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, obj
 		case http.StatusNotFound:
 			return "", "", true, nil
 		case http.StatusOK:
+			observationCount++
+			lastObserved = append(lastObserved[:0], response...)
 			if objectIsTerminating(response) {
 				return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_TERMINATING", "existing Kubernetes object is terminating")
 			}
@@ -327,7 +378,7 @@ func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, obj
 			}
 			lastErr = verifyErr
 			if attempt == client.mismatchConfirmationAttempts-1 {
-				return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr)
+				return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr, mismatchEvidence(object, firstErr, lastErr, observationCount, lastObserved))
 			}
 		default:
 			return "", "", false, apiStatusError(http.MethodGet, status, response)
@@ -345,17 +396,52 @@ func existingObjectMismatch(err error) error {
 	return newCategorizedSubmissionError(category, "existing Kubernetes object differs from projection")
 }
 
-func existingObjectMismatchConvergenceExhausted(err error) error {
+func existingObjectMismatchConvergenceExhausted(err error, evidence *SubmissionMismatchEvidence) error {
 	category := "SUBMISSION_OBJECT_MISMATCH_CONVERGENCE_EXHAUSTED"
 	var categorized interface{ RedactedStopCategory() string }
 	if errors.As(err, &categorized) {
 		switch categorized.RedactedStopCategory() {
 		case "SUBMISSION_OBJECT_MISMATCH", "SUBMISSION_OBJECT_IDENTITY_MISMATCH", "SUBMISSION_OBJECT_METADATA_MISMATCH",
-			"SUBMISSION_OBJECT_SPEC_MISMATCH", "SUBMISSION_OBJECT_CONTENT_MISMATCH":
+			"SUBMISSION_OBJECT_SPEC_MISMATCH", "SUBMISSION_OBJECT_CONTENT_MISMATCH",
+			"SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH", "SUBMISSION_OBJECT_CONTENT_STRING_DATA_MISMATCH",
+			"SUBMISSION_OBJECT_CONTENT_RULES_MISMATCH", "SUBMISSION_OBJECT_CONTENT_SUBJECTS_MISMATCH",
+			"SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH", "SUBMISSION_OBJECT_CONTENT_TYPE_MISMATCH",
+			"SUBMISSION_OBJECT_CONTENT_OTHER_MISMATCH":
 			category = categorized.RedactedStopCategory() + "_CONVERGENCE_EXHAUSTED"
 		}
 	}
-	return newCategorizedSubmissionError(category, "existing Kubernetes object mismatch did not converge within the bounded window")
+	return newCategorizedSubmissionErrorWithEvidence(category, "existing Kubernetes object mismatch did not converge within the bounded window", evidence)
+}
+
+func mismatchEvidence(object Object, firstErr, lastErr error, count int, lastObserved []byte) *SubmissionMismatchEvidence {
+	return &SubmissionMismatchEvidence{
+		FirstCategory:         categorizedSubmissionCategory(firstErr),
+		LastCategory:          categorizedSubmissionCategory(lastErr),
+		ObservationCount:      count,
+		ExpectedDigest:        object.Digest,
+		LastObservedDigest:    canonicalObservedDigest(lastObserved),
+		RuntimeIdentityStable: true,
+	}
+}
+
+func categorizedSubmissionCategory(err error) string {
+	var categorized interface{ RedactedStopCategory() string }
+	if errors.As(err, &categorized) {
+		return categorized.RedactedStopCategory()
+	}
+	return "SUBMISSION_OBJECT_MISMATCH"
+}
+
+func canonicalObservedDigest(raw []byte) string {
+	value, err := decodeJSONObject(raw)
+	if err != nil {
+		return ""
+	}
+	canonical, err := canonicalJSON(value)
+	if err != nil {
+		return ""
+	}
+	return digest.SHA256(canonical)
 }
 
 func observedRuntimeIdentity(raw []byte) (string, string) {
@@ -465,7 +551,36 @@ func objectMismatchCategory(expected, observed map[string]any) string {
 	if expectedSpec, exists := expected["spec"]; exists && !isSubset(expectedSpec, observed["spec"]) {
 		return "SUBMISSION_OBJECT_SPEC_MISMATCH"
 	}
-	return "SUBMISSION_OBJECT_CONTENT_MISMATCH"
+	mismatched := make([]string, 0, len(expected))
+	for key := range expected {
+		switch key {
+		case "apiVersion", "kind", "metadata", "spec":
+		default:
+			if !isSubset(expected[key], observed[key]) {
+				mismatched = append(mismatched, key)
+			}
+		}
+	}
+	sort.Strings(mismatched)
+	if len(mismatched) == 0 {
+		return "SUBMISSION_OBJECT_COMPARATOR_INCONSISTENT"
+	}
+	switch mismatched[0] {
+	case "data":
+		return "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH"
+	case "stringData":
+		return "SUBMISSION_OBJECT_CONTENT_STRING_DATA_MISMATCH"
+	case "rules":
+		return "SUBMISSION_OBJECT_CONTENT_RULES_MISMATCH"
+	case "subjects":
+		return "SUBMISSION_OBJECT_CONTENT_SUBJECTS_MISMATCH"
+	case "roleRef":
+		return "SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH"
+	case "type":
+		return "SUBMISSION_OBJECT_CONTENT_TYPE_MISMATCH"
+	default:
+		return "SUBMISSION_OBJECT_CONTENT_OTHER_MISMATCH"
+	}
 }
 
 func decodeJSONObject(raw []byte) (map[string]any, error) {

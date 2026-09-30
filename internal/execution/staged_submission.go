@@ -94,7 +94,10 @@ func (mutator *SubmissionPlaneMutator) Mutate(ctx context.Context, request Stage
 		if errors.As(submitErr, &categorized) && validStageFailureCategory(categorized.RedactedStopCategory()) {
 			category = categorized.RedactedStopCategory()
 		}
-		return StageMutationResult{Outcome: "STOPPED", MutationState: mutationState, EvidenceDigest: evidenceDigest, FailureCategory: category}, errors.New("bounded submission stopped")
+		if (receipt.MismatchEvidence != nil) != submissionMismatchEvidenceRequired(category) {
+			return StageMutationResult{}, errors.New("submission receipt mismatch evidence differs from its stop category")
+		}
+		return StageMutationResult{Outcome: "STOPPED", MutationState: mutationState, EvidenceDigest: evidenceDigest, FailureCategory: category, MismatchEvidence: cloneSubmissionMismatchEvidence(receipt.MismatchEvidence)}, errors.New("bounded submission stopped")
 	}
 	if mutationState != "ATTEMPTED" {
 		// Provider prerequisites are intentionally durable across disposable
@@ -141,6 +144,9 @@ func validateSubmissionPlaneOutcome(receipt submission.PlaneReceipt, plane submi
 	}
 	if receipt.Format != submission.PlaneReceiptFormat || receipt.Authority != plane.Identity || receipt.Role != plane.Role || receipt.State != wantState || len(receipt.Results) > len(plane.Objects) || (!stopped && len(receipt.Results) != len(plane.Objects)) {
 		return "", errors.New("submission receipt differs from the preconstructed plane")
+	}
+	if !validSubmissionMismatchEvidence(receipt.MismatchEvidence) || (!stopped && receipt.MismatchEvidence != nil) {
+		return "", errors.New("submission receipt mismatch evidence is invalid")
 	}
 	wantMutation := "NOT_ATTEMPTED"
 	for index, result := range receipt.Results {
