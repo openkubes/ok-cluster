@@ -135,7 +135,7 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 	})
 }
 
-func TestKubernetesSubmitConfirmsExistingMismatchExactlyOnce(t *testing.T) {
+func TestKubernetesSubmitObservesExistingMismatchWithinBoundedConvergence(t *testing.T) {
 	root, binding := validProjection(t)
 	plan, err := Load(root, binding)
 	if err != nil {
@@ -172,6 +172,36 @@ func TestKubernetesSubmitConfirmsExistingMismatchExactlyOnce(t *testing.T) {
 		receipt, err := newSubmissionClient(t, "ok-infra", api.client()).Submit(context.Background(), plan.Infrastructure)
 		if err != nil || receipt.Results[0].State != "UNCHANGED" || api.gets != 2 || api.posts != 0 {
 			t.Fatalf("convergence performed a write: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
+		}
+	})
+
+	t.Run("disappears after multiple bounded observations", func(t *testing.T) {
+		api := newFakeObjectAPI(t)
+		object := apiObject(t, objectPlan.Raw)
+		object["metadata"].(map[string]any)["name"] = "different"
+		api.objects[objectPlan.ObjectPath] = object
+		api.beforeGet = func(count int, path string, api *fakeObjectAPI) {
+			if count == 4 {
+				delete(api.objects, path)
+			}
+		}
+		client := newSubmissionClientWithMismatchAttempts(t, "ok-infra", api.client(), 3)
+		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
+		if err != nil || receipt.Results[0].State != "CREATED" || api.gets != 4 || api.posts != 1 {
+			t.Fatalf("bounded disappearance did not converge to one create: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
+		}
+	})
+
+	t.Run("stable drift exhausts finite observation cap", func(t *testing.T) {
+		api := newFakeObjectAPI(t)
+		object := apiObject(t, objectPlan.Raw)
+		object["metadata"].(map[string]any)["name"] = "different"
+		api.objects[objectPlan.ObjectPath] = object
+		client := newSubmissionClientWithMismatchAttempts(t, "ok-infra", api.client(), 3)
+		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
+		var stopped *SubmissionError
+		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 4 || api.posts != 0 {
+			t.Fatalf("bounded stable drift did not stop: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
 		}
 	})
 
@@ -237,6 +267,26 @@ func TestKubernetesSubmitConfirmsExistingMismatchExactlyOnce(t *testing.T) {
 		var stopped *SubmissionError
 		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_RESPONSE_INVALID_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 1 || api.posts != 0 {
 			t.Fatalf("cancelled confirmation was not terminal: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
+		}
+	})
+
+	t.Run("bounded deadline exhaustion retains mismatch category", func(t *testing.T) {
+		api := newFakeObjectAPI(t)
+		object := apiObject(t, objectPlan.Raw)
+		object["metadata"].(map[string]any)["name"] = "different"
+		api.objects[objectPlan.ObjectPath] = object
+		client, err := NewKubernetesClient(KubernetesClientConfig{
+			Endpoint: "http://127.0.0.1:12345", BearerToken: "short-lived-test-token", AuthorityIdentity: "ok-infra", Client: api.client(),
+			MismatchConfirmationDelay: time.Millisecond, MismatchConfirmationAttempts: 3,
+			Wait: func(context.Context, time.Duration) error { return context.DeadlineExceeded },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
+		var stopped *SubmissionError
+		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 1 || api.posts != 0 {
+			t.Fatalf("bounded deadline exhaustion lost the original mismatch: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
 		}
 	})
 }
@@ -312,6 +362,20 @@ func TestKubernetesClientBoundsMismatchConfirmationDelay(t *testing.T) {
 			MismatchConfirmationDelay: delay,
 		}); err == nil {
 			t.Fatalf("unbounded mismatch confirmation delay %s was accepted", delay)
+		}
+	}
+}
+
+func TestKubernetesClientBoundsMismatchConfirmationAttempts(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusNotFound, nil, nil), nil
+	})}
+	for _, attempts := range []int{-1, objectMismatchMaximumAttempts + 1} {
+		if _, err := NewKubernetesClient(KubernetesClientConfig{
+			Endpoint: "http://127.0.0.1:12345", BearerToken: "short-lived-test-token", AuthorityIdentity: "ok-infra", Client: client,
+			MismatchConfirmationAttempts: attempts,
+		}); err == nil {
+			t.Fatalf("unbounded mismatch confirmation attempt count %d was accepted", attempts)
 		}
 	}
 }
@@ -514,10 +578,14 @@ func apiObject(t *testing.T, raw []byte) map[string]any {
 }
 
 func newSubmissionClient(t *testing.T, authority string, client *http.Client) *KubernetesClient {
+	return newSubmissionClientWithMismatchAttempts(t, authority, client, 1)
+}
+
+func newSubmissionClientWithMismatchAttempts(t *testing.T, authority string, client *http.Client, attempts int) *KubernetesClient {
 	t.Helper()
 	result, err := NewKubernetesClient(KubernetesClientConfig{
 		Endpoint: "http://127.0.0.1:12345", BearerToken: "short-lived-test-token", AuthorityIdentity: authority, Client: client,
-		MismatchConfirmationDelay: time.Millisecond, Wait: func(context.Context, time.Duration) error { return nil },
+		MismatchConfirmationDelay: time.Millisecond, MismatchConfirmationAttempts: attempts, Wait: func(context.Context, time.Duration) error { return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
