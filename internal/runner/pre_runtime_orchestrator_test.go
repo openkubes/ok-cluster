@@ -170,14 +170,38 @@ func TestPreRuntimeOrchestrationReportsRedactedClusterLifecycleStopCategory(t *t
 	}
 }
 
+func TestPreRuntimeOrchestrationReportsMismatchConvergenceExhaustion(t *testing.T) {
+	category := "SUBMISSION_OBJECT_CONTENT_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"
+	orchestration := successfulPreRuntimeOrchestration(nil)
+	orchestration.RunClusterLifecycle = func(context.Context, execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
+		return execution.StagedOperationReceipt{
+			Format: execution.StagedReceiptFormat, State: "COMPLETED_STOPPED", PlanDigest: runnerStageSHA("a"),
+			StageID: "cluster-lifecycle", StageReceiptDigest: runnerStageSHA("2"), FailureCategory: category,
+		}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: category}
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != category || len(receipt.Checkpoints) != 1 {
+		t.Fatalf("mismatch convergence exhaustion was not preserved: %#v err=%v", receipt, err)
+	}
+}
+
 func TestSubmissionPhaseOrdinalCategoriesAreRedactedAndAccepted(t *testing.T) {
 	for _, category := range []string{
 		"SUBMISSION_OBJECT_TERMINATING_AT_02",
+		"SUBMISSION_OBJECT_CONTENT_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02",
 		"SUBMISSION_CREATE_RESPONSE_IDENTITY_MISMATCH_AT_02",
 		"SUBMISSION_CREATE_RESPONSE_CONTENT_MISMATCH_AT_08",
 	} {
 		if !validRedactedStopCategory(category) {
 			t.Fatalf("phase-bound submission category was rejected: %s", category)
+		}
+	}
+	for _, category := range []string{
+		"SUBMISSION_OBJECT_TERMINATING_CONVERGENCE_EXHAUSTED_AT_02",
+		"SUBMISSION_OBJECT_RUNTIME_IDENTITY_INVALID_CONVERGENCE_EXHAUSTED_AT_02",
+	} {
+		if validRedactedStopCategory(category) {
+			t.Fatalf("terminal submission category gained an exhaustion variant: %s", category)
 		}
 	}
 }

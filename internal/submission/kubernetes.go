@@ -21,8 +21,8 @@ const (
 	maximumAPIResponseBytes          = 4 * 1024 * 1024
 	objectMismatchConfirmationDelay  = 2 * time.Second
 	maximumMismatchConfirmationDelay = 5 * time.Second
-	objectMismatchConvergenceTimeout = 5 * time.Minute
-	objectMismatchMaximumAttempts    = 150
+	objectMismatchConvergenceTimeout = 10 * time.Minute
+	objectMismatchMaximumAttempts    = 300
 	PlaneReceiptFormat               = "ok147-bounded-submission-receipt/v2"
 )
 
@@ -289,14 +289,22 @@ func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, obj
 	defer cancel()
 	lastErr := firstErr
 	for attempt := 0; attempt < client.mismatchConfirmationAttempts; attempt++ {
-		if err := client.wait(convergenceCtx, client.mismatchConfirmationDelay); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-				return "", "", false, existingObjectMismatch(lastErr)
+		// The final observation is deliberately performed without another wait.
+		// This closes the narrow race between the last delayed observation and
+		// attempt-cap exhaustion without extending either hard bound.
+		if attempt < client.mismatchConfirmationAttempts-1 {
+			if err := client.wait(convergenceCtx, client.mismatchConfirmationDelay); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+					return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr)
+				}
+				return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_RESPONSE_INVALID", "existing Kubernetes object confirmation was interrupted")
 			}
-			return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_RESPONSE_INVALID", "existing Kubernetes object confirmation was interrupted")
 		}
 		response, status, err := client.request(convergenceCtx, http.MethodGet, object.ObjectPath, nil)
 		if err != nil {
+			if errors.Is(convergenceCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+				return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr)
+			}
 			return "", "", false, err
 		}
 		switch status {
@@ -318,11 +326,14 @@ func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, obj
 				return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_RUNTIME_IDENTITY_INVALID", "existing Kubernetes object identity changed during confirmation")
 			}
 			lastErr = verifyErr
+			if attempt == client.mismatchConfirmationAttempts-1 {
+				return "", "", false, existingObjectMismatchConvergenceExhausted(lastErr)
+			}
 		default:
 			return "", "", false, apiStatusError(http.MethodGet, status, response)
 		}
 	}
-	return "", "", false, existingObjectMismatch(lastErr)
+	panic("unreachable bounded mismatch convergence")
 }
 
 func existingObjectMismatch(err error) error {
@@ -332,6 +343,19 @@ func existingObjectMismatch(err error) error {
 		category = categorized.RedactedStopCategory()
 	}
 	return newCategorizedSubmissionError(category, "existing Kubernetes object differs from projection")
+}
+
+func existingObjectMismatchConvergenceExhausted(err error) error {
+	category := "SUBMISSION_OBJECT_MISMATCH_CONVERGENCE_EXHAUSTED"
+	var categorized interface{ RedactedStopCategory() string }
+	if errors.As(err, &categorized) {
+		switch categorized.RedactedStopCategory() {
+		case "SUBMISSION_OBJECT_MISMATCH", "SUBMISSION_OBJECT_IDENTITY_MISMATCH", "SUBMISSION_OBJECT_METADATA_MISMATCH",
+			"SUBMISSION_OBJECT_SPEC_MISMATCH", "SUBMISSION_OBJECT_CONTENT_MISMATCH":
+			category = categorized.RedactedStopCategory() + "_CONVERGENCE_EXHAUSTED"
+		}
+	}
+	return newCategorizedSubmissionError(category, "existing Kubernetes object mismatch did not converge within the bounded window")
 }
 
 func observedRuntimeIdentity(raw []byte) (string, string) {

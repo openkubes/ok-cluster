@@ -90,11 +90,20 @@ func TestStagedOperationPersistsRedactedNonSuccessWithoutRetry(t *testing.T) {
 func TestSubmissionPhaseOrdinalCategoriesAreValidStageFailures(t *testing.T) {
 	for _, category := range []string{
 		"SUBMISSION_OBJECT_TERMINATING_AT_02",
+		"SUBMISSION_OBJECT_CONTENT_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02",
 		"SUBMISSION_CREATE_RESPONSE_IDENTITY_MISMATCH_AT_02",
 		"SUBMISSION_CREATE_RESPONSE_CONTENT_MISMATCH_AT_08",
 	} {
 		if !validStageFailureCategory(category) {
 			t.Fatalf("phase-bound submission category was rejected: %s", category)
+		}
+	}
+	for _, category := range []string{
+		"SUBMISSION_OBJECT_TERMINATING_CONVERGENCE_EXHAUSTED_AT_02",
+		"SUBMISSION_OBJECT_RESPONSE_INVALID_CONVERGENCE_EXHAUSTED_AT_02",
+	} {
+		if validStageFailureCategory(category) {
+			t.Fatalf("terminal submission category gained an exhaustion variant: %s", category)
 		}
 	}
 }
