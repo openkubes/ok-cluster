@@ -138,6 +138,28 @@ func TestSubmissionPlaneMutatorPreservesOnlyRedactedStopCategory(t *testing.T) {
 	}
 }
 
+func TestSubmissionPlaneMutatorPreservesOnlyBoundedRedactedMismatchEvidence(t *testing.T) {
+	plan := stagedPlan(t)
+	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
+	evidence := &submission.SubmissionMismatchEvidence{
+		FirstCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH", LastCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH",
+		ObservationCount: 300, ExpectedDigest: stagedSHA("e"), LastObservedDigest: stagedSHA("f"), RuntimeIdentityStable: true,
+	}
+	stopped := submission.PlaneReceipt{
+		Format: submission.PlaneReceiptFormat, Authority: projected.Management.Identity, Role: projected.Management.Role,
+		State: "STOPPED_PARTIAL_OR_UNKNOWN", MutationState: "NOT_ATTEMPTED", Results: []submission.ObjectResult{}, MismatchEvidence: evidence,
+	}
+	submitter := &fakePlaneSubmitter{receipt: stopped, err: &submission.SubmissionError{Receipt: stopped, Cause: errors.New("private object detail"), Category: "SUBMISSION_OBJECT_SPEC_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"}}
+	mutator, err := NewSubmissionPlaneMutator(plan, "cluster-lifecycle", projected, submitter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := mutator.Mutate(context.Background(), stagedMutationRequest(t, plan, mutator.Binding()))
+	if err == nil || result.MismatchEvidence == nil || *result.MismatchEvidence != *evidence || strings.Contains(err.Error(), "private") {
+		t.Fatalf("redacted mismatch evidence was not safely propagated: %#v err=%v", result, err)
+	}
+}
+
 func TestSubmissionPlaneMutatorBindsLifecycleRuntimeIdentityWithoutExposingUID(t *testing.T) {
 	plan := stagedPlan(t)
 	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)

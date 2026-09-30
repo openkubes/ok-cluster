@@ -11,7 +11,8 @@ import (
 
 const PreRuntimeOrchestrationReceiptFormat = "ok147-pre-runtime-orchestration-receipt/v1"
 
-var submissionObjectOrdinalStopCategoryPattern = regexp.MustCompile(`^SUBMISSION_(?:OBJECT_(?:(?:MISMATCH|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH)(?:_CONVERGENCE_EXHAUSTED)?|RESPONSE_INVALID|PROJECTION_INVALID|RUNTIME_IDENTITY_INVALID|TERMINATING)|CREATE_RESPONSE_(?:INVALID|RESPONSE_INVALID|PROJECTION_INVALID|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|RUNTIME_IDENTITY_INVALID))_AT_[0-9]{2}$`)
+var submissionObjectOrdinalStopCategoryPattern = regexp.MustCompile(`^SUBMISSION_(?:OBJECT_(?:(?:MISMATCH|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|CONTENT_(?:DATA|STRING_DATA|RULES|SUBJECTS|ROLE_REF|TYPE|OTHER)_MISMATCH)(?:_CONVERGENCE_EXHAUSTED)?|COMPARATOR_INCONSISTENT|RESPONSE_INVALID|PROJECTION_INVALID|RUNTIME_IDENTITY_INVALID|TERMINATING)|CREATE_RESPONSE_(?:INVALID|RESPONSE_INVALID|PROJECTION_INVALID|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|CONTENT_(?:DATA|STRING_DATA|RULES|SUBJECTS|ROLE_REF|TYPE|OTHER)_MISMATCH|COMPARATOR_INCONSISTENT|RUNTIME_IDENTITY_INVALID))_AT_[0-9]{2}$`)
+var orchestrationMismatchEvidenceCategoryPattern = regexp.MustCompile(`^SUBMISSION_OBJECT_(?:MISMATCH|IDENTITY_MISMATCH|METADATA_MISMATCH|SPEC_MISMATCH|CONTENT_MISMATCH|CONTENT_(?:DATA|STRING_DATA|RULES|SUBJECTS|ROLE_REF|TYPE|OTHER)_MISMATCH)$`)
 
 var preRuntimeStageOrder = []string{
 	"provider-prerequisites",
@@ -32,12 +33,13 @@ type PreRuntimeStageCheckpoint struct {
 // PreRuntimeOrchestrationReceipt is a redaction-safe summary. It contains no
 // credential, endpoint, target UID, CA, raw object or local path.
 type PreRuntimeOrchestrationReceipt struct {
-	Format       string                      `json:"format"`
-	State        string                      `json:"state"`
-	PlanDigest   string                      `json:"planDigest,omitempty"`
-	StoppedAt    string                      `json:"stoppedAt,omitempty"`
-	StopCategory string                      `json:"stopCategory,omitempty"`
-	Checkpoints  []PreRuntimeStageCheckpoint `json:"checkpoints"`
+	Format           string                                `json:"format"`
+	State            string                                `json:"state"`
+	PlanDigest       string                                `json:"planDigest,omitempty"`
+	StoppedAt        string                                `json:"stoppedAt,omitempty"`
+	StopCategory     string                                `json:"stopCategory,omitempty"`
+	MismatchEvidence *execution.SubmissionMismatchEvidence `json:"mismatchEvidence,omitempty"`
+	Checkpoints      []PreRuntimeStageCheckpoint           `json:"checkpoints"`
 }
 
 // PreRuntimeOrchestration composes only the already bounded Stage 1-7
@@ -167,6 +169,17 @@ func stopPreRuntimeOrchestration(receipt PreRuntimeOrchestrationReceipt, stageID
 func stopPreRuntimeOrchestrationWithCause(receipt PreRuntimeOrchestrationReceipt, stageID string, cause error) (PreRuntimeOrchestrationReceipt, error) {
 	receipt.State, receipt.StoppedAt = "STOPPED", stageID
 	receipt.StopCategory = redactedStopCategory(cause)
+	var evidenceSource interface {
+		RedactedMismatchEvidence() *execution.SubmissionMismatchEvidence
+	}
+	if errors.As(cause, &evidenceSource) {
+		receipt.MismatchEvidence = evidenceSource.RedactedMismatchEvidence()
+	}
+	if !validOrchestrationMismatchEvidenceForCategory(receipt.StopCategory, receipt.MismatchEvidence) {
+		receipt.StopCategory = "ORCHESTRATION_STOPPED"
+		receipt.MismatchEvidence = nil
+		return receipt, errors.New("pre-runtime orchestration received invalid mismatch evidence")
+	}
 	if cause == nil {
 		return receipt, errors.New("pre-runtime orchestration stopped at " + stageID)
 	}

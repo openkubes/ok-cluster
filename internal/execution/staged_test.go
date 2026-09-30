@@ -146,6 +146,37 @@ func TestStageMutationValidationAllowsOnlyProviderEnsureWithoutWrite(t *testing.
 	}
 }
 
+func TestStageMutationValidationBindsMismatchEvidenceToConvergenceExhaustion(t *testing.T) {
+	evidence := &SubmissionMismatchEvidence{
+		FirstCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH", LastCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH",
+		ObservationCount: 300, ExpectedDigest: stagedSHA("e"), LastObservedDigest: stagedSHA("f"), RuntimeIdentityStable: true,
+	}
+	valid := StageMutationResult{
+		Outcome: "STOPPED", MutationState: "NOT_ATTEMPTED", EvidenceDigest: stagedSHA("d"),
+		FailureCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02", MismatchEvidence: evidence,
+	}
+	if err := validateStageMutationResult("cluster-lifecycle", valid, errors.New("redacted stop")); err != nil {
+		t.Fatalf("bounded mismatch evidence was rejected: %v", err)
+	}
+	withoutEvidence := valid
+	withoutEvidence.MismatchEvidence = nil
+	if err := validateStageMutationResult("cluster-lifecycle", withoutEvidence, errors.New("redacted stop")); err == nil {
+		t.Fatal("convergence exhaustion without evidence was accepted")
+	}
+	wrongCategory := valid
+	wrongCategory.FailureCategory = "SUBMISSION_HTTP_FORBIDDEN"
+	if err := validateStageMutationResult("cluster-lifecycle", wrongCategory, errors.New("redacted stop")); err == nil {
+		t.Fatal("mismatch evidence attached to unrelated stop was accepted")
+	}
+	oversized := valid
+	oversizedEvidence := *evidence
+	oversizedEvidence.ObservationCount = 301
+	oversized.MismatchEvidence = &oversizedEvidence
+	if err := validateStageMutationResult("cluster-lifecycle", oversized, errors.New("redacted stop")); err == nil {
+		t.Fatal("unbounded mismatch evidence was accepted")
+	}
+}
+
 func TestStagedOperationRejectsWrongMutatorBeforeClaim(t *testing.T) {
 	plan := stagedPlan(t)
 	at := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)

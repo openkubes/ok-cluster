@@ -171,16 +171,20 @@ func TestPreRuntimeOrchestrationReportsRedactedClusterLifecycleStopCategory(t *t
 }
 
 func TestPreRuntimeOrchestrationReportsMismatchConvergenceExhaustion(t *testing.T) {
-	category := "SUBMISSION_OBJECT_CONTENT_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"
+	category := "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"
+	evidence := &execution.SubmissionMismatchEvidence{
+		FirstCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH", LastCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH",
+		ObservationCount: 300, ExpectedDigest: runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
+	}
 	orchestration := successfulPreRuntimeOrchestration(nil)
 	orchestration.RunClusterLifecycle = func(context.Context, execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
 		return execution.StagedOperationReceipt{
 			Format: execution.StagedReceiptFormat, State: "COMPLETED_STOPPED", PlanDigest: runnerStageSHA("a"),
-			StageID: "cluster-lifecycle", StageReceiptDigest: runnerStageSHA("2"), FailureCategory: category,
-		}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: category}
+			StageID: "cluster-lifecycle", StageReceiptDigest: runnerStageSHA("2"), FailureCategory: category, MismatchEvidence: evidence,
+		}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: category, MismatchEvidence: evidence}
 	}
 	receipt, err := orchestration.Run(context.Background())
-	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != category || len(receipt.Checkpoints) != 1 {
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != category || len(receipt.Checkpoints) != 1 || receipt.MismatchEvidence == nil || *receipt.MismatchEvidence != *evidence {
 		t.Fatalf("mismatch convergence exhaustion was not preserved: %#v err=%v", receipt, err)
 	}
 }
@@ -189,6 +193,8 @@ func TestSubmissionPhaseOrdinalCategoriesAreRedactedAndAccepted(t *testing.T) {
 	for _, category := range []string{
 		"SUBMISSION_OBJECT_TERMINATING_AT_02",
 		"SUBMISSION_OBJECT_CONTENT_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02",
+		"SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02",
+		"SUBMISSION_OBJECT_COMPARATOR_INCONSISTENT_AT_02",
 		"SUBMISSION_CREATE_RESPONSE_IDENTITY_MISMATCH_AT_02",
 		"SUBMISSION_CREATE_RESPONSE_CONTENT_MISMATCH_AT_08",
 	} {

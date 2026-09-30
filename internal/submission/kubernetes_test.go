@@ -73,6 +73,14 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_01" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
 			t.Fatalf("drift accepted: %#v %v", receipt, err)
 		}
+		evidence := receipt.MismatchEvidence
+		if evidence == nil || evidence.FirstCategory != "SUBMISSION_OBJECT_METADATA_MISMATCH" || evidence.LastCategory != evidence.FirstCategory || evidence.ObservationCount != api.gets-1 || evidence.ExpectedDigest != plan.Infrastructure.Objects[0].Digest || evidence.LastObservedDigest == "" || !evidence.RuntimeIdentityStable {
+			t.Fatalf("bounded mismatch evidence was not retained safely: %#v", evidence)
+		}
+		encoded, _ := json.Marshal(evidence)
+		if strings.Contains(string(encoded), "different") || strings.Contains(string(encoded), plan.Infrastructure.Objects[0].ObjectPath) {
+			t.Fatalf("private mismatch detail escaped: %s", encoded)
+		}
 	})
 
 	t.Run("terminating existing object", func(t *testing.T) {
@@ -354,7 +362,7 @@ func TestObservedObjectMismatchCategoriesAreRedactedAndPhaseSpecific(t *testing.
 		{name: "identity", observed: `{"apiVersion":"v2","kind":"ConfigMap","metadata":{"name":"bound","uid":"u","resourceVersion":"1"},"spec":{"mode":"bound"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_IDENTITY_MISMATCH"},
 		{name: "metadata", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"other","uid":"u","resourceVersion":"1"},"spec":{"mode":"bound"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_METADATA_MISMATCH"},
 		{name: "spec", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound","uid":"u","resourceVersion":"1"},"spec":{"mode":"other"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_SPEC_MISMATCH"},
-		{name: "content", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound","uid":"u","resourceVersion":"1"},"spec":{"mode":"bound"},"data":{"key":"other"}}`, want: "SUBMISSION_OBJECT_CONTENT_MISMATCH"},
+		{name: "content", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound","uid":"u","resourceVersion":"1"},"spec":{"mode":"bound"},"data":{"key":"other"}}`, want: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH"},
 		{name: "runtime identity", observed: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"bound"},"spec":{"mode":"bound"},"data":{"key":"bound"}}`, want: "SUBMISSION_OBJECT_RUNTIME_IDENTITY_INVALID"},
 	}
 	for _, test := range tests {
@@ -375,12 +383,45 @@ func TestObservedObjectMismatchExhaustionCategoriesAreRedactedAndPhaseSpecific(t
 		"SUBMISSION_OBJECT_METADATA_MISMATCH",
 		"SUBMISSION_OBJECT_SPEC_MISMATCH",
 		"SUBMISSION_OBJECT_CONTENT_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_STRING_DATA_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_RULES_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_SUBJECTS_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_TYPE_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_OTHER_MISMATCH",
 	} {
-		err := existingObjectMismatchConvergenceExhausted(newCategorizedSubmissionError(category, "private detail"))
+		err := existingObjectMismatchConvergenceExhausted(newCategorizedSubmissionError(category, "private detail"), nil)
 		var categorized interface{ RedactedStopCategory() string }
 		if !errors.As(err, &categorized) || categorized.RedactedStopCategory() != category+"_CONVERGENCE_EXHAUSTED" || strings.Contains(err.Error(), "private") {
 			t.Fatalf("exhaustion category was not redaction-safe: category=%q err=%v", category, err)
 		}
+	}
+}
+
+func TestObjectMismatchCategoryRejectsImpossibleEnvelopeOnlyContentMismatch(t *testing.T) {
+	expected := map[string]any{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "metadata": map[string]any{"name": "bound"}, "spec": map[string]any{"mode": "bound"}}
+	observed := map[string]any{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "metadata": map[string]any{"name": "bound"}, "spec": map[string]any{"mode": "bound"}}
+	if got := objectMismatchCategory(expected, observed); got != "SUBMISSION_OBJECT_COMPARATOR_INCONSISTENT" {
+		t.Fatalf("category=%q", got)
+	}
+}
+
+func TestObjectMismatchCategoryUsesTheActuallyMismatchedTopLevelScope(t *testing.T) {
+	expected := map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+		"metadata": map[string]any{"name": "bound"},
+		"data":     map[string]any{"stable": "value"},
+		"roleRef":  map[string]any{"kind": "Role", "name": "expected"},
+	}
+	observed := map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+		"metadata": map[string]any{"name": "bound"},
+		"data":     map[string]any{"stable": "value"},
+		"roleRef":  map[string]any{"kind": "Role", "name": "other"},
+	}
+	if got := objectMismatchCategory(expected, observed); got != "SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH" {
+		t.Fatalf("category followed a matching field instead of the mismatch: %s", got)
 	}
 }
 
