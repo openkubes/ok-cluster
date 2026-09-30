@@ -172,7 +172,8 @@ func TestPreRuntimeExecutionStopsWithoutReplayWhenReceiptPersistenceFails(t *tes
 	}
 	receipt, err := executor.Run(context.Background())
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" || len(receipt.Checkpoints) != 1 ||
-		!reflect.DeepEqual(*calls, []string{"provider-prerequisites"}) || persistCalls != 1 {
+		receipt.StopCategory != "PROVIDER_PREREQUISITES_RECEIPT_PERSISTENCE_STOPPED" ||
+		!reflect.DeepEqual(*calls, []string{"provider-prerequisites"}) || persistCalls != 1 || strings.Contains(err.Error(), "private") {
 		t.Fatalf("persistence stop replayed or lost durable stage identity: %#v calls=%v persist=%d err=%v", receipt, *calls, persistCalls, err)
 	}
 	if _, err := executor.ReceiptPrefix(); err == nil {

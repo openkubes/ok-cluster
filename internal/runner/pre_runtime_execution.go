@@ -223,7 +223,10 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 		if err != nil {
 			return run, err
 		}
-		return run, persist(ctx, invocation.store, StagedOperationReceiptReference(run))
+		if err := persist(ctx, invocation.store, StagedOperationReceiptReference(run)); err != nil {
+			return run, newFixedRedactedStop("PROVIDER_PREREQUISITES_RECEIPT_PERSISTENCE_STOPPED", err)
+		}
+		return run, nil
 	}
 	orchestration.RunClusterLifecycle = func(ctx context.Context, _ execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
 		source, err := resolve(ctx)
