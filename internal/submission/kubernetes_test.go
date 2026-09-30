@@ -70,7 +70,7 @@ func TestKubernetesSubmitFailsClosedForDriftConflictAndAuthority(t *testing.T) {
 		client := newSubmissionClient(t, "ok-infra", api.client())
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
 		var stopped *SubmissionError
-		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
+		if err == nil || !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_01" || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || api.posts != 0 {
 			t.Fatalf("drift accepted: %#v %v", receipt, err)
 		}
 	})
@@ -181,13 +181,13 @@ func TestKubernetesSubmitObservesExistingMismatchWithinBoundedConvergence(t *tes
 		object["metadata"].(map[string]any)["name"] = "different"
 		api.objects[objectPlan.ObjectPath] = object
 		api.beforeGet = func(count int, path string, api *fakeObjectAPI) {
-			if count == 4 {
+			if count == 3 {
 				delete(api.objects, path)
 			}
 		}
 		client := newSubmissionClientWithMismatchAttempts(t, "ok-infra", api.client(), 3)
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
-		if err != nil || receipt.Results[0].State != "CREATED" || api.gets != 4 || api.posts != 1 {
+		if err != nil || receipt.Results[0].State != "CREATED" || api.gets != 3 || api.posts != 1 {
 			t.Fatalf("bounded disappearance did not converge to one create: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
 		}
 	})
@@ -200,8 +200,25 @@ func TestKubernetesSubmitObservesExistingMismatchWithinBoundedConvergence(t *tes
 		client := newSubmissionClientWithMismatchAttempts(t, "ok-infra", api.client(), 3)
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
 		var stopped *SubmissionError
-		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 4 || api.posts != 0 {
+		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 4 || api.posts != 0 {
 			t.Fatalf("bounded stable drift did not stop: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
+		}
+	})
+
+	t.Run("final no-wait observation can reach exact absence", func(t *testing.T) {
+		api := newFakeObjectAPI(t)
+		object := apiObject(t, objectPlan.Raw)
+		object["metadata"].(map[string]any)["name"] = "different"
+		api.objects[objectPlan.ObjectPath] = object
+		api.beforeGet = func(count int, path string, api *fakeObjectAPI) {
+			if count == 4 {
+				delete(api.objects, path)
+			}
+		}
+		client := newSubmissionClientWithMismatchAttempts(t, "ok-infra", api.client(), 3)
+		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
+		if err != nil || receipt.Results[0].State != "CREATED" || api.gets != 4 || api.posts != 1 {
+			t.Fatalf("final no-wait observation did not reach one create: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
 		}
 	})
 
@@ -212,7 +229,7 @@ func TestKubernetesSubmitObservesExistingMismatchWithinBoundedConvergence(t *tes
 		api.objects[objectPlan.ObjectPath] = object
 		receipt, err := newSubmissionClient(t, "ok-infra", api.client()).Submit(context.Background(), plan.Infrastructure)
 		var stopped *SubmissionError
-		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 2 || api.posts != 0 {
+		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 2 || api.posts != 0 {
 			t.Fatalf("stable drift did not stop: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
 		}
 	})
@@ -251,6 +268,23 @@ func TestKubernetesSubmitObservesExistingMismatchWithinBoundedConvergence(t *tes
 		}
 	})
 
+	t.Run("HTTP rejection during confirmation remains terminal", func(t *testing.T) {
+		api := newFakeObjectAPI(t)
+		object := apiObject(t, objectPlan.Raw)
+		object["metadata"].(map[string]any)["name"] = "different"
+		api.objects[objectPlan.ObjectPath] = object
+		api.beforeGet = func(count int, _ string, api *fakeObjectAPI) {
+			if count == 2 {
+				api.failStatus = http.StatusForbidden
+			}
+		}
+		receipt, err := newSubmissionClientWithMismatchAttempts(t, "ok-infra", api.client(), 2).Submit(context.Background(), plan.Infrastructure)
+		var stopped *SubmissionError
+		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_HTTP_FORBIDDEN" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 2 || api.posts != 0 {
+			t.Fatalf("HTTP rejection during confirmation was retried or accepted: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
+		}
+	})
+
 	t.Run("cancelled confirmation remains terminal", func(t *testing.T) {
 		api := newFakeObjectAPI(t)
 		object := apiObject(t, objectPlan.Raw)
@@ -285,7 +319,7 @@ func TestKubernetesSubmitObservesExistingMismatchWithinBoundedConvergence(t *tes
 		}
 		receipt, err := client.Submit(context.Background(), plan.Infrastructure)
 		var stopped *SubmissionError
-		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 1 || api.posts != 0 {
+		if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_01" || receipt.MutationState != "NOT_ATTEMPTED" || api.gets != 1 || api.posts != 0 {
 			t.Fatalf("bounded deadline exhaustion lost the original mismatch: receipt=%#v gets=%d posts=%d err=%v", receipt, api.gets, api.posts, err)
 		}
 	})
@@ -304,7 +338,7 @@ func TestSubmissionObjectOrdinalIsBoundWithoutIdentityDisclosure(t *testing.T) {
 	client := newSubmissionClient(t, "ok-infra", api.client())
 	_, err = client.Submit(context.Background(), plan.Infrastructure)
 	var stopped *SubmissionError
-	if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_AT_01" || strings.Contains(stopped.RedactedStopCategory(), "private") || strings.Contains(err.Error(), "private") {
+	if !errors.As(err, &stopped) || stopped.RedactedStopCategory() != "SUBMISSION_OBJECT_METADATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_01" || strings.Contains(stopped.RedactedStopCategory(), "private") || strings.Contains(err.Error(), "private") {
 		t.Fatalf("ordinal category was not redaction-safe: %v", err)
 	}
 }
@@ -331,6 +365,22 @@ func TestObservedObjectMismatchCategoriesAreRedactedAndPhaseSpecific(t *testing.
 				t.Fatalf("category=%v err=%v, want %s", categorized, err, test.want)
 			}
 		})
+	}
+}
+
+func TestObservedObjectMismatchExhaustionCategoriesAreRedactedAndPhaseSpecific(t *testing.T) {
+	for _, category := range []string{
+		"SUBMISSION_OBJECT_MISMATCH",
+		"SUBMISSION_OBJECT_IDENTITY_MISMATCH",
+		"SUBMISSION_OBJECT_METADATA_MISMATCH",
+		"SUBMISSION_OBJECT_SPEC_MISMATCH",
+		"SUBMISSION_OBJECT_CONTENT_MISMATCH",
+	} {
+		err := existingObjectMismatchConvergenceExhausted(newCategorizedSubmissionError(category, "private detail"))
+		var categorized interface{ RedactedStopCategory() string }
+		if !errors.As(err, &categorized) || categorized.RedactedStopCategory() != category+"_CONVERGENCE_EXHAUSTED" || strings.Contains(err.Error(), "private") {
+			t.Fatalf("exhaustion category was not redaction-safe: category=%q err=%v", category, err)
+		}
 	}
 }
 
