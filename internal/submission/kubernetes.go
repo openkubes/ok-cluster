@@ -18,28 +18,34 @@ import (
 )
 
 const (
-	maximumAPIResponseBytes = 4 * 1024 * 1024
-	PlaneReceiptFormat      = "ok147-bounded-submission-receipt/v2"
+	maximumAPIResponseBytes          = 4 * 1024 * 1024
+	objectMismatchConfirmationDelay  = 2 * time.Second
+	maximumMismatchConfirmationDelay = 5 * time.Second
+	PlaneReceiptFormat               = "ok147-bounded-submission-receipt/v2"
 )
 
 // KubernetesClientConfig binds one client to one authority plane. Credentials
 // are supplied by an execution-environment adapter and are never retained in a
 // receipt.
 type KubernetesClientConfig struct {
-	Endpoint          string
-	BearerToken       string
-	ClientCertificate bool
-	AuthorityIdentity string
-	Client            *http.Client
+	Endpoint                  string
+	BearerToken               string
+	ClientCertificate         bool
+	AuthorityIdentity         string
+	Client                    *http.Client
+	MismatchConfirmationDelay time.Duration
+	Wait                      func(context.Context, time.Duration) error
 }
 
 // KubernetesClient performs only exact GET and collection POST operations.
 type KubernetesClient struct {
-	endpoint          *url.URL
-	token             string
-	clientCertificate bool
-	authority         string
-	client            *http.Client
+	endpoint                  *url.URL
+	token                     string
+	clientCertificate         bool
+	authority                 string
+	client                    *http.Client
+	mismatchConfirmationDelay time.Duration
+	wait                      func(context.Context, time.Duration) error
 }
 
 // ObjectResult records only redacted, immutable submission identity.
@@ -117,6 +123,17 @@ func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, erro
 	if config.Client == nil {
 		return nil, errors.New("submission requires an explicitly configured HTTP client")
 	}
+	if config.MismatchConfirmationDelay < 0 || config.MismatchConfirmationDelay > maximumMismatchConfirmationDelay {
+		return nil, errors.New("submission mismatch confirmation delay is invalid")
+	}
+	confirmationDelay := config.MismatchConfirmationDelay
+	if confirmationDelay == 0 {
+		confirmationDelay = objectMismatchConfirmationDelay
+	}
+	wait := config.Wait
+	if wait == nil {
+		wait = waitForSubmissionConfirmation
+	}
 	client := *config.Client
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 	if client.Timeout == 0 {
@@ -126,7 +143,19 @@ func NewKubernetesClient(config KubernetesClientConfig) (*KubernetesClient, erro
 	return &KubernetesClient{
 		endpoint: endpoint, token: config.BearerToken, clientCertificate: config.ClientCertificate,
 		authority: config.AuthorityIdentity, client: &client,
+		mismatchConfirmationDelay: confirmationDelay, wait: wait,
 	}, nil
+}
+
+func waitForSubmissionConfirmation(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Submit verifies existing objects or creates missing objects in projection
@@ -199,12 +228,11 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 		}
 		uid, err := verifyObservedObject(response, object)
 		if err != nil {
-			category := "SUBMISSION_OBJECT_MISMATCH"
-			var categorized interface{ RedactedStopCategory() string }
-			if errors.As(err, &categorized) {
-				category = categorized.RedactedStopCategory()
+			state, confirmedUID, continueCreate, confirmErr := client.confirmObservedMismatch(ctx, object, response, err)
+			if confirmErr != nil || !continueCreate {
+				return state, confirmedUID, false, confirmErr
 			}
-			return "", "", false, newCategorizedSubmissionError(category, "existing Kubernetes object differs from projection")
+			break
 		}
 		return "UNCHANGED", uid, false, nil
 	case http.StatusNotFound:
@@ -233,6 +261,64 @@ func (client *KubernetesClient) submitObject(ctx context.Context, object Object)
 		return "", "", true, newCategorizedSubmissionError(category, "created Kubernetes object response differs from projection")
 	}
 	return "CREATED", uid, true, nil
+}
+
+// confirmObservedMismatch performs one in-process confirmation below the
+// single stage receipt. It is not a stage retry. Stable drift and identity
+// turnover remain terminal; only confirmed disappearance reaches the existing
+// one-create path.
+func (client *KubernetesClient) confirmObservedMismatch(ctx context.Context, object Object, first []byte, firstErr error) (string, string, bool, error) {
+	firstUID, firstResourceVersion := observedRuntimeIdentity(first)
+	if firstUID == "" || firstResourceVersion == "" {
+		return "", "", false, existingObjectMismatch(firstErr)
+	}
+	if err := client.wait(ctx, client.mismatchConfirmationDelay); err != nil {
+		return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_RESPONSE_INVALID", "existing Kubernetes object confirmation was interrupted")
+	}
+	response, status, err := client.request(ctx, http.MethodGet, object.ObjectPath, nil)
+	if err != nil {
+		return "", "", false, err
+	}
+	switch status {
+	case http.StatusNotFound:
+		return "", "", true, nil
+	case http.StatusOK:
+		if objectIsTerminating(response) {
+			return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_TERMINATING", "existing Kubernetes object is terminating")
+		}
+		uid, verifyErr := verifyObservedObject(response, object)
+		if verifyErr == nil {
+			if uid != firstUID {
+				return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_RUNTIME_IDENTITY_INVALID", "existing Kubernetes object identity changed during confirmation")
+			}
+			return "UNCHANGED", uid, false, nil
+		}
+		confirmedUID, confirmedResourceVersion := observedRuntimeIdentity(response)
+		if confirmedUID == "" || confirmedResourceVersion == "" || confirmedUID != firstUID {
+			return "", "", false, newCategorizedSubmissionError("SUBMISSION_OBJECT_RUNTIME_IDENTITY_INVALID", "existing Kubernetes object identity changed during confirmation")
+		}
+		return "", "", false, existingObjectMismatch(verifyErr)
+	default:
+		return "", "", false, apiStatusError(http.MethodGet, status, response)
+	}
+}
+
+func existingObjectMismatch(err error) error {
+	category := "SUBMISSION_OBJECT_MISMATCH"
+	var categorized interface{ RedactedStopCategory() string }
+	if errors.As(err, &categorized) {
+		category = categorized.RedactedStopCategory()
+	}
+	return newCategorizedSubmissionError(category, "existing Kubernetes object differs from projection")
+}
+
+func observedRuntimeIdentity(raw []byte) (string, string) {
+	object, err := decodeJSONObject(raw)
+	if err != nil {
+		return "", ""
+	}
+	metadata, _ := object["metadata"].(map[string]any)
+	return text(metadata["uid"]), text(metadata["resourceVersion"])
 }
 
 func objectIsTerminating(raw []byte) bool {
