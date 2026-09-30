@@ -273,6 +273,30 @@ func TestFullRunOrchestrationPreservesCompletedPrefixCheckpointWhenBridgeStops(t
 	}
 }
 
+func TestFullRunOrchestrationPropagatesProviderReceiptPersistenceStop(t *testing.T) {
+	prefix := &fakePreRuntimeContinuation{
+		receipt: PreRuntimeOrchestrationReceipt{
+			Format: PreRuntimeOrchestrationReceiptFormat, State: "STOPPED", PlanDigest: runnerStageSHA("a"),
+			StoppedAt: "provider-prerequisites", StopCategory: "PROVIDER_PREREQUISITES_RECEIPT_PERSISTENCE_STOPPED",
+			Checkpoints: []PreRuntimeStageCheckpoint{{StageID: "provider-prerequisites", State: "COMPLETED_SUCCEEDED", StageReceiptDigest: runnerStageSHA("1")}},
+		},
+		err: newFixedRedactedStop("PROVIDER_PREREQUISITES_RECEIPT_PERSISTENCE_STOPPED", errors.New("private persistence detail")),
+	}
+	orchestration := &FullRunOrchestration{
+		PreRuntime: prefix,
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			t.Fatal("stopped prefix reached continuation")
+			return nil, nil
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "provider-prerequisites" ||
+		receipt.StopCategory != "PROVIDER_PREREQUISITES_RECEIPT_PERSISTENCE_STOPPED" || len(receipt.Checkpoints) != 1 ||
+		strings.Contains(err.Error(), "private") {
+		t.Fatalf("provider receipt persistence category was not propagated safely: %#v err=%v", receipt, err)
+	}
+}
+
 func TestFullRunOrchestrationRejectsForeignContinuationBeforeRun(t *testing.T) {
 	for name, mutate := range map[string]func(*PostRuntimeContinuationBinding){
 		"foreign plan": func(binding *PostRuntimeContinuationBinding) { binding.PlanDigest = runnerStageSHA("f") },
