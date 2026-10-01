@@ -74,13 +74,14 @@ type PreRuntimeExecutionConfig struct {
 }
 
 type PreRuntimeExecutionReceipt struct {
-	Format                 string                              `json:"format"`
-	State                  string                              `json:"state"`
-	PlanDigest             string                              `json:"planDigest,omitempty"`
-	StoppedAt              string                              `json:"stoppedAt,omitempty"`
-	StopCategory           string                              `json:"stopCategory,omitempty"`
-	Checkpoints            []PreRuntimeStageCheckpoint         `json:"checkpoints"`
-	ResolvedAuthorizations []ResolvedStageAuthorizationReceipt `json:"resolvedAuthorizations"`
+	Format                 string                                `json:"format"`
+	State                  string                                `json:"state"`
+	PlanDigest             string                                `json:"planDigest,omitempty"`
+	StoppedAt              string                                `json:"stoppedAt,omitempty"`
+	StopCategory           string                                `json:"stopCategory,omitempty"`
+	MismatchEvidence       *execution.SubmissionMismatchEvidence `json:"mismatchEvidence,omitempty"`
+	Checkpoints            []PreRuntimeStageCheckpoint           `json:"checkpoints"`
+	ResolvedAuthorizations []ResolvedStageAuthorizationReceipt   `json:"resolvedAuthorizations"`
 }
 
 type preRuntimeStagedInvocation struct {
@@ -331,6 +332,7 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 	result := PreRuntimeExecutionReceipt{
 		Format: PreRuntimeExecutionReceiptFormat, State: orchestrationReceipt.State,
 		PlanDigest: orchestrationReceipt.PlanDigest, StoppedAt: orchestrationReceipt.StoppedAt, StopCategory: orchestrationReceipt.StopCategory,
+		MismatchEvidence:       cloneOrchestrationMismatchEvidence(orchestrationReceipt.MismatchEvidence),
 		Checkpoints:            append([]PreRuntimeStageCheckpoint(nil), orchestrationReceipt.Checkpoints...),
 		ResolvedAuthorizations: append([]ResolvedStageAuthorizationReceipt(nil), authorizations...),
 	}
