@@ -159,6 +159,48 @@ func TestPreRuntimeExecutionStopsAfterDurableReceiptWhenNextGrantIsUnavailable(t
 	}
 }
 
+func TestPreRuntimeExecutionPreservesClusterLifecycleMismatchEvidence(t *testing.T) {
+	config, factories, calls, _ := preRuntimeExecutionFixture(t)
+	category := "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"
+	evidence := &execution.SubmissionMismatchEvidence{
+		FirstCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH", LastCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH",
+		ObservationCount: 300, ExpectedDigest: runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
+	}
+	originalSubmission := factories.submission
+	factories.submission = func(resume StageResumeConfig, stageID string, source StageAuthorizationSource, config PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
+		if stageID != "cluster-lifecycle" {
+			return originalSubmission(resume, stageID, source, config)
+		}
+		return preRuntimeStagedInvocation{store: &ledger.Ledger{}, run: func(context.Context) (execution.StagedOperationReceipt, error) {
+			*calls = append(*calls, stageID)
+			return execution.StagedOperationReceipt{
+				Format: execution.StagedReceiptFormat, State: "COMPLETED_STOPPED", PlanDigest: runnerStageSHA("a"),
+				StageID: stageID, StageReceiptDigest: runnerStageSHA("2"), FailureCategory: category, MismatchEvidence: evidence,
+			}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: category, MismatchEvidence: evidence}
+		}}, nil
+	}
+	executor, err := openPreRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != category ||
+		len(receipt.Checkpoints) != 1 || receipt.MismatchEvidence == nil || *receipt.MismatchEvidence != *evidence ||
+		!reflect.DeepEqual(*calls, []string{"provider-prerequisites", "cluster-lifecycle"}) {
+		t.Fatalf("pre-runtime execution lost lifecycle mismatch evidence: receipt=%#v calls=%v err=%v", receipt, *calls, err)
+	}
+	receipt.MismatchEvidence.FirstCategory = "SUBMISSION_OBJECT_MISMATCH"
+	if evidence.FirstCategory != "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH" {
+		t.Fatal("pre-runtime execution did not defensively copy mismatch evidence")
+	}
+	encoded := string(mustJSON(t, receipt))
+	for _, forbidden := range []string{"private", "endpoint", "kubeconfig", "uid"} {
+		if strings.Contains(strings.ToLower(encoded), forbidden) {
+			t.Fatalf("pre-runtime stop receipt exposed forbidden marker %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func TestPreRuntimeExecutionStopsWithoutReplayWhenReceiptPersistenceFails(t *testing.T) {
 	config, factories, calls, _ := preRuntimeExecutionFixture(t)
 	persistCalls := 0

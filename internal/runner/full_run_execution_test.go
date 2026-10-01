@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openkubes/ok-cluster/internal/execution"
 )
 
 type fakeConcretePreRuntimeExecution struct {
@@ -346,6 +348,70 @@ func TestFullRunExecutionDoesNotOpenSuffixAfterStoppedPrefix(t *testing.T) {
 	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "enablement" || len(receipt.Checkpoints) != 3 ||
 		preRuntime.prefixCalls != 0 || postCalls != 0 {
 		t.Fatalf("stopped concrete prefix opened the suffix: %#v prefix=%d post=%d err=%v", receipt, preRuntime.prefixCalls, postCalls, err)
+	}
+}
+
+func TestFullRunExecutionPreservesConcreteClusterLifecycleMismatchEvidence(t *testing.T) {
+	category := "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"
+	evidence := &execution.SubmissionMismatchEvidence{
+		FirstCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH", LastCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH",
+		ObservationCount: 300, ExpectedDigest: runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
+	}
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	preRuntime.receipt.State = "STOPPED"
+	preRuntime.receipt.StoppedAt = "cluster-lifecycle"
+	preRuntime.receipt.StopCategory = category
+	preRuntime.receipt.MismatchEvidence = evidence
+	preRuntime.receipt.Checkpoints = preRuntime.receipt.Checkpoints[:1]
+	preRuntime.runErr = &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: category, MismatchEvidence: evidence}
+	postCalls := 0
+	fullRun, err := openFullRunExecution(testFullRunExecutionConfig(), fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := fullRun.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != category ||
+		len(receipt.Checkpoints) != 1 || receipt.MismatchEvidence == nil || *receipt.MismatchEvidence != *evidence || postCalls != 0 {
+		t.Fatalf("concrete lifecycle stop lost bounded evidence: receipt=%#v post=%d err=%v", receipt, postCalls, err)
+	}
+	receipt.MismatchEvidence.FirstCategory = "SUBMISSION_OBJECT_MISMATCH"
+	if preRuntime.receipt.MismatchEvidence.FirstCategory != "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH" {
+		t.Fatal("concrete adapter did not defensively copy mismatch evidence")
+	}
+	encoded := string(mustJSON(t, receipt))
+	for _, forbidden := range []string{"private", "endpoint", "kubeconfig", "uid"} {
+		if strings.Contains(strings.ToLower(encoded), forbidden) {
+			t.Fatalf("full-run stop receipt exposed forbidden marker %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestFullRunExecutionRejectsMismatchEvidenceOnSuccessfulConcretePrefix(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	preRuntime.receipt.MismatchEvidence = &execution.SubmissionMismatchEvidence{
+		FirstCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH", LastCategory: "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH",
+		ObservationCount: 1, ExpectedDigest: runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
+	}
+	postCalls := 0
+	fullRun, err := openFullRunExecution(testFullRunExecutionConfig(), fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+			postCalls++
+			return successfulFakePostRuntimeContinuation(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := fullRun.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.MismatchEvidence != nil || len(receipt.Checkpoints) != 0 || postCalls != 0 {
+		t.Fatalf("successful concrete prefix carried mismatch evidence: receipt=%#v post=%d err=%v", receipt, postCalls, err)
 	}
 }
 
