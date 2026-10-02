@@ -7,6 +7,7 @@ import argparse
 import ipaddress
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -38,6 +39,13 @@ OK_LINUX_DEFAULT_TALOS_VERSION = "v1.9.6"
 OK_LINUX_PATH = Path(
     os.environ.get("OK_LINUX_PATH", SCRIPT_DIR.parent / "ok-linux")
 ).resolve()
+
+WORKLOAD_USER_NAMESPACES_DEFAULT_MAX = 11255
+WORKLOAD_USER_NAMESPACES_KEYS = {
+    "enabled",
+    "maxUserNamespaces",
+    "provisionerBasePath",
+}
 
 def load_yaml(path: Path) -> dict:
     with open(path) as f:
@@ -213,9 +221,134 @@ def render_infra_cluster_secret_ref(cfg: dict) -> str:
         f"    namespace: {namespace}\n"
     )
 
+
+def validate_workload_user_namespaces(cfg: dict) -> dict | None:
+    """Validate and normalize the Talos/KubeVirt user-namespace opt-in."""
+    if "workloadUserNamespaces" not in cfg:
+        return None
+    capability = cfg["workloadUserNamespaces"]
+    if not isinstance(capability, dict):
+        raise SystemExit("ERROR: workloadUserNamespaces must be a mapping")
+    invalid_keys = [key for key in capability if not isinstance(key, str)]
+    if invalid_keys:
+        raise SystemExit(
+            "ERROR: workloadUserNamespaces keys must be strings; invalid: "
+            + ", ".join(sorted(repr(key) for key in invalid_keys))
+        )
+    unknown = set(capability) - WORKLOAD_USER_NAMESPACES_KEYS
+    if unknown:
+        raise SystemExit(
+            "ERROR: workloadUserNamespaces allows only enabled, "
+            "maxUserNamespaces, and provisionerBasePath; unknown: "
+            + ", ".join(sorted(unknown))
+        )
+    if "enabled" not in capability or not isinstance(capability["enabled"], bool):
+        raise SystemExit("ERROR: workloadUserNamespaces.enabled must be a boolean")
+    if cfg.get("type") != "talos" or cfg.get("provider", "kubevirt") != "kubevirt":
+        raise SystemExit(
+            "ERROR: workloadUserNamespaces is supported only for Talos on KubeVirt"
+        )
+
+    maximum = capability.get(
+        "maxUserNamespaces", WORKLOAD_USER_NAMESPACES_DEFAULT_MAX
+    )
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0:
+        raise SystemExit(
+            "ERROR: workloadUserNamespaces.maxUserNamespaces must be a positive integer"
+        )
+
+    has_base_path = "provisionerBasePath" in capability
+    base_path = capability.get("provisionerBasePath")
+    if capability["enabled"] and not has_base_path:
+        raise SystemExit(
+            "ERROR: workloadUserNamespaces.provisionerBasePath is required when enabled"
+        )
+    if has_base_path:
+        if not isinstance(base_path, str) or not base_path:
+            raise SystemExit(
+                "ERROR: workloadUserNamespaces.provisionerBasePath must be a path"
+            )
+        if any(ord(character) < 32 or ord(character) == 127 for character in base_path):
+            raise SystemExit(
+                "ERROR: workloadUserNamespaces.provisionerBasePath must not contain "
+                "control characters"
+            )
+        normalized = posixpath.normpath(base_path)
+        if (
+            not base_path.startswith("/")
+            or normalized != base_path
+            or normalized == "/var"
+            or not normalized.startswith("/var/")
+        ):
+            raise SystemExit(
+                "ERROR: workloadUserNamespaces.provisionerBasePath must be a "
+                "normalized absolute child of /var"
+            )
+
+    normalized_capability = dict(capability)
+    normalized_capability["maxUserNamespaces"] = maximum
+    return normalized_capability
+
+
+def render_workload_user_namespace_patches(cfg: dict) -> str:
+    """Render worker-only Talos patches; disabled/absent is byte-empty."""
+    capability = validate_workload_user_namespaces(cfg)
+    if capability is None or not capability["enabled"]:
+        return ""
+    maximum = capability["maxUserNamespaces"]
+    base_path = capability["provisionerBasePath"]
+    return (
+        "\n      - op: add\n"
+        "        path: /machine/sysctls\n"
+        "        value:\n"
+        f'          user.max_user_namespaces: "{maximum}"\n'
+        "      - op: add\n"
+        "        path: /machine/kubelet/extraMounts\n"
+        "        value:\n"
+        f"        - destination: {json.dumps(base_path)}\n"
+        "          type: bind\n"
+        f"          source: {json.dumps(base_path)}\n"
+        "          options:\n"
+        "          - bind\n"
+        "          - rshared\n"
+        "          - rw"
+    )
+
+
+def workload_user_namespaces_from_env(cluster_type: str, provider: str) -> dict | None:
+    """Validate Make scaffold inputs and return the block to persist when enabled."""
+    enabled_text = os.environ.get("WORKLOAD_USER_NAMESPACES", "false")
+    if enabled_text not in {"true", "false"}:
+        raise SystemExit("ERROR: WORKLOAD_USER_NAMESPACES must be exactly true or false")
+    maximum_text = os.environ.get(
+        "MAX_USER_NAMESPACES", str(WORKLOAD_USER_NAMESPACES_DEFAULT_MAX)
+    )
+    if not maximum_text.isdecimal():
+        raise SystemExit("ERROR: MAX_USER_NAMESPACES must be a positive integer")
+    capability = {
+        "enabled": enabled_text == "true",
+        "maxUserNamespaces": int(maximum_text),
+    }
+    base_path = os.environ.get("PROVISIONER_BASE_PATH", "")
+    if base_path:
+        capability["provisionerBasePath"] = base_path
+    validation_type = cluster_type if capability["enabled"] else "talos"
+    validation_provider = provider if capability["enabled"] else "kubevirt"
+    validated = validate_workload_user_namespaces(
+        {
+            "type": validation_type,
+            "provider": validation_provider,
+            "workloadUserNamespaces": capability,
+        }
+    )
+    return validated if validated["enabled"] else None
+
 def resolve_config(cfg: dict, cluster_name: str) -> dict:
     cfg = yaml.safe_load(yaml.dump(cfg))
     validate_registry_trust(cfg)
+    workload_user_namespaces = validate_workload_user_namespaces(cfg)
+    if workload_user_namespaces is not None:
+        cfg["workloadUserNamespaces"] = workload_user_namespaces
     clusters = discover_clusters()
     others = [c for c in clusters if c["name"] != cluster_name]
     net = cfg.setdefault("network", {})
@@ -298,6 +431,9 @@ def build_context(cfg: dict) -> dict:
         "CLUSTER_TYPE":       cfg.get("type", "ubuntu"),
         "INFRA_PROVIDER":     cfg.get("provider", "kubevirt"),
         "INFRA_CLUSTER_SECRET_REF": render_infra_cluster_secret_ref(cfg),
+        "WORKLOAD_USER_NAMESPACE_PATCHES": (
+            render_workload_user_namespace_patches(cfg)
+        ),
         "OS_IMAGE_NAME":      _osp.get("image", "talos-openstack-amd64"),
         "OS_CP_FLAVOR":       _osp.get("controlPlaneFlavor", "m1.large"),
         "OS_NODE_FLAVOR":     _osp.get("nodeFlavor", "m1.large"),
@@ -429,6 +565,12 @@ def cmd_render(args):
         print(f"ERROR: {cfg_path} not found.", file=sys.stderr)
         sys.exit(1)
     raw = load_yaml(cfg_path)
+    if os.environ.get("OK_CLUSTER_SCAFFOLD_WORKLOAD_USER_NAMESPACES") == "1":
+        capability = workload_user_namespaces_from_env(
+            raw.get("type", "ubuntu"), raw.get("provider", "kubevirt")
+        )
+        if capability is not None:
+            raw["workloadUserNamespaces"] = capability
     cfg = resolve_config(raw, cluster_name)
     render_cluster(cluster_name, cluster_dir, cfg)
     print(f"\nCluster '{cluster_name}' rendered → {cluster_dir.relative_to(SCRIPT_DIR)}/")
@@ -460,12 +602,20 @@ def cmd_show_ip(args):
     start_ip = args.start_ip or os.environ.get("START_IP")
     print(next_free_ip(used, start_ip=start_ip))
 
+
+def cmd_validate_workload_user_namespaces_env(args):
+    workload_user_namespaces_from_env(args.cluster_type, args.provider)
+
 def main():
     p = argparse.ArgumentParser(description="OpenKubes cluster manifest renderer")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("render"); r.add_argument("--cluster", required=True); r.set_defaults(func=cmd_render)
     l = sub.add_parser("list"); l.set_defaults(func=cmd_list)
     ip = sub.add_parser("next-ip"); ip.add_argument("--cluster", default="__new__"); ip.add_argument("--start-ip", default=None); ip.set_defaults(func=cmd_show_ip)
+    wuns = sub.add_parser("validate-workload-user-namespaces-env")
+    wuns.add_argument("--type", dest="cluster_type", required=True)
+    wuns.add_argument("--provider", required=True)
+    wuns.set_defaults(func=cmd_validate_workload_user_namespaces_env)
     args = p.parse_args()
     args.func(args)
 

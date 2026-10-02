@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test contract-executor-test contract-executor-dry-run ok147-runner-image-plan ok147-runner-image-build
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test contract-executor-test contract-executor-dry-run ok147-runner-image-plan ok147-runner-image-build
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -37,6 +37,13 @@ REGISTRY_TALOSCONFIG_SECRET_KEY ?= talosconfig
 REGISTRY_CA_KUBECONFIG ?= $(HOME)/.kube/ok-shared.yaml
 REGISTRY_ADDRESS ?=
 REGISTRY_TRUST_APPLY ?= no
+WORKLOAD_USER_NAMESPACES ?= false
+PROVISIONER_BASE_PATH ?=
+MAX_USER_NAMESPACES ?= 11255
+# Preserve literal option values through Make and the shell (notably paths).
+override export WORKLOAD_USER_NAMESPACES := $(value WORKLOAD_USER_NAMESPACES)
+override export PROVISIONER_BASE_PATH := $(value PROVISIONER_BASE_PATH)
+override export MAX_USER_NAMESPACES := $(value MAX_USER_NAMESPACES)
 
 SCRIPT_DIR    := $(shell pwd)
 CLUSTERS_DIR  := $(SCRIPT_DIR)
@@ -158,6 +165,8 @@ require-type:
 
 # ── scaffold + render ─────────────────────────────────────────────────────────
 new: require-cluster require-type
+	@python3 $(SCRIPT_DIR)/render.py validate-workload-user-namespaces-env \
+		--type "$(TYPE)" --provider "$(PROVIDER)"
 	@CLUSTER=$(CLUSTER) TYPE=$(TYPE) HA=$(HA) WORKERS=$(WORKERS) \
 	 K8S_VERSION=$(K8S_VERSION) TALOS_VERSION=$(TALOS_VERSION) \
 	 PROVIDER=$(PROVIDER) ARCHITECTURE=$(ARCHITECTURE) \
@@ -172,11 +181,15 @@ new: require-cluster require-type
 	 REGISTRY_TALOSCONFIG_SECRET_NAMESPACE=$(REGISTRY_TALOSCONFIG_SECRET_NAMESPACE) \
 	 REGISTRY_TALOSCONFIG_SECRET_NAME=$(REGISTRY_TALOSCONFIG_SECRET_NAME) \
 	 REGISTRY_TALOSCONFIG_SECRET_KEY=$(REGISTRY_TALOSCONFIG_SECRET_KEY) \
+	 OK_CLUSTER_SCAFFOLD_WORKLOAD_USER_NAMESPACES=1 \
 	 OK_LINUX_PATH=$(OK_LINUX_PATH) \
 	 bash $(SCRIPT_DIR)/new-cluster.sh
 
 render: require-cluster
 	@START_IP=$(START_IP) python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
+
+ok178-workload-user-namespaces-test: ## OK-178: offline Talos worker user-namespace render contract
+	@python3 $(SCRIPT_DIR)/tests/ok178_workload_user_namespaces_test.py
 
 prepare-cilium-chart: ## Download/verify pinned Cilium 1.19.6 into .tools
 	@python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
@@ -1088,6 +1101,7 @@ help:
 	@echo "  make bootstrap CLUSTER=ok-ai   # apply + annotate PVCs + Cilium CNI"
 	@echo "  make kubeconfig CLUSTER=ok-ai  # once nodes Running"
 	@echo "  make new CLUSTER=ok-ai TYPE=talos REGISTRY_TRUST=true # opt in to registry.ok-shared.internal trust"
+	@echo "  make new CLUSTER=ok-ai TYPE=talos WORKLOAD_USER_NAMESPACES=true PROVISIONER_BASE_PATH=/var/openebs/ok176-c3 # worker user namespaces"
 	@echo ""
 	@echo "── Constrained Flatcar Workflow (ADR-009) ───────────────────────────"
 	@echo "  make prepare-cilium-chart"
@@ -1116,6 +1130,7 @@ help:
 	@echo "  make talos-registry-trust-dry-run CLUSTER=ok-shared # Arash: API no-reboot dry-run on all nodes"
 	@echo "  make talos-registry-trust-apply CLUSTER=ok-shared REGISTRY_TRUST_APPLY=yes # Arash: apply after dry-run"
 	@echo "  make ok138-registry-trust-test # offline structural + Talos v1.9.5 validation"
+	@echo "  make ok178-workload-user-namespaces-test # offline worker user-namespace render contract"
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"
 	@echo "  make annotate-pvcs CLUSTER=ok-ai  # annotate PVCs manually"
