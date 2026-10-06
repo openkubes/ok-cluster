@@ -16,6 +16,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 func TestLoadSubmissionStageBundleSelectsBoundProjectionStage(t *testing.T) {
@@ -106,9 +107,9 @@ func TestClusterLifecycleBundleRequiresBoundProviderAccessCredential(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(boundPlan.Management.Objects) != 3 || boundPlan.Management.Objects[0].Identity.Kind != "Namespace" ||
+	if len(boundPlan.Management.Objects) != 4 || boundPlan.Management.Objects[0].Identity.Kind != "Namespace" ||
 		boundPlan.Management.Objects[1].Identity.Kind != "Secret" || boundPlan.Management.Objects[2].Identity.Kind != "Cluster" ||
-		len(bundle.projection.Management.Objects) != 2 {
+		boundPlan.Management.Objects[3].Identity.Kind != "KubevirtCluster" || len(bundle.projection.Management.Objects) != 3 {
 		t.Fatalf("provider Secret was not inserted after its Namespace without mutating the verified projection: %#v", boundPlan.Management.Objects)
 	}
 	opened, err := bundle.Open(runtime)
@@ -125,6 +126,77 @@ func TestClusterLifecycleBundleRequiresBoundProviderAccessCredential(t *testing.
 	legacyRuntime.ProviderAccessKubeconfigFile = credential
 	if _, err := legacyBundle.Open(legacyRuntime); err == nil || !strings.Contains(err.Error(), "not bound") {
 		t.Fatalf("legacy lifecycle stage accepted an unbound provider credential: %v", err)
+	}
+}
+
+func TestProviderAccessLifecycleBindingRejectsStaleOrAmbiguousProjection(t *testing.T) {
+	fixture := submissionBundleFixtureWithProviderAccess(t)
+	bundle, err := LoadSubmissionStageBundle(fixture.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialPath := filepath.Join(t.TempDir(), "provider.kubeconfig")
+	if err := os.WriteFile(credentialPath, providerAccessBundleKubeconfig(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credential, err := bundle.providerAccess.MaterializeSecret(credentialPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mutateKubevirtCluster := func(t *testing.T, plan submission.Plan, mutate func(map[string]any)) submission.Plan {
+		t.Helper()
+		plan.Management.Objects = append([]submission.Object(nil), plan.Management.Objects...)
+		for index := range plan.Management.Objects {
+			if plan.Management.Objects[index].Identity.Kind != "KubevirtCluster" {
+				continue
+			}
+			var document map[string]any
+			if err := json.Unmarshal(plan.Management.Objects[index].Raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			mutate(document)
+			plan.Management.Objects[index].Raw = mustJSON(t, document)
+			return plan
+		}
+		t.Fatal("fixture has no KubevirtCluster")
+		return submission.Plan{}
+	}
+
+	tests := map[string]func(*testing.T, submission.Plan) submission.Plan{
+		"missing service namespace": func(t *testing.T, plan submission.Plan) submission.Plan {
+			return mutateKubevirtCluster(t, plan, func(document map[string]any) {
+				spec := document["spec"].(map[string]any)
+				template := spec["controlPlaneServiceTemplate"].(map[string]any)
+				delete(template["metadata"].(map[string]any), "namespace")
+			})
+		},
+		"foreign credential reference": func(t *testing.T, plan submission.Plan) submission.Plan {
+			return mutateKubevirtCluster(t, plan, func(document map[string]any) {
+				ref := document["spec"].(map[string]any)["infraClusterSecretRef"].(map[string]any)
+				ref["name"] = "foreign-provider-credential"
+			})
+		},
+		"missing kubevirt cluster": func(t *testing.T, plan submission.Plan) submission.Plan {
+			plan.Management.Objects = plan.Management.Objects[:2]
+			return plan
+		},
+		"duplicate kubevirt cluster": func(t *testing.T, plan submission.Plan) submission.Plan {
+			plan.Management.Objects = append(plan.Management.Objects, plan.Management.Objects[2])
+			return plan
+		},
+	}
+	for name, change := range tests {
+		t.Run(name, func(t *testing.T) {
+			plan := change(t, bundle.projection)
+			err := validateProviderAccessLifecycleBinding(plan, credential)
+			if err == nil || err.Error() != "cluster-lifecycle provider-access projection binding is invalid" {
+				t.Fatalf("invalid projection was not rejected with a redacted category: %v", err)
+			}
+			if strings.Contains(err.Error(), credential.Identity.Name) || strings.Contains(err.Error(), "foreign-provider-credential") {
+				t.Fatalf("provider credential identity escaped through error: %v", err)
+			}
+		})
 	}
 }
 
@@ -153,6 +225,14 @@ func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overri
 	revision := bundleSHA("a")
 	infra := []byte("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: " + revision + "\n")
 	management := []byte("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: " + revision + "\n---\napiVersion: cluster.x-k8s.io/v1beta2\nkind: Cluster\nmetadata:\n  name: disposable-ok147\n  namespace: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: " + revision + "\nspec:\n  clusterNetwork:\n    services:\n      cidrBlocks: [10.100.0.0/20]\n")
+	managementResources := []map[string]any{
+		{"apiVersion": "v1", "kind": "Namespace", "name": "disposable-ok147"},
+		{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "namespace": "disposable-ok147", "name": "disposable-ok147"},
+	}
+	if providerAccess {
+		management = append(management, []byte("---\napiVersion: infrastructure.cluster.x-k8s.io/v1alpha1\nkind: KubevirtCluster\nmetadata:\n  name: disposable-ok147\n  namespace: disposable-ok147\n  annotations:\n    openkubes.io/contract-name: disposable-ok147\n    openkubes.io/contract-namespace: disposable-ok147\n    openkubes.io/intent-revision: "+revision+"\nspec:\n  infraClusterSecretRef:\n    apiVersion: v1\n    kind: Secret\n    namespace: disposable-ok147\n    name: external-infra-kubeconfig-disposable-ok147\n  controlPlaneServiceTemplate:\n    metadata:\n      namespace: disposable-ok147\n    spec:\n      type: LoadBalancer\n")...)
+		managementResources = append(managementResources, map[string]any{"apiVersion": "infrastructure.cluster.x-k8s.io/v1alpha1", "kind": "KubevirtCluster", "namespace": "disposable-ok147", "name": "disposable-ok147"})
+	}
 	authority := mustJSON(t, map[string]any{
 		"format": "ok141-contract-to-capi-projection/v2", "contractIdentity": identity, "intentRevision": revision,
 		"infrastructurePlane": map[string]any{
@@ -161,10 +241,7 @@ func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overri
 		},
 		"managementPlane": map[string]any{
 			"identity": "ok-mgmt", "role": "single-lifecycle-writer",
-			"resources": []map[string]any{
-				{"apiVersion": "v1", "kind": "Namespace", "name": "disposable-ok147"},
-				{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "namespace": "disposable-ok147", "name": "disposable-ok147"},
-			},
+			"resources": managementResources,
 		},
 		"providerAccess": map[string]any{}, "excludedRendererArtifacts": []any{},
 	})
@@ -179,7 +256,7 @@ func submissionBundleFixtureOptions(t *testing.T, completedProvider bool, overri
 		},
 		"objectSets": map[string]any{
 			"okInfraPrerequisites": map[string]any{"count": 1, "digest": bundleSHA("1")},
-			"okMgmtLifecycle":      map[string]any{"count": 2, "digest": bundleSHA("2")},
+			"okMgmtLifecycle":      map[string]any{"count": len(managementResources), "digest": bundleSHA("2")},
 		},
 		"providerAccess": map[string]any{}, "source": map[string]any{},
 	})

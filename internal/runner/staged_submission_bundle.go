@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"time"
@@ -199,6 +200,9 @@ func bindSubmissionProviderAccess(bundle VerifiedSubmissionStageBundle, kubeconf
 	if err != nil {
 		return submission.Plan{}, err
 	}
+	if err := validateProviderAccessLifecycleBinding(projectionPlan, object); err != nil {
+		return submission.Plan{}, err
+	}
 	// The Secret is namespaced, so its Namespace must be created first. Keep
 	// the verified lifecycle projection order and insert the runtime-bound
 	// provider credential immediately after that exact Namespace object.
@@ -223,6 +227,54 @@ func bindSubmissionProviderAccess(bundle VerifiedSubmissionStageBundle, kubeconf
 	objects = append(objects, projectionPlan.Management.Objects[insertAfter+1:]...)
 	projectionPlan.Management.Objects = objects
 	return projectionPlan, nil
+}
+
+// validateProviderAccessLifecycleBinding keeps the runtime-created provider
+// credential and the verified lifecycle projection on one exact namespace and
+// Secret identity. CAPK must not infer the LoadBalancer namespace from ambient
+// kubeconfig state when a provider credential is bound.
+func validateProviderAccessLifecycleBinding(plan submission.Plan, credential submission.Object) error {
+	type objectReference struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Namespace  string `json:"namespace"`
+		Name       string `json:"name"`
+	}
+	type kubevirtCluster struct {
+		Spec struct {
+			InfraClusterSecretRef       objectReference `json:"infraClusterSecretRef"`
+			ControlPlaneServiceTemplate struct {
+				Metadata struct {
+					Namespace string `json:"namespace"`
+				} `json:"metadata"`
+			} `json:"controlPlaneServiceTemplate"`
+		} `json:"spec"`
+	}
+
+	matched := 0
+	for _, projected := range plan.Management.Objects {
+		if projected.Identity.APIVersion != "infrastructure.cluster.x-k8s.io/v1alpha1" || projected.Identity.Kind != "KubevirtCluster" {
+			continue
+		}
+		matched++
+		if projected.Identity.Namespace != credential.Identity.Namespace {
+			return errors.New("cluster-lifecycle provider-access projection binding is invalid")
+		}
+		var document kubevirtCluster
+		if err := json.Unmarshal(projected.Raw, &document); err != nil {
+			return errors.New("cluster-lifecycle provider-access projection binding is invalid")
+		}
+		ref := document.Spec.InfraClusterSecretRef
+		if ref.APIVersion != "v1" || ref.Kind != "Secret" ||
+			ref.Namespace != credential.Identity.Namespace || ref.Name != credential.Identity.Name ||
+			document.Spec.ControlPlaneServiceTemplate.Metadata.Namespace != credential.Identity.Namespace {
+			return errors.New("cluster-lifecycle provider-access projection binding is invalid")
+		}
+	}
+	if matched != 1 {
+		return errors.New("cluster-lifecycle provider-access projection binding is invalid")
+	}
+	return nil
 }
 
 func loadSubmissionProviderAccessPolicy(config SubmissionStageBundleConfig, plan stageplan.Binding, stageID string) (submission.VerifiedProviderAccessPolicy, bool, error) {
