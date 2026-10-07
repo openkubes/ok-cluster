@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -114,6 +115,27 @@ func TestTargetRegistrationLauncherPreservesPartialStateAndCannotRetry(t *testin
 	}
 }
 
+func TestTargetRegistrationLauncherRejectsMismatchedSecretResponseWithoutLeakingPrivateData(t *testing.T) {
+	fixture := targetRegistrationMaterialFixture(t)
+	material, _ := BuildTargetRegistrationMaterial(fixture.config)
+	api := newTargetRegistrationLauncherAPI(t)
+	api.mismatchDataPost = 2
+	launcher := newTargetRegistrationLauncher(t, material, api.client(), fixture.config.MaterializationTime.Add(time.Minute))
+	receipt, err := launcher.Install(context.Background())
+	if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || receipt.MutationState != "ATTEMPTED_UNKNOWN" || len(receipt.Results) != 1 || receipt.Results[0].Role != "project" {
+		t.Fatalf("mismatched Secret response was accepted: %#v %v", receipt, err)
+	}
+	public, marshalErr := json.Marshal(receipt)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	for _, forbidden := range []string{string(fixture.credential.token), string(fixture.credential.caBundle), fixture.credential.endpoint, material.registrationDigest} {
+		if bytes.Contains(public, []byte(forbidden)) || strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("mismatched response leaked private material")
+		}
+	}
+}
+
 func TestTargetRegistrationLauncherFailsClosedForTamperingUnknownOutcomeAndRedirect(t *testing.T) {
 	fixture := targetRegistrationMaterialFixture(t)
 	material, _ := BuildTargetRegistrationMaterial(fixture.config)
@@ -171,14 +193,15 @@ type targetRegistrationLauncherRequest struct {
 }
 
 type targetRegistrationLauncherAPI struct {
-	t            *testing.T
-	mu           sync.Mutex
-	objects      map[string]map[string]any
-	requests     []targetRegistrationLauncherRequest
-	posts        int
-	failPost     int
-	errorPost    int
-	mismatchPost int
+	t                *testing.T
+	mu               sync.Mutex
+	objects          map[string]map[string]any
+	requests         []targetRegistrationLauncherRequest
+	posts            int
+	failPost         int
+	errorPost        int
+	mismatchPost     int
+	mismatchDataPost int
 }
 
 func newTargetRegistrationLauncherAPI(t *testing.T) *targetRegistrationLauncherAPI {
@@ -222,6 +245,18 @@ func (api *targetRegistrationLauncherAPI) roundTrip(request *http.Request) (*htt
 		metadata := object["metadata"].(map[string]any)
 		metadata["uid"] = "created-target-registration-uid-" + string(rune('a'+api.posts-1))
 		metadata["resourceVersion"] = string(rune('1' + api.posts - 1))
+		if object["kind"] == "Secret" {
+			stringData := object["stringData"].(map[string]any)
+			data := make(map[string]any, len(stringData))
+			for key, value := range stringData {
+				data[key] = base64.StdEncoding.EncodeToString([]byte(value.(string)))
+			}
+			delete(object, "stringData")
+			object["data"] = data
+			if api.mismatchDataPost == api.posts {
+				data["config"] = base64.StdEncoding.EncodeToString([]byte("foreign-private-material"))
+			}
+		}
 		path := request.URL.Path + "/" + metadata["name"].(string)
 		api.objects[path] = object
 		if api.mismatchPost == api.posts {

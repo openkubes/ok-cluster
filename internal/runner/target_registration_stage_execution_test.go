@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -229,6 +230,15 @@ func newTargetRegistrationExecutionAPI(t *testing.T, failPost int) *targetRegist
 			metadata, _ := object["metadata"].(map[string]any)
 			metadata["uid"] = "target-registration-runtime-uid-" + string(rune('0'+api.posts))
 			metadata["resourceVersion"] = "1"
+			if object["kind"] == "Secret" {
+				stringData := object["stringData"].(map[string]any)
+				data := make(map[string]any, len(stringData))
+				for key, value := range stringData {
+					data[key] = base64.StdEncoding.EncodeToString([]byte(value.(string)))
+				}
+				delete(object, "stringData")
+				object["data"] = data
+			}
 			name, _ := metadata["name"].(string)
 			api.objects[strings.TrimSuffix(request.URL.Path, "/")+"/"+name] = object
 			response.WriteHeader(http.StatusCreated)
