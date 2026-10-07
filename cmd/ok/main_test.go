@@ -980,16 +980,16 @@ func TestTargetAccessStageRunBindsExactArtifactAndWorkloadRuntime(t *testing.T) 
 		if !bounded || time.Until(deadline) > stageRunTimeout || time.Until(deadline) < stageRunTimeout-time.Minute {
 			t.Fatalf("target-access context is not bounded: %s %t", deadline, bounded)
 		}
-		if bundle.PlanPath != "/tmp/plan.json" || len(bundle.Receipts) != 6 || bundle.ArtifactPath != "/tmp/target-access.yaml" || len(bundle.ExpectedObjects) != 11 {
+		if bundle.PlanPath != "/tmp/plan.json" || len(bundle.Receipts) != 6 || bundle.ArtifactPath != "/tmp/target-access.yaml" || len(bundle.ExpectedObjects) != 16 {
 			t.Fatalf("target-access bundle differs: %#v", bundle)
 		}
-		wantKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding"}
+		wantKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding", "ClusterRole", "ClusterRole", "ClusterRole", "ClusterRole", "ClusterRole"}
 		for index, object := range bundle.ExpectedObjects {
 			if object.Kind != wantKinds[index] {
 				t.Fatalf("target-access identity %d differs: %#v", index, object)
 			}
 		}
-		if bundle.ExpectedObjects[0].Name != "ok-observability" || bundle.ExpectedObjects[1].Namespace != "kube-system" || bundle.ExpectedObjects[4].Namespace != "ok-observability" || runtime.Ledger.Namespace != ledgerNamespace || runtime.Workload.Path != "/private/tmp/runtime-binding.json" || runtime.Workload.ExpectedBindingDigest != testSHA("5") || runtime.Workload.TokenFile != "/private/tmp/workload-token" || runtime.Clock == nil {
+		if bundle.ExpectedObjects[0].Name != "ok-observability" || bundle.ExpectedObjects[1].Namespace != "kube-system" || bundle.ExpectedObjects[4].Namespace != "ok-observability" || bundle.ExpectedObjects[11].Name != "disposable-ok141-observability-core-kube-state-metrics" || bundle.ExpectedObjects[15].Name != "ok-observability-prometheus" || runtime.Ledger.Namespace != ledgerNamespace || runtime.Workload.Path != "/private/tmp/runtime-binding.json" || runtime.Workload.ExpectedBindingDigest != testSHA("5") || runtime.Workload.TokenFile != "/private/tmp/workload-token" || runtime.Clock == nil {
 			t.Fatalf("target-access runtime differs: %#v %#v", bundle.ExpectedObjects, runtime)
 		}
 		return execution.StagedOperationReceipt{Format: execution.StagedReceiptFormat, State: "COMPLETED_SUCCEEDED", StageID: "target-access", StageReceiptDigest: testSHA("8")}, nil

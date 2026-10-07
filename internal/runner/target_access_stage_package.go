@@ -6,6 +6,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/digest"
 	"github.com/openkubes/ok-cluster/internal/projection"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 const TargetAccessStagePackageFormat = "ok147-target-access-stage-package/v1"
@@ -41,7 +42,7 @@ type TargetAccessStagePackageConfig struct {
 }
 
 // TargetAccessStagePackageReceipt is a redaction-safe offline composition
-// proof. TargetAccessDigest covers the eleven rendered target objects while
+// proof. TargetAccessDigest covers the sixteen rendered target objects while
 // TargetIdentityDigest correlates the package to the CAPI-created workload.
 type TargetAccessStagePackageReceipt struct {
 	Format                string   `json:"format"`
@@ -91,6 +92,7 @@ func BuildTargetAccessStagePackage(config TargetAccessStagePackageConfig) (Verif
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: config.ObservabilityNamespace, Name: config.ObserverRole},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: config.ObservabilityNamespace, Name: config.ObserverRoleBinding},
 	}
+	jobObjects = append(jobObjects, submission.TargetAccessPrerequisiteIdentities()...)
 	if len(config.Bundle.ExpectedObjects) != len(jobObjects) {
 		return VerifiedTargetAccessStagePackage{}, errors.New("target-access Job object identities differ from verified bundle")
 	}

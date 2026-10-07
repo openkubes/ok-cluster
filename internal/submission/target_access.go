@@ -16,6 +16,32 @@ import (
 
 const TargetAccessPlanFormat = "ok147-bounded-target-access-plan/v1"
 
+const (
+	TargetAccessBaseObjectCount         = 11
+	TargetAccessPrerequisiteObjectCount = 5
+	TargetAccessObjectCount             = TargetAccessBaseObjectCount + TargetAccessPrerequisiteObjectCount
+)
+
+var targetAccessPrerequisiteNames = [...]string{
+	"disposable-ok141-observability-core-kube-state-metrics",
+	"ok-observability-grafana-clusterrole",
+	"ok-observability-log-collector",
+	"ok-observability-operator",
+	"ok-observability-prometheus",
+}
+
+// TargetAccessPrerequisiteIdentities returns the fixed, ordered Platform
+// ClusterRoles that must exist before Argo CD can reconcile their exact rules.
+func TargetAccessPrerequisiteIdentities() []projection.ResourceIdentity {
+	identities := make([]projection.ResourceIdentity, 0, len(targetAccessPrerequisiteNames))
+	for _, name := range targetAccessPrerequisiteNames {
+		identities = append(identities, projection.ResourceIdentity{
+			APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: name,
+		})
+	}
+	return identities
+}
+
 const maximumTargetAccessArtifactBytes = 512 * 1024
 
 // TargetAccessExpected is independently bound by the staged plan, verified
@@ -84,10 +110,10 @@ func validateTargetAccessExpected(expected TargetAccessExpected) error {
 	if expected.WorkloadAuthority != expected.TargetIdentityDigest {
 		return errors.New("target-access workload authority must equal the immutable target identity")
 	}
-	if len(expected.Objects) != 11 {
-		return errors.New("target-access requires exactly eleven object identities")
+	if len(expected.Objects) != TargetAccessObjectCount {
+		return errors.New("target-access requires exactly sixteen object identities")
 	}
-	expectedKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding"}
+	expectedKinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding", "ClusterRole", "ClusterRole", "ClusterRole", "ClusterRole", "ClusterRole"}
 	for index, identity := range expected.Objects {
 		if identity.Kind != expectedKinds[index] || !validName(identity.Name, 253) {
 			return errors.New("target-access expected object order or identity is invalid")
@@ -108,6 +134,11 @@ func validateTargetAccessExpected(expected TargetAccessExpected) error {
 			}
 		} else if identity.Namespace == "" || !validName(identity.Namespace, 63) || strings.Contains(identity.Namespace, ".") {
 			return errors.New("target-access namespaced identity is invalid")
+		}
+	}
+	for index, prerequisite := range TargetAccessPrerequisiteIdentities() {
+		if expected.Objects[TargetAccessBaseObjectCount+index] != prerequisite {
+			return errors.New("target-access Platform ClusterRole prerequisite order or identity is invalid")
 		}
 	}
 	return nil
@@ -172,7 +203,7 @@ func decodeTargetAccessObjects(raw []byte, expected TargetAccessExpected) ([]Obj
 		return nil, fmt.Errorf("target-access artifact contains %d objects, expected exactly %d", len(values), len(expected.Objects))
 	}
 	for index, value := range values {
-		object, err := validateTargetAccessObject(value, expected.Objects[index])
+		object, err := validateTargetAccessObject(value, expected.Objects[index], index >= TargetAccessBaseObjectCount)
 		if err != nil {
 			return nil, fmt.Errorf("target-access document %d: %w", index+1, err)
 		}
@@ -184,7 +215,7 @@ func decodeTargetAccessObjects(raw []byte, expected TargetAccessExpected) ([]Obj
 	return objects, nil
 }
 
-func validateTargetAccessObject(value map[string]any, expected projection.ResourceIdentity) (Object, error) {
+func validateTargetAccessObject(value map[string]any, expected projection.ResourceIdentity, prerequisite bool) (Object, error) {
 	if _, exists := value["status"]; exists {
 		return Object{}, errors.New("target-access object must not contain status")
 	}
@@ -225,7 +256,13 @@ func validateTargetAccessObject(value map[string]any, expected projection.Resour
 		if err := rejectTargetAccessUnknownKeys(value, identity.Kind, "apiVersion", "kind", "metadata", "rules"); err != nil {
 			return Object{}, err
 		}
-		if err := validateTargetAccessRules(value["rules"]); err != nil {
+		var err error
+		if prerequisite {
+			err = validateTargetAccessPrerequisiteRules(value["rules"])
+		} else {
+			err = validateTargetAccessRules(value["rules"])
+		}
+		if err != nil {
 			return Object{}, err
 		}
 	case "RoleBinding", "ClusterRoleBinding":
@@ -299,6 +336,14 @@ func validateTargetAccessRules(raw any) error {
 				}
 			}
 		}
+		verbs, _ := rule["verbs"].([]any)
+		for _, verb := range verbs {
+			if text(verb) == "bind" || text(verb) == "escalate" {
+				if _, bounded := rule["resourceNames"]; !bounded {
+					return errors.New("target-access RBAC bind or escalate must be resourceName-bounded")
+				}
+			}
+		}
 		for _, forbidden := range []string{"nonResourceURLs"} {
 			if _, exists := rule[forbidden]; exists {
 				return errors.New("target-access RBAC non-resource permissions are forbidden")
@@ -306,6 +351,84 @@ func validateTargetAccessRules(raw any) error {
 		}
 	}
 	return nil
+}
+
+func validateTargetAccessPrerequisiteRules(raw any) error {
+	rules, ok := raw.([]any)
+	if !ok || len(rules) == 0 || len(rules) > 64 {
+		return errors.New("target-access Platform ClusterRole prerequisite rules are missing or unbounded")
+	}
+	for _, rawRule := range rules {
+		rule, ok := rawRule.(map[string]any)
+		if !ok {
+			return errors.New("target-access Platform ClusterRole prerequisite rule is invalid")
+		}
+		if err := rejectTargetAccessUnknownKeys(rule, "Platform ClusterRole prerequisite rule", "apiGroups", "resources", "verbs", "resourceNames", "nonResourceURLs"); err != nil {
+			return err
+		}
+		verbs, err := validateTargetAccessPrerequisiteValues(rule["verbs"], "verbs", false)
+		if err != nil {
+			return err
+		}
+		for _, verb := range verbs {
+			if verb == "bind" || verb == "escalate" {
+				return errors.New("target-access Platform ClusterRole prerequisites must not grant bind or escalate")
+			}
+		}
+		_, hasNonResourceURLs := rule["nonResourceURLs"]
+		if hasNonResourceURLs {
+			if _, exists := rule["resources"]; exists {
+				return errors.New("target-access Platform ClusterRole prerequisite mixes resource and non-resource permissions")
+			}
+			if _, exists := rule["resourceNames"]; exists {
+				return errors.New("target-access Platform ClusterRole prerequisite non-resource rule contains resourceNames")
+			}
+			if groups, exists := rule["apiGroups"]; exists {
+				values, err := validateTargetAccessPrerequisiteValues(groups, "apiGroups", true)
+				if err != nil || len(values) != 1 || values[0] != "" {
+					return errors.New("target-access Platform ClusterRole prerequisite non-resource apiGroups are invalid")
+				}
+			}
+			if _, err := validateTargetAccessPrerequisiteValues(rule["nonResourceURLs"], "nonResourceURLs", false); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := validateTargetAccessPrerequisiteValues(rule["apiGroups"], "apiGroups", true); err != nil {
+			return err
+		}
+		if _, err := validateTargetAccessPrerequisiteValues(rule["resources"], "resources", false); err != nil {
+			return err
+		}
+		if names, exists := rule["resourceNames"]; exists {
+			values, err := validateTargetAccessPrerequisiteValues(names, "resourceNames", false)
+			if err != nil {
+				return err
+			}
+			for _, name := range values {
+				if name != "*" && !validName(name, 253) {
+					return errors.New("target-access Platform ClusterRole prerequisite resourceName is invalid")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateTargetAccessPrerequisiteValues(raw any, field string, allowEmpty bool) ([]string, error) {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > 64 {
+		return nil, fmt.Errorf("target-access Platform ClusterRole prerequisite %s are missing or unbounded", field)
+	}
+	result := make([]string, 0, len(values))
+	for _, rawValue := range values {
+		value := text(rawValue)
+		if (!allowEmpty && value == "") || strings.ContainsAny(value, " \t\r\n") {
+			return nil, fmt.Errorf("target-access Platform ClusterRole prerequisite %s contain an unsafe value", field)
+		}
+		result = append(result, value)
+	}
+	return result, nil
 }
 
 func validateTargetAccessBindingShape(value map[string]any) error {
@@ -346,6 +469,9 @@ func rejectTargetAccessUnknownKeys(value map[string]any, description string, all
 func validateTargetAccessRelationships(values []map[string]any, identities []projection.ResourceIdentity) error {
 	managerServiceAccount := identities[1]
 	clusterRole := identities[2]
+	if err := validateTargetAccessManagerEscalation(values[2]["rules"]); err != nil {
+		return err
+	}
 	for _, index := range []int{3, 5, 7} {
 		roleRef := values[index]["roleRef"].(map[string]any)
 		subject := values[index]["subjects"].([]any)[0].(map[string]any)
@@ -374,6 +500,47 @@ func validateTargetAccessRelationships(values []map[string]any, identities []pro
 	}
 	if text(roleRef["kind"]) != identities[9].Kind || text(roleRef["name"]) != identities[9].Name {
 		return errors.New("target-access observer binding roleRef differs from its exact role")
+	}
+	return nil
+}
+
+func validateTargetAccessManagerEscalation(raw any) error {
+	rules, _ := raw.([]any)
+	allowed := make(map[string]bool, len(targetAccessPrerequisiteNames))
+	escalated := make(map[string]bool, len(targetAccessPrerequisiteNames))
+	for _, name := range targetAccessPrerequisiteNames {
+		allowed[name] = true
+	}
+	for _, rawRule := range rules {
+		rule, _ := rawRule.(map[string]any)
+		verbs, _ := rule["verbs"].([]any)
+		elevated, escalates := false, false
+		for _, rawVerb := range verbs {
+			switch text(rawVerb) {
+			case "bind":
+				elevated = true
+			case "escalate":
+				elevated, escalates = true, true
+			}
+		}
+		if !elevated {
+			continue
+		}
+		names, _ := rule["resourceNames"].([]any)
+		for _, rawName := range names {
+			name := text(rawName)
+			if !allowed[name] {
+				return errors.New("target-access manager bind or escalate exceeds the Platform ClusterRole prerequisite allowlist")
+			}
+			if escalates {
+				escalated[name] = true
+			}
+		}
+	}
+	for _, name := range targetAccessPrerequisiteNames {
+		if !escalated[name] {
+			return errors.New("target-access manager lacks bounded escalation for every Platform ClusterRole prerequisite")
+		}
 	}
 	return nil
 }
