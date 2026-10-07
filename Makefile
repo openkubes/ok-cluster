@@ -854,9 +854,22 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 			*) echo "Aborted. Re-run with CONFIRM=yes to skip this prompt (e.g. in CI)."; exit 1 ;; \
 		esac; \
 	fi; \
+	CFG="$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"; \
+	UIDS_FILE="$(CLUSTERS_DIR)/$(CLUSTER)/.teardown-data-volume-uids"; \
+	if [ -n "$$DV_UIDS" ] && [ -d "$(CLUSTERS_DIR)/$(CLUSTER)" ]; then \
+		printf '%s' "$$DV_UIDS" > "$$UIDS_FILE"; \
+	elif [ -r "$$UIDS_FILE" ]; then \
+		DV_UIDS=$$(cat "$$UIDS_FILE"); \
+	fi; \
 	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
 	$(OKB) delete namespace $(CLUSTER) --ignore-not-found; \
-	HAS_TALOS_GOLDEN=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])) or {}; print(str(c.get("type") == "talos" and bool(c.get("os",{}).get("goldenImage"))).lower())' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"); \
+	CLEANUP_FAILED=0; \
+	if [ ! -r "$$CFG" ]; then \
+		echo "SKIP local render directory $(CLUSTER) already absent; nothing to clean up for the Golden Image."; \
+		HAS_TALOS_GOLDEN=false; \
+	else \
+		HAS_TALOS_GOLDEN=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])) or {}; print(str(c.get("type") == "talos" and bool(c.get("os",{}).get("goldenImage"))).lower())' "$$CFG"); \
+	fi; \
 	if [ "$$HAS_TALOS_GOLDEN" = "true" ]; then \
 		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
 			--cleanup-authorization \
@@ -864,10 +877,12 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
 			--ok-linux-path "$(OK_LINUX_PATH)" \
 			--data-volume-uids "$$DV_UIDS" \
-			|| { echo "❌ Golden clone-authorization cleanup failed for $(CLUSTER); local directory and VM disks kept for retry."; exit 1; }; \
+			|| { echo "❌ Golden clone-authorization cleanup failed for $(CLUSTER); local directory kept for retry."; CLEANUP_FAILED=1; }; \
 	fi; \
-	echo "Removing local cluster directory..."; \
-	rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
+	if [ "$$CLEANUP_FAILED" = 0 ]; then \
+		echo "Removing local cluster directory..."; \
+		rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
+	fi; \
 	if [ -n "$$PVS" ]; then \
 		echo "Cleaning up Retain-policy PVs and their underlying Longhorn volumes..."; \
 		for pv in $$PVS; do \
@@ -876,6 +891,10 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 			echo "  Deleting Longhorn volume $$pv (best-effort -- may already be gone)..."; \
 			$(OKB) -n longhorn-system delete volumes.longhorn.io $$pv --ignore-not-found 2>/dev/null || true; \
 		done; \
+	fi; \
+	if [ "$$CLEANUP_FAILED" != 0 ]; then \
+		echo "❌ Teardown of $(CLUSTER) incomplete; re-run make teardown CLUSTER=$(CLUSTER) after fixing the error above."; \
+		exit 1; \
 	fi; \
 	echo "✅ Talos cluster $(CLUSTER) torn down (including Retain-policy PV cleanup)."
 

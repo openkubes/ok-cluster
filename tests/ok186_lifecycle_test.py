@@ -21,6 +21,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "ok130-talos" / "cluster-config.yaml"
@@ -52,6 +54,12 @@ if "get" in args and "clusters.cluster.x-k8s.io" in args:
         sys.stderr.write("Error from server (Forbidden): clusters is forbidden\n")
         sys.exit(1)
     print("cluster.cluster.x-k8s.io/x")
+elif any("volumeName" in arg for arg in args):
+    if not os.environ.get("FAKE_NAMESPACE_GONE"):
+        print("pv-1")
+elif any(".metadata.uid" in arg for arg in args):
+    if not os.environ.get("FAKE_NAMESPACE_GONE"):
+        print("uid-1,", end="")
 elif "get" in args and "pvc" in args:
     print("cp-0 Bound")
 elif "get" in args and "dv" in args:
@@ -71,6 +79,16 @@ if os.environ.get("FAKE_CLUSTERCTL") == "fail":
     sys.stderr.write("Error: failed to get kubeconfig: secret not found\n")
     sys.exit(1)
 print("apiVersion: v1\nkind: Config\nclusters: []")
+"""
+
+FAKE_LIFECYCLE = r"""#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps(["talos_golden_lifecycle", *sys.argv[1:]]) + "\n")
+if os.environ.get("FAKE_CLEANUP") == "fail":
+    sys.stderr.write("role read failed: Error from server (Forbidden)\n")
+    sys.exit(1)
+print("PASS clone RBAC (fake)")
 """
 
 FAKE_HELM = r"""#!/usr/bin/env python3
@@ -313,23 +331,54 @@ def cleanup_tests() -> None:
         "a real read error fails the cleanup and deletes nothing",
     )
 
-    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    teardown = makefile.split("\nteardown:", 1)[1].split("\nteardown-all:", 1)[0]
-    cleanup_at = teardown.find("talos-golden-cleanup-authorization")
-    if cleanup_at < 0:
-        cleanup_at = teardown.find("cleanup-authorization")
+
+def teardown_tests(box: Sandbox) -> None:
+    """Run the real teardown recipe with the lifecycle script replaced by a fake."""
+    scripts = box.base / "script-dir" / "scripts"
+    scripts.mkdir(parents=True)
+    fake = scripts / "talos_golden_lifecycle.py"
+    fake.write_text(FAKE_LIFECYCLE)
+    rendered = box.clusters / CLUSTER
+    config = yaml.safe_load((rendered / "cluster-config.yaml").read_text())
+    config["os"]["goldenImage"] = {"namespace": "ok-golden", "claim": "golden"}
+    (rendered / "cluster-config.yaml").write_text(yaml.safe_dump(config))
+    script_dir = f"SCRIPT_DIR={box.base / 'script-dir'}"
+
+    def cleanup_calls(calls):
+        return [call for call in calls if call[0] == "talos_golden_lifecycle"]
+
+    result, calls = box.make("teardown", script_dir, CONFIRM="yes", FAKE_CLEANUP="fail")
     check(
-        cleanup_at >= 0
-        and "|| { echo" in teardown[cleanup_at:]
-        and teardown.find("exit 1; }", cleanup_at)
-        < teardown.find("Removing local cluster directory"),
-        "teardown stops with exit 1 before deleting local files when cleanup fails",
+        result.returncode != 0
+        and "incomplete" in result.stdout
+        and rendered.is_dir()
+        and (rendered / ".teardown-data-volume-uids").read_text() == "uid-1,"
+        and any(call[-3:-1] == ["pv", "pv-1"] for call in calls),
+        "failed cleanup: exit non-zero, render dir and DataVolume UIDs kept, PVs still cleaned",
+    )
+    result, calls = box.make("teardown", script_dir, CONFIRM="yes", FAKE_NAMESPACE_GONE="1")
+    retry = cleanup_calls(calls)
+    check(
+        result.returncode == 0
+        and len(retry) == 1
+        and retry[0][retry[0].index("--data-volume-uids") + 1] == "uid-1,"
+        and not rendered.exists(),
+        "retry after namespace deletion reuses the saved DataVolume UIDs and completes",
+    )
+    result, calls = box.make("teardown", script_dir, CONFIRM="yes", FAKE_NAMESPACE_GONE="1")
+    check(
+        result.returncode == 0
+        and "SKIP local render directory" in result.stdout
+        and "Traceback" not in result.stderr
+        and not cleanup_calls(calls),
+        "teardown with the render dir already gone: SKIP, exit 0, no traceback",
     )
 
 
 def main() -> int:
     base = Path(tempfile.mkdtemp(prefix="ok186-"))
     make_tests(Sandbox(base))
+    teardown_tests(Sandbox(base / "teardown"))
     make_defaults()
     cleanup_tests()
     failed = [message for condition, message in CHECKS if not condition]
