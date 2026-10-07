@@ -1370,17 +1370,24 @@ def cleanup_authorization(args: argparse.Namespace) -> int:
     cluster = config["name"]
     golden_namespace = config["os"]["goldenImage"]["namespace"]
     authorization = f"{cluster}-talos-golden-image-cloner"
+    absent = set()
     for kind in ("role", "rolebinding"):
-        obj = kubectl_json(
+        found = kubectl(
             kubeconfig,
-            [
-                "-n",
-                golden_namespace,
-                "get",
-                kind,
-                authorization,
-            ],
+            ["-n", golden_namespace, "get", kind, authorization, "-o", "json"],
+            expected=(0, 1),
         )
+        if found.returncode != 0:
+            # Only an explicit NotFound means "already removed"; any other
+            # read failure must still fail the teardown.
+            if "NotFound" not in found.stderr:
+                raise TalosLifecycleError(
+                    f"{kind} {authorization} read failed: {found.stderr.strip()}"
+                )
+            print(f"SKIP {kind} {golden_namespace}/{authorization} already absent")
+            absent.add(kind)
+            continue
+        obj = json.loads(found.stdout)
         labels = obj["metadata"].get("labels", {})
         if (
             labels.get("openkubes.io/type") != "talos"
@@ -1392,6 +1399,8 @@ def cleanup_authorization(args: argparse.Namespace) -> int:
                 f"{kind} clone authorization ownership is invalid"
             )
     for kind in ("rolebinding", "role"):
+        if kind in absent:
+            continue
         kubectl(
             kubeconfig,
             [
@@ -1456,7 +1465,9 @@ def cleanup_authorization(args: argparse.Namespace) -> int:
     if after != before:
         raise TalosLifecycleError("shared Talos Golden PVC changed on cleanup")
     print(
-        f"PASS removed {golden_namespace}/{authorization}; "
+        f"PASS clone RBAC {golden_namespace}/{authorization} "
+        f"removed={sorted({'role', 'rolebinding'} - absent)} "
+        f"already_absent={sorted(absent)}; "
         f"removed_snapshots={len(removed_snapshots)} "
         f"preserved golden_uid={after['uid']}"
     )
