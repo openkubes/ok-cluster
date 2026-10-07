@@ -11,6 +11,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/runner"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 var prepareTargetAccessStageLaunch = func(config runner.TargetAccessStageLaunchMaterialConfig) (targetAccessLaunchPreparation, error) {
@@ -60,7 +61,7 @@ type targetAccessLaunchPreparation struct {
 }
 
 func targetAccessExpectedObjects(observabilityNamespace, managerServiceAccount, clusterRole, clusterRoleBinding, platformRole, platformRoleBinding, kubeSystemRole, kubeSystemRoleBinding, observerServiceAccount, observerRole, observerRoleBinding string) []projection.ResourceIdentity {
-	return []projection.ResourceIdentity{
+	objects := []projection.ResourceIdentity{
 		{APIVersion: "v1", Kind: "Namespace", Name: observabilityNamespace},
 		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "kube-system", Name: managerServiceAccount},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: clusterRole},
@@ -73,6 +74,7 @@ func targetAccessExpectedObjects(observabilityNamespace, managerServiceAccount, 
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: observabilityNamespace, Name: observerRole},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: observabilityNamespace, Name: observerRoleBinding},
 	}
+	return append(objects, submission.TargetAccessPrerequisiteIdentities()...)
 }
 
 func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io.Writer) error {
@@ -82,7 +84,7 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
 	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
 	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
-	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered eleven-object target-access set")
+	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered sixteen-object target-access set")
 	observabilityNamespace := flags.String("observability-namespace", "", "independently expected observability namespace")
 	managerServiceAccount := flags.String("manager-serviceaccount", "", "independently expected kube-system manager ServiceAccount")
 	clusterRole := flags.String("cluster-role", "", "independently expected cluster role")
@@ -193,7 +195,7 @@ func addTargetAccessLaunchMaterialFlags(flags *flag.FlagSet) *targetAccessLaunch
 	values.grantPath = flags.String("grant", "", "path to the signed single-stage grant")
 	values.grantKeyPath = flags.String("grant-key", "", "path to the trusted stage-authority public key")
 	values.evaluationTime = flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
-	values.artifactPath = flags.String("target-access-artifact", "", "path to the exact externally rendered eleven-object target-access set")
+	values.artifactPath = flags.String("target-access-artifact", "", "path to the exact externally rendered sixteen-object target-access set")
 	values.observabilityNamespace = flags.String("observability-namespace", "", "independently expected observability namespace")
 	values.managerServiceAccount = flags.String("manager-serviceaccount", "", "independently expected kube-system manager ServiceAccount")
 	values.clusterRole = flags.String("cluster-role", "", "independently expected cluster role")

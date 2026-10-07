@@ -11,7 +11,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/projection"
 )
 
-func TestLoadTargetAccessBindsExactElevenObjectSet(t *testing.T) {
+func TestLoadTargetAccessBindsExactSixteenObjectSet(t *testing.T) {
 	raw := targetAccessYAML()
 	path := writeTargetAccessArtifact(t, raw)
 	expected := targetAccessExpected(raw)
@@ -22,7 +22,7 @@ func TestLoadTargetAccessBindsExactElevenObjectSet(t *testing.T) {
 	if plan.Format != TargetAccessPlanFormat || plan.IntentRevision != expected.IntentRevision || plan.PlatformRevision != expected.PlatformRevision || plan.TargetIdentityDigest != expected.TargetIdentityDigest || plan.MutationAllowed {
 		t.Fatalf("unexpected target-access plan: %#v", plan)
 	}
-	if plan.Workload.Identity != expected.TargetIdentityDigest || plan.Workload.Role != "target-access-writer" || len(plan.Workload.Objects) != 11 {
+	if plan.Workload.Identity != expected.TargetIdentityDigest || plan.Workload.Role != "target-access-writer" || len(plan.Workload.Objects) != TargetAccessObjectCount {
 		t.Fatalf("unexpected target-access authority plane: %#v", plan.Workload)
 	}
 	for index, object := range plan.Workload.Objects {
@@ -50,6 +50,15 @@ func TestLoadTargetAccessFailsClosed(t *testing.T) {
 		"wildcard permission": func(raw []byte) []byte {
 			return []byte(strings.Replace(string(raw), "verbs: [get, list, watch]", "verbs: ['*']", 1))
 		},
+		"unbounded escalate": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "verbs: [get, list, watch]", "verbs: [get, escalate]", 1))
+		},
+		"foreign escalation target": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "      - ok-observability-prometheus\n    verbs: [bind, escalate]", "      - cluster-admin\n    verbs: [bind, escalate]", 1))
+		},
+		"incomplete escalation allowlist": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "      - ok-observability-prometheus\n    verbs: [bind, escalate]", "    verbs: [bind, escalate]", 1))
+		},
 		"user subject": func(raw []byte) []byte {
 			return []byte(strings.Replace(string(raw), "kind: ServiceAccount, name: ok147-argocd-manager", "kind: User, name: cluster-admin", 1))
 		},
@@ -61,6 +70,15 @@ func TestLoadTargetAccessFailsClosed(t *testing.T) {
 		},
 		"unknown rule field": func(raw []byte) []byte {
 			return []byte(strings.Replace(string(raw), "resources: [customresourcedefinitions]\n    verbs:", "resources: [customresourcedefinitions]\n    arbitrary: true\n    verbs:", 1))
+		},
+		"prerequisite identity": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "name: ok-observability-grafana-clusterrole", "name: cluster-admin", 1))
+		},
+		"prerequisite aggregation": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "name: ok-observability-grafana-clusterrole\nrules:", "name: ok-observability-grafana-clusterrole\naggregationRule: {}\nrules:", 1))
+		},
+		"prerequisite escalate": func(raw []byte) []byte {
+			return []byte(strings.Replace(string(raw), "verbs: [get, list, watch, '*']", "verbs: [get, escalate]", 1))
 		},
 		"observer write permission": func(raw []byte) []byte {
 			return []byte(strings.Replace(string(raw), "resources: [services]\n    verbs: [get]\n  - apiGroups: [discovery.k8s.io]", "resources: [services]\n    verbs: [get, create]\n  - apiGroups: [discovery.k8s.io]", 1))
@@ -104,6 +122,25 @@ func TestLoadTargetAccessFailsClosed(t *testing.T) {
 	}
 }
 
+func TestLoadTargetAccessRejectsPrerequisiteOrderAndRedactsPrivateValues(t *testing.T) {
+	valid := targetAccessYAML()
+	path := writeTargetAccessArtifact(t, valid)
+	expected := targetAccessExpected(valid)
+	expected.Objects[11], expected.Objects[12] = expected.Objects[12], expected.Objects[11]
+	if _, err := LoadTargetAccess(path, expected); err == nil {
+		t.Fatal("reordered Platform ClusterRole prerequisites were accepted")
+	}
+
+	const privateValue = "private-credential-material-must-not-escape"
+	changed := []byte(strings.Replace(string(valid), "name: ok-observability-grafana-clusterrole", "name: "+privateValue, 1))
+	expected = targetAccessExpected(changed)
+	expected.Objects[12].Name = "ok-observability-grafana-clusterrole"
+	_, err := LoadTargetAccess(writeTargetAccessArtifact(t, changed), expected)
+	if err == nil || strings.Contains(err.Error(), privateValue) {
+		t.Fatalf("target-access identity failure exposed private input: %v", err)
+	}
+}
+
 func targetAccessExpected(raw []byte) TargetAccessExpected {
 	return TargetAccessExpected{
 		ArtifactDigest: digest.SHA256(raw), ContractIdentity: contract.Identity{Namespace: "disposable-ok147", Name: "disposable-ok147"},
@@ -121,6 +158,11 @@ func targetAccessExpected(raw []byte) TargetAccessExpected {
 			{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "disposable-ok141-observability-core-kube-state-metrics"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-grafana-clusterrole"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-log-collector"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-operator"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-prometheus"},
 		},
 	}
 }
@@ -159,6 +201,15 @@ rules:
   - apiGroups: [apiextensions.k8s.io]
     resources: [customresourcedefinitions]
     verbs: [get, list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames:
+      - disposable-ok141-observability-core-kube-state-metrics
+      - ok-observability-grafana-clusterrole
+      - ok-observability-log-collector
+      - ok-observability-operator
+      - ok-observability-prometheus
+    verbs: [bind, escalate]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -246,6 +297,50 @@ roleRef:
   name: ok147-observability-autonomy
 subjects:
   - {kind: ServiceAccount, name: ok147-observability-autonomy, namespace: ok-observability}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: disposable-ok141-observability-core-kube-state-metrics
+rules:
+  - apiGroups: [""]
+    resources: [nodes, pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ok-observability-grafana-clusterrole
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch, '*']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ok-observability-log-collector
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ok-observability-operator
+rules:
+  - apiGroups: [monitoring.coreos.com]
+    resources: ['*']
+    verbs: ['*']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ok-observability-prometheus
+rules:
+  - nonResourceURLs: [/metrics]
+    verbs: [get]
 `)
 }
 

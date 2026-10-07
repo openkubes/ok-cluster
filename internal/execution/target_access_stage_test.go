@@ -23,7 +23,7 @@ func TestTargetAccessMutatorBindsExactWorkloadAccessSet(t *testing.T) {
 	if err != nil || result.Outcome != "SUCCEEDED" || result.MutationState != "ATTEMPTED" || result.EvidenceDigest == "" || submitter.calls != 1 {
 		t.Fatalf("target-access mutation did not complete: %#v calls=%d err=%v", result, submitter.calls, err)
 	}
-	if submitter.plane.Identity != stagedSHA("e") || len(submitter.plane.Objects) != 11 || submitter.plane.Objects[0].Identity.Kind != "Namespace" || string(submitter.plane.Objects[0].Raw) != `{"apiVersion":"v1","kind":"Namespace"}` {
+	if submitter.plane.Identity != stagedSHA("e") || len(submitter.plane.Objects) != submission.TargetAccessObjectCount || submitter.plane.Objects[0].Identity.Kind != "Namespace" || string(submitter.plane.Objects[0].Raw) != `{"apiVersion":"v1","kind":"Namespace"}` {
 		t.Fatalf("mutator did not retain the verified workload plane: %#v", submitter.plane)
 	}
 }
@@ -72,12 +72,13 @@ func TestTargetAccessMutatorRejectsForeignProjectionAndRequest(t *testing.T) {
 }
 
 func stagedTargetAccessPlan(r, p, fixture, targetDigest string) submission.TargetAccessPlan {
-	kinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding"}
+	kinds := []string{"Namespace", "ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Role", "RoleBinding", "ServiceAccount", "Role", "RoleBinding", "ClusterRole", "ClusterRole", "ClusterRole", "ClusterRole", "ClusterRole"}
+	digestCharacters := "123456789abcdef0"
 	objects := make([]submission.Object, len(kinds))
 	for index, kind := range kinds {
 		objects[index] = submission.Object{
 			Identity: projection.ResourceIdentity{APIVersion: "v1", Kind: kind, Name: "object"},
-			Digest:   stagedSHA(string("123456789ab"[index])), CollectionPath: "/api/v1/resources", ObjectPath: "/api/v1/resources/object",
+			Digest:   stagedSHA(string(digestCharacters[index])), CollectionPath: "/api/v1/resources", ObjectPath: "/api/v1/resources/object",
 			Raw: json.RawMessage(`{"apiVersion":"v1","kind":"` + kind + `"}`),
 		}
 	}

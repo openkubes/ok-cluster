@@ -2063,7 +2063,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	grantPath := flags.String("grant", "", "path to the signed single-stage grant")
 	grantKeyPath := flags.String("grant-key", "", "path to the trusted stage-authority public key")
 	evaluationTime := flags.String("evaluation-time", "", "explicit RFC3339 grant evaluation time")
-	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered eleven-object target-access set")
+	artifactPath := flags.String("target-access-artifact", "", "path to the exact externally rendered sixteen-object target-access set")
 	observabilityNamespace := flags.String("observability-namespace", "", "independently expected observability namespace")
 	managerServiceAccount := flags.String("manager-serviceaccount", "", "independently expected kube-system manager ServiceAccount")
 	clusterRole := flags.String("cluster-role", "", "independently expected cluster role")

@@ -11,6 +11,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 func TestLoadTargetAccessStageBundleBindsPrefixGrantArtifactAndTarget(t *testing.T) {
@@ -24,10 +25,10 @@ func TestLoadTargetAccessStageBundleBindsPrefixGrantArtifactAndTarget(t *testing
 		t.Fatalf("unexpected target-access decision: %#v %v", decision, err)
 	}
 	receipt, err := bundle.Receipt()
-	if err != nil || receipt.Format != TargetAccessStageBundleReceiptFormat || receipt.State != "VERIFIED" || receipt.PlanDigest != fixture.plan.PlanDigest || receipt.TargetIdentityDigest != digest.SHA256([]byte(targetAccessRuntimeUID)) || receipt.AuthorizationDigest == "" || len(receipt.ObjectDigests) != 11 || receipt.MutationAllowed {
+	if err != nil || receipt.Format != TargetAccessStageBundleReceiptFormat || receipt.State != "VERIFIED" || receipt.PlanDigest != fixture.plan.PlanDigest || receipt.TargetIdentityDigest != digest.SHA256([]byte(targetAccessRuntimeUID)) || receipt.AuthorizationDigest == "" || len(receipt.ObjectDigests) != submission.TargetAccessObjectCount || receipt.MutationAllowed {
 		t.Fatalf("unexpected target-access bundle receipt: %#v %v", receipt, err)
 	}
-	if bundle.projection.Workload.Identity != digest.SHA256([]byte(targetAccessRuntimeUID)) || len(bundle.projection.Workload.Objects) != 11 {
+	if bundle.projection.Workload.Identity != digest.SHA256([]byte(targetAccessRuntimeUID)) || len(bundle.projection.Workload.Objects) != submission.TargetAccessObjectCount {
 		t.Fatalf("target-access projection differs: %#v", bundle.projection)
 	}
 }
@@ -226,6 +227,11 @@ func runnerTargetAccessIdentities() []projection.ResourceIdentity {
 		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "disposable-ok141-observability-core-kube-state-metrics"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-grafana-clusterrole"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-log-collector"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-operator"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-prometheus"},
 	}
 }
 
@@ -246,6 +252,7 @@ kind: ClusterRole
 metadata: {name: ok147-argocd-platform-cluster}
 rules:
   - {apiGroups: [apiextensions.k8s.io], resources: [customresourcedefinitions], verbs: [get, list, watch]}
+  - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], resourceNames: [disposable-ok141-observability-core-kube-state-metrics, ok-observability-grafana-clusterrole, ok-observability-log-collector, ok-observability-operator, ok-observability-prometheus], verbs: [bind, escalate]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -294,5 +301,35 @@ kind: RoleBinding
 metadata: {name: ok147-observability-autonomy, namespace: ok-observability}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ok147-observability-autonomy}
 subjects: [{kind: ServiceAccount, name: ok147-observability-autonomy, namespace: ok-observability}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: disposable-ok141-observability-core-kube-state-metrics}
+rules:
+  - {apiGroups: [""], resources: [nodes, pods], verbs: [get, list, watch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: ok-observability-grafana-clusterrole}
+rules:
+  - {apiGroups: [""], resources: [configmaps], verbs: [get, list, watch, '*']}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: ok-observability-log-collector}
+rules:
+  - {apiGroups: [""], resources: [pods, namespaces], verbs: [get, list, watch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: ok-observability-operator}
+rules:
+  - {apiGroups: [monitoring.coreos.com], resources: ['*'], verbs: ['*']}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: ok-observability-prometheus}
+rules:
+  - {nonResourceURLs: [/metrics], verbs: [get]}
 `)
 }
