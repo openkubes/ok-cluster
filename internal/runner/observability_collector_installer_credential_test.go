@@ -34,7 +34,9 @@ func TestObservabilityCollectorInstallerCredentialIssuesOnceInMemory(t *testing.
 		}
 		return targetCredentialTestResponse(http.StatusCreated, map[string]any{
 			"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-			"spec":   map[string]any{"audiences": []string{"https://kubernetes.default.svc"}, "expirationSeconds": 1800},
+			"spec": map[string]any{
+				"audiences": []string{"https://kubernetes.default.svc"}, "expirationSeconds": 1800, "boundObjectRef": nil,
+			},
 			"status": map[string]any{"token": token, "expirationTimestamp": now.Add(observabilityCollectorInstallerLifetime).Format(time.RFC3339)},
 		}), nil
 	})}
@@ -159,17 +161,19 @@ func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 	target := digest.SHA256([]byte("collector-installer-target"))
 	ca := []byte("collector-installer-ca")
 	tests := map[string]struct {
-		subject   string
-		expires   time.Time
-		audiences []string
-		status    int
-		want      string
+		subject        string
+		expires        time.Time
+		audiences      []string
+		boundObjectRef any
+		status         int
+		want           string
 	}{
-		"foreign subject":  {subject: "system:serviceaccount:openkubes-execution-system:foreign", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
-		"short lifetime":   {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(10 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
-		"missing audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID"},
-		"foreign audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"foreign"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
-		"wrong status":     {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusForbidden, want: "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID"},
+		"foreign subject":        {subject: "system:serviceaccount:openkubes-execution-system:foreign", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
+		"short lifetime":         {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(10 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
+		"missing audience":       {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID"},
+		"foreign audience":       {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"foreign"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
+		"bound object reference": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, boundObjectRef: map[string]any{"kind": "Pod", "name": "foreign", "uid": "foreign"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID"},
+		"wrong status":           {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusForbidden, want: "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -179,7 +183,9 @@ func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 				requests++
 				return targetCredentialTestResponse(test.status, map[string]any{
 					"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-					"spec":   map[string]any{"audiences": test.audiences, "expirationSeconds": 1800},
+					"spec": map[string]any{
+						"audiences": test.audiences, "expirationSeconds": 1800, "boundObjectRef": test.boundObjectRef,
+					},
 					"status": map[string]any{"token": token, "expirationTimestamp": test.expires.Format(time.RFC3339)},
 				}), nil
 			})}
