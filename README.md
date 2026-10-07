@@ -275,6 +275,10 @@ make bootstrap CLUSTER=my-cluster
 # Get kubeconfig once nodes are Running
 make kubeconfig CLUSTER=my-cluster
 
+# If bootstrap was interrupted after the manifests were applied, resume it
+# (annotate PVCs, kubeconfig, Cilium, wait for Ready) without re-applying:
+make bootstrap-resume CLUSTER=my-cluster
+
 # Check status
 make status CLUSTER=my-cluster
 
@@ -286,6 +290,26 @@ make install-observability CLUSTER=my-cluster
 # Optional: register with the ok-mgmt management plane (Crossplane)
 make register-cluster CLUSTER=my-cluster
 ```
+
+#### Kubeconfig locations
+
+The Talos lifecycle targets (`new`, `render`, `bootstrap`, `bootstrap-resume`,
+`annotate-pvcs`, `kubeconfig`, `install-cni`, `teardown`) take the
+management-cluster kubeconfig from `TALOS_INFRA_KUBECONFIG` and write the guest
+kubeconfig to `GUEST_KUBECONFIG_DIR/<cluster>.yaml`. Both default to `~/.kube`
+(`~/.kube/ok-infra.yaml`, `~/.kube/<cluster>.yaml`); override them together to
+keep a run self-contained:
+
+```bash
+make bootstrap CLUSTER=my-cluster \
+  TALOS_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
+  GUEST_KUBECONFIG_DIR=/path/to/kubeconfigs
+```
+
+`make kubeconfig` writes the file atomically with mode `0600` and prints the
+`clusterctl` error instead of leaving an empty file behind. `make teardown` is
+safe to repeat: resources that are already gone are reported as `SKIP`, while
+any other cleanup error stops the teardown with a non-zero exit.
 
 #### Reviewed Talos KubeVirt scheduling profiles
 
@@ -530,10 +554,11 @@ make prepare-cilium-chart                            # acquire/reuse pinned Cili
 make verify-cilium-chart                             # offline digest verification
 make install       CLUSTER=<name>                    # ubuntu: apply + wait + cilium
 make bootstrap     CLUSTER=<name>                    # talos: apply + annotate PVCs + cilium
+make bootstrap-resume CLUSTER=<name>                 # talos: resume after apply (refuses if the Cluster is absent)
 make flatcar-preflight CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz"
 make install-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz" FLATCAR_APPLY=yes
 make teardown-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes
-make kubeconfig    CLUSTER=<name>                    # save kubeconfig to ~/.kube/<name>.yaml
+make kubeconfig    CLUSTER=<name>                    # save kubeconfig (0600) to $GUEST_KUBECONFIG_DIR/<name>.yaml (default ~/.kube)
 make install-cni   CLUSTER=<name>                    # install Cilium (manual)
 make install-storage CLUSTER=<name>                  # install local-path-provisioner *inside* the workload cluster
 make install-ingress CLUSTER=<name>                  # Traefik + IngressClass ok-ingress + host-cluster LB proxy
