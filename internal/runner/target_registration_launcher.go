@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -263,6 +264,12 @@ func verifyTargetRegistrationCreatedObject(raw []byte, expected targetRegistrati
 		return "", "", err
 	}
 	desired, err := decodeCapabilityJSONObject(expected.raw)
+	if err != nil {
+		return "", "", errors.New("decode expected target-registration object")
+	}
+	if expected.role == "registration" {
+		desired, err = targetRegistrationSecretResponseShape(desired)
+	}
 	if err != nil || !capabilitySubset(desired, observed) {
 		return "", "", errors.New("observed target-registration object does not contain exact desired fields")
 	}
@@ -273,6 +280,32 @@ func verifyTargetRegistrationCreatedObject(raw []byte, expected targetRegistrati
 		return "", "", errors.New("observed target-registration server identity is invalid")
 	}
 	return uid, resourceVersion, nil
+}
+
+// targetRegistrationSecretResponseShape models the Kubernetes API response for
+// a Secret submitted with stringData. The API never returns stringData; it
+// returns the same values base64-encoded in data. This conversion is performed
+// only in memory so the exact credential-bearing values remain verified while
+// no private material is added to receipts or errors.
+func targetRegistrationSecretResponseShape(desired map[string]any) (map[string]any, error) {
+	stringData, ok := desired["stringData"].(map[string]any)
+	if !ok || len(stringData) == 0 {
+		return nil, errors.New("expected target-registration Secret stringData is invalid")
+	}
+	if _, exists := desired["data"]; exists {
+		return nil, errors.New("expected target-registration Secret contains ambiguous data")
+	}
+	data := make(map[string]any, len(stringData))
+	for key, value := range stringData {
+		text, ok := value.(string)
+		if !ok || key == "" {
+			return nil, errors.New("expected target-registration Secret stringData value is invalid")
+		}
+		data[key] = base64.StdEncoding.EncodeToString([]byte(text))
+	}
+	delete(desired, "stringData")
+	desired["data"] = data
+	return desired, nil
 }
 
 func (launcher *KubernetesTargetRegistrationLauncher) request(ctx context.Context, method, path string, body []byte) ([]byte, int, error) {
