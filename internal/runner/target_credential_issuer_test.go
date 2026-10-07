@@ -33,7 +33,7 @@ func TestTargetCredentialIssuerIssuesOneRedactedInMemoryCredential(t *testing.T)
 		}
 		return targetCredentialTestResponse(http.StatusCreated, map[string]any{
 			"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-			"spec":   map[string]any{"audiences": []string{"https://kubernetes.default.svc"}, "expirationSeconds": 10800},
+			"spec":   map[string]any{"audiences": []string{"https://kubernetes.default.svc"}, "expirationSeconds": 10800, "boundObjectRef": nil},
 			"status": map[string]any{"token": token, "expirationTimestamp": now.Add(3 * time.Hour).Format(time.RFC3339)},
 		}), nil
 	})}
@@ -95,17 +95,19 @@ func TestOpenTargetCredentialIssuerBindsRuntimeTarget(t *testing.T) {
 func TestTargetCredentialIssuerFailsClosedOnResponseClaims(t *testing.T) {
 	now := time.Date(2026, 8, 17, 17, 0, 0, 0, time.UTC)
 	tests := map[string]struct {
-		subject   string
-		expires   time.Time
-		audiences []string
-		status    int
-		mediaType string
+		subject        string
+		expires        time.Time
+		audiences      []string
+		boundObjectRef any
+		status         int
+		mediaType      string
 	}{
 		"foreign subject":            {subject: "system:serviceaccount:kube-system:foreign", expires: now.Add(3 * time.Hour), audiences: []string{"default"}, status: http.StatusCreated, mediaType: "application/json"},
 		"short lifetime":             {subject: "system:serviceaccount:kube-system:ok147-argocd-manager", expires: now.Add(time.Hour), audiences: []string{"default"}, status: http.StatusCreated, mediaType: "application/json"},
 		"missing defaulted audience": {subject: "system:serviceaccount:kube-system:ok147-argocd-manager", expires: now.Add(3 * time.Hour), audiences: []string{}, status: http.StatusCreated, mediaType: "application/json"},
 		"wrong status":               {subject: "system:serviceaccount:kube-system:ok147-argocd-manager", expires: now.Add(3 * time.Hour), audiences: []string{"default"}, status: http.StatusForbidden, mediaType: "application/json"},
 		"wrong media type":           {subject: "system:serviceaccount:kube-system:ok147-argocd-manager", expires: now.Add(3 * time.Hour), audiences: []string{"default"}, status: http.StatusCreated, mediaType: "text/plain"},
+		"bound object reference":     {subject: "system:serviceaccount:kube-system:ok147-argocd-manager", expires: now.Add(3 * time.Hour), audiences: []string{"default"}, boundObjectRef: map[string]any{"kind": "Pod", "name": "foreign", "uid": "foreign"}, status: http.StatusCreated, mediaType: "application/json"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -118,7 +120,7 @@ func TestTargetCredentialIssuerFailsClosedOnResponseClaims(t *testing.T) {
 			client := &http.Client{Transport: submissionStageLauncherRoundTripFunc(func(*http.Request) (*http.Response, error) {
 				response := targetCredentialTestResponse(test.status, map[string]any{
 					"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "metadata": map[string]any{},
-					"spec":   map[string]any{"audiences": test.audiences, "expirationSeconds": 10800},
+					"spec":   map[string]any{"audiences": test.audiences, "expirationSeconds": 10800, "boundObjectRef": test.boundObjectRef},
 					"status": map[string]any{"token": token, "expirationTimestamp": test.expires.Format(time.RFC3339)},
 				})
 				response.Header.Set("Content-Type", test.mediaType)
