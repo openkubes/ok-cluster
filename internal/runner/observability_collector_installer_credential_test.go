@@ -163,12 +163,13 @@ func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 		expires   time.Time
 		audiences []string
 		status    int
+		want      string
 	}{
-		"foreign subject":  {subject: "system:serviceaccount:openkubes-execution-system:foreign", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated},
-		"short lifetime":   {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(10 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated},
-		"missing audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{}, status: http.StatusCreated},
-		"foreign audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"foreign"}, status: http.StatusCreated},
-		"wrong status":     {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusForbidden},
+		"foreign subject":  {subject: "system:serviceaccount:openkubes-execution-system:foreign", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
+		"short lifetime":   {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(10 * time.Minute), audiences: []string{"default"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
+		"missing audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID"},
+		"foreign audience": {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"foreign"}, status: http.StatusCreated, want: "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH"},
+		"wrong status":     {subject: "system:serviceaccount:openkubes-execution-system:ok147-observability-collector-installer", expires: now.Add(30 * time.Minute), audiences: []string{"default"}, status: http.StatusForbidden, want: "POST_PREFIX_OBSERVER_CREDENTIAL_RESPONSE_INVALID"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -189,8 +190,8 @@ func TestObservabilityCollectorInstallerCredentialFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := issuer.Issue(context.Background()); err == nil || requests != 1 {
-				t.Fatalf("invalid collector installer credential response was accepted or retried: requests=%d err=%v", requests, err)
+			if _, err := issuer.Issue(context.Background()); err == nil || requests != 1 || redactedStopCategory(err) != test.want || err.Error() != "stage orchestration stopped" {
+				t.Fatalf("invalid collector installer credential response was accepted or exposed: requests=%d category=%q err=%v", requests, redactedStopCategory(err), err)
 			}
 		})
 	}

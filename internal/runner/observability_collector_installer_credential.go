@@ -187,29 +187,29 @@ func (issuer *KubernetesObservabilityCollectorInstallerCredentialIssuer) verifyR
 	if value.APIVersion != "authentication.k8s.io/v1" || value.Kind != "TokenRequest" || len(value.Status.Token) < 80 ||
 		strings.TrimSpace(value.Status.Token) != value.Status.Token || strings.ContainsAny(value.Status.Token, "\r\n") ||
 		value.Spec.ExpirationSeconds != int64(observabilityCollectorInstallerLifetime/time.Second) || len(value.Spec.Audiences) == 0 || value.Spec.BoundObjectRef != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer TokenRequest response is invalid")
+		return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID", errors.New("collector installer TokenRequest response is invalid"))
 	}
 	expiresAt, err := time.Parse(time.RFC3339, value.Status.ExpirationTimestamp)
 	if err != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer credential expiration is invalid")
+		return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector installer credential expiration is invalid"))
 	}
 	lifetime := expiresAt.Sub(now)
 	if lifetime < minimumObservabilityCollectorInstallerLifetime || lifetime > observabilityCollectorInstallerLifetime {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer credential lifetime is outside the bounded window")
+		return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector installer credential lifetime is outside the bounded window"))
 	}
 	claims, err := decodeTargetCredentialClaims(value.Status.Token)
 	if err != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("decode collector installer credential claims")
+		return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("decode collector installer credential claims"))
 	}
 	exp, err := claims.Expires.Int64()
 	wantSubject := "system:serviceaccount:" + observabilityCollectorInstallerNamespace + ":" + observabilityCollectorInstallerServiceAccount
 	if err != nil || claims.Subject != wantSubject || exp != expiresAt.Unix() || !exactTokenAudienceBinding(claims.Audience, value.Spec.Audiences) {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer credential claims differ from bounded identity")
+		return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector installer credential claims differ from bounded identity"))
 	}
 	if claims.IssuedAt != "" {
 		iat, err := claims.IssuedAt.Int64()
 		if err != nil || time.Unix(iat, 0).After(now.Add(5*time.Second)) || time.Unix(iat, 0).Before(now.Add(-5*time.Minute)) {
-			return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("collector installer credential issuance claim is invalid")
+			return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("collector installer credential issuance claim is invalid"))
 		}
 	}
 	serviceAccountIdentity := digest.SHA256([]byte("system:serviceaccount:" + observabilityCollectorInstallerNamespace + ":" + observabilityCollectorInstallerServiceAccount))
@@ -226,7 +226,7 @@ func (issuer *KubernetesObservabilityCollectorInstallerCredentialIssuer) verifyR
 	}
 	material.privateDigest, err = observabilityCollectorInstallerPrivateDigest(material)
 	if err != nil {
-		return VerifiedObservabilityCollectorInstallerCredential{}, errors.New("bind private collector installer credential")
+		return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_MATERIALIZATION_STOPPED", errors.New("bind private collector installer credential"))
 	}
 	return material, nil
 }
