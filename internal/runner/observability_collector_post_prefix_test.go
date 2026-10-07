@@ -287,6 +287,7 @@ func TestObservabilityCollectorPostPrefixInstallerCredentialUsesRedactedSubcateg
 		"POST_PREFIX_INSTALLER_CREDENTIAL_TRANSPORT_STOPPED",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_CONVERGENCE_EXHAUSTED",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID",
+		"POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_RECEIPT_INVALID",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_RECEIPT_ENCODING_STOPPED",
 		"POST_PREFIX_INSTALLER_CREDENTIAL_MATERIALIZATION_STOPPED",
@@ -310,6 +311,10 @@ func TestObservabilityCollectorPostPrefixInstallerCredentialUsesRedactedSubcateg
 	foreign := postPrefixInstallerCredentialStopOrFallback(newFixedRedactedStop("FOREIGN_PRIVATE_CATEGORY", errors.New("private detail")))
 	if got := redactedStopCategory(foreign); got != "POST_PREFIX_INSTALLER_CREDENTIAL_ISSUANCE_STOPPED" {
 		t.Fatalf("foreign installer credential category escaped: %q", got)
+	}
+	preserved := postPrefixInstallerCredentialStopOrFallback(newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH", errors.New("private claim detail")))
+	if got := redactedStopCategory(preserved); got != "POST_PREFIX_INSTALLER_CREDENTIAL_CLAIMS_MISMATCH" || strings.Contains(got, "private") {
+		t.Fatalf("installer credential validation category was not preserved safely: %q", got)
 	}
 
 	t.Run("issuance", func(t *testing.T) {
