@@ -186,7 +186,8 @@ func (issuer *KubernetesObservabilityCollectorInstallerCredentialIssuer) Issue(c
 func (issuer *KubernetesObservabilityCollectorInstallerCredentialIssuer) verifyResponse(value targetCredentialTokenResponse, now time.Time) (VerifiedObservabilityCollectorInstallerCredential, error) {
 	if value.APIVersion != "authentication.k8s.io/v1" || value.Kind != "TokenRequest" || len(value.Status.Token) < 80 ||
 		strings.TrimSpace(value.Status.Token) != value.Status.Token || strings.ContainsAny(value.Status.Token, "\r\n") ||
-		value.Spec.ExpirationSeconds != int64(observabilityCollectorInstallerLifetime/time.Second) || len(value.Spec.Audiences) == 0 || value.Spec.BoundObjectRef != nil {
+		value.Spec.ExpirationSeconds != int64(observabilityCollectorInstallerLifetime/time.Second) || len(value.Spec.Audiences) == 0 ||
+		(len(bytes.TrimSpace(value.Spec.BoundObjectRef)) != 0 && !bytes.Equal(bytes.TrimSpace(value.Spec.BoundObjectRef), []byte("null"))) {
 		return VerifiedObservabilityCollectorInstallerCredential{}, newFixedRedactedStop("POST_PREFIX_INSTALLER_CREDENTIAL_RESPONSE_INVALID", errors.New("collector installer TokenRequest response is invalid"))
 	}
 	expiresAt, err := time.Parse(time.RFC3339, value.Status.ExpirationTimestamp)
