@@ -393,34 +393,40 @@ func TestFullRunExecutionPreservesConcreteClusterLifecycleMismatchEvidence(t *te
 }
 
 func TestFullRunExecutionPreservesRedactedClusterLifecycleOpenCategory(t *testing.T) {
-	category := "CLUSTER_LIFECYCLE_BUNDLE_VALIDATION_STOPPED"
-	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
-	preRuntime.receipt.State = "STOPPED"
-	preRuntime.receipt.StoppedAt = "cluster-lifecycle"
-	preRuntime.receipt.StopCategory = category
-	preRuntime.receipt.Checkpoints = preRuntime.receipt.Checkpoints[:1]
-	preRuntime.runErr = newFixedRedactedStop(category, errors.New("private path and credential detail"))
-	postCalls := 0
-	fullRun, err := openFullRunExecution(testFullRunExecutionConfig(), fullRunExecutionFactories{
-		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
-		postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
-			postCalls++
-			return successfulFakePostRuntimeContinuation(), nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	receipt, err := fullRun.Run(context.Background())
-	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != category ||
-		len(receipt.Checkpoints) != 1 || postCalls != 0 {
-		t.Fatalf("full-run lost cluster-lifecycle open category: receipt=%#v post=%d err=%v", receipt, postCalls, err)
-	}
-	encoded := strings.ToLower(string(mustJSON(t, receipt)) + err.Error())
-	for _, forbidden := range []string{"private", "credential", "endpoint", "kubeconfig", "uid", "path and credential"} {
-		if strings.Contains(encoded, forbidden) {
-			t.Fatalf("full-run cluster-lifecycle category exposed %q: %s", forbidden, encoded)
-		}
+	for _, category := range []string{
+		"CLUSTER_LIFECYCLE_PROVIDER_ACCESS_BINDING_STOPPED",
+		"CLUSTER_LIFECYCLE_RUNTIME_OPERATION_OPEN_STOPPED",
+	} {
+		t.Run(category, func(t *testing.T) {
+			preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+			preRuntime.receipt.State = "STOPPED"
+			preRuntime.receipt.StoppedAt = "cluster-lifecycle"
+			preRuntime.receipt.StopCategory = category
+			preRuntime.receipt.Checkpoints = preRuntime.receipt.Checkpoints[:1]
+			preRuntime.runErr = newFixedRedactedStop(category, errors.New("private path and credential detail"))
+			postCalls := 0
+			fullRun, err := openFullRunExecution(testFullRunExecutionConfig(), fullRunExecutionFactories{
+				preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+				postRuntime: func(PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
+					postCalls++
+					return successfulFakePostRuntimeContinuation(), nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := fullRun.Run(context.Background())
+			if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != category ||
+				len(receipt.Checkpoints) != 1 || postCalls != 0 {
+				t.Fatalf("full-run lost cluster-lifecycle open category: receipt=%#v post=%d err=%v", receipt, postCalls, err)
+			}
+			encoded := strings.ToLower(string(mustJSON(t, receipt)) + err.Error())
+			for _, forbidden := range []string{"private", "credential", "endpoint", "kubeconfig", "uid", "path and credential"} {
+				if strings.Contains(encoded, forbidden) {
+					t.Fatalf("full-run cluster-lifecycle category exposed %q: %s", forbidden, encoded)
+				}
+			}
+		})
 	}
 }
 
