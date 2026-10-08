@@ -235,8 +235,11 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 			return execution.StagedOperationReceipt{}, err
 		}
 		invocation, err := executor.factories.submission(executor.resume(receipts), "cluster-lifecycle", source, executor.config)
-		if err != nil || invocation.run == nil || invocation.store == nil {
-			return execution.StagedOperationReceipt{}, errors.New("open cluster-lifecycle stage")
+		if err != nil {
+			return execution.StagedOperationReceipt{}, clusterLifecycleOpenStopOrFallback(err)
+		}
+		if invocation.run == nil || invocation.store == nil {
+			return execution.StagedOperationReceipt{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_INVOCATION_INVALID", nil)
 		}
 		run, err := invocation.run(ctx)
 		if err != nil {
@@ -459,6 +462,9 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 				ProviderAccessPolicyPath: preRuntimeProviderAccessPolicyPath(stageID, config.ProviderAccessPolicyPath),
 			})
 			if err != nil {
+				if stageID == "cluster-lifecycle" {
+					return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_BUNDLE_VALIDATION_STOPPED", err)
+				}
 				return preRuntimeStagedInvocation{}, err
 			}
 			runtime := config.ProviderPrerequisites
@@ -467,6 +473,9 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 			}
 			opened, err := bundle.Open(runtime)
 			if err != nil {
+				if stageID == "cluster-lifecycle" {
+					return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED", err)
+				}
 				return preRuntimeStagedInvocation{}, err
 			}
 			return preRuntimeStagedInvocation{run: opened.Run, store: opened.operation.Ledger}, nil
@@ -558,6 +567,14 @@ func preRuntimeProviderAccessPolicyPath(stageID, path string) string {
 		return path
 	}
 	return ""
+}
+
+func clusterLifecycleOpenStopOrFallback(cause error) error {
+	var categorized redactedStopCategorizer
+	if errors.As(cause, &categorized) && validClusterLifecycleOpenStopCategory(categorized.RedactedStopCategory()) {
+		return cause
+	}
+	return newFixedRedactedStop("CLUSTER_LIFECYCLE_STAGE_OPEN_STOPPED", cause)
 }
 
 func stoppedPreRuntimeExecutionReceipt(stageID string, checkpoints []PreRuntimeStageCheckpoint, authorizations []ResolvedStageAuthorizationReceipt) PreRuntimeExecutionReceipt {

@@ -159,6 +159,91 @@ func TestPreRuntimeExecutionStopsAfterDurableReceiptWhenNextGrantIsUnavailable(t
 	}
 }
 
+func TestPreRuntimeExecutionReportsRedactedClusterLifecycleOpenCategories(t *testing.T) {
+	tests := []struct {
+		name     string
+		category string
+		open     func() (preRuntimeStagedInvocation, error)
+	}{
+		{
+			name: "bundle validation", category: "CLUSTER_LIFECYCLE_BUNDLE_VALIDATION_STOPPED",
+			open: func() (preRuntimeStagedInvocation, error) {
+				return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_BUNDLE_VALIDATION_STOPPED", errors.New("private bundle path and identity"))
+			},
+		},
+		{
+			name: "runtime open", category: "CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED",
+			open: func() (preRuntimeStagedInvocation, error) {
+				return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED", errors.New("private credential and endpoint"))
+			},
+		},
+		{
+			name: "invalid invocation", category: "CLUSTER_LIFECYCLE_INVOCATION_INVALID",
+			open: func() (preRuntimeStagedInvocation, error) { return preRuntimeStagedInvocation{}, nil },
+		},
+		{
+			name: "uncategorized fallback", category: "CLUSTER_LIFECYCLE_STAGE_OPEN_STOPPED",
+			open: func() (preRuntimeStagedInvocation, error) {
+				return preRuntimeStagedInvocation{}, errors.New("private foreign open failure")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config, factories, calls, _ := preRuntimeExecutionFixture(t)
+			original := factories.submission
+			factories.submission = func(resume StageResumeConfig, stageID string, source StageAuthorizationSource, config PreRuntimeExecutionConfig) (preRuntimeStagedInvocation, error) {
+				if stageID == "cluster-lifecycle" {
+					return test.open()
+				}
+				return original(resume, stageID, source, config)
+			}
+			executor, err := openPreRuntimeExecution(config, factories)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := executor.Run(context.Background())
+			if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "cluster-lifecycle" || receipt.StopCategory != test.category ||
+				len(receipt.Checkpoints) != 1 || !reflect.DeepEqual(*calls, []string{"provider-prerequisites"}) {
+				t.Fatalf("cluster-lifecycle open category differs: receipt=%#v calls=%v err=%v", receipt, *calls, err)
+			}
+			encoded := strings.ToLower(string(mustJSON(t, receipt)) + err.Error())
+			for _, forbidden := range []string{"private", "credential", "endpoint", "kubeconfig", "uid", "bundle path", "foreign open failure"} {
+				if strings.Contains(encoded, forbidden) {
+					t.Fatalf("cluster-lifecycle open category exposed %q: %s", forbidden, encoded)
+				}
+			}
+		})
+	}
+}
+
+func TestClusterLifecycleOpenStopRejectsForeignCategory(t *testing.T) {
+	private := errors.New("private foreign category detail")
+	err := clusterLifecycleOpenStopOrFallback(newFixedRedactedStop("AUTHORIZATION_HTTP_REJECTED", private))
+	if got := redactedStopCategory(err); got != "CLUSTER_LIFECYCLE_STAGE_OPEN_STOPPED" || strings.Contains(err.Error(), "private") {
+		t.Fatalf("foreign cluster-lifecycle open category escaped: category=%s err=%v", got, err)
+	}
+	for _, category := range []string{
+		"CLUSTER_LIFECYCLE_BUNDLE_VALIDATION_STOPPED",
+		"CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED",
+		"CLUSTER_LIFECYCLE_INVOCATION_INVALID",
+		"CLUSTER_LIFECYCLE_STAGE_OPEN_STOPPED",
+	} {
+		if !validClusterLifecycleOpenStopCategory(category) || !validRedactedStopCategory(category) {
+			t.Fatalf("cluster-lifecycle open category is not allowlisted: %s", category)
+		}
+	}
+}
+
+func TestDefaultPreRuntimeExecutionFactoryCategorizesClusterLifecycleBundleValidation(t *testing.T) {
+	factory := defaultPreRuntimeExecutionFactories().submission
+	_, err := factory(StageResumeConfig{}, "cluster-lifecycle", StageAuthorizationSource{}, PreRuntimeExecutionConfig{})
+	if err == nil || redactedStopCategory(err) != "CLUSTER_LIFECYCLE_BUNDLE_VALIDATION_STOPPED" ||
+		strings.Contains(strings.ToLower(err.Error()), "path") {
+		t.Fatalf("default cluster-lifecycle bundle failure was not safely categorized: %v", err)
+	}
+}
+
 func TestPreRuntimeExecutionPreservesClusterLifecycleMismatchEvidence(t *testing.T) {
 	config, factories, calls, _ := preRuntimeExecutionFixture(t)
 	category := "SUBMISSION_OBJECT_CONTENT_DATA_MISMATCH_CONVERGENCE_EXHAUSTED_AT_02"
