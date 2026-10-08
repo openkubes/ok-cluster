@@ -471,11 +471,8 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 			if stageID == "cluster-lifecycle" {
 				runtime = config.ClusterLifecycle
 			}
-			opened, err := bundle.Open(runtime)
+			opened, err := openPreRuntimeSubmissionBundle(bundle, stageID, runtime)
 			if err != nil {
-				if stageID == "cluster-lifecycle" {
-					return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED", err)
-				}
 				return preRuntimeStagedInvocation{}, err
 			}
 			return preRuntimeStagedInvocation{run: opened.Run, store: opened.operation.Ledger}, nil
@@ -560,6 +557,24 @@ func defaultPreRuntimeExecutionFactories() preRuntimeExecutionFactories {
 			return material.Persist(path)
 		},
 	}
+}
+
+func openPreRuntimeSubmissionBundle(bundle VerifiedSubmissionStageBundle, stageID string, runtime SubmissionStageRuntimeConfig) (BoundSubmissionStage, error) {
+	if stageID != "cluster-lifecycle" {
+		return bundle.Open(runtime)
+	}
+	projectionPlan, err := bindSubmissionProviderAccess(bundle, runtime.ProviderAccessKubeconfigFile)
+	if err != nil {
+		return BoundSubmissionStage{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_PROVIDER_ACCESS_BINDING_STOPPED", err)
+	}
+	operation, err := OpenKubernetesSubmissionStageOperation(KubernetesSubmissionStageOperationConfig{
+		Ledger: runtime.Ledger, Authority: runtime.Authority, Plan: bundle.plan,
+		StageID: bundle.stageID, Projection: projectionPlan, Clock: runtime.Clock,
+	})
+	if err != nil {
+		return BoundSubmissionStage{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_RUNTIME_OPERATION_OPEN_STOPPED", err)
+	}
+	return BoundSubmissionStage{operation: operation, plan: bundle.plan, cursor: bundle.cursor, grant: bundle.grant, verified: true}, nil
 }
 
 func preRuntimeProviderAccessPolicyPath(stageID, path string) string {

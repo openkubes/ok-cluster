@@ -172,9 +172,15 @@ func TestPreRuntimeExecutionReportsRedactedClusterLifecycleOpenCategories(t *tes
 			},
 		},
 		{
-			name: "runtime open", category: "CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED",
+			name: "provider access binding", category: "CLUSTER_LIFECYCLE_PROVIDER_ACCESS_BINDING_STOPPED",
 			open: func() (preRuntimeStagedInvocation, error) {
-				return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED", errors.New("private credential and endpoint"))
+				return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_PROVIDER_ACCESS_BINDING_STOPPED", errors.New("private credential and endpoint"))
+			},
+		},
+		{
+			name: "runtime operation open", category: "CLUSTER_LIFECYCLE_RUNTIME_OPERATION_OPEN_STOPPED",
+			open: func() (preRuntimeStagedInvocation, error) {
+				return preRuntimeStagedInvocation{}, newFixedRedactedStop("CLUSTER_LIFECYCLE_RUNTIME_OPERATION_OPEN_STOPPED", errors.New("private runtime authority and token"))
 			},
 		},
 		{
@@ -225,13 +231,51 @@ func TestClusterLifecycleOpenStopRejectsForeignCategory(t *testing.T) {
 	}
 	for _, category := range []string{
 		"CLUSTER_LIFECYCLE_BUNDLE_VALIDATION_STOPPED",
-		"CLUSTER_LIFECYCLE_RUNTIME_OPEN_STOPPED",
+		"CLUSTER_LIFECYCLE_PROVIDER_ACCESS_BINDING_STOPPED",
+		"CLUSTER_LIFECYCLE_RUNTIME_OPERATION_OPEN_STOPPED",
 		"CLUSTER_LIFECYCLE_INVOCATION_INVALID",
 		"CLUSTER_LIFECYCLE_STAGE_OPEN_STOPPED",
 	} {
 		if !validClusterLifecycleOpenStopCategory(category) || !validRedactedStopCategory(category) {
 			t.Fatalf("cluster-lifecycle open category is not allowlisted: %s", category)
 		}
+	}
+}
+
+func TestOpenPreRuntimeSubmissionBundleCategorizesClusterLifecycleRuntimePhases(t *testing.T) {
+	tests := []struct {
+		name     string
+		bundle   VerifiedSubmissionStageBundle
+		category string
+	}{
+		{
+			name: "provider access binding",
+			bundle: VerifiedSubmissionStageBundle{
+				verified: true, stageID: "cluster-lifecycle", hasProviderAccess: true,
+			},
+			category: "CLUSTER_LIFECYCLE_PROVIDER_ACCESS_BINDING_STOPPED",
+		},
+		{
+			name: "runtime operation open",
+			bundle: VerifiedSubmissionStageBundle{
+				verified: true, stageID: "cluster-lifecycle",
+			},
+			category: "CLUSTER_LIFECYCLE_RUNTIME_OPERATION_OPEN_STOPPED",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := openPreRuntimeSubmissionBundle(test.bundle, "cluster-lifecycle", SubmissionStageRuntimeConfig{})
+			if err == nil || redactedStopCategory(err) != test.category || err.Error() != "stage orchestration stopped" {
+				t.Fatalf("cluster-lifecycle runtime phase was not safely categorized: category=%q err=%v", redactedStopCategory(err), err)
+			}
+			encoded := strings.ToLower(err.Error())
+			for _, forbidden := range []string{"credential", "endpoint", "token", "path", "uid", "provider-access"} {
+				if strings.Contains(encoded, forbidden) {
+					t.Fatalf("cluster-lifecycle runtime phase exposed %q: %s", forbidden, encoded)
+				}
+			}
+		})
 	}
 }
 
