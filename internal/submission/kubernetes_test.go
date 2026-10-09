@@ -15,6 +15,19 @@ import (
 	"time"
 )
 
+func TestKubernetesMismatchConvergenceProductionBounds(t *testing.T) {
+	if objectMismatchConvergenceTimeout != 20*time.Minute {
+		t.Fatalf("convergence timeout = %s, want 20m", objectMismatchConvergenceTimeout)
+	}
+	if objectMismatchMaximumAttempts != 600 {
+		t.Fatalf("convergence attempts = %d, want 600", objectMismatchMaximumAttempts)
+	}
+	waitBudget := time.Duration(objectMismatchMaximumAttempts-1) * objectMismatchConfirmationDelay
+	if waitBudget >= objectMismatchConvergenceTimeout {
+		t.Fatalf("final no-wait GET has no bounded budget: waits=%s timeout=%s", waitBudget, objectMismatchConvergenceTimeout)
+	}
+}
+
 func TestKubernetesSubmitIsExactCreateOnlyAndIdempotent(t *testing.T) {
 	root, binding := validProjection(t)
 	plan, err := Load(root, binding)

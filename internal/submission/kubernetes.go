@@ -24,8 +24,8 @@ const (
 	maximumAPIResponseBytes          = 4 * 1024 * 1024
 	objectMismatchConfirmationDelay  = 2 * time.Second
 	maximumMismatchConfirmationDelay = 5 * time.Second
-	objectMismatchConvergenceTimeout = 10 * time.Minute
-	objectMismatchMaximumAttempts    = 300
+	objectMismatchConvergenceTimeout = 20 * time.Minute
+	objectMismatchMaximumAttempts    = 600
 	PlaneReceiptFormat               = "ok147-bounded-submission-receipt/v2"
 )
 

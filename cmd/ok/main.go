@@ -31,6 +31,7 @@ import (
 const (
 	ledgerNamespace                 = "openkubes-execution-system"
 	stageRunTimeout                 = 10 * time.Minute
+	submissionStageRunTimeout       = 21 * time.Minute
 	stageLaunchTimeout              = 5 * time.Minute
 	lifecycleObservationRunOverhead = time.Minute
 	runtimeBindingRunTimeout        = 2 * time.Minute
@@ -1962,7 +1963,7 @@ func runClusterStageRun(ctx context.Context, arguments []string, stdout, stderr 
 			return fmt.Errorf("%s is required", input.name)
 		}
 	}
-	boundedContext, cancel := context.WithTimeout(ctx, stageRunTimeout)
+	boundedContext, cancel := context.WithTimeout(ctx, submissionStageRunTimeout)
 	defer cancel()
 	receipt, runErr := executeSubmissionStage(boundedContext, bundleConfig, runner.SubmissionStageRuntimeConfig{
 		Ledger: runner.KubernetesLedgerConfig{
