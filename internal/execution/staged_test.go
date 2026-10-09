@@ -149,7 +149,7 @@ func TestStageMutationValidationAllowsOnlyProviderEnsureWithoutWrite(t *testing.
 func TestStageMutationValidationBindsMismatchEvidenceToConvergenceExhaustion(t *testing.T) {
 	evidence := &SubmissionMismatchEvidence{
 		FirstCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH", LastCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH",
-		ObservationCount: 300, ExpectedDigest: stagedSHA("e"), LastObservedDigest: stagedSHA("f"), RuntimeIdentityStable: true,
+		ObservationCount: objectMismatchMaximumEvidenceObservations, ExpectedDigest: stagedSHA("e"), LastObservedDigest: stagedSHA("f"), RuntimeIdentityStable: true,
 	}
 	valid := StageMutationResult{
 		Outcome: "STOPPED", MutationState: "NOT_ATTEMPTED", EvidenceDigest: stagedSHA("d"),
@@ -170,7 +170,7 @@ func TestStageMutationValidationBindsMismatchEvidenceToConvergenceExhaustion(t *
 	}
 	oversized := valid
 	oversizedEvidence := *evidence
-	oversizedEvidence.ObservationCount = 301
+	oversizedEvidence.ObservationCount = objectMismatchMaximumEvidenceObservations + 1
 	oversized.MismatchEvidence = &oversizedEvidence
 	if err := validateStageMutationResult("cluster-lifecycle", oversized, errors.New("redacted stop")); err == nil {
 		t.Fatal("unbounded mismatch evidence was accepted")

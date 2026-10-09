@@ -26,7 +26,10 @@ const (
 	maximumMismatchConfirmationDelay = 5 * time.Second
 	objectMismatchConvergenceTimeout = 30 * time.Minute
 	objectMismatchMaximumAttempts    = 900
-	PlaneReceiptFormat               = "ok147-bounded-submission-receipt/v2"
+	// MaximumMismatchEvidenceObservations is the shared validation bound for
+	// the redacted evidence emitted by the bounded convergence loop.
+	MaximumMismatchEvidenceObservations = objectMismatchMaximumAttempts
+	PlaneReceiptFormat                  = "ok147-bounded-submission-receipt/v2"
 )
 
 // KubernetesClientConfig binds one client to one authority plane. Credentials

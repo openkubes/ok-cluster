@@ -22,6 +22,9 @@ func TestKubernetesMismatchConvergenceProductionBounds(t *testing.T) {
 	if objectMismatchMaximumAttempts != 900 {
 		t.Fatalf("convergence attempts = %d, want 900", objectMismatchMaximumAttempts)
 	}
+	if MaximumMismatchEvidenceObservations != objectMismatchMaximumAttempts {
+		t.Fatalf("evidence observations = %d, want submission attempts %d", MaximumMismatchEvidenceObservations, objectMismatchMaximumAttempts)
+	}
 	waitBudget := time.Duration(objectMismatchMaximumAttempts-1) * objectMismatchConfirmationDelay
 	if waitBudget >= objectMismatchConvergenceTimeout {
 		t.Fatalf("final no-wait GET has no bounded budget: waits=%s timeout=%s", waitBudget, objectMismatchConvergenceTimeout)

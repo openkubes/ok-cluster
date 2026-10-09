@@ -143,7 +143,7 @@ func TestSubmissionPlaneMutatorPreservesOnlyBoundedRedactedMismatchEvidence(t *t
 	projected := stagedSubmissionPlan(plan.IntentRevision, plan.Authorities.Infrastructure, plan.Authorities.Management)
 	evidence := &submission.SubmissionMismatchEvidence{
 		FirstCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH", LastCategory: "SUBMISSION_OBJECT_SPEC_MISMATCH",
-		ObservationCount: 300, ExpectedDigest: stagedSHA("e"), LastObservedDigest: stagedSHA("f"), RuntimeIdentityStable: true,
+		ObservationCount: submission.MaximumMismatchEvidenceObservations, ExpectedDigest: stagedSHA("e"), LastObservedDigest: stagedSHA("f"), RuntimeIdentityStable: true,
 	}
 	stopped := submission.PlaneReceipt{
 		Format: submission.PlaneReceiptFormat, Authority: projected.Management.Identity, Role: projected.Management.Role,
