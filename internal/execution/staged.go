@@ -247,7 +247,7 @@ func validSubmissionMismatchEvidence(evidence *SubmissionMismatchEvidence) bool 
 		evidence.RuntimeIdentityStable
 }
 
-const objectMismatchMaximumEvidenceObservations = 300
+const objectMismatchMaximumEvidenceObservations = submission.MaximumMismatchEvidenceObservations
 
 func validStageFailureCategory(category string) bool {
 	if submissionObjectStopCategoryPattern.MatchString(category) {
