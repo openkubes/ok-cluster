@@ -38,6 +38,18 @@ func TestVersionIncludesExecutableRevision(t *testing.T) {
 	}
 }
 
+func TestSubmissionStageRunTimeoutEnvelopesObjectConvergence(t *testing.T) {
+	if submissionStageRunTimeout != 21*time.Minute {
+		t.Fatalf("submission stage timeout = %s, want 21m", submissionStageRunTimeout)
+	}
+	if submissionStageRunTimeout <= 20*time.Minute {
+		t.Fatalf("submission stage timeout does not envelope the 20m object convergence window: %s", submissionStageRunTimeout)
+	}
+	if stageRunTimeout != 10*time.Minute {
+		t.Fatalf("unrelated stage timeout changed: %s", stageRunTimeout)
+	}
+}
+
 func TestCreateDryRunProducesNonMutatingPlan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
@@ -877,7 +889,7 @@ func TestStageRunRequiresExplicitExecutionAndBindsOneRuntime(t *testing.T) {
 		t.Fatal("claim-time clock was not bound")
 	}
 	deadline, bounded := capturedContext.Deadline()
-	if !bounded || time.Until(deadline) > stageRunTimeout || time.Until(deadline) < stageRunTimeout-time.Minute {
+	if !bounded || time.Until(deadline) > submissionStageRunTimeout || time.Until(deadline) < submissionStageRunTimeout-time.Minute {
 		t.Fatalf("stage run context is not bounded to the fixed timeout: %s %t", deadline, bounded)
 	}
 	var receipt execution.StagedOperationReceipt
