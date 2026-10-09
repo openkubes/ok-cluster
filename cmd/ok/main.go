@@ -31,7 +31,7 @@ import (
 const (
 	ledgerNamespace                 = "openkubes-execution-system"
 	stageRunTimeout                 = 10 * time.Minute
-	submissionStageRunTimeout       = 21 * time.Minute
+	submissionStageRunTimeout       = 31 * time.Minute
 	stageLaunchTimeout              = 5 * time.Minute
 	lifecycleObservationRunOverhead = time.Minute
 	runtimeBindingRunTimeout        = 2 * time.Minute

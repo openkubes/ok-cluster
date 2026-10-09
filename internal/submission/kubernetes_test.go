@@ -16,11 +16,11 @@ import (
 )
 
 func TestKubernetesMismatchConvergenceProductionBounds(t *testing.T) {
-	if objectMismatchConvergenceTimeout != 20*time.Minute {
-		t.Fatalf("convergence timeout = %s, want 20m", objectMismatchConvergenceTimeout)
+	if objectMismatchConvergenceTimeout != 30*time.Minute {
+		t.Fatalf("convergence timeout = %s, want 30m", objectMismatchConvergenceTimeout)
 	}
-	if objectMismatchMaximumAttempts != 600 {
-		t.Fatalf("convergence attempts = %d, want 600", objectMismatchMaximumAttempts)
+	if objectMismatchMaximumAttempts != 900 {
+		t.Fatalf("convergence attempts = %d, want 900", objectMismatchMaximumAttempts)
 	}
 	waitBudget := time.Duration(objectMismatchMaximumAttempts-1) * objectMismatchConfirmationDelay
 	if waitBudget >= objectMismatchConvergenceTimeout {

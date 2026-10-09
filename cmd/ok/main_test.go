@@ -39,11 +39,11 @@ func TestVersionIncludesExecutableRevision(t *testing.T) {
 }
 
 func TestSubmissionStageRunTimeoutEnvelopesObjectConvergence(t *testing.T) {
-	if submissionStageRunTimeout != 21*time.Minute {
-		t.Fatalf("submission stage timeout = %s, want 21m", submissionStageRunTimeout)
+	if submissionStageRunTimeout != 31*time.Minute {
+		t.Fatalf("submission stage timeout = %s, want 31m", submissionStageRunTimeout)
 	}
-	if submissionStageRunTimeout <= 20*time.Minute {
-		t.Fatalf("submission stage timeout does not envelope the 20m object convergence window: %s", submissionStageRunTimeout)
+	if submissionStageRunTimeout <= 30*time.Minute {
+		t.Fatalf("submission stage timeout does not envelope the 30m object convergence window: %s", submissionStageRunTimeout)
 	}
 	if stageRunTimeout != 10*time.Minute {
 		t.Fatalf("unrelated stage timeout changed: %s", stageRunTimeout)
