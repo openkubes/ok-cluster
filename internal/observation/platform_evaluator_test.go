@@ -125,6 +125,12 @@ func TestEvaluatePlatformSnapshotFailsClosed(t *testing.T) {
 			},
 			status: "Unknown", reason: "PlatformConvergencePending",
 		},
+		"progressing": {
+			mutate: func(_ *PlatformProfile, snapshot *PlatformSnapshot) {
+				snapshot.Applications[0].HealthStatus = "Progressing"
+			},
+			status: "Unknown", reason: "PlatformConvergencePending",
+		},
 		"degraded": {
 			mutate: func(_ *PlatformProfile, snapshot *PlatformSnapshot) {
 				snapshot.Applications[0].HealthStatus = "Degraded"
@@ -171,6 +177,42 @@ func TestEvaluatePlatformSnapshotFailsClosed(t *testing.T) {
 				t.Fatalf("unsafe platform result: %#v", evidence)
 			}
 		})
+	}
+}
+
+func TestEvaluatePlatformApplicationsKeepsProgressingEvidenceRedacted(t *testing.T) {
+	policy, profile, snapshot := validPlatformFixture(t)
+	application := &snapshot.Applications[0]
+	sensitiveName := application.Name
+	application.HealthStatus = "Progressing"
+
+	evidence, err := EvaluatePlatformSnapshot(policy, profile, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != "Unknown" || evidence.Reason != "PlatformConvergencePending" {
+		t.Fatalf("progressing Application became terminal: %#v", evidence)
+	}
+	if strings.Contains(evidence.Reason, sensitiveName) || strings.Contains(evidence.Reason, "argocd") {
+		t.Fatalf("progressing evidence leaked runtime identity: %#v", evidence)
+	}
+
+	application.HealthStatus = "Healthy"
+	evidence, err = EvaluatePlatformSnapshot(policy, profile, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != "True" || evidence.Reason != "PlatformReady" {
+		t.Fatalf("healthy Application did not converge: %#v", evidence)
+	}
+
+	application.HealthStatus = "Degraded"
+	evidence, err = EvaluatePlatformSnapshot(policy, profile, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != "False" || evidence.Reason != "PlatformHealthFailed" {
+		t.Fatalf("degraded Application was not terminal: %#v", evidence)
 	}
 }
 
