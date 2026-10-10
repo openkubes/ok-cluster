@@ -181,6 +181,9 @@ func validPackagedFullRunRuntimePaths(document fullRunExecutionManifestDocument)
 		document.TargetCredential.PolicyPath == path("input/target-credential-policy.json") && document.TargetCredential.Workload == workload &&
 		document.TargetRegistration.ArtifactPath == path("input/target-registration.yaml") && document.TargetRegistration.GitOps.TokenFile == path("credentials/gitops-token") && document.TargetRegistration.GitOps.CAFile == path("credentials/gitops-ca.crt") &&
 		document.PlatformApplications.ArtifactPath == path("input/platform-applications.yaml") && document.ReceiptDirectory == path("work/receipts") &&
+		document.ObservabilityCredentials.GrafanaAdminUserFile == path("credentials/observability-grafana-admin-user") &&
+		document.ObservabilityCredentials.GrafanaAdminPasswordFile == path("credentials/observability-grafana-admin-password") &&
+		document.ObservabilityCredentials.OpenSearchAdminPasswordFile == path("credentials/observability-opensearch-admin-password") &&
 		document.ObservabilityCollector.RuntimeAuthorityPath == path("input/collector-runtime-authority.yaml") &&
 		document.ObservabilityCollector.JobTemplatePath == path("input/collector-job.yaml") &&
 		document.ObservabilityCollector.WebhookTokenPath == path("credentials/collector-webhook-token") &&

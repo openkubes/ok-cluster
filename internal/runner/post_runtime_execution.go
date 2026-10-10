@@ -77,6 +77,7 @@ type PostRuntimeExecutionConfig struct {
 	Authorization              StageAuthorizationResolver
 	TargetRegistration         PostRuntimeTargetRegistrationConfig
 	PlatformApplications       PostRuntimePlatformApplicationsConfig
+	ObservabilityCredentials   ObservabilityCredentialInstallationConfig
 	PlatformObservation        PostRuntimePlatformObservationConfig
 	AggregateEvidence          PostRuntimeAggregateEvidenceConfig
 	RuntimeBinding             RuntimeBindingMaterialFileConfig
@@ -117,27 +118,29 @@ type postRuntimeEvaluationInvocation struct {
 }
 
 type postRuntimeExecutionFactories struct {
-	credential           func(TargetCredentialStageBundleConfig, TargetCredentialStageRuntimeConfig) (postRuntimeCredentialInvocation, error)
-	registration         func(StageResumeConfig, *VerifiedTargetCredentialStageHandoff, StageAuthorizationSource, PostRuntimeTargetRegistrationConfig, VerifiedRuntimeBindingMaterial) (postRuntimeStagedInvocation, error)
-	applications         func(StageResumeConfig, StageAuthorizationSource, PostRuntimePlatformApplicationsConfig) (postRuntimeStagedInvocation, error)
-	observation          func(StageResumeConfig, PostRuntimePlatformObservationConfig) (postRuntimeObservationInvocation, error)
-	aggregate            func(StageResumeConfig, PostRuntimeAggregateEvidenceConfig, VerifiedRuntimeBindingMaterial) (postRuntimeEvaluationInvocation, error)
-	registrationRecovery func(context.Context, TargetRegistrationRecoveryConfig) (TargetRegistrationRecoveryReceipt, error)
+	credential               func(TargetCredentialStageBundleConfig, TargetCredentialStageRuntimeConfig) (postRuntimeCredentialInvocation, error)
+	registration             func(StageResumeConfig, *VerifiedTargetCredentialStageHandoff, StageAuthorizationSource, PostRuntimeTargetRegistrationConfig, VerifiedRuntimeBindingMaterial) (postRuntimeStagedInvocation, error)
+	applications             func(StageResumeConfig, StageAuthorizationSource, PostRuntimePlatformApplicationsConfig) (postRuntimeStagedInvocation, error)
+	observation              func(StageResumeConfig, PostRuntimePlatformObservationConfig) (postRuntimeObservationInvocation, error)
+	aggregate                func(StageResumeConfig, PostRuntimeAggregateEvidenceConfig, VerifiedRuntimeBindingMaterial) (postRuntimeEvaluationInvocation, error)
+	registrationRecovery     func(context.Context, TargetRegistrationRecoveryConfig) (TargetRegistrationRecoveryReceipt, error)
+	observabilityCredentials func(ObservabilityCredentialInstallationConfig) (*observabilityCredentialInstaller, error)
 }
 
 type PostRuntimeExecution struct {
-	config               PostRuntimeExecutionConfig
-	initial              StageResumeConfig
-	continuation         PostRuntimeContinuationBinding
-	runtime              VerifiedRuntimeBindingMaterial
-	credential           postRuntimeCredentialInvocation
-	dynamicCredential    bool
-	recoveryBundle       *VerifiedTargetCredentialStageBundle
-	recovery             *PostRuntimeTargetCredentialRecoveryConfig
-	registrationRecovery *PostRuntimeTargetRegistrationRecoveryConfig
-	factories            postRuntimeExecutionFactories
-	mu                   sync.Mutex
-	used                 bool
+	config                   PostRuntimeExecutionConfig
+	initial                  StageResumeConfig
+	continuation             PostRuntimeContinuationBinding
+	runtime                  VerifiedRuntimeBindingMaterial
+	credential               postRuntimeCredentialInvocation
+	dynamicCredential        bool
+	recoveryBundle           *VerifiedTargetCredentialStageBundle
+	recovery                 *PostRuntimeTargetCredentialRecoveryConfig
+	registrationRecovery     *PostRuntimeTargetRegistrationRecoveryConfig
+	factories                postRuntimeExecutionFactories
+	observabilityCredentials *observabilityCredentialInstaller
+	mu                       sync.Mutex
+	used                     bool
 }
 
 // OpenPostRuntimeExecution performs bounded local loading only. It opens
@@ -245,11 +248,26 @@ func openPostRuntimeExecution(config PostRuntimeExecutionConfig, factories postR
 	config.AggregateEvidence.Profile.Required = append([]string(nil), config.AggregateEvidence.Profile.Required...)
 	config.AggregateEvidence.Runtime.RuntimeMaterialPath = config.RuntimeBinding.MaterialPath
 	config.AggregateEvidence.Runtime.RuntimeReceiptPath = config.RuntimeBinding.ReceiptPath
+	var credentialInstaller *observabilityCredentialInstaller
+	credentialsConfigured := config.ObservabilityCredentials.GrafanaAdminUserFile != "" ||
+		config.ObservabilityCredentials.GrafanaAdminPasswordFile != "" || config.ObservabilityCredentials.OpenSearchAdminPasswordFile != ""
+	if credentialsConfigured {
+		if factories.observabilityCredentials == nil {
+			return nil, errors.New("open observability credential installer")
+		}
+		config.ObservabilityCredentials.Authority.Endpoint = runtime.material.Target.WorkloadAPIEndpoint
+		config.ObservabilityCredentials.Authority.AuthorityIdentity = runtime.material.Target.CAPIClusterUID
+		config.ObservabilityCredentials.Authority.CABundleDigest = runtime.material.Target.WorkloadAPICADigest
+		credentialInstaller, err = factories.observabilityCredentials(config.ObservabilityCredentials)
+		if err != nil || credentialInstaller == nil {
+			return nil, errors.New("open observability credential installer")
+		}
+	}
 	return &PostRuntimeExecution{
 		config: config, initial: initial, continuation: continuation, runtime: runtime, credential: credential,
 		dynamicCredential: dynamicCredential,
 		recoveryBundle:    recoveryBundle, recovery: config.TargetCredentialRecovery, factories: factories,
-		registrationRecovery: registrationRecovery,
+		registrationRecovery: registrationRecovery, observabilityCredentials: credentialInstaller,
 	}, nil
 }
 
@@ -405,6 +423,11 @@ func (executor *PostRuntimeExecution) Run(ctx context.Context) (PostRuntimeExecu
 		return runReceipt, nil
 	}
 	orchestration.RunPlatformApplications = func(ctx context.Context, _ execution.StagedOperationReceipt) (execution.StagedOperationReceipt, error) {
+		if executor.observabilityCredentials != nil {
+			if _, err := executor.observabilityCredentials.Install(ctx); err != nil {
+				return execution.StagedOperationReceipt{}, err
+			}
+		}
 		resolved, err := ResolveStageAuthorization(ctx, executor.resume(receipts), executor.config.Authorization)
 		if err != nil {
 			return execution.StagedOperationReceipt{}, err
@@ -615,6 +638,7 @@ func defaultPostRuntimeExecutionFactories() postRuntimeExecutionFactories {
 			}
 			return postRuntimeEvaluationInvocation{run: opened.Run}, nil
 		},
-		registrationRecovery: RecoverTargetRegistration,
+		registrationRecovery:     RecoverTargetRegistration,
+		observabilityCredentials: OpenObservabilityCredentialInstaller,
 	}
 }

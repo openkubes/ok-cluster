@@ -25,7 +25,7 @@ const (
 	fullRunExecutionHandoffVolumeRoot   = "/var/run/openkubes/handoff-volume"
 	fullRunExecutionHandoffPrivateRoot  = "/var/run/openkubes/handoff-volume/private"
 	maximumFullRunExecutionBundleBytes  = 900 * 1024
-	maximumFullRunExecutionBundleFiles  = 37
+	maximumFullRunExecutionBundleFiles  = 40
 )
 
 var fullRunExecutionBundleFiles = []string{
@@ -44,6 +44,9 @@ var fullRunExecutionBundleFiles = []string{
 	"credentials/ledger-token",
 	"credentials/management-ca.crt",
 	"credentials/management-token",
+	"credentials/observability-grafana-admin-user",
+	"credentials/observability-grafana-admin-password",
+	"credentials/observability-opensearch-admin-password",
 	"credentials/provider-access-kubeconfig",
 	"input/aggregate-profile.json",
 	"input/authorization-authority.pub",
@@ -203,42 +206,45 @@ func verifyFullRunExecutionBundle(bundle VerifiedFullRunExecutionBundle) error {
 
 func collectFullRunExecutionSources(document fullRunExecutionManifestDocument, evidencePublicKeyPath string) (map[string][]byte, string, error) {
 	paths := map[string]string{
-		"credentials/authorization-ca.crt":              document.Authorization.CAFile,
-		"credentials/authorization-token":               document.Authorization.TokenFile,
-		"credentials/collector-query-token":             document.ObservabilityCollector.QueryTokenPath,
-		"credentials/collector-tls.crt":                 document.ObservabilityCollector.TLSCertificatePath,
-		"credentials/collector-tls.key":                 document.ObservabilityCollector.TLSPrivateKeyPath,
-		"credentials/collector-webhook-token":           document.ObservabilityCollector.WebhookTokenPath,
-		"credentials/gitops-ca.crt":                     document.TargetRegistration.GitOps.CAFile,
-		"credentials/gitops-token":                      document.TargetRegistration.GitOps.TokenFile,
-		"credentials/infrastructure-ca.crt":             document.ProviderPrerequisites.Authority.CAFile,
-		"credentials/infrastructure-token":              document.ProviderPrerequisites.Authority.TokenFile,
-		"credentials/ledger-ca.crt":                     document.ProviderPrerequisites.Ledger.CAFile,
-		"credentials/ledger-token":                      document.ProviderPrerequisites.Ledger.TokenFile,
-		"credentials/management-ca.crt":                 document.ClusterLifecycle.Authority.CAFile,
-		"credentials/management-token":                  document.ClusterLifecycle.Authority.TokenFile,
-		"credentials/provider-access-kubeconfig":        document.ProviderAccess.KubeconfigFile,
-		"input/aggregate-profile.json":                  document.Profiles.Aggregate.Path,
-		"input/authorization-authority.pub":             document.Authorization.PublicKeyPath,
-		"input/collector-job.yaml":                      document.ObservabilityCollector.JobTemplatePath,
-		"input/collector-runtime-authority.yaml":        document.ObservabilityCollector.RuntimeAuthorityPath,
-		"input/enablement.yaml":                         document.Enablement.ArtifactPath,
-		"input/independent-evidence.pub":                evidencePublicKeyPath,
-		"input/network-profile.json":                    document.Profiles.Network.Path,
-		"input/platform-applications.yaml":              document.PlatformApplications.ArtifactPath,
-		"input/platform-profile.json":                   document.Profiles.Platform.Path,
-		"input/provider-access-policy.json":             document.ProviderAccess.PolicyPath,
-		"input/projection/authority-map.json":           filepath.Join(document.Projection.Root, "authority-map.json"),
-		"input/projection/ok-infra-prerequisites.yaml":  filepath.Join(document.Projection.Root, "ok-infra-prerequisites.yaml"),
-		"input/projection/ok-mgmt-lifecycle.yaml":       filepath.Join(document.Projection.Root, "ok-mgmt-lifecycle.yaml"),
-		"input/projection/renderer-input.yaml":          filepath.Join(document.Projection.Root, "renderer-input.yaml"),
-		"input/projection/renderer-source.yaml":         filepath.Join(document.Projection.Root, "renderer-source.yaml"),
-		"input/projection/resolved-renderer-input.yaml": filepath.Join(document.Projection.Root, "resolved-renderer-input.yaml"),
-		"input/projection-manifest.json":                document.Projection.ManifestPath,
-		"input/staged-plan.json":                        document.Plan.Path,
-		"input/target-access.yaml":                      document.TargetAccess.ArtifactPath,
-		"input/target-credential-policy.json":           document.TargetCredential.PolicyPath,
-		"input/target-registration.yaml":                document.TargetRegistration.ArtifactPath,
+		"credentials/authorization-ca.crt":                    document.Authorization.CAFile,
+		"credentials/authorization-token":                     document.Authorization.TokenFile,
+		"credentials/collector-query-token":                   document.ObservabilityCollector.QueryTokenPath,
+		"credentials/collector-tls.crt":                       document.ObservabilityCollector.TLSCertificatePath,
+		"credentials/collector-tls.key":                       document.ObservabilityCollector.TLSPrivateKeyPath,
+		"credentials/collector-webhook-token":                 document.ObservabilityCollector.WebhookTokenPath,
+		"credentials/gitops-ca.crt":                           document.TargetRegistration.GitOps.CAFile,
+		"credentials/gitops-token":                            document.TargetRegistration.GitOps.TokenFile,
+		"credentials/infrastructure-ca.crt":                   document.ProviderPrerequisites.Authority.CAFile,
+		"credentials/infrastructure-token":                    document.ProviderPrerequisites.Authority.TokenFile,
+		"credentials/ledger-ca.crt":                           document.ProviderPrerequisites.Ledger.CAFile,
+		"credentials/ledger-token":                            document.ProviderPrerequisites.Ledger.TokenFile,
+		"credentials/management-ca.crt":                       document.ClusterLifecycle.Authority.CAFile,
+		"credentials/management-token":                        document.ClusterLifecycle.Authority.TokenFile,
+		"credentials/observability-grafana-admin-user":        document.ObservabilityCredentials.GrafanaAdminUserFile,
+		"credentials/observability-grafana-admin-password":    document.ObservabilityCredentials.GrafanaAdminPasswordFile,
+		"credentials/observability-opensearch-admin-password": document.ObservabilityCredentials.OpenSearchAdminPasswordFile,
+		"credentials/provider-access-kubeconfig":              document.ProviderAccess.KubeconfigFile,
+		"input/aggregate-profile.json":                        document.Profiles.Aggregate.Path,
+		"input/authorization-authority.pub":                   document.Authorization.PublicKeyPath,
+		"input/collector-job.yaml":                            document.ObservabilityCollector.JobTemplatePath,
+		"input/collector-runtime-authority.yaml":              document.ObservabilityCollector.RuntimeAuthorityPath,
+		"input/enablement.yaml":                               document.Enablement.ArtifactPath,
+		"input/independent-evidence.pub":                      evidencePublicKeyPath,
+		"input/network-profile.json":                          document.Profiles.Network.Path,
+		"input/platform-applications.yaml":                    document.PlatformApplications.ArtifactPath,
+		"input/platform-profile.json":                         document.Profiles.Platform.Path,
+		"input/provider-access-policy.json":                   document.ProviderAccess.PolicyPath,
+		"input/projection/authority-map.json":                 filepath.Join(document.Projection.Root, "authority-map.json"),
+		"input/projection/ok-infra-prerequisites.yaml":        filepath.Join(document.Projection.Root, "ok-infra-prerequisites.yaml"),
+		"input/projection/ok-mgmt-lifecycle.yaml":             filepath.Join(document.Projection.Root, "ok-mgmt-lifecycle.yaml"),
+		"input/projection/renderer-input.yaml":                filepath.Join(document.Projection.Root, "renderer-input.yaml"),
+		"input/projection/renderer-source.yaml":               filepath.Join(document.Projection.Root, "renderer-source.yaml"),
+		"input/projection/resolved-renderer-input.yaml":       filepath.Join(document.Projection.Root, "resolved-renderer-input.yaml"),
+		"input/projection-manifest.json":                      document.Projection.ManifestPath,
+		"input/staged-plan.json":                              document.Plan.Path,
+		"input/target-access.yaml":                            document.TargetAccess.ArtifactPath,
+		"input/target-credential-policy.json":                 document.TargetCredential.PolicyPath,
+		"input/target-registration.yaml":                      document.TargetRegistration.ArtifactPath,
 	}
 	result := make(map[string][]byte, len(paths))
 	totalBytes := 0
@@ -252,6 +258,15 @@ func collectFullRunExecutionSources(document fullRunExecutionManifestDocument, e
 			return nil, "", errors.New("full-run execution sources exceed size limit")
 		}
 		result[relative] = raw
+	}
+	for _, relative := range []string{
+		"credentials/observability-grafana-admin-user",
+		"credentials/observability-grafana-admin-password",
+		"credentials/observability-opensearch-admin-password",
+	} {
+		if !validObservabilityCredentialValue(result[relative]) {
+			return nil, "", errors.New("full-run observability credential material is invalid")
+		}
 	}
 	publicRaw := result["input/independent-evidence.pub"]
 	encoded := strings.TrimSuffix(string(publicRaw), "\n")
@@ -319,6 +334,11 @@ func rewriteFullRunExecutionBundle(document fullRunExecutionManifestDocument, so
 	document.TargetCredential.PolicyPath, document.TargetCredential.Ledger, document.TargetCredential.Workload = path("input/target-credential-policy.json"), ledger, workload
 	document.TargetRegistration.ArtifactPath, document.TargetRegistration.Ledger, document.TargetRegistration.GitOps = path("input/target-registration.yaml"), ledger, gitOps
 	document.PlatformApplications.ArtifactPath, document.PlatformApplications.Ledger, document.PlatformApplications.GitOps = path("input/platform-applications.yaml"), ledger, gitOps
+	document.ObservabilityCredentials = fullRunObservabilityCredentialsDocument{
+		GrafanaAdminUserFile:        path("credentials/observability-grafana-admin-user"),
+		GrafanaAdminPasswordFile:    path("credentials/observability-grafana-admin-password"),
+		OpenSearchAdminPasswordFile: path("credentials/observability-opensearch-admin-password"),
+	}
 	document.PlatformObservation.Ledger, document.PlatformObservation.Argo = ledger, gitOps
 	document.PlatformObservation.Capability.IndependentEvidenceIdentityPath = fullRunExecutionHandoffRoot + "/observability-evidence-identity.json"
 	document.PlatformObservation.Capability.IndependentEvidenceIdentityReceiptPath = fullRunExecutionHandoffRoot + "/observability-evidence-identity-receipt.json"

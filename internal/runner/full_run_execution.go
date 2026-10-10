@@ -148,6 +148,9 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 			bound.AggregateEvidence.Runtime.WorkloadTokenFile = workloadAuthority.TokenFile
 			bound.AggregateEvidence.Runtime.WorkloadKubeconfigFile = workloadAuthority.KubeconfigFile
 			bound.AggregateEvidence.Runtime.WorkloadCAFile = workloadAuthority.CAFile
+			bound.ObservabilityCredentials.Authority = KubernetesAuthorityConfig{
+				KubeconfigFile: workloadAuthority.KubeconfigFile, CAFile: workloadAuthority.CAFile,
+			}
 			bound.TargetRegistration.Expected.TargetIdentityDigest = targetIdentity
 			bound.PlatformApplications.Expected.TargetIdentityDigest = targetIdentity
 			if bound.TargetRegistration.Runtime.Clock != nil {
@@ -205,6 +208,7 @@ func clonePostRuntimeExecutionConfigForFullRun(config PostRuntimeExecutionConfig
 	config.TargetCredential.TargetAccessExpectedObjects = append([]projection.ResourceIdentity(nil), config.TargetCredential.TargetAccessExpectedObjects...)
 	config.TargetRegistration.Expected.TargetNamespaces = append([]string(nil), config.TargetRegistration.Expected.TargetNamespaces...)
 	config.PlatformApplications.Expected.Profile.RequiredApplications = append([]observation.PlatformApplicationExpectation(nil), config.PlatformApplications.Expected.Profile.RequiredApplications...)
+	config.ObservabilityCredentials.Authority = KubernetesAuthorityConfig{}
 	config.PlatformObservation.Profile.RequiredApplications = append([]observation.PlatformApplicationExpectation(nil), config.PlatformObservation.Profile.RequiredApplications...)
 	config.AggregateEvidence.Profile.Required = append([]string(nil), config.AggregateEvidence.Profile.Required...)
 	return config

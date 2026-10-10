@@ -1,12 +1,15 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -66,6 +69,79 @@ func TestPostRuntimeExecutionComposesExactSuffixWithDynamicAuthorization(t *test
 		if strings.Contains(string(public), forbidden) {
 			t.Fatalf("public execution receipt exposed %q", forbidden)
 		}
+	}
+}
+
+func TestPostRuntimeExecutionInstallsObservabilityCredentialsBeforePlatformApplications(t *testing.T) {
+	config, factories, calls, _ := postRuntimeExecutionFixture(t)
+	config.ObservabilityCredentials = ObservabilityCredentialInstallationConfig{
+		GrafanaAdminUserFile: "private-user", GrafanaAdminPasswordFile: "private-grafana-password",
+		OpenSearchAdminPasswordFile: "private-opensearch-password",
+	}
+	expected := observabilityCredentialSecretFixture(t, []string{"admin", strings.Repeat("g", 48), strings.Repeat("o", 48)})
+	requests := 0
+	factories.observabilityCredentials = func(ObservabilityCredentialInstallationConfig) (*observabilityCredentialInstaller, error) {
+		return &observabilityCredentialInstaller{
+			endpoint: &url.URL{Scheme: "https", Host: "127.0.0.1:6443"}, raw: expected, digest: digest.SHA256(expected),
+			client: &http.Client{Transport: observabilityCredentialRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				requests++
+				if request.Method == http.MethodGet {
+					return observabilityCredentialResponse(http.StatusNotFound, nil), nil
+				}
+				*calls = append(*calls, "observability-credentials")
+				return observabilityCredentialResponse(http.StatusCreated, observabilityCredentialObserved(t, expected, "uid-created", "31")), nil
+			})},
+		}, nil
+	}
+	executor, err := openPostRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || requests != 2 {
+		t.Fatalf("credential-prefixed execution failed: %#v requests=%d err=%v", receipt, requests, err)
+	}
+	want := []string{"target-credential", "target-registration", "observability-credentials", "platform-applications", "platform-observation", "aggregate-evidence"}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Fatalf("observability credential ordering differs: got=%v want=%v", *calls, want)
+	}
+}
+
+func TestPostRuntimeExecutionPropagatesRedactedObservabilityCredentialMismatch(t *testing.T) {
+	config, factories, calls, _ := postRuntimeExecutionFixture(t)
+	config.ObservabilityCredentials = ObservabilityCredentialInstallationConfig{
+		GrafanaAdminUserFile: "private-user", GrafanaAdminPasswordFile: "private-grafana-password",
+		OpenSearchAdminPasswordFile: "private-opensearch-password",
+	}
+	expected := observabilityCredentialSecretFixture(t, []string{"admin", strings.Repeat("g", 48), strings.Repeat("o", 48)})
+	observed := observabilityCredentialObserved(t, expected, "uid-existing", "32")
+	var value map[string]any
+	if err := json.Unmarshal(observed, &value); err != nil {
+		t.Fatal(err)
+	}
+	value["data"].(map[string]any)["grafana-admin-password"] = "Zm9yZWlnbg=="
+	observed, _ = json.Marshal(value)
+	factories.observabilityCredentials = func(ObservabilityCredentialInstallationConfig) (*observabilityCredentialInstaller, error) {
+		return &observabilityCredentialInstaller{
+			endpoint: &url.URL{Scheme: "https", Host: "127.0.0.1:6443"}, raw: expected, digest: digest.SHA256(expected),
+			client: &http.Client{Transport: observabilityCredentialRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return observabilityCredentialResponse(http.StatusOK, observed), nil
+			})},
+		}, nil
+	}
+	executor, err := openPostRuntimeExecution(config, factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := executor.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.StoppedAt != "platform-applications" ||
+		receipt.StopCategory != "OBSERVABILITY_CREDENTIAL_INSTALLATION_MISMATCH" || len(receipt.Checkpoints) != 2 ||
+		!reflect.DeepEqual(*calls, []string{"target-credential", "target-registration"}) {
+		t.Fatalf("credential mismatch propagation differs: %#v calls=%v err=%v", receipt, *calls, err)
+	}
+	public, marshalErr := json.Marshal(receipt)
+	if marshalErr != nil || bytes.Contains(public, []byte(strings.Repeat("g", 48))) || strings.Contains(err.Error(), strings.Repeat("g", 48)) {
+		t.Fatal("credential mismatch leaked private data")
 	}
 }
 
