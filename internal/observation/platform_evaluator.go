@@ -335,7 +335,11 @@ func evaluatePlatformApplications(policy Policy, profile PlatformProfile, target
 		if application.SyncStatus != "Synced" {
 			return "Unknown", "PlatformConvergencePending", policy.PlatformRevision
 		}
-		if application.HealthStatus != "Healthy" {
+		switch application.HealthStatus {
+		case "Healthy":
+		case "Progressing":
+			return "Unknown", "PlatformConvergencePending", policy.PlatformRevision
+		default:
 			return "False", "PlatformHealthFailed", policy.PlatformRevision
 		}
 	}
