@@ -555,6 +555,9 @@ func fullRunExecutionManifestFixtureWithNetworkMode(t *testing.T, networkObserva
 	collectorCertificate, collectorKey := collectorServerCredential(t, time.Now().UTC(), net.ParseIP("192.0.2.44"))
 	collectorCertificatePath := writeBundleFile(t, root, "collector-tls.crt", collectorCertificate)
 	collectorKeyPath := writeBundleFile(t, root, "collector-tls.key", collectorKey)
+	grafanaAdminUserPath := writeBundleFile(t, root, "observability-grafana-admin-user", []byte("admin"))
+	grafanaAdminPasswordPath := writeBundleFile(t, root, "observability-grafana-admin-password", []byte(strings.Repeat("g", 48)))
+	openSearchAdminPasswordPath := writeBundleFile(t, root, "observability-opensearch-admin-password", []byte(strings.Repeat("o", 48)))
 	authorityCertificate, _ := authorityServerCredential(t, time.Now().UTC(), boundedStageAuthorityDNSName, true)
 	post.Authorization.Endpoint = "https://" + boundedStageAuthorityDNSName + ":8443/v1/stage-authorizations"
 	post.Authorization.CAFile = writeBundleFile(t, root, "stage-authority-tls.crt", authorityCertificate)
@@ -589,6 +592,11 @@ func fullRunExecutionManifestFixtureWithNetworkMode(t *testing.T, networkObserva
 			ArtifactPath: post.PlatformApplications.ArtifactPath, ArgoNamespace: post.PlatformApplications.ArgoNamespace,
 			ProjectName: post.PlatformApplications.ProjectName, RegistrationName: post.PlatformApplications.RegistrationName,
 			SourceRepository: post.PlatformApplications.SourceRepository, Ledger: ledger, GitOps: gitOpsAuthority,
+		},
+		ObservabilityCredentials: fullRunObservabilityCredentialsDocument{
+			GrafanaAdminUserFile:        grafanaAdminUserPath,
+			GrafanaAdminPasswordFile:    grafanaAdminPasswordPath,
+			OpenSearchAdminPasswordFile: openSearchAdminPasswordPath,
 		},
 		PlatformObservation: fullRunPlatformObservationDocument{
 			Ledger: ledger, Argo: gitOpsAuthority,

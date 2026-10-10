@@ -219,6 +219,9 @@ spec:
               - {key: credentials.ledger-token, path: credentials/ledger-token}
               - {key: credentials.management-ca.crt, path: credentials/management-ca.crt}
               - {key: credentials.management-token, path: credentials/management-token}
+              - {key: credentials.observability-grafana-admin-user, path: credentials/observability-grafana-admin-user}
+              - {key: credentials.observability-grafana-admin-password, path: credentials/observability-grafana-admin-password}
+              - {key: credentials.observability-opensearch-admin-password, path: credentials/observability-opensearch-admin-password}
               - {key: credentials.provider-access-kubeconfig, path: credentials/provider-access-kubeconfig}
               - {key: input.aggregate-profile.json, path: input/aggregate-profile.json}
               - {key: input.authorization-authority.pub, path: input/authorization-authority.pub}

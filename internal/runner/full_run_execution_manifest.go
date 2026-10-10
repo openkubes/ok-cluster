@@ -121,6 +121,12 @@ type fullRunPlatformApplicationsDocument struct {
 	GitOps           postRuntimeAuthorityDocument `json:"gitOps"`
 }
 
+type fullRunObservabilityCredentialsDocument struct {
+	GrafanaAdminUserFile        string `json:"grafanaAdminUserFile"`
+	GrafanaAdminPasswordFile    string `json:"grafanaAdminPasswordFile"`
+	OpenSearchAdminPasswordFile string `json:"opensearchAdminPasswordFile"`
+}
+
 type fullRunCapabilityDocument struct {
 	Namespace                              string `json:"namespace"`
 	Timeout                                string `json:"timeout"`
@@ -171,26 +177,27 @@ type fullRunObservabilityCollectorDocument struct {
 }
 
 type fullRunExecutionManifestDocument struct {
-	Format                 string                                `json:"format"`
-	Plan                   fullRunPlanDocument                   `json:"plan"`
-	Projection             fullRunProjectionDocument             `json:"projection"`
-	Authorization          postRuntimeAuthorizationDocument      `json:"authorization"`
-	Profiles               postRuntimeProfilesDocument           `json:"profiles"`
-	ProviderPrerequisites  fullRunSubmissionRuntimeDocument      `json:"providerPrerequisites"`
-	ProviderAccess         fullRunProviderAccessDocument         `json:"providerAccess"`
-	ClusterLifecycle       fullRunSubmissionRuntimeDocument      `json:"clusterLifecycle"`
-	LifecycleObservation   fullRunLifecycleObservationDocument   `json:"lifecycleObservation"`
-	Enablement             fullRunEnablementDocument             `json:"enablement"`
-	NetworkObservation     fullRunNetworkObservationDocument     `json:"networkObservation"`
-	RuntimeBinding         fullRunRuntimeBindingDocument         `json:"runtimeBinding"`
-	TargetAccess           fullRunTargetAccessDocument           `json:"targetAccess"`
-	TargetCredential       fullRunTargetCredentialDocument       `json:"targetCredential"`
-	TargetRegistration     fullRunTargetRegistrationDocument     `json:"targetRegistration"`
-	PlatformApplications   fullRunPlatformApplicationsDocument   `json:"platformApplications"`
-	PlatformObservation    fullRunPlatformObservationDocument    `json:"platformObservation"`
-	AggregateEvidence      fullRunAggregateEvidenceDocument      `json:"aggregateEvidence"`
-	ObservabilityCollector fullRunObservabilityCollectorDocument `json:"observabilityCollector"`
-	ReceiptDirectory       string                                `json:"receiptDirectory"`
+	Format                   string                                  `json:"format"`
+	Plan                     fullRunPlanDocument                     `json:"plan"`
+	Projection               fullRunProjectionDocument               `json:"projection"`
+	Authorization            postRuntimeAuthorizationDocument        `json:"authorization"`
+	Profiles                 postRuntimeProfilesDocument             `json:"profiles"`
+	ProviderPrerequisites    fullRunSubmissionRuntimeDocument        `json:"providerPrerequisites"`
+	ProviderAccess           fullRunProviderAccessDocument           `json:"providerAccess"`
+	ClusterLifecycle         fullRunSubmissionRuntimeDocument        `json:"clusterLifecycle"`
+	LifecycleObservation     fullRunLifecycleObservationDocument     `json:"lifecycleObservation"`
+	Enablement               fullRunEnablementDocument               `json:"enablement"`
+	NetworkObservation       fullRunNetworkObservationDocument       `json:"networkObservation"`
+	RuntimeBinding           fullRunRuntimeBindingDocument           `json:"runtimeBinding"`
+	TargetAccess             fullRunTargetAccessDocument             `json:"targetAccess"`
+	TargetCredential         fullRunTargetCredentialDocument         `json:"targetCredential"`
+	TargetRegistration       fullRunTargetRegistrationDocument       `json:"targetRegistration"`
+	PlatformApplications     fullRunPlatformApplicationsDocument     `json:"platformApplications"`
+	ObservabilityCredentials fullRunObservabilityCredentialsDocument `json:"observabilityCredentials"`
+	PlatformObservation      fullRunPlatformObservationDocument      `json:"platformObservation"`
+	AggregateEvidence        fullRunAggregateEvidenceDocument        `json:"aggregateEvidence"`
+	ObservabilityCollector   fullRunObservabilityCollectorDocument   `json:"observabilityCollector"`
+	ReceiptDirectory         string                                  `json:"receiptDirectory"`
 }
 
 type FullRunExecutionManifestReceipt struct {
@@ -428,6 +435,11 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 			PlatformApplications: PostRuntimePlatformApplicationsConfig{
 				ArtifactPath: document.PlatformApplications.ArtifactPath, Expected: applicationsExpected,
 				Runtime: PlatformApplicationsStageRuntimeConfig{Ledger: ledger, GitOps: authorityConfig(document.PlatformApplications.GitOps), Clock: runtime.Clock},
+			},
+			ObservabilityCredentials: ObservabilityCredentialInstallationConfig{
+				GrafanaAdminUserFile:        document.ObservabilityCredentials.GrafanaAdminUserFile,
+				GrafanaAdminPasswordFile:    document.ObservabilityCredentials.GrafanaAdminPasswordFile,
+				OpenSearchAdminPasswordFile: document.ObservabilityCredentials.OpenSearchAdminPasswordFile,
 			},
 			PlatformObservation: PostRuntimePlatformObservationConfig{
 				Profile: clonePlatformProfile(manifest.platform), Capability: capability,
@@ -792,6 +804,9 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 		document.Profiles.Network.Path, document.Profiles.Platform.Path, document.Profiles.Aggregate.Path,
 		document.Enablement.ArtifactPath, document.TargetAccess.ArtifactPath, document.TargetCredential.PolicyPath,
 		document.TargetRegistration.ArtifactPath, document.PlatformApplications.ArtifactPath, document.ReceiptDirectory,
+		document.ObservabilityCredentials.GrafanaAdminUserFile,
+		document.ObservabilityCredentials.GrafanaAdminPasswordFile,
+		document.ObservabilityCredentials.OpenSearchAdminPasswordFile,
 		document.ObservabilityCollector.RuntimeAuthorityPath, document.ObservabilityCollector.JobTemplatePath,
 		document.ObservabilityCollector.WebhookTokenPath, document.ObservabilityCollector.QueryTokenPath,
 		document.ObservabilityCollector.TLSCertificatePath, document.ObservabilityCollector.TLSPrivateKeyPath,
@@ -800,6 +815,12 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 		if !validFullRunAbsolutePath(path) {
 			return errors.New("full-run manifest contains an invalid absolute path")
 		}
+	}
+	credentialPaths := document.ObservabilityCredentials
+	if credentialPaths.GrafanaAdminUserFile == credentialPaths.GrafanaAdminPasswordFile ||
+		credentialPaths.GrafanaAdminUserFile == credentialPaths.OpenSearchAdminPasswordFile ||
+		credentialPaths.GrafanaAdminPasswordFile == credentialPaths.OpenSearchAdminPasswordFile {
+		return errors.New("full-run observability credential source paths must be distinct")
 	}
 	if !validFullRunAuthorization(document.Authorization) {
 		return errors.New("full-run authorization binding is invalid")

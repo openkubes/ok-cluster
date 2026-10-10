@@ -53,6 +53,9 @@ func TestBuildFullRunExecutionBundleIsDeterministicAndSelfContained(t *testing.T
 		rewritten.NetworkObservation.Workload.BindingPath != path("work/workload-authority.json") ||
 		rewritten.AggregateEvidence.WorkloadTokenFile != "" ||
 		rewritten.AggregateEvidence.WorkloadKubeconfigFile != path("work/workload-kubeconfig.yaml") ||
+		rewritten.ObservabilityCredentials.GrafanaAdminUserFile != path("credentials/observability-grafana-admin-user") ||
+		rewritten.ObservabilityCredentials.GrafanaAdminPasswordFile != path("credentials/observability-grafana-admin-password") ||
+		rewritten.ObservabilityCredentials.OpenSearchAdminPasswordFile != path("credentials/observability-opensearch-admin-password") ||
 		rewritten.PlatformObservation.Capability.IndependentEvidencePath != fullRunExecutionHandoffRoot+"/observability-evidence.json" ||
 		rewritten.ReceiptDirectory != path("work/receipts") {
 		t.Fatalf("rewritten manifest escaped fixed roots: %#v", rewritten)
@@ -64,15 +67,18 @@ func TestBuildFullRunExecutionBundleIsDeterministicAndSelfContained(t *testing.T
 		t.Fatal("semantic full-run identity changed during path rewrite")
 	}
 	for relative, sourcePath := range map[string]string{
-		"input/staged-plan.json":                        source.document.Plan.Path,
-		"input/enablement.yaml":                         source.document.Enablement.ArtifactPath,
-		"input/platform-applications.yaml":              source.document.PlatformApplications.ArtifactPath,
-		"input/provider-access-policy.json":             source.document.ProviderAccess.PolicyPath,
-		"credentials/provider-access-kubeconfig":        source.document.ProviderAccess.KubeconfigFile,
-		"input/independent-evidence.pub":                publicKeyPath,
-		"input/projection/renderer-input.yaml":          filepath.Join(source.document.Projection.Root, "renderer-input.yaml"),
-		"input/projection/renderer-source.yaml":         filepath.Join(source.document.Projection.Root, "renderer-source.yaml"),
-		"input/projection/resolved-renderer-input.yaml": filepath.Join(source.document.Projection.Root, "resolved-renderer-input.yaml"),
+		"input/staged-plan.json":                              source.document.Plan.Path,
+		"input/enablement.yaml":                               source.document.Enablement.ArtifactPath,
+		"input/platform-applications.yaml":                    source.document.PlatformApplications.ArtifactPath,
+		"input/provider-access-policy.json":                   source.document.ProviderAccess.PolicyPath,
+		"credentials/provider-access-kubeconfig":              source.document.ProviderAccess.KubeconfigFile,
+		"credentials/observability-grafana-admin-user":        source.document.ObservabilityCredentials.GrafanaAdminUserFile,
+		"credentials/observability-grafana-admin-password":    source.document.ObservabilityCredentials.GrafanaAdminPasswordFile,
+		"credentials/observability-opensearch-admin-password": source.document.ObservabilityCredentials.OpenSearchAdminPasswordFile,
+		"input/independent-evidence.pub":                      publicKeyPath,
+		"input/projection/renderer-input.yaml":                filepath.Join(source.document.Projection.Root, "renderer-input.yaml"),
+		"input/projection/renderer-source.yaml":               filepath.Join(source.document.Projection.Root, "renderer-source.yaml"),
+		"input/projection/resolved-renderer-input.yaml":       filepath.Join(source.document.Projection.Root, "resolved-renderer-input.yaml"),
 	} {
 		want, readErr := os.ReadFile(sourcePath)
 		if readErr != nil || !bytes.Equal(bundle.files[relative], want) {
@@ -124,6 +130,19 @@ func TestBuildFullRunExecutionBundleRejectsForeignOrIncompleteSources(t *testing
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(document.Authorization.TokenFile, []byte(" token-with-whitespace "), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"invalid observability credential": func(t *testing.T, manifestPath string, _ *FullRunExecutionBundleConfig) {
+			raw, err := os.ReadFile(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document fullRunExecutionManifestDocument
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(document.ObservabilityCredentials.GrafanaAdminPasswordFile, []byte("invalid\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		},
