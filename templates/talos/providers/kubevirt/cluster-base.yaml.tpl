@@ -317,7 +317,7 @@ spec:
       - op: add
         path: /machine/features/hostDNS
         value:
-          enabled: false
+          enabled: false${WORKLOAD_USER_NAMESPACE_PATCHES}
 ---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment

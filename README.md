@@ -643,6 +643,42 @@ The CA and ingress address are resolved only at execution time; neither is
 stored in rendered files. Existing clusters use the review/dry-run/apply
 targets documented in [Talos registry trust](docs/registry-trust.md).
 
+### Opt-in workload user namespaces
+
+Talos clusters on KubeVirt can opt worker nodes into the host prerequisites
+used by workload user namespaces:
+
+```bash
+make new CLUSTER=my-cluster TYPE=talos \
+  WORKLOAD_USER_NAMESPACES=true \
+  PROVISIONER_BASE_PATH=/var/openebs/ok176-c3
+```
+
+The scaffold persists `workloadUserNamespaces` in `cluster-config.yaml`, so a
+later `make render CLUSTER=my-cluster` reproduces the same worker machine
+configuration:
+
+```yaml
+workloadUserNamespaces:
+  enabled: true
+  maxUserNamespaces: 11255
+  provisionerBasePath: /var/openebs/ok176-c3
+```
+
+The capability is off by default. `MAX_USER_NAMESPACES` defaults to `11255`
+and can be overridden when scaffolding. The provisioner base path is mounted
+into kubelet with a shared bind mount, must be a normalized absolute child of
+`/var`, and must match the base path configured separately on the storage
+provisioner.
+
+This capability changes workers only: workload pods and their storage run
+there, while control-plane nodes retain their narrower machine configuration.
+It is supported only for `TYPE=talos PROVIDER=kubevirt`; unsupported OS or
+provider combinations fail closed. Existing configs can set the same
+`workloadUserNamespaces` block directly and use `make render`. This knob only
+creates the Talos host prerequisites. It does not install a storage provisioner
+or set the workload Pod's `hostUsers` policy.
+
 For a complete disposable `ok-infra` meetup deployment with independent
 control-plane/worker sizing, timed warm provisioning, runtime verification,
 and Golden-Image-preserving cleanup, see the
