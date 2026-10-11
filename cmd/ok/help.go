@@ -93,7 +93,8 @@ Usage:
 Modes (exactly one is required):
   --dry-run    Verify all bound local inputs and print a non-mutating summary
   --prepare    Verify the manifest and print the identity required for live mode
-  --live       Run the bounded workflow; also requires --execute and the prepared identity
+  --live       Contact bound APIs and permit the exact workflow mutations;
+               also requires --execute and the prepared identity
 
 Input:
   -f, --file   Private full-run manifest bound to completionMode bare-cluster-mvp/v1
@@ -107,7 +108,8 @@ Safety:
   do not contact a cluster, open a network client, or execute a stage.
   Their JSON receipts report apiContacted=false, authorizationConsumed=false,
   mutationAllowed=false, and the next required operator action.
-  Live mode is single-use, bounded, has no retry or rollback, and fails closed.
+  Live mode runs the Stage 1-7 executor locally, may create cluster resources,
+  is single-use and bounded, and has no retry, rollback, or cleanup.
 
 Legacy contract-planning flags remain available for compatibility; use
 "ok cluster stage --help" for the expert runner surface.

@@ -47,9 +47,16 @@ ok cluster create --file /private/bare-run.json \
 The CLI re-verifies the manifest and exact digest before opening the bounded
 runner. The marker path must be absent and private; it records terminal
 consumption even when execution stops. Never treat `--prepare` output as live
-authorization.
+authorization. This command runs the Stage 1-7 executor directly in the local
+`ok` process. It contacts the APIs bound by the private manifest and does not
+install the four Job-activation wrapper objects described below.
 
-The live activation installs exactly four objects on `ok-mgmt`, in this order:
+## Job-based activation path
+
+The Job-based live activation is a separate expert deployment path. It is not
+implicitly invoked by `ok cluster create --live`.
+
+That launcher installs exactly four objects on `ok-mgmt`, in this order:
 
 ```text
 immutable executor activation Secret

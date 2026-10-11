@@ -77,7 +77,8 @@ automation. A preparation result has this shape:
 Live execution is a separate, fail-closed mode. It requires the exact prepared
 digest, the pinned independent-evidence key, a new terminal-marker path and two
 literal gates (`--live --execute`). It performs the bounded Stage 1-7 run with
-no automatic retry, rollback or cleanup:
+no automatic retry, rollback or cleanup. The command runs the executor in the
+local `ok` process and contacts the APIs bound by the private manifest:
 
 ```bash
 .tools/bin/ok cluster create --file /private/bare-run.json \
