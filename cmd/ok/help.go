@@ -68,6 +68,15 @@ func containsHelpArgument(arguments []string) bool {
 	return false
 }
 
+func containsFlagHelp(arguments []string) bool {
+	for _, argument := range arguments {
+		if argument == "--help" || argument == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
 func writeRootHelp(output io.Writer) {
 	fmt.Fprint(output, `OpenKubes bounded cluster runner
 

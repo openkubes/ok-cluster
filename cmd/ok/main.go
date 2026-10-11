@@ -678,6 +678,17 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if routeHelp(arguments, stdout) {
 		return nil
 	}
+	if containsFlagHelp(arguments) {
+		err := dispatchContext(ctx, arguments, stdout, stdout)
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	return dispatchContext(ctx, arguments, stdout, stderr)
+}
+
+func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 1 && arguments[0] == "version" {
 		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil

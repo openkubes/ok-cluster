@@ -53,6 +53,27 @@ func TestHierarchicalHelp(t *testing.T) {
 	}
 }
 
+func TestLeafFlagHelpIsSuccessfulAndUsesStdout(t *testing.T) {
+	for name, arguments := range map[string][]string{
+		"full prepare":      {"cluster", "stage", "run", "full", "prepare", "--help"},
+		"observe lifecycle": {"cluster", "stage", "observe", "lifecycle", "--help"},
+		"bind runtime":      {"cluster", "stage", "bind", "runtime", "--help"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(arguments, &stdout, &stderr); err != nil {
+				t.Fatalf("leaf help failed: %v", err)
+			}
+			if !strings.Contains(stdout.String(), "Usage of ok cluster stage") {
+				t.Fatalf("leaf help missing usage:\n%s", stdout.String())
+			}
+			if strings.Contains(stdout.String(), "ERROR:") || stderr.Len() != 0 {
+				t.Fatalf("leaf help reported an error: stdout=%s stderr=%s", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestClusterCreateFileRejectsAmbiguousFileFlags(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"cluster", "create", "--file", "/private/a.json", "-f", "/private/b.json", "--dry-run"},
