@@ -292,13 +292,14 @@ func testCA(t *testing.T) []byte {
 
 func testClientCredential(t *testing.T) ([]byte, []byte, []byte) {
 	t.Helper()
+	now := time.Now().UTC()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(101), Subject: pkix.Name{CommonName: "ok147-workload-test-ca"},
-		NotBefore: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC),
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
 		IsCA: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, BasicConstraintsValid: true,
 	}
 	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
@@ -311,7 +312,7 @@ func testClientCredential(t *testing.T) ([]byte, []byte, []byte) {
 	}
 	clientTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(102), Subject: pkix.Name{CommonName: "ok147-workload-client"},
-		NotBefore: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC),
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caTemplate, &clientKey.PublicKey, caKey)

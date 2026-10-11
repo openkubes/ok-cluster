@@ -1,0 +1,45 @@
+name: ok CLI checks
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ok-cli-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Test all packages offline from clusters
+        run: go test -mod=readonly ./... -count=1
+
+      - name: Vet all packages
+        run: go vet -mod=readonly ./...
+
+      - name: Build and smoke-test the CLI
+        run: |
+          CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false -o "$RUNNER_TEMP/ok" ./cmd/ok
+          "$RUNNER_TEMP/ok" --help
+          "$RUNNER_TEMP/ok" cluster create --help
+          "$RUNNER_TEMP/ok" version

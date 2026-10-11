@@ -162,8 +162,17 @@ func TestWaitForObservabilityIndependentEvidenceIdentityStopsAtExecutorTerminalM
 	identityPath := filepath.Join(root, "identity.json")
 	receiptPath := filepath.Join(root, "identity-receipt.json")
 	terminalPath := filepath.Join(root, FullRunExecutorTerminalMarkerName)
+	if err := ValidateFullRunExecutorTerminalMarkerDestination(terminalPath); err != nil {
+		t.Fatalf("absent marker did not pass preflight: %v", err)
+	}
+	if err := ValidateFullRunExecutorTerminalMarkerDestination(filepath.Join(root, "wrong-name")); err == nil {
+		t.Fatal("marker preflight accepted the wrong fixed name")
+	}
 	if err := WriteFullRunExecutorTerminalMarker(terminalPath); err != nil {
 		t.Fatal(err)
+	}
+	if err := ValidateFullRunExecutorTerminalMarkerDestination(terminalPath); err == nil {
+		t.Fatal("marker preflight accepted an existing destination")
 	}
 	waits := 0
 	_, err := WaitForObservabilityIndependentEvidenceIdentity(context.Background(), ObservabilityIndependentEvidenceIdentityWaitConfig{

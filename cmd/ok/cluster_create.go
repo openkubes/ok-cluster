@@ -1,0 +1,147 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/openkubes/ok-cluster/internal/runner"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
+)
+
+const clusterCreateWorkflowFormat = "ok-cli-cluster-create/v1"
+
+type clusterCreateWorkflowReceipt struct {
+	Format                string `json:"format"`
+	Operation             string `json:"operation"`
+	Mode                  string `json:"mode"`
+	State                 string `json:"state"`
+	ManifestDigest        string `json:"manifestDigest"`
+	PlanDigest            string `json:"planDigest"`
+	CompletionMode        string `json:"completionMode"`
+	APIContacted          bool   `json:"apiContacted"`
+	AuthorizationConsumed bool   `json:"authorizationConsumed"`
+	MutationAllowed       bool   `json:"mutationAllowed"`
+	NextAction            string `json:"nextAction"`
+}
+
+type clusterCreateLiveConfig struct {
+	ManifestPath                 string
+	ExpectedManifestDigest       string
+	IndependentEvidencePublicKey string
+	TerminalMarker               string
+}
+
+var executeClusterCreateLive = func(ctx context.Context, config clusterCreateLiveConfig, stdout, stderr io.Writer) error {
+	return runClusterStageRunFullExecute(ctx, []string{
+		"--manifest", config.ManifestPath,
+		"--expected-manifest-digest", config.ExpectedManifestDigest,
+		"--independent-evidence-public-key", config.IndependentEvidencePublicKey,
+		"--terminal-marker", config.TerminalMarker,
+		"--execute",
+	}, stdout, stderr)
+}
+
+var validateClusterCreateTerminalMarker = runner.ValidateFullRunExecutorTerminalMarkerDestination
+
+func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	if countClusterCreateFileFlags(arguments) != 1 {
+		return errors.New("exactly one --file or -f input is required")
+	}
+	flags := flag.NewFlagSet("ok cluster create", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var manifestPath string
+	flags.StringVar(&manifestPath, "file", "", "private Bare-MVP full-run manifest")
+	flags.StringVar(&manifestPath, "f", "", "private Bare-MVP full-run manifest (shorthand)")
+	dryRun := flags.Bool("dry-run", false, "verify locally and emit a non-mutating summary")
+	prepare := flags.Bool("prepare", false, "verify locally and emit the identity required by live mode")
+	live := flags.Bool("live", false, "select live cluster execution")
+	execute := flags.Bool("execute", false, "explicitly authorize the selected live execution")
+	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact digest emitted by --prepare")
+	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent evidence public key")
+	terminalMarker := flags.String("terminal-marker", "", "new create-only private terminal marker")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("positional arguments are not accepted")
+	}
+	if manifestPath == "" {
+		return errors.New("--file is required")
+	}
+	modeCount := 0
+	for _, selected := range []bool{*dryRun, *prepare, *live} {
+		if selected {
+			modeCount++
+		}
+	}
+	if modeCount != 1 {
+		return errors.New("exactly one of --dry-run, --prepare, or --live is required")
+	}
+	if !*live && (*execute || *expectedManifestDigest != "" || *evidencePublicKey != "" || *terminalMarker != "") {
+		return errors.New("--execute and live-only inputs require --live")
+	}
+	if *live {
+		if !*execute {
+			return errors.New("live cluster creation requires explicit --live --execute")
+		}
+		if !sha256DigestPattern.MatchString(*expectedManifestDigest) || *evidencePublicKey == "" || *terminalMarker == "" {
+			return errors.New("--live requires a lowercase SHA-256 --expected-manifest-digest, --independent-evidence-public-key, and --terminal-marker")
+		}
+		if err := validateClusterCreateTerminalMarker(*terminalMarker); err != nil {
+			return errors.New("--terminal-marker must be an absent executor-terminal file in an existing private directory")
+		}
+	}
+
+	manifest, err := prepareFullRunExecutionManifest(manifestPath)
+	if err != nil {
+		return fmt.Errorf("verify Bare-MVP manifest: %w", err)
+	}
+	if !validFullRunManifestReceiptFormat(manifest.Format) || manifest.State != "VERIFIED" || manifest.MutationAllowed {
+		return errors.New("Bare-MVP manifest preparation did not verify")
+	}
+	if manifest.CompletionMode != stageplan.CompletionModeBareClusterMVP {
+		return fmt.Errorf("cluster create requires completionMode %q", stageplan.CompletionModeBareClusterMVP)
+	}
+
+	if *live {
+		if manifest.ManifestDigest != *expectedManifestDigest {
+			return errors.New("Bare-MVP manifest differs from the prepared identity")
+		}
+		return executeClusterCreateLive(ctx, clusterCreateLiveConfig{
+			ManifestPath: manifestPath, ExpectedManifestDigest: *expectedManifestDigest,
+			IndependentEvidencePublicKey: *evidencePublicKey, TerminalMarker: *terminalMarker,
+		}, stdout, stderr)
+	}
+
+	mode, state := "dry-run", "VALIDATED"
+	nextAction := "review the validated identities, then run --prepare with the same file"
+	if *prepare {
+		mode, state = "prepare", "PREPARED"
+		nextAction = "obtain separate live approval; pass manifestDigest as --expected-manifest-digest"
+	}
+	receipt := clusterCreateWorkflowReceipt{
+		Format: clusterCreateWorkflowFormat, Operation: "CreateCluster", Mode: mode, State: state,
+		ManifestDigest: manifest.ManifestDigest, PlanDigest: manifest.PlanDigest,
+		CompletionMode: manifest.CompletionMode, APIContacted: false, AuthorizationConsumed: false,
+		MutationAllowed: false, NextAction: nextAction,
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(receipt)
+}
+
+func countClusterCreateFileFlags(arguments []string) int {
+	count := 0
+	for _, argument := range arguments {
+		if argument == "--file" || argument == "-f" || strings.HasPrefix(argument, "--file=") || strings.HasPrefix(argument, "-f=") {
+			count++
+		}
+	}
+	return count
+}

@@ -290,11 +290,21 @@ func WaitForObservabilityIndependentEvidenceIdentity(ctx context.Context, config
 // without granting either container Kubernetes read access. The fixed marker
 // is create-only and contains no execution result or credential.
 func WriteFullRunExecutorTerminalMarker(path string) error {
-	if filepath.Base(path) != FullRunExecutorTerminalMarkerName || validateRuntimeBindingOutputPath(path) != nil {
+	if err := ValidateFullRunExecutorTerminalMarkerDestination(path); err != nil {
 		return errors.New("full-run executor terminal marker destination is invalid")
 	}
 	if err := writeExclusivePrivateMaterial(path, []byte("TERMINAL\n")); err != nil {
 		return errors.New("persist full-run executor terminal marker")
+	}
+	return nil
+}
+
+// ValidateFullRunExecutorTerminalMarkerDestination performs the complete
+// create-only marker preflight without writing the marker. Callers use it
+// before opening any mutation-capable runtime.
+func ValidateFullRunExecutorTerminalMarkerDestination(path string) error {
+	if filepath.Base(path) != FullRunExecutorTerminalMarkerName || validateRuntimeBindingOutputPath(path) != nil {
+		return errors.New("full-run executor terminal marker destination is invalid")
 	}
 	return nil
 }

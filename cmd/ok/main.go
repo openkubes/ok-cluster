@@ -675,6 +675,9 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 }
 
 func runContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	if routeHelp(arguments, stdout) {
+		return nil
+	}
 	if len(arguments) == 1 && arguments[0] == "version" {
 		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil
@@ -701,6 +704,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 		return runEvidenceObservabilityServe(ctx, arguments[3:], stdout, stderr)
 	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
+		if hasClusterCreateFileFlag(arguments[2:]) {
+			return runClusterCreateWorkflow(ctx, arguments[2:], stdout, stderr)
+		}
 		return runClusterCreate(arguments[2:], stdout, stderr)
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "dry-run" && arguments[2] == "serve" {
@@ -862,7 +868,16 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok authority stage policy ... | ok authority stage package ... | ok authority stage materialize ... | ok authority stage launch prepare ... | ok authority stage launch execute ... | ok authority stage serve ... | ok evidence observability serve ... | ok cluster create ... | ok cluster stage attempt verify ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage receipt materialize ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage evidence observability identity materialize ... | ok cluster stage evidence observability authority materialize ... | ok cluster stage evidence observability collector package ... | ok cluster stage evidence observability collector launch prepare ... | ok cluster stage evidence observability collector launch execute ... | ok cluster stage evidence observability collector materialize ... | ok cluster stage evidence observability produce ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run full bind-v3 ... | ok cluster stage run full prepare ... | ok cluster stage run full package ... | ok cluster stage run full launch prepare ... | ok cluster stage run full launch execute ... | ok cluster stage run full materialize ... | ok cluster stage run full execute ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime package ... | ok cluster stage run post-runtime materialize ... | ok cluster stage run post-runtime launch prepare ... | ok cluster stage run post-runtime launch execute ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("unknown command; run 'ok --help' for usage")
+}
+
+func hasClusterCreateFileFlag(arguments []string) bool {
+	for _, argument := range arguments {
+		if argument == "--file" || argument == "-f" || strings.HasPrefix(argument, "--file=") || strings.HasPrefix(argument, "-f=") {
+			return true
+		}
+	}
+	return false
 }
 
 func runClusterDryRunServe(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {

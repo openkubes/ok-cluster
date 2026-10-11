@@ -294,7 +294,8 @@ func runClusterStageRunFullLaunchExecute(ctx context.Context, arguments []string
 
 // runClusterStageRunFullPrepare verifies the complete private first-run
 // contract offline and emits the identity required by the separate execute
-// command. It opens no credential or runtime dependency.
+// command. It locally validates referenced private material but constructs no
+// network client and opens no runtime dependency.
 func runClusterStageRunFullPrepare(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster stage run full prepare", flag.ContinueOnError)
 	flags.SetOutput(stderr)

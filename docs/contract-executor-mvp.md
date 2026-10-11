@@ -31,7 +31,8 @@ R = SHA-256(canonical contract)
 non-mutating CreateCluster plan
 ```
 
-The `cluster create` command is intentionally dry-run-only:
+The legacy contract-planning form of `cluster create` is intentionally
+dry-run-only:
 
 ```bash
 go run ./cmd/ok cluster create \
@@ -41,9 +42,11 @@ go run ./cmd/ok cluster create \
 ```
 
 It performs no cluster discovery, credential read, API contact, submission, or
-observation. A command without `--dry-run` fails closed. Mutating submission is
-available only through the later, independently authorized staged execution
-path described below; it cannot be activated through `cluster create`.
+observation. A legacy contract-planning command without `--dry-run` fails
+closed. The productized `cluster create --file` facade described in the
+[operator runbook](ok147-operator-runbook.md) can reach the independently
+authorized Bare-MVP execution path only with `--live --execute`, the exact
+prepared manifest digest and the remaining pinned live inputs.
 
 The emitted `ok147-create-plan/v1` document is an internal, test-only format.
 It is deliberately not shaped as a Kubernetes API object and does not establish
@@ -3662,7 +3665,9 @@ Successful Stage-8 and Stage-9 crash boundaries can be reactivated through the
 same manifest, authority, package, Job and CLI chain without rewriting their
 durable receipts. This is not yet the OK-147 Definition of Done:
 
-- the legacy `ok cluster create` command remains dry-run-only;
+- the legacy `ok cluster create --contract ...` form remains dry-run-only; the
+  `--file` facade adds offline dry-run/prepare modes and an explicit,
+  digest-bound `--live --execute` Bare-MVP gate;
 - the joined concrete Stage 1-7 and Stage 8-12 adapters have a shared
   activation boundary plus concrete local prepare/execute commands; the
   ephemeral full-run Job and private activation package select that same

@@ -12,6 +12,43 @@ bounded post-runtime suffix. It is neither a long-running operator nor a
 lifecycle source of truth. CAPI/CAPK, the selected Enablement mechanism and
 GitOps remain the owners of convergence.
 
+For the Bare-MVP completion mode, operators use the product CLI facade rather
+than assembling stage commands manually:
+
+```bash
+ok cluster create --file /private/bare-run.json --dry-run
+ok cluster create --file /private/bare-run.json --prepare
+```
+
+Both commands are offline: they read and validate the referenced private
+artifacts, including credential and TLS material, but construct no network
+client, contact no API, execute no stage and consume no authorization. They
+accept only the explicit Plan-bound `bare-cluster-mvp/v1` completion mode,
+which terminates after the exact Stage 1-7 prefix. The prepare receipt's
+`manifestDigest` is the identity that must be reviewed and copied into a
+separately approved live invocation. An omitted or different completion mode
+fails closed.
+
+The redaction-safe receipt states `apiContacted: false`,
+`authorizationConsumed: false` and `mutationAllowed: false`. For `--prepare`,
+its `nextAction` requires separate live approval and binds the next command to
+the emitted `manifestDigest`; it is guidance, not authorization.
+
+After separate approval, the local live form is:
+
+```bash
+ok cluster create --file /private/bare-run.json \
+  --live --execute \
+  --expected-manifest-digest sha256:<reviewed-digest> \
+  --independent-evidence-public-key /private/evidence.pub \
+  --terminal-marker /private/run-01/executor-terminal
+```
+
+The CLI re-verifies the manifest and exact digest before opening the bounded
+runner. The marker path must be absent and private; it records terminal
+consumption even when execution stops. Never treat `--prepare` output as live
+authorization.
+
 The live activation installs exactly four objects on `ok-mgmt`, in this order:
 
 ```text

@@ -504,9 +504,10 @@ func OpenFullRunExecutionManifest(path string, runtime FullRunExecutionManifestR
 }
 
 // LoadFullRunExecutionManifest verifies the complete private first-run
-// contract without opening a credential, resolving a grant, contacting an API
-// or creating a file. Lifecycle-derived runtime identity and capability proof
-// deliberately remain later in-memory handoffs.
+// contract. It reads and validates referenced private credential material, but
+// constructs no network client, resolves no grant, contacts no API and creates
+// no file. Lifecycle-derived runtime identity and capability proof deliberately
+// remain later in-memory handoffs.
 func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest, FullRunExecutionManifestReceipt, error) {
 	receipt := FullRunExecutionManifestReceipt{
 		Format: FullRunExecutionManifestReceiptFormat, State: "STOPPED", MutationAllowed: false,
