@@ -73,6 +73,20 @@ been attempted, an error or
 uncertain response is preserved as `STOPPED_PARTIAL_OR_UNKNOWN`; do not retry,
 update, patch, apply, delete or clean up under the same authorization.
 
+## Manual stage-by-stage execution
+
+The expert CLI can expose the same Bare-MVP prefix one stage at a time. Start
+with `ok cluster stage run --help`; it lists the exact order across the `run`,
+`observe` and `bind` command groups. Every invocation must consume the exact
+durable receipt prefix from its predecessors. Each mutation-capable execute or
+launch command requires its own explicit `--execute` gate and a separate
+approval. This surface is intended for controlled diagnosis and recovery, not
+as an authorization shortcut or a replay mechanism.
+
+After a stopped or uncertain mutation, preserve its receipt and inspect the
+durable state. Do not invoke the same mutation again merely because the CLI
+returned an error.
+
 ## Required inputs
 
 Before preparation, record and independently review:

@@ -32,6 +32,11 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterStageHelp(stdout)
 		return true
 	}
+	if len(arguments) == 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" ||
+		len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && isHelpArgument(arguments[3]) {
+		writeClusterStageRunHelp(stdout)
+		return true
+	}
 	if len(arguments) == 2 && arguments[0] == "version" && isHelpArgument(arguments[1]) {
 		fmt.Fprint(stdout, "Usage: ok version\n\nPrint the CLI version and source revision.\n")
 		return true
@@ -136,5 +141,34 @@ Command groups:
 
 These commands expose internal safety seams. Most operators should use
 "ok cluster create --file ... --dry-run" first.
+`)
+}
+
+func writeClusterStageRunHelp(output io.Writer) {
+	fmt.Fprint(output, `Execute plan-bound stages through the expert runner
+
+Usage:
+  ok cluster stage run [flags]
+  ok cluster stage run enablement [flags]
+  ok cluster stage run target-access [flags]
+  ok cluster stage run full prepare [flags]
+  ok cluster stage run full execute [flags] --execute
+
+Manual Bare-MVP order across the expert command groups:
+  1. cluster stage run                 provider-prerequisites
+  2. cluster stage run                 cluster-lifecycle
+  3. cluster stage observe lifecycle   lifecycle-observation
+  4. cluster stage run enablement      enablement
+  5. cluster stage observe network     network-observation
+  6. cluster stage bind runtime        runtime-binding
+  7. cluster stage run target-access   target-access
+
+Every step is bound to the reviewed Plan and the exact durable receipt prefix.
+Mutation-capable execute or launch commands require their own explicit
+--execute gate and separate approval. Never replay a stopped or uncertain
+mutation; preserve its receipt and inspect the durable state first.
+
+The product path "ok cluster create --file ..." is preferred for a complete
+Bare-MVP run. The commands above are an expert diagnostic and recovery surface.
 `)
 }

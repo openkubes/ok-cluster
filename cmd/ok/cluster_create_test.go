@@ -31,6 +31,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"cluster create":       {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "may create cluster resources"}},
 		"create trailing help": {[]string{"cluster", "create", "--file", "/private/run.json", "--help"}, []string{"--file", "--dry-run", "--live --execute"}},
 		"cluster stage":        {[]string{"cluster", "stage", "--help"}, []string{"Expert stage-level", "observe", "launch"}},
+		"cluster stage run":    {[]string{"cluster", "stage", "run", "--help"}, []string{"Manual Bare-MVP order", "provider-prerequisites", "separate approval"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
