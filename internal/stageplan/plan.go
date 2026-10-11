@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	Format           = "ok147-staged-execution-plan/v1"
-	FormatV2         = "ok147-staged-execution-plan/v2"
-	BindingFormat    = "ok147-verified-staged-execution-plan/v1"
-	BindingFormatV2  = "ok147-verified-staged-execution-plan/v2"
-	maximumPlanBytes = 128 * 1024
+	Format                       = "ok147-staged-execution-plan/v1"
+	FormatV2                     = "ok147-staged-execution-plan/v2"
+	BindingFormat                = "ok147-verified-staged-execution-plan/v1"
+	BindingFormatV2              = "ok147-verified-staged-execution-plan/v2"
+	CompletionModeBareClusterMVP = "bare-cluster-mvp/v1"
+	maximumPlanBytes             = 128 * 1024
 )
 
 var (
@@ -45,6 +46,7 @@ type Expected struct {
 	ManagementAuthority     string
 	GitOpsAuthority         string
 	NetworkObservationMode  string
+	CompletionMode          string
 }
 
 type Authorities struct {
@@ -82,6 +84,7 @@ type document struct {
 	ExecutionAttempt       string            `json:"executionAttemptDigest,omitempty"`
 	AuthorizationState     string            `json:"authorizationState"`
 	NetworkObservationMode string            `json:"networkObservationMode,omitempty"`
+	CompletionMode         string            `json:"completionMode,omitempty"`
 	Authorities            Authorities       `json:"authorities"`
 	Stages                 []Stage           `json:"stages"`
 }
@@ -98,6 +101,7 @@ type Binding struct {
 	ExecutionFixture               string            `json:"executionFixture"`
 	ExecutionAttempt               string            `json:"executionAttemptDigest,omitempty"`
 	NetworkObservationMode         string            `json:"networkObservationMode,omitempty"`
+	CompletionMode                 string            `json:"completionMode,omitempty"`
 	Authorities                    Authorities       `json:"authorities"`
 	Stages                         []Stage           `json:"stages"`
 	verified                       bool
@@ -106,6 +110,7 @@ type Binding struct {
 	verifiedRevisions              [5]string
 	verifiedAuthorities            Authorities
 	verifiedNetworkObservationMode string
+	verifiedCompletionMode         string
 	stageDigests                   map[string]string
 }
 
@@ -185,6 +190,12 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 	if source.NetworkObservationMode != "" && source.NetworkObservationMode != "deferred-mvp/v1" {
 		return Binding{}, errors.New("staged execution plan network observation mode is unsupported")
 	}
+	if source.CompletionMode != expected.CompletionMode {
+		return Binding{}, errors.New("staged execution plan completion mode differs from verified input")
+	}
+	if !validCompletionMode(source.CompletionMode) {
+		return Binding{}, errors.New("staged execution plan completion mode is unsupported")
+	}
 	if source.IntentRevision != expected.IntentRevision || source.EnablementRevision != expected.EnablementRevision || source.PlatformRevision != expected.PlatformRevision || source.ExecutionFixture != expected.ExecutionFixture {
 		return Binding{}, errors.New("staged execution plan revisions or fixture differ from verified inputs")
 	}
@@ -223,11 +234,13 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 		PlatformRevision: source.PlatformRevision, ExecutionFixture: source.ExecutionFixture,
 		ExecutionAttempt:       source.ExecutionAttempt,
 		NetworkObservationMode: source.NetworkObservationMode,
+		CompletionMode:         source.CompletionMode,
 		Authorities:            source.Authorities, Stages: cloneStages(source.Stages),
 		verified: true, verifiedDigest: planDigest, verifiedIdentity: source.ContractIdentity,
 		verifiedRevisions:   [5]string{source.IntentRevision, source.EnablementRevision, source.PlatformRevision, source.ExecutionFixture, source.ExecutionAttempt},
 		verifiedAuthorities: source.Authorities, stageDigests: stageDigests,
 		verifiedNetworkObservationMode: source.NetworkObservationMode,
+		verifiedCompletionMode:         source.CompletionMode,
 	}, nil
 }
 
@@ -250,6 +263,9 @@ func ValidateExpected(expected Expected) error {
 	}
 	if expected.NetworkObservationMode != "" && expected.NetworkObservationMode != "deferred-mvp/v1" {
 		return errors.New("expected network observation mode is unsupported")
+	}
+	if !validCompletionMode(expected.CompletionMode) {
+		return errors.New("expected completion mode is unsupported")
 	}
 	for label, value := range map[string]string{
 		"infrastructure authority": expected.InfrastructureAuthority,
@@ -354,7 +370,7 @@ func (binding Binding) Stage(id string) (Stage, string, error) {
 	if !binding.verified || binding.Format != BindingFormat && binding.Format != BindingFormatV2 || binding.PlanDigest != binding.verifiedDigest || !digestPattern.MatchString(binding.PlanDigest) {
 		return Stage{}, "", errors.New("verified staged execution binding is required")
 	}
-	if binding.ContractIdentity != binding.verifiedIdentity || [5]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture, binding.ExecutionAttempt} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities || binding.NetworkObservationMode != binding.verifiedNetworkObservationMode {
+	if binding.ContractIdentity != binding.verifiedIdentity || [5]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture, binding.ExecutionAttempt} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities || binding.NetworkObservationMode != binding.verifiedNetworkObservationMode || binding.CompletionMode != binding.verifiedCompletionMode {
 		return Stage{}, "", errors.New("staged execution top-level binding changed after verification")
 	}
 	if err := validateStages(binding.Stages); err != nil {
@@ -370,6 +386,10 @@ func (binding Binding) Stage(id string) (Stage, string, error) {
 		}
 	}
 	return Stage{}, "", fmt.Errorf("stage %q is not part of the verified execution plan", id)
+}
+
+func validCompletionMode(mode string) bool {
+	return mode == "" || mode == CompletionModeBareClusterMVP
 }
 
 // RequireInput rechecks that one exact immutable artifact identity is bound to

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 func TestFullRunExecutionActivationIsInertThenRunsExactlyOnce(t *testing.T) {
@@ -40,6 +42,45 @@ func TestFullRunExecutionActivationIsInertThenRunsExactlyOnce(t *testing.T) {
 	}
 	if second, err := activation.Run(context.Background()); err == nil || second.State != "STOPPED" || execution.calls.Load() != 1 {
 		t.Fatalf("consumed activation ran again: receipt=%#v calls=%d err=%v", second, execution.calls.Load(), err)
+	}
+}
+
+func TestFullRunExecutionActivationAcceptsExactBareClusterSuccess(t *testing.T) {
+	manifest := verifiedFullRunActivationManifestReceipt()
+	manifest.CompletionMode = stageplan.CompletionModeBareClusterMVP
+	executed := successfulFullRunActivationExecutionReceipt()
+	executed.CompletionMode = stageplan.CompletionModeBareClusterMVP
+	executed.Checkpoints = executed.Checkpoints[:len(preRuntimeStageOrder)]
+	execution := &recordingFullRunManifestExecution{receipt: executed}
+	activation, _, err := openFullRunExecutionActivation("/private/full-run.json", FullRunExecutionManifestRuntime{}, fullRunExecutionActivationFactories{
+		open: func(string, FullRunExecutionManifestRuntime) (fullRunManifestExecution, FullRunExecutionManifestReceipt, error) {
+			return execution, manifest, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := activation.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || receipt.Execution == nil || len(receipt.Execution.Checkpoints) != len(preRuntimeStageOrder) {
+		t.Fatalf("exact bare-cluster success was rejected: %#v err=%v", receipt, err)
+	}
+}
+
+func TestFullRunExecutionActivationRejectsCompletionModeMismatch(t *testing.T) {
+	manifest := verifiedFullRunActivationManifestReceipt()
+	manifest.CompletionMode = stageplan.CompletionModeBareClusterMVP
+	execution := &recordingFullRunManifestExecution{receipt: successfulFullRunActivationExecutionReceipt()}
+	activation, _, err := openFullRunExecutionActivation("/private/full-run.json", FullRunExecutionManifestRuntime{}, fullRunExecutionActivationFactories{
+		open: func(string, FullRunExecutionManifestRuntime) (fullRunManifestExecution, FullRunExecutionManifestReceipt, error) {
+			return execution, manifest, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := activation.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || receipt.Execution == nil {
+		t.Fatalf("completion-mode mismatch was accepted: %#v err=%v", receipt, err)
 	}
 }
 

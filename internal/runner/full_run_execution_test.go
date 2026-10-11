@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 type fakeConcretePreRuntimeExecution struct {
@@ -82,6 +83,31 @@ func TestFullRunExecutionComposesConcreteAdaptersWithExactPrivatePrefix(t *testi
 	if second, secondErr := execution.Run(context.Background()); secondErr == nil || second.State != "STOPPED" ||
 		preRuntime.runs != 1 || postCalls != 1 || postRuntime.calls.Load() != 1 {
 		t.Fatalf("concrete full-run execution was replayed: %#v err=%v", second, secondErr)
+	}
+}
+
+func TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial(t *testing.T) {
+	preRuntime := successfulFakeConcretePreRuntimeExecution(t)
+	config := testFullRunExecutionConfig()
+	config.PreRuntime.PlanExpected.CompletionMode = stageplan.CompletionModeBareClusterMVP
+	config.PostRuntime = PostRuntimeExecutionConfig{}
+	workloadBinder := &recordingFullRunWorkloadAuthorityBinder{}
+	evidenceBinder := &recordingFullRunEvidenceIdentityBinder{}
+	activator := &recordingFullRunPostPrefixActivator{}
+	config.WorkloadAuthorityBinder = workloadBinder
+	config.EvidenceIdentityBinder = evidenceBinder
+	config.PostPrefixActivator = activator
+	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
+		preRuntime: func(PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) { return preRuntime, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := execution.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+		len(receipt.Checkpoints) != len(preRuntimeStageOrder) || preRuntime.runs != 1 || preRuntime.prefixCalls != 0 ||
+		workloadBinder.calls != 0 || evidenceBinder.calls != 0 || activator.calls != 0 {
+		t.Fatalf("bare-cluster execution opened post-runtime material: receipt=%#v pre=%d prefix=%d workload=%d evidence=%d activation=%d err=%v", receipt, preRuntime.runs, preRuntime.prefixCalls, workloadBinder.calls, evidenceBinder.calls, activator.calls, err)
 	}
 }
 

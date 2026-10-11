@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 type fakePostRuntimeContinuation struct {
@@ -76,6 +77,41 @@ func TestFullRunOrchestrationComposesExactTwelveStageChainOnce(t *testing.T) {
 	}
 	if second, err := orchestration.Run(context.Background()); err == nil || second.State != "STOPPED" || len(calls) != 8 || continuation.calls.Load() != 1 {
 		t.Fatalf("single-use full run executed twice: %#v calls=%v suffix=%d err=%v", second, calls, continuation.calls.Load(), err)
+	}
+}
+
+func TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix(t *testing.T) {
+	calls := []string{}
+	bindCalls := 0
+	orchestration := &FullRunOrchestration{
+		PreRuntime:     successfulPreRuntimeOrchestration(&calls),
+		CompletionMode: stageplan.CompletionModeBareClusterMVP,
+		BindPostRuntime: func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
+			bindCalls++
+			return nil, errors.New("post-runtime must remain closed")
+		},
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err != nil || receipt.State != "SUCCEEDED" || receipt.StoppedAt != "" ||
+		receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP || len(receipt.Checkpoints) != len(preRuntimeStageOrder) ||
+		!reflect.DeepEqual(calls, preRuntimeStageOrder) || bindCalls != 0 {
+		t.Fatalf("bare-cluster run crossed its terminal boundary: receipt=%#v calls=%v bind=%d err=%v", receipt, calls, bindCalls, err)
+	}
+	for index, checkpoint := range receipt.Checkpoints {
+		if checkpoint.StageID != preRuntimeStageOrder[index] || checkpoint.State != "COMPLETED_SUCCEEDED" {
+			t.Fatalf("unexpected bare-cluster checkpoint %d: %#v", index, checkpoint)
+		}
+	}
+}
+
+func TestFullRunOrchestrationRejectsUnknownCompletionModeBeforeExecution(t *testing.T) {
+	calls := []string{}
+	orchestration := &FullRunOrchestration{
+		PreRuntime: successfulPreRuntimeOrchestration(&calls), CompletionMode: "skip-post-runtime/v1",
+	}
+	receipt, err := orchestration.Run(context.Background())
+	if err == nil || receipt.State != "STOPPED" || len(calls) != 0 {
+		t.Fatalf("unknown completion mode was accepted: receipt=%#v calls=%v err=%v", receipt, calls, err)
 	}
 }
 

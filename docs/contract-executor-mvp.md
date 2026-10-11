@@ -2818,6 +2818,21 @@ only the twelve ordered stage identities. A second invocation is rejected.
 This is an in-process composition seam only: it adds no renderer, dynamic
 writer, retry, rollback, cleanup, CLI command or Job mutation surface.
 
+Plan v2 may instead bind the explicit completion mode
+`bare-cluster-mvp/v1`. In that mode the same single-use execution must finish
+the exact Stage 1-7 prefix, including target access, and then returns a
+`SUCCEEDED` receipt with exactly seven checkpoints and the bound completion
+mode. It does not open the receipt-prefix bridge, workload/evidence binders,
+post-prefix activation, a `PostRuntimeExecution` or the Platform capability
+factory. Consequently target credential issuance, GitOps registration,
+Platform Applications, Observability installation/observation and aggregate
+evidence do not run. An omitted completion mode preserves the existing exact
+twelve-stage behavior; any other value fails closed before Stage 1. The mode
+is part of the canonical Plan digest, the full-run manifest expectation and
+the redaction-safe manifest/orchestration receipts. Stage CLI and authority
+policy commands must pass the independently reviewed value with
+`--completion-mode bare-cluster-mvp/v1`.
+
 The concrete full-run execution adapter now opens Stage 1-7 first and defers
 opening Stage 8-12 until all seven receipts are successful and durable. It
 loads the private prefix from the completed adapter, checks every private

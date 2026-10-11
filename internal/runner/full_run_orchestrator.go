@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/stagereceipt"
 )
 
@@ -31,6 +32,7 @@ type FullRunOrchestrationReceipt struct {
 	Format           string                                `json:"format"`
 	State            string                                `json:"state"`
 	PlanDigest       string                                `json:"planDigest,omitempty"`
+	CompletionMode   string                                `json:"completionMode,omitempty"`
 	StoppedAt        string                                `json:"stoppedAt,omitempty"`
 	StopCategory     string                                `json:"stopCategory,omitempty"`
 	MismatchEvidence *execution.SubmissionMismatchEvidence `json:"mismatchEvidence,omitempty"`
@@ -66,6 +68,7 @@ type PreRuntimeContinuation interface {
 type FullRunOrchestration struct {
 	PreRuntime      PreRuntimeContinuation
 	BindPostRuntime func(context.Context, PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error)
+	CompletionMode  string
 
 	mu   sync.Mutex
 	used bool
@@ -77,7 +80,8 @@ type FullRunOrchestration struct {
 func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrchestrationReceipt, error) {
 	receipt := FullRunOrchestrationReceipt{
 		Format: FullRunOrchestrationReceiptFormat, State: "RUNNING",
-		Checkpoints: []FullRunStageCheckpoint{},
+		CompletionMode: orchestrationCompletionMode(orchestration),
+		Checkpoints:    []FullRunStageCheckpoint{},
 	}
 	if orchestration == nil {
 		return stopFullRunOrchestration(receipt, fullRunOrchestrationInitialStoppedStage)
@@ -89,7 +93,10 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 	}
 	orchestration.used = true
 	orchestration.mu.Unlock()
-	if orchestration.PreRuntime == nil || orchestration.BindPostRuntime == nil {
+	if orchestration.CompletionMode != "" && orchestration.CompletionMode != stageplan.CompletionModeBareClusterMVP {
+		return stopFullRunOrchestration(receipt, fullRunOrchestrationInitialStoppedStage)
+	}
+	if orchestration.PreRuntime == nil || (orchestration.CompletionMode == "" && orchestration.BindPostRuntime == nil) {
 		return stopFullRunOrchestration(receipt, fullRunOrchestrationInitialStoppedStage)
 	}
 	if err := ctx.Err(); err != nil {
@@ -113,6 +120,10 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 	}
 	if err := ctx.Err(); err != nil {
 		return stopFullRunOrchestration(receipt, postRuntimeStageOrder[0])
+	}
+	if orchestration.CompletionMode == stageplan.CompletionModeBareClusterMVP {
+		receipt.State = "SUCCEEDED"
+		return receipt, nil
 	}
 
 	continuation, err := orchestration.BindPostRuntime(ctx, prefix)
@@ -139,6 +150,13 @@ func (orchestration *FullRunOrchestration) Run(ctx context.Context) (FullRunOrch
 	}
 	receipt.State = "SUCCEEDED"
 	return receipt, nil
+}
+
+func orchestrationCompletionMode(orchestration *FullRunOrchestration) string {
+	if orchestration == nil {
+		return ""
+	}
+	return orchestration.CompletionMode
 }
 
 func appendFullRunPrefix(receipt *FullRunOrchestrationReceipt, prefix PreRuntimeOrchestrationReceipt) error {

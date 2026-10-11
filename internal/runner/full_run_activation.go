@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 const FullRunExecutionActivationReceiptFormat = "ok147-full-run-execution-activation-receipt/v1"
@@ -103,12 +105,36 @@ func (activation *FullRunExecutionActivation) Run(ctx context.Context) (FullRunE
 		}
 		return receipt, err
 	}
-	if executed.Format != FullRunOrchestrationReceiptFormat || executed.State != "SUCCEEDED" || executed.StoppedAt != "" {
+	if !validFullRunActivationSuccess(executed, activation.manifest) {
 		receipt.State = "STOPPED"
 		return receipt, errors.New("full-run execution returned an invalid success receipt")
 	}
 	receipt.State = "SUCCEEDED"
 	return receipt, nil
+}
+
+func validFullRunActivationSuccess(executed FullRunOrchestrationReceipt, manifest FullRunExecutionManifestReceipt) bool {
+	if executed.Format != FullRunOrchestrationReceiptFormat || executed.State != "SUCCEEDED" || executed.StoppedAt != "" ||
+		executed.StopCategory != "" || executed.MismatchEvidence != nil || executed.PlanDigest != manifest.PlanDigest ||
+		executed.CompletionMode != manifest.CompletionMode {
+		return false
+	}
+	order := append(append([]string(nil), preRuntimeStageOrder...), postRuntimeStageOrder...)
+	if manifest.CompletionMode == stageplan.CompletionModeBareClusterMVP {
+		order = append([]string(nil), preRuntimeStageOrder...)
+	} else if manifest.CompletionMode != "" {
+		return false
+	}
+	if len(executed.Checkpoints) != len(order) {
+		return false
+	}
+	for index, checkpoint := range executed.Checkpoints {
+		if checkpoint.StageID != order[index] || checkpoint.State != "COMPLETED_SUCCEEDED" ||
+			!stageReceiptPrefixDigestPattern.MatchString(checkpoint.StageReceiptDigest) {
+			return false
+		}
+	}
+	return true
 }
 
 func defaultFullRunExecutionActivationFactories() fullRunExecutionActivationFactories {

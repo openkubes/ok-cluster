@@ -6,6 +6,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"github.com/openkubes/ok-cluster/internal/projection"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 // FullRunExecutionConfig binds the two existing concrete execution adapters.
@@ -71,12 +72,22 @@ func OpenFullRunExecution(config FullRunExecutionConfig) (*FullRunExecution, err
 }
 
 func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecutionFactories) (*FullRunExecution, error) {
-	if factories.preRuntime == nil || factories.postRuntime == nil {
+	bareCluster := config.PreRuntime.PlanExpected.CompletionMode == stageplan.CompletionModeBareClusterMVP
+	if factories.preRuntime == nil || (!bareCluster && factories.postRuntime == nil) {
 		return nil, errors.New("full-run execution factories are incomplete")
 	}
-	if config.PreRuntime.PlanPath == "" || config.PostRuntime.TargetCredential.PlanPath != config.PreRuntime.PlanPath ||
-		config.PostRuntime.TargetCredential.PlanExpected != config.PreRuntime.PlanExpected {
+	if config.PreRuntime.PlanPath == "" || (!bareCluster && (config.PostRuntime.TargetCredential.PlanPath != config.PreRuntime.PlanPath ||
+		config.PostRuntime.TargetCredential.PlanExpected != config.PreRuntime.PlanExpected)) {
 		return nil, errors.New("full-run execution plan binding differs")
+	}
+	if bareCluster {
+		preRuntime, err := factories.preRuntime(config.PreRuntime)
+		if err != nil || preRuntime == nil {
+			return nil, errors.New("open full-run pre-runtime execution")
+		}
+		return &FullRunExecution{orchestration: &FullRunOrchestration{
+			PreRuntime: &concretePreRuntimeContinuation{executor: preRuntime}, CompletionMode: stageplan.CompletionModeBareClusterMVP,
+		}}, nil
 	}
 	if config.PreRuntime.RuntimeBinding.OutputPath == "" || config.PreRuntime.RuntimeBindingReceiptPath == "" ||
 		config.PostRuntime.RuntimeBinding.MaterialPath != config.PreRuntime.RuntimeBinding.OutputPath ||
@@ -103,7 +114,8 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 	postRuntime := clonePostRuntimeExecutionConfigForFullRun(config.PostRuntime)
 	prefix := &concretePreRuntimeContinuation{executor: preRuntime}
 	orchestration := &FullRunOrchestration{
-		PreRuntime: prefix,
+		PreRuntime:     prefix,
+		CompletionMode: config.PreRuntime.PlanExpected.CompletionMode,
 		BindPostRuntime: func(ctx context.Context, completed PreRuntimeOrchestrationReceipt) (PostRuntimeContinuation, error) {
 			privatePrefix, prefixErr := preRuntime.ReceiptPrefix()
 			if prefixErr != nil || len(privatePrefix) != len(completed.Checkpoints) || len(privatePrefix) != len(preRuntimeStageOrder) {
