@@ -37,6 +37,21 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterStageRunHelp(stdout)
 		return true
 	}
+	if len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "full" ||
+		len(arguments) == 5 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" && arguments[3] == "full" && isHelpArgument(arguments[4]) {
+		writeClusterStageRunFullHelp(stdout)
+		return true
+	}
+	if len(arguments) == 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" ||
+		len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "observe" && isHelpArgument(arguments[3]) {
+		writeClusterStageObserveHelp(stdout)
+		return true
+	}
+	if len(arguments) == 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "bind" ||
+		len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "bind" && isHelpArgument(arguments[3]) {
+		writeClusterStageBindHelp(stdout)
+		return true
+	}
 	if len(arguments) == 2 && arguments[0] == "version" && isHelpArgument(arguments[1]) {
 		fmt.Fprint(stdout, "Usage: ok version\n\nPrint the CLI version and source revision.\n")
 		return true
@@ -170,5 +185,63 @@ mutation; preserve its receipt and inspect the durable state first.
 
 The product path "ok cluster create --file ..." is preferred for a complete
 Bare-MVP run. The commands above are an expert diagnostic and recovery surface.
+`)
+}
+
+func writeClusterStageRunFullHelp(output io.Writer) {
+	fmt.Fprint(output, `Prepare or execute a complete manifest-bound runner
+
+Usage:
+  ok cluster stage run full prepare [flags]
+  ok cluster stage run full execute [flags] --execute
+  ok cluster stage run full package [flags]
+  ok cluster stage run full materialize [flags]
+  ok cluster stage run full launch prepare [flags]
+  ok cluster stage run full launch execute [flags] --execute
+
+Commands:
+  prepare          Verify the complete private manifest offline
+  execute          Run the single-use in-process executor against bound APIs
+  package          Build the immutable Job-activation package offline
+  materialize      Write a verified private execution bundle
+  launch prepare   Build and review the four-object installation plan offline
+  launch execute   Install the exact activation objects on ok-mgmt
+
+The execute and launch-execute paths are different live boundaries. Both
+require separate approval and an explicit --execute gate. Most operators
+should use "ok cluster create --file ..." instead of this expert surface.
+`)
+}
+
+func writeClusterStageObserveHelp(output io.Writer) {
+	fmt.Fprint(output, `Run bounded stage observations
+
+Usage:
+  ok cluster stage observe lifecycle [flags]
+  ok cluster stage observe network [flags]
+  ok cluster stage observe platform [flags]
+
+Commands:
+  lifecycle   Observe CAPI/provider lifecycle evidence (Bare-MVP Stage 3)
+  network     Observe workload network readiness (Bare-MVP Stage 5)
+  platform    Observe post-runtime platform evidence (Stage 11)
+
+Direct observation commands do not repair or reconcile resources. Packaging
+and launch subcommands are expert activation paths; a launch execute command
+may create its exact activation objects and requires --execute.
+`)
+}
+
+func writeClusterStageBindHelp(output io.Writer) {
+	fmt.Fprint(output, `Bind verified runtime identity
+
+Usage:
+  ok cluster stage bind runtime [flags]
+  ok cluster stage bind runtime launch prepare [flags]
+  ok cluster stage bind runtime launch execute [flags] --execute
+
+The direct runtime command is Bare-MVP Stage 6. It consumes the exact lifecycle
+and network receipt prefix and emits bound runtime material. Launch prepare is
+offline; launch execute is a separate mutation-capable activation boundary.
 `)
 }
