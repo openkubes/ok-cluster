@@ -1646,6 +1646,35 @@ func TestStageInspectPropagatesOptionalExecutionAttempt(t *testing.T) {
 	}
 }
 
+func TestStageCommandsPropagateBareClusterCompletionMode(t *testing.T) {
+	previousInspect := inspectSubmissionStage
+	previousResume := inspectStageResume
+	defer func() {
+		inspectSubmissionStage = previousInspect
+		inspectStageResume = previousResume
+	}()
+	var inspected runner.SubmissionStageBundleConfig
+	inspectSubmissionStage = func(config runner.SubmissionStageBundleConfig) (stageInspection, error) {
+		inspected = config
+		return stageInspection{Format: "ok147-stage-inspection/v1", Decision: stagecursor.Decision{Format: stagecursor.DecisionFormat, State: "NEXT"}, AuthorizationState: "VERIFIED"}, nil
+	}
+	var resumed runner.StageResumeConfig
+	inspectStageResume = func(config runner.StageResumeConfig) (stageResumeInspection, error) {
+		resumed = config
+		return stageResumeInspection{Format: "ok147-stage-resume-inspection/v1", Decision: stagecursor.Decision{Format: stagecursor.DecisionFormat, State: "NEXT"}}, nil
+	}
+	mode := stageplan.CompletionModeBareClusterMVP
+	if err := run(append(stageInspectArguments(), "--completion-mode", mode), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(append(stageResumeArguments(), "--completion-mode", mode), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if inspected.PlanExpected.CompletionMode != mode || resumed.PlanExpected.CompletionMode != mode {
+		t.Fatalf("completion mode was not propagated: inspect=%q resume=%q", inspected.PlanExpected.CompletionMode, resumed.PlanExpected.CompletionMode)
+	}
+}
+
 func stageResumeArguments() []string {
 	return []string{
 		"cluster", "stage", "resume",

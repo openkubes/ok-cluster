@@ -117,6 +117,36 @@ func TestLoadFullRunExecutionManifestBindsDeferredMVPNetworkObservation(t *testi
 	}
 }
 
+func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
+	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	document, planDocument := readFullRunExecutionFixture(t, manifestPath)
+	document.Plan.Expected.CompletionMode = stageplan.CompletionModeBareClusterMVP
+	planDocument["completionMode"] = stageplan.CompletionModeBareClusterMVP
+	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, planDocument))
+	writeBundleFile(t, filepath.Dir(manifestPath), filepath.Base(manifestPath), mustJSON(t, document))
+
+	manifest, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+		manifest.plan.CompletionMode != stageplan.CompletionModeBareClusterMVP {
+		t.Fatalf("bare-cluster completion was not bound at the manifest edge: %#v", receipt)
+	}
+	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.PreRuntime.PlanExpected.CompletionMode != stageplan.CompletionModeBareClusterMVP || config.PostRuntime.TargetCredential.PlanPath != "" || config.PostPrefixActivator != nil {
+		t.Fatalf("bare-cluster manifest opened post-runtime configuration: %#v", config)
+	}
+	manifest.plan.CompletionMode = ""
+	if _, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer}); err == nil || !strings.Contains(err.Error(), "plan changed after loading") {
+		t.Fatalf("in-memory completion mode mutation was accepted: %v", err)
+	}
+}
+
 func TestFullRunExecutionManifestAttemptFormatFailsClosed(t *testing.T) {
 	tests := map[string]func(*fullRunExecutionManifestDocument, map[string]any){
 		"v3 cannot acquire attempt": func(document *fullRunExecutionManifestDocument, plan map[string]any) {

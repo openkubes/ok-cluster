@@ -301,6 +301,7 @@ type stageBundleFlags struct {
 	evaluationTime                                                *string
 	receipts                                                      receiptFlags
 	receiptPrefix, receiptPrefixDigest                            *string
+	completionMode                                                *string
 }
 
 type stageResumeFlags struct {
@@ -310,6 +311,7 @@ type stageResumeFlags struct {
 	infrastructureAuthority, managementAuthority, gitOpsAuthority *string
 	receipts                                                      receiptFlags
 	receiptPrefix, receiptPrefixDigest                            *string
+	completionMode                                                *string
 }
 
 func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
@@ -325,6 +327,7 @@ func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
 	values.infrastructureAuthority = flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
 	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
 	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
+	values.completionMode = flags.String("completion-mode", "", "expected plan-bound completion mode")
 	flags.Var(&values.receipts, "receipt", "ordered canonical receipt as PATH@sha256:<digest>; repeat for each completed stage")
 	values.receiptPrefix = flags.String("receipt-prefix", "", "path to a digest-bound ordered receipt-prefix manifest")
 	values.receiptPrefixDigest = flags.String("receipt-prefix-digest", "", "expected SHA-256 digest of the receipt-prefix manifest")
@@ -371,6 +374,7 @@ func (values *stageResumeFlags) config() (runner.StageResumeConfig, error) {
 			PlatformRevision: *values.platformRevision, ExecutionFixture: *values.executionFixture,
 			ExecutionAttemptDigest:  *values.executionAttempt,
 			InfrastructureAuthority: *values.infrastructureAuthority, ManagementAuthority: *values.managementAuthority, GitOpsAuthority: *values.gitOpsAuthority,
+			CompletionMode: *values.completionMode,
 		},
 		Receipts: receipts,
 	}, nil
@@ -390,6 +394,7 @@ func addStageBundleFlags(flags *flag.FlagSet) *stageBundleFlags {
 	values.infrastructureAuthority = flags.String("infrastructure-authority", "", "expected infrastructure authority identity")
 	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
 	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
+	values.completionMode = flags.String("completion-mode", "", "expected plan-bound completion mode")
 	flags.Var(&values.receipts, "receipt", "ordered canonical predecessor receipt as PATH@sha256:<digest>; repeat for each receipt")
 	values.receiptPrefix = flags.String("receipt-prefix", "", "path to a digest-bound ordered receipt-prefix manifest")
 	values.receiptPrefixDigest = flags.String("receipt-prefix-digest", "", "expected SHA-256 digest of the receipt-prefix manifest")
@@ -450,6 +455,7 @@ func (values *stageBundleFlags) config() (runner.SubmissionStageBundleConfig, er
 			PlatformRevision: *values.platformRevision, ExecutionFixture: *values.executionFixture,
 			ExecutionAttemptDigest:  *values.executionAttempt,
 			InfrastructureAuthority: *values.infrastructureAuthority, ManagementAuthority: *values.managementAuthority, GitOpsAuthority: *values.gitOpsAuthority,
+			CompletionMode: *values.completionMode,
 		},
 		Receipts: receipts, GrantPath: *values.grantPath, GrantPublicKeyPath: *values.grantKeyPath,
 		ProjectionManifestPath: *values.projectionManifest, ProjectionRoot: *values.projectionRoot, EvaluationTime: at,

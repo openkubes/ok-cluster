@@ -206,6 +206,7 @@ type FullRunExecutionManifestReceipt struct {
 	ManifestDigest            string `json:"manifestDigest"`
 	PlanDigest                string `json:"planDigest"`
 	ExecutionAttemptDigest    string `json:"executionAttemptDigest,omitempty"`
+	CompletionMode            string `json:"completionMode,omitempty"`
 	ProjectionManifestDigest  string `json:"projectionManifestDigest"`
 	ProjectionAuthorityDigest string `json:"projectionAuthorityDigest"`
 	NetworkProfileDigest      string `json:"networkProfileDigest"`
@@ -283,7 +284,7 @@ func (manifest VerifiedFullRunExecutionManifest) Receipt() (FullRunExecutionMani
 // reads while opening the authorization and lifecycle-authority adapters, but
 // performs no API request, grant resolution, capability action or mutation.
 func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRunExecutionManifestRuntime) (FullRunExecutionConfig, error) {
-	if !manifest.verified || manifest.receipt.State != "VERIFIED" || runtime.PlatformCapability == nil || runtime.Clock == nil || runtime.Wait == nil {
+	if !manifest.verified || manifest.receipt.State != "VERIFIED" || runtime.Clock == nil || runtime.Wait == nil {
 		return FullRunExecutionConfig{}, errors.New("verified full-run manifest runtime is incomplete")
 	}
 	document, plan := manifest.document, manifest.plan
@@ -291,8 +292,12 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	if plan.PlanDigest != manifest.receipt.PlanDigest || plan.IntentRevision != expected.IntentRevision ||
 		plan.EnablementRevision != expected.EnablementRevision || plan.PlatformRevision != expected.PlatformRevision ||
 		plan.ExecutionFixture != expected.ExecutionFixture || plan.ExecutionAttempt != expected.ExecutionAttemptDigest ||
-		plan.NetworkObservationMode != expected.NetworkObservationMode {
+		plan.NetworkObservationMode != expected.NetworkObservationMode || plan.CompletionMode != expected.CompletionMode {
 		return FullRunExecutionConfig{}, errors.New("verified full-run manifest plan changed after loading")
+	}
+	bareCluster := plan.CompletionMode == stageplan.CompletionModeBareClusterMVP
+	if !bareCluster && runtime.PlatformCapability == nil {
+		return FullRunExecutionConfig{}, errors.New("verified full-run manifest runtime is incomplete")
 	}
 	lifecycleInterval, lifecycleTimeout, err := parsePostRuntimePolling(document.LifecycleObservation.PollInterval, document.LifecycleObservation.PollTimeout)
 	if err != nil {
@@ -309,10 +314,6 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	// convergence into a stopped full run.
 	if networkTimeout < lifecycleTimeout {
 		return FullRunExecutionConfig{}, errors.New("full-run network polling timeout is shorter than lifecycle polling timeout")
-	}
-	platformInterval, platformTimeout, err := parsePostRuntimePolling(document.PlatformObservation.PollInterval, document.PlatformObservation.PollTimeout)
-	if err != nil {
-		return FullRunExecutionConfig{}, errors.New("parse full-run platform polling")
 	}
 	authorization, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
 		Endpoint: document.Authorization.Endpoint, TokenFile: document.Authorization.TokenFile, CAFile: document.Authorization.CAFile,
@@ -331,6 +332,51 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	})
 	if err != nil {
 		return FullRunExecutionConfig{}, fmt.Errorf("open full-run lifecycle workload authority materializer: %w", err)
+	}
+	ledger := ledgerConfig(document.ProviderPrerequisites.Ledger)
+	workloadFiles := WorkloadAuthorityFileResolverConfig{
+		Path: workload.BindingPath, KubeconfigFile: workload.KubeconfigFile, CAFile: workload.CAFile,
+	}
+	preRuntime := PreRuntimeExecutionConfig{
+		PlanPath: document.Plan.Path, PlanExpected: expected,
+		ProjectionManifestPath: document.Projection.ManifestPath, ProjectionRoot: document.Projection.Root,
+		Authorization:            authorization,
+		ProviderAccessPolicyPath: document.ProviderAccess.PolicyPath,
+		ProviderPrerequisites:    SubmissionStageRuntimeConfig{Ledger: ledger, Authority: authorityConfig(document.ProviderPrerequisites.Authority), Clock: runtime.Clock},
+		ClusterLifecycle: SubmissionStageRuntimeConfig{
+			Ledger: ledger, Authority: authorityConfig(document.ClusterLifecycle.Authority),
+			ProviderAccessKubeconfigFile: document.ProviderAccess.KubeconfigFile, Clock: runtime.Clock,
+		},
+		LifecycleObservation: LifecycleObservationStageRuntimeConfig{
+			Ledger: ledger, Management: authorityConfig(document.LifecycleObservation.Management),
+			PollInterval: lifecycleInterval, PollTimeout: lifecycleTimeout, Clock: runtime.Clock, Wait: runtime.Wait,
+		},
+		Enablement: PreRuntimeEnablementExecutionConfig{
+			ArtifactPath: document.Enablement.ArtifactPath, ExpectedObject: document.Enablement.ExpectedObject,
+			Runtime: SubmissionStageRuntimeConfig{Ledger: ledger, Authority: authorityConfig(document.Enablement.Runtime.Authority), Clock: runtime.Clock},
+		},
+		WorkloadAuthority: materializer,
+		NetworkObservation: NetworkObservationStageRuntimeConfig{
+			Ledger: ledger, Management: authorityConfig(document.NetworkObservation.Management), Workload: workloadFiles,
+			NetworkProfilePath: document.Profiles.Network.Path, ExpectedNetworkProfileDigest: manifest.receipt.NetworkProfileDigest,
+			PollInterval: networkInterval, PollTimeout: networkTimeout, Clock: runtime.Clock, Wait: runtime.Wait,
+		},
+		RuntimeBinding: RuntimeBindingStageRuntimeConfig{
+			Ledger: ledger, Workload: workloadFiles, OutputPath: document.RuntimeBinding.MaterialPath, Clock: runtime.Clock,
+		},
+		RuntimeBindingReceiptPath: document.RuntimeBinding.ReceiptPath,
+		TargetAccess: PreRuntimeTargetAccessExecutionConfig{
+			ArtifactPath: document.TargetAccess.ArtifactPath, ExpectedObjects: append([]projection.ResourceIdentity(nil), document.TargetAccess.ExpectedObjects...),
+			Runtime: TargetAccessStageRuntimeConfig{Ledger: ledger, Workload: workloadFiles, Clock: runtime.Clock},
+		},
+		ReceiptDirectory: document.ReceiptDirectory,
+	}
+	if bareCluster {
+		return FullRunExecutionConfig{PreRuntime: preRuntime}, nil
+	}
+	platformInterval, platformTimeout, err := parsePostRuntimePolling(document.PlatformObservation.PollInterval, document.PlatformObservation.PollTimeout)
+	if err != nil {
+		return FullRunExecutionConfig{}, errors.New("parse full-run platform polling")
 	}
 	capabilityTimeout, err := time.ParseDuration(document.PlatformObservation.Capability.Timeout)
 	if err != nil {
@@ -360,10 +406,6 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	if err != nil {
 		return FullRunExecutionConfig{}, err
 	}
-	ledger := ledgerConfig(document.ProviderPrerequisites.Ledger)
-	workloadFiles := WorkloadAuthorityFileResolverConfig{
-		Path: workload.BindingPath, KubeconfigFile: workload.KubeconfigFile, CAFile: workload.CAFile,
-	}
 	registrationExpected := submission.TargetRegistrationExpected{
 		ArtifactDigest: fullRunStageInputDigest(plan, "target-registration"), ContractIdentity: plan.ContractIdentity,
 		IntentRevision: plan.IntentRevision, PlatformRevision: plan.PlatformRevision, ExecutionFixture: plan.ExecutionFixture,
@@ -386,40 +428,7 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 			document.PlatformObservation.Capability.IndependentEvidenceIdentityPath,
 			document.PlatformObservation.Capability.IndependentEvidenceIdentityReceiptPath,
 		),
-		PreRuntime: PreRuntimeExecutionConfig{
-			PlanPath: document.Plan.Path, PlanExpected: expected,
-			ProjectionManifestPath: document.Projection.ManifestPath, ProjectionRoot: document.Projection.Root,
-			Authorization:            authorization,
-			ProviderAccessPolicyPath: document.ProviderAccess.PolicyPath,
-			ProviderPrerequisites:    SubmissionStageRuntimeConfig{Ledger: ledger, Authority: authorityConfig(document.ProviderPrerequisites.Authority), Clock: runtime.Clock},
-			ClusterLifecycle: SubmissionStageRuntimeConfig{
-				Ledger: ledger, Authority: authorityConfig(document.ClusterLifecycle.Authority),
-				ProviderAccessKubeconfigFile: document.ProviderAccess.KubeconfigFile, Clock: runtime.Clock,
-			},
-			LifecycleObservation: LifecycleObservationStageRuntimeConfig{
-				Ledger: ledger, Management: authorityConfig(document.LifecycleObservation.Management),
-				PollInterval: lifecycleInterval, PollTimeout: lifecycleTimeout, Clock: runtime.Clock, Wait: runtime.Wait,
-			},
-			Enablement: PreRuntimeEnablementExecutionConfig{
-				ArtifactPath: document.Enablement.ArtifactPath, ExpectedObject: document.Enablement.ExpectedObject,
-				Runtime: SubmissionStageRuntimeConfig{Ledger: ledger, Authority: authorityConfig(document.Enablement.Runtime.Authority), Clock: runtime.Clock},
-			},
-			WorkloadAuthority: materializer,
-			NetworkObservation: NetworkObservationStageRuntimeConfig{
-				Ledger: ledger, Management: authorityConfig(document.NetworkObservation.Management), Workload: workloadFiles,
-				NetworkProfilePath: document.Profiles.Network.Path, ExpectedNetworkProfileDigest: manifest.receipt.NetworkProfileDigest,
-				PollInterval: networkInterval, PollTimeout: networkTimeout, Clock: runtime.Clock, Wait: runtime.Wait,
-			},
-			RuntimeBinding: RuntimeBindingStageRuntimeConfig{
-				Ledger: ledger, Workload: workloadFiles, OutputPath: document.RuntimeBinding.MaterialPath, Clock: runtime.Clock,
-			},
-			RuntimeBindingReceiptPath: document.RuntimeBinding.ReceiptPath,
-			TargetAccess: PreRuntimeTargetAccessExecutionConfig{
-				ArtifactPath: document.TargetAccess.ArtifactPath, ExpectedObjects: append([]projection.ResourceIdentity(nil), document.TargetAccess.ExpectedObjects...),
-				Runtime: TargetAccessStageRuntimeConfig{Ledger: ledger, Workload: workloadFiles, Clock: runtime.Clock},
-			},
-			ReceiptDirectory: document.ReceiptDirectory,
-		},
+		PreRuntime: preRuntime,
 		PostRuntime: PostRuntimeExecutionConfig{
 			TargetCredential: TargetCredentialStageBundleConfig{
 				PlanPath: document.Plan.Path, PlanExpected: expected, Receipts: []StageReceiptSource{}, PolicyPath: document.TargetCredential.PolicyPath,
@@ -518,6 +527,7 @@ func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest
 	}
 	receipt.PlanDigest = plan.PlanDigest
 	receipt.ExecutionAttemptDigest = plan.ExecutionAttempt
+	receipt.CompletionMode = plan.CompletionMode
 	if plan.Format == stageplan.BindingFormatV2 {
 		receipt.Format = FullRunExecutionManifestReceiptFormatV2
 	}
@@ -595,6 +605,7 @@ func fullRunPlanExpected(document postRuntimePlanExpectedDocument) stageplan.Exp
 		InfrastructureAuthority: document.InfrastructureAuthority,
 		ManagementAuthority:     document.ManagementAuthority, GitOpsAuthority: document.GitOpsAuthority,
 		NetworkObservationMode: document.NetworkObservationMode,
+		CompletionMode:         document.CompletionMode,
 	}
 }
 
