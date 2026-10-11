@@ -715,10 +715,15 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 		return runEvidenceObservabilityServe(ctx, arguments[3:], stdout, stderr)
 	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
-		if hasClusterCreateFileFlag(arguments[2:]) {
-			return runClusterCreateWorkflow(ctx, arguments[2:], stdout, stderr)
+		productFlags := hasClusterCreateProductFlag(arguments[2:])
+		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:])
+		if productFlags && legacyFlags {
+			return errors.New("product --file workflow flags cannot be combined with legacy --contract workflow flags")
 		}
-		return runClusterCreate(arguments[2:], stdout, stderr)
+		if legacyFlags {
+			return runClusterCreate(arguments[2:], stdout, stderr)
+		}
+		return runClusterCreateWorkflow(ctx, arguments[2:], stdout, stderr)
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "dry-run" && arguments[2] == "serve" {
 		return runClusterDryRunServe(ctx, arguments[3:], stdout, stderr)
@@ -882,10 +887,27 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	return errors.New("unknown command; run 'ok --help' for usage")
 }
 
-func hasClusterCreateFileFlag(arguments []string) bool {
+func hasClusterCreateProductFlag(arguments []string) bool {
+	return hasAnyCommandFlag(arguments,
+		"--file", "-f", "--prepare", "--live", "--execute", "--expected-manifest-digest",
+		"--independent-evidence-public-key", "--terminal-marker",
+	)
+}
+
+func hasLegacyClusterCreateFlag(arguments []string) bool {
+	return hasAnyCommandFlag(arguments,
+		"--contract", "--schema", "--projection-manifest", "--projection-root", "--authorization",
+		"--authorization-key", "--evaluation-time", "--ledger-inspect", "--ledger-api-endpoint",
+		"--ledger-token-file", "--ledger-ca-file",
+	)
+}
+
+func hasAnyCommandFlag(arguments []string, names ...string) bool {
 	for _, argument := range arguments {
-		if argument == "--file" || argument == "-f" || strings.HasPrefix(argument, "--file=") || strings.HasPrefix(argument, "-f=") {
-			return true
+		for _, name := range names {
+			if argument == name || strings.HasPrefix(argument, name+"=") {
+				return true
+			}
 		}
 	}
 	return false

@@ -92,6 +92,36 @@ func TestClusterCreateFileRejectsAmbiguousFileFlags(t *testing.T) {
 	}
 }
 
+func TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly(t *testing.T) {
+	for name, arguments := range map[string][]string{
+		"dry-run without file": {"cluster", "create", "--dry-run"},
+		"prepare without file": {"cluster", "create", "--prepare"},
+		"live without file":    {"cluster", "create", "--live", "--execute"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := run(arguments, &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), "exactly one --file or -f input is required") {
+				t.Fatalf("incomplete product command reached the wrong parser: err=%v stderr=%s", err, stderr.String())
+			}
+		})
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"cluster", "create", "--contract", "/missing/contract", "--schema", "/missing/schema", "--dry-run"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "read contract") {
+		t.Fatalf("legacy command did not reach the legacy parser: err=%v stderr=%s", err, stderr.String())
+	}
+
+	err = run([]string{
+		"cluster", "create", "--file", "/private/run.json", "--prepare",
+		"--contract", "/legacy/contract", "--schema", "/legacy/schema",
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("mixed product and legacy flags were not rejected clearly: err=%v", err)
+	}
+}
+
 func TestClusterCreateFileDryRunAndPrepareAreNonMutating(t *testing.T) {
 	previousPrepare := prepareFullRunExecutionManifest
 	previousExecute := executeClusterCreateLive
