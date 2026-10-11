@@ -22,6 +22,26 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterHelp(stdout)
 		return true
 	}
+	if len(arguments) == 1 && arguments[0] == "authority" ||
+		len(arguments) == 2 && arguments[0] == "authority" && isHelpArgument(arguments[1]) {
+		writeAuthorityHelp(stdout)
+		return true
+	}
+	if len(arguments) == 2 && arguments[0] == "authority" && arguments[1] == "stage" ||
+		len(arguments) == 3 && arguments[0] == "authority" && arguments[1] == "stage" && isHelpArgument(arguments[2]) {
+		writeAuthorityStageHelp(stdout)
+		return true
+	}
+	if len(arguments) == 1 && arguments[0] == "evidence" ||
+		len(arguments) == 2 && arguments[0] == "evidence" && isHelpArgument(arguments[1]) {
+		writeEvidenceHelp(stdout)
+		return true
+	}
+	if len(arguments) == 2 && arguments[0] == "evidence" && arguments[1] == "observability" ||
+		len(arguments) == 3 && arguments[0] == "evidence" && arguments[1] == "observability" && isHelpArgument(arguments[2]) {
+		writeEvidenceObservabilityHelp(stdout)
+		return true
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" &&
 		(len(arguments) == 2 || containsHelpArgument(arguments[2:])) {
 		writeClusterCreateHelp(stdout)
@@ -30,6 +50,11 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 	if len(arguments) == 2 && arguments[0] == "cluster" && arguments[1] == "stage" ||
 		len(arguments) == 3 && arguments[0] == "cluster" && arguments[1] == "stage" && isHelpArgument(arguments[2]) {
 		writeClusterStageHelp(stdout)
+		return true
+	}
+	if len(arguments) == 2 && arguments[0] == "cluster" && arguments[1] == "dry-run" ||
+		len(arguments) == 3 && arguments[0] == "cluster" && arguments[1] == "dry-run" && isHelpArgument(arguments[2]) {
+		writeClusterDryRunHelp(stdout)
 		return true
 	}
 	if len(arguments) == 3 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "run" ||
@@ -105,6 +130,73 @@ Commands:
   dry-run     Read-only HTTP validation service (expert)
 
 Start with "ok cluster create --help".
+`)
+}
+
+func writeAuthorityHelp(output io.Writer) {
+	fmt.Fprint(output, `Prepare and operate the bounded stage authority
+
+Usage:
+  ok authority stage <command> [flags]
+
+Commands:
+  stage   Build policy and packages or explicitly activate the stage authority
+
+Run "ok authority stage --help" for the expert command boundary.
+`)
+}
+
+func writeAuthorityStageHelp(output io.Writer) {
+	fmt.Fprint(output, `Bounded stage-authority commands
+
+Usage:
+  ok authority stage <command> [flags]
+
+Commands:
+  policy           Build a Plan-bound authority policy offline
+  package          Build an immutable activation package offline
+  materialize      Write verified private activation material locally
+  launch prepare   Build and review an installation plan offline
+  launch execute   Install the exact authority objects; requires --execute
+  serve            Run the bounded authority service
+
+Preparing, packaging, or materializing is not live authorization. Launch
+execute is a separate mutation boundary and requires separate approval.
+`)
+}
+
+func writeEvidenceHelp(output io.Writer) {
+	fmt.Fprint(output, `Operate independent evidence services
+
+Usage:
+  ok evidence observability <command> [flags]
+
+Commands:
+  observability   Serve independently verifiable Observability evidence
+
+Run "ok evidence observability --help" for service-specific help.
+`)
+}
+
+func writeEvidenceObservabilityHelp(output io.Writer) {
+	fmt.Fprint(output, `Serve independent Observability evidence
+
+Usage:
+  ok evidence observability serve [flags]
+
+The service is a separate trust domain from the stage authority and runner.
+Starting it opens its configured listener; inspect leaf help before launch.
+`)
+}
+
+func writeClusterDryRunHelp(output io.Writer) {
+	fmt.Fprint(output, `Serve the expert read-only validation endpoint
+
+Usage:
+  ok cluster dry-run serve [flags]
+
+This is the legacy HTTP validation service. For a one-shot Bare-MVP workflow,
+use "ok cluster create --file ... --dry-run".
 `)
 }
 
