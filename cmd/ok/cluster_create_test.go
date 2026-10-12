@@ -73,6 +73,8 @@ func TestClusterCreateRequirementsAreMachineReadableAndNonMutating(t *testing.T)
 	if requirements.Format != clusterCreateRequirementsFormat || requirements.Operation != "CreateCluster" ||
 		requirements.RequiredCompletionMode != stageplan.CompletionModeBareClusterMVP ||
 		requirements.OfflineAPIContacted || requirements.OfflineMutationAllowed || !requirements.LiveMutationAllowed ||
+		requirements.PostRuntimeMaterialRequired || len(requirements.RequiredManifestSections) != 14 ||
+		len(requirements.UnusedPostRuntimeSections) != 9 ||
 		requirements.TerminalMarkerName != runner.FullRunExecutorTerminalMarkerName ||
 		len(requirements.AcceptedManifestFormats) != 2 || len(requirements.LiveStageOrder) != 7 ||
 		requirements.LiveStageOrder[1] != "cluster-lifecycle" || stderr.Len() != 0 {

@@ -22,6 +22,8 @@ type clusterCreateRequirements struct {
 	AcceptedManifestFormats     []string `json:"acceptedManifestFormats"`
 	RequiredCompletionMode      string   `json:"requiredCompletionMode"`
 	ManifestPathRules           []string `json:"manifestPathRules"`
+	RequiredManifestSections    []string `json:"requiredManifestSections"`
+	UnusedPostRuntimeSections   []string `json:"unusedPostRuntimeSections"`
 	OfflineModes                []string `json:"offlineModes"`
 	OfflineAPIContacted         bool     `json:"offlineApiContacted"`
 	OfflineMutationAllowed      bool     `json:"offlineMutationAllowed"`
@@ -76,6 +78,16 @@ func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
 		ManifestPathRules: []string{
 			"absolute path", "regular non-symlink file", "owner-only permissions (0600 or stricter)",
 			"all referenced private inputs present and digest-bound",
+		},
+		RequiredManifestSections: []string{
+			"format", "plan", "projection", "authorization", "profiles.network", "providerPrerequisites",
+			"providerAccess", "clusterLifecycle", "lifecycleObservation", "enablement", "networkObservation",
+			"runtimeBinding", "targetAccess", "receiptDirectory",
+		},
+		UnusedPostRuntimeSections: []string{
+			"profiles.platform", "profiles.aggregate", "targetCredential", "targetRegistration",
+			"platformApplications", "observabilityCredentials", "platformObservation", "aggregateEvidence",
+			"observabilityCollector",
 		},
 		OfflineModes: []string{"--dry-run", "--prepare"}, OfflineAPIContacted: false, OfflineMutationAllowed: false,
 		LiveRequiredFlags: []string{
