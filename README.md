@@ -57,7 +57,14 @@ without reading a private file:
 
 ```bash
 .tools/bin/ok cluster create requirements
+.tools/bin/ok cluster create manifest-template > /private/bare-run.template.json
 ```
+
+The template contains the exact Stage 1-7 manifest shape and all sixteen
+ordered target-access identities. Its placeholder digests, names, hosts and
+paths are intentionally invalid. It is a renderer input aid, not a runnable
+manifest or authorization; replace and independently bind every placeholder,
+then start with `--dry-run`.
 
 The initial product surface consumes the private full-run manifest from the
 proven OK-147 runner. It intentionally accepts only a manifest whose reviewed

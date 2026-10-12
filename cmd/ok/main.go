@@ -717,6 +717,9 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" {
 		return runClusterCreateRequirements(arguments[3:], stdout)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "manifest-template" {
+		return runClusterCreateManifestTemplate(arguments[3:], stdout)
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
 		productFlags := hasClusterCreateProductFlag(arguments[2:])
 		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:])

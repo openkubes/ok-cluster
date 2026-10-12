@@ -46,6 +46,10 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterCreateRequirementsHelp(stdout)
 		return true
 	}
+	if len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "manifest-template" && isHelpArgument(arguments[3]) {
+		writeClusterCreateManifestTemplateHelp(stdout)
+		return true
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" &&
 		(len(arguments) == 2 || containsHelpArgument(arguments[2:])) {
 		writeClusterCreateHelp(stdout)
@@ -209,6 +213,7 @@ func writeClusterCreateHelp(output io.Writer) {
 
 Usage:
   ok cluster create requirements
+  ok cluster create manifest-template
   ok cluster create --file <private-manifest.json> --dry-run
   ok cluster create --file <private-manifest.json> --prepare
   ok cluster create --file <private-manifest.json> --live --execute \
@@ -252,6 +257,19 @@ The command reads no file, opens no network client, and emits static JSON for
 renderer and packaging integrations. The contract reports that Stage 8-12
 post-runtime material is not required for Bare-MVP. It does not prepare or
 authorize a run.
+`)
+}
+
+func writeClusterCreateManifestTemplateHelp(output io.Writer) {
+	fmt.Fprint(output, `Print a non-authorizing Bare-MVP manifest skeleton
+
+Usage:
+  ok cluster create manifest-template
+
+The command reads no file and opens no network client. Its JSON output contains
+invalid placeholder identities and paths by design; an authoritative renderer
+must replace every placeholder and bind all referenced artifacts before the
+result can pass "ok cluster create --file ... --dry-run".
 `)
 }
 

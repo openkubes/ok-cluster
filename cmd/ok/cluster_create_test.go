@@ -13,6 +13,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/runner"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
+	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
 func bareClusterCreateManifestReceipt() runner.FullRunExecutionManifestReceipt {
@@ -36,6 +37,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"evidence observability": {[]string{"evidence", "observability", "--help"}, []string{"observability serve", "configured listener"}},
 		"cluster create":         {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "may create cluster resources"}},
 		"create requirements":    {[]string{"cluster", "create", "requirements", "--help"}, []string{"machine-readable", "reads no file", "does not prepare"}},
+		"create template":        {[]string{"cluster", "create", "manifest-template", "--help"}, []string{"manifest skeleton", "invalid placeholder", "authoritative renderer"}},
 		"create trailing help":   {[]string{"cluster", "create", "--file", "/private/run.json", "--help"}, []string{"--file", "--dry-run", "--live --execute"}},
 		"cluster dry-run":        {[]string{"cluster", "dry-run", "--help"}, []string{"dry-run serve", "legacy HTTP validation"}},
 		"cluster stage":          {[]string{"cluster", "stage", "--help"}, []string{"Expert stage-level", "observe", "launch"}},
@@ -58,6 +60,52 @@ func TestHierarchicalHelp(t *testing.T) {
 				t.Fatalf("unexpected stderr: %s", stderr.String())
 			}
 		})
+	}
+}
+
+func TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"cluster", "create", "manifest-template"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	plan, ok := manifest["plan"].(map[string]any)
+	if !ok {
+		t.Fatalf("template plan is missing: %#v", manifest)
+	}
+	expected, ok := plan["expected"].(map[string]any)
+	if !ok || expected["completionMode"] != stageplan.CompletionModeBareClusterMVP ||
+		expected["executionAttemptDigest"] != bareClusterTemplateDigest {
+		t.Fatalf("template plan boundary is invalid: %#v", plan)
+	}
+	targetAccess, ok := manifest["targetAccess"].(map[string]any)
+	if !ok {
+		t.Fatalf("template target access is missing: %#v", manifest)
+	}
+	objects, ok := targetAccess["expectedObjects"].([]any)
+	if !ok || len(objects) != submission.TargetAccessObjectCount {
+		t.Fatalf("template target access inventory is invalid: %#v", targetAccess)
+	}
+	for _, forbidden := range []string{"targetCredential", "targetRegistration", "platformApplications", "observabilityCollector"} {
+		if _, exists := manifest[forbidden]; exists {
+			t.Fatalf("template included unused post-runtime section %q", forbidden)
+		}
+	}
+	if !strings.Contains(stdout.String(), "<replace-with-64-lowercase-hex>") || stderr.Len() != 0 {
+		t.Fatalf("template did not retain fail-closed placeholders: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	templatePath := filepath.Join(t.TempDir(), "bare-run.template.json")
+	if err := os.WriteFile(templatePath, stdout.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runner.LoadFullRunExecutionManifest(templatePath); err == nil {
+		t.Fatal("unrendered manifest template passed the production loader")
+	}
+	if err := run([]string{"cluster", "create", "manifest-template", "extra"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("manifest-template accepted positional input")
 	}
 }
 
