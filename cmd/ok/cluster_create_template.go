@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path/filepath"
 
 	"github.com/openkubes/ok-cluster/internal/runner"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
@@ -16,23 +17,30 @@ func runClusterCreateManifestTemplate(arguments []string, stdout io.Writer) erro
 	if len(arguments) != 0 {
 		return errors.New("ok cluster create manifest-template accepts no flags or positional arguments")
 	}
+	return writeClusterCreateManifestTemplate(stdout, "<contract-namespace>", "<contract-name>", "/private/replace")
+}
+
+func writeClusterCreateManifestTemplate(stdout io.Writer, namespace, name, root string) error {
+	privatePath := func(elements ...string) string {
+		return filepath.Join(append([]string{root}, elements...)...)
+	}
 	ledger := map[string]any{
 		"endpoint": "https://<ledger-api-host>:6443", "namespace": "openkubes-execution-system",
-		"tokenFile": "/private/replace/ledger.token", "caFile": "/private/replace/ledger-ca.crt",
+		"tokenFile": privatePath("ledger.token"), "caFile": privatePath("ledger-ca.crt"),
 	}
-	infra := bareClusterTemplateAuthority("https://<infrastructure-api-host>:6443", "ok-infra", "infrastructure")
-	management := bareClusterTemplateAuthority("https://<management-api-host>:6443", "ok-mgmt", "management")
+	infra := bareClusterTemplateAuthority(root, "https://<infrastructure-api-host>:6443", "ok-infra", "infrastructure")
+	management := bareClusterTemplateAuthority(root, "https://<management-api-host>:6443", "ok-mgmt", "management")
 	workload := map[string]any{
-		"bindingPath":    "/private/replace/runtime/workload-authority.json",
-		"kubeconfigFile": "/private/replace/runtime/workload.kubeconfig",
-		"caFile":         "/private/replace/runtime/workload-ca.crt",
+		"bindingPath":    privatePath("runtime", "workload-authority.json"),
+		"kubeconfigFile": privatePath("runtime", "workload.kubeconfig"),
+		"caFile":         privatePath("runtime", "workload-ca.crt"),
 	}
 	manifest := map[string]any{
 		"format": runner.FullRunExecutionManifestFormatV4,
 		"plan": map[string]any{
-			"path": "/private/replace/staged-plan.json",
+			"path": privatePath("staged-plan.json"),
 			"expected": map[string]any{
-				"contractIdentity": map[string]any{"namespace": "<contract-namespace>", "name": "<contract-name>"},
+				"contractIdentity": map[string]any{"namespace": namespace, "name": name},
 				"intentRevision":   bareClusterTemplateDigest, "enablementRevision": bareClusterTemplateDigest,
 				"platformRevision": bareClusterTemplateDigest, "executionFixture": bareClusterTemplateDigest,
 				"executionAttemptDigest":  bareClusterTemplateDigest,
@@ -41,29 +49,29 @@ func runClusterCreateManifestTemplate(arguments []string, stdout io.Writer) erro
 			},
 		},
 		"projection": map[string]any{
-			"manifestPath": "/private/replace/projection/manifest.json", "root": "/private/replace/projection",
+			"manifestPath": privatePath("projection", "manifest.json"), "root": privatePath("projection"),
 		},
 		"authorization": map[string]any{
 			"endpoint":  "https://ok147-stage-authority.openkubes-execution-system.svc:8443/v1/stage-authorizations",
-			"tokenFile": "/private/replace/authorization.token", "caFile": "/private/replace/authorization-ca.crt",
-			"publicKeyPath": "/private/replace/authorization.pub", "outputDirectory": "/private/replace/authorizations",
+			"tokenFile": privatePath("authorization.token"), "caFile": privatePath("authorization-ca.crt"),
+			"publicKeyPath": privatePath("authorization.pub"), "outputDirectory": privatePath("authorizations"),
 		},
 		"profiles": map[string]any{
-			"network": map[string]any{"path": "/private/replace/network-profile.json", "digest": bareClusterTemplateDigest},
+			"network": map[string]any{"path": privatePath("network-profile.json"), "digest": bareClusterTemplateDigest},
 		},
 		"providerPrerequisites": map[string]any{"ledger": ledger, "authority": infra},
 		"providerAccess": map[string]any{
-			"policyPath": "/private/replace/provider-access-policy.json", "kubeconfigFile": "/private/replace/provider-access.kubeconfig",
+			"policyPath": privatePath("provider-access-policy.json"), "kubeconfigFile": privatePath("provider-access.kubeconfig"),
 		},
 		"clusterLifecycle": map[string]any{"ledger": ledger, "authority": management},
 		"lifecycleObservation": map[string]any{
 			"ledger": ledger, "management": management, "pollInterval": "1s", "pollTimeout": "30m",
 		},
 		"enablement": map[string]any{
-			"artifactPath": "/private/replace/enablement.yaml",
+			"artifactPath": privatePath("enablement.yaml"),
 			"expectedObject": map[string]any{
 				"apiVersion": "addons.cluster.x-k8s.io/v1alpha1", "kind": "HelmChartProxy",
-				"namespace": "<contract-namespace>", "name": "<enablement-name>",
+				"namespace": namespace, "name": "<enablement-name>",
 			},
 			"runtime": map[string]any{"ledger": ledger, "authority": management},
 		},
@@ -72,14 +80,14 @@ func runClusterCreateManifestTemplate(arguments []string, stdout io.Writer) erro
 		},
 		"runtimeBinding": map[string]any{
 			"ledger": ledger, "workload": workload,
-			"materialPath": "/private/replace/runtime/runtime-binding.json",
-			"receiptPath":  "/private/replace/runtime/runtime-binding-receipt.json",
+			"materialPath": privatePath("runtime", "runtime-binding.json"),
+			"receiptPath":  privatePath("runtime", "runtime-binding-receipt.json"),
 		},
 		"targetAccess": map[string]any{
-			"artifactPath": "/private/replace/target-access.yaml", "expectedObjects": bareClusterTemplateTargetAccessObjects(),
+			"artifactPath": privatePath("target-access.yaml"), "expectedObjects": bareClusterTemplateTargetAccessObjects(),
 			"ledger": ledger, "workload": workload,
 		},
-		"receiptDirectory": "/private/replace/receipts",
+		"receiptDirectory": privatePath("receipts"),
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetEscapeHTML(false)
@@ -91,9 +99,13 @@ func runClusterCreatePlanTemplate(arguments []string, stdout io.Writer) error {
 	if len(arguments) != 0 {
 		return errors.New("ok cluster create plan-template accepts no flags or positional arguments")
 	}
+	return writeClusterCreatePlanTemplate(stdout, "<contract-namespace>", "<contract-name>")
+}
+
+func writeClusterCreatePlanTemplate(stdout io.Writer, namespace, name string) error {
 	plan := map[string]any{
 		"format":           stageplan.FormatV2,
-		"contractIdentity": map[string]any{"namespace": "<contract-namespace>", "name": "<contract-name>"},
+		"contractIdentity": map[string]any{"namespace": namespace, "name": name},
 		"intentRevision":   bareClusterTemplateDigest, "enablementRevision": bareClusterTemplateDigest,
 		"platformRevision": bareClusterTemplateDigest, "executionFixture": bareClusterTemplateDigest,
 		"executionAttemptDigest": bareClusterTemplateDigest,
@@ -136,10 +148,10 @@ func bareClusterTemplateStage(order int, id, kind, authority, operation string, 
 	return stage
 }
 
-func bareClusterTemplateAuthority(endpoint, identity, tokenName string) map[string]any {
+func bareClusterTemplateAuthority(root, endpoint, identity, tokenName string) map[string]any {
 	return map[string]any{
 		"endpoint": endpoint, "authorityIdentity": identity,
-		"tokenFile": "/private/replace/" + tokenName + ".token", "caFile": "/private/replace/" + tokenName + "-ca.crt",
+		"tokenFile": filepath.Join(root, tokenName+".token"), "caFile": filepath.Join(root, tokenName+"-ca.crt"),
 		"caBundleDigest": bareClusterTemplateDigest,
 	}
 }

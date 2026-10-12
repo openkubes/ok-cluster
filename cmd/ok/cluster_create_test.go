@@ -40,6 +40,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"create requirements":    {[]string{"cluster", "create", "requirements", "--help"}, []string{"machine-readable", "reads no file", "does not prepare"}},
 		"create template":        {[]string{"cluster", "create", "manifest-template", "--help"}, []string{"manifest skeleton", "invalid placeholder", "authoritative renderer"}},
 		"create plan template":   {[]string{"cluster", "create", "plan-template", "--help"}, []string{"seven-stage", "NO-GO", "authoritative renderer"}},
+		"create scaffold":        {[]string{"cluster", "create", "scaffold", "--help"}, []string{"must not exist", "contacts no API", "invalid"}},
 		"create trailing help":   {[]string{"cluster", "create", "--file", "/private/run.json", "--help"}, []string{"--file", "--dry-run", "--live --execute"}},
 		"cluster dry-run":        {[]string{"cluster", "dry-run", "--help"}, []string{"dry-run serve", "legacy HTTP validation"}},
 		"cluster stage":          {[]string{"cluster", "stage", "--help"}, []string{"Expert stage-level", "observe", "launch"}},
@@ -158,6 +159,52 @@ func TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing(t *test
 	}
 	if err := run([]string{"cluster", "create", "manifest-template", "extra"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("manifest-template accepted positional input")
+	}
+}
+
+func TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound(t *testing.T) {
+	parent := t.TempDir()
+	output := filepath.Join(parent, "runner-inputs")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"cluster", "create", "scaffold", "--name", "ok-cli-mvp", "--output", output}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var receipt clusterCreateScaffoldReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "SCAFFOLDED" || receipt.ContractName != "ok-cli-mvp" || receipt.APIContacted || receipt.MutationAllowed || len(receipt.Files) != 2 || stderr.Len() != 0 {
+		t.Fatalf("unexpected scaffold receipt: %#v stderr=%s", receipt, stderr.String())
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("scaffold directory is not private: mode=%v err=%v", info.Mode(), err)
+	}
+	for _, path := range receipt.Files {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("scaffold file is not private: path=%s mode=%v err=%v", path, info.Mode(), err)
+		}
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(output, "full-run-manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	expected := manifest["plan"].(map[string]any)["expected"].(map[string]any)
+	identity := expected["contractIdentity"].(map[string]any)
+	if identity["name"] != "ok-cli-mvp" || identity["namespace"] != "ok-cli-mvp" ||
+		manifest["plan"].(map[string]any)["path"] != filepath.Join(output, "staged-plan.json") {
+		t.Fatalf("scaffold manifest is not name/path bound: %#v", manifest)
+	}
+	if err := run([]string{"cluster", "create", "scaffold", "--name", "ok-cli-mvp", "--output", output}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("scaffold reused its output: %v", err)
+	}
+	if err := run([]string{"cluster", "create", "scaffold", "--name", "Existing_Name", "--output", filepath.Join(parent, "other")}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("scaffold accepted an invalid cluster name")
 	}
 }
 

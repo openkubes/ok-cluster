@@ -61,6 +61,20 @@ without reading a private file:
 .tools/bin/ok cluster create plan-template > /private/staged-plan.template.json
 ```
 
+For a named run, create a new private workspace directly. The output directory
+must not exist; the command refuses to reuse or overwrite it:
+
+```bash
+.tools/bin/ok cluster create scaffold \
+  --name ok-cli-mvp \
+  --output /private/ok-cli-mvp-run
+```
+
+This command is offline and create-only. It creates a `0700` directory with
+`0600` Plan and manifest templates, reports `apiContacted: false` and
+`mutationAllowed: false`, and still leaves all digest, endpoint and private
+material placeholders invalid until authoritative inputs are supplied.
+
 The templates contain the exact Stage 1-7 manifest shape, seven-stage Plan and
 all sixteen ordered target-access identities. Placeholder digests, names,
 hosts and paths are intentionally invalid, and the Plan remains explicitly

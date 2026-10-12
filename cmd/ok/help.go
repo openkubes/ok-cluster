@@ -54,6 +54,10 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterCreatePlanTemplateHelp(stdout)
 		return true
 	}
+	if len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "scaffold" && isHelpArgument(arguments[3]) {
+		writeClusterCreateScaffoldHelp(stdout)
+		return true
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" &&
 		(len(arguments) == 2 || containsHelpArgument(arguments[2:])) {
 		writeClusterCreateHelp(stdout)
@@ -217,6 +221,7 @@ func writeClusterCreateHelp(output io.Writer) {
 
 Usage:
   ok cluster create requirements
+  ok cluster create scaffold --name <new-name> --output <new-private-directory>
   ok cluster create manifest-template
   ok cluster create plan-template
   ok cluster create --file <private-manifest.json> --dry-run
@@ -240,6 +245,8 @@ Live inputs:
                     private directory (mode 0700 or stricter)
 
 Safety:
+  The scaffold command is offline and create-only: it refuses an existing
+  output path and writes owner-only templates containing invalid placeholders.
   Dry-run and prepare read and validate referenced private inputs locally, but
   do not contact a cluster, open a network client, or execute a stage.
   Their JSON receipts report apiContacted=false, authorizationConsumed=false,
@@ -287,6 +294,20 @@ Usage:
 The command reads no file and opens no network client. The plan fixes the exact
 Stage 1-7 order and authorizationState NO-GO. Its placeholder identities and
 digests are deliberately invalid until supplied by an authoritative renderer.
+`)
+}
+
+func writeClusterCreateScaffoldHelp(output io.Writer) {
+	fmt.Fprint(output, `Create a private, non-authorizing Bare-MVP workspace
+
+Usage:
+  ok cluster create scaffold --name <new-name> --output <new-private-directory>
+
+The name is used for both the cluster and Contract namespace/name. The output
+directory must not exist; scaffold never reuses or overwrites it. It creates
+owner-only plan and full-run manifest templates with deliberately invalid
+digest and endpoint placeholders. It reads no cluster state, contacts no API,
+and grants no mutation authority.
 `)
 }
 

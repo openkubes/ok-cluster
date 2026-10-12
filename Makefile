@@ -229,12 +229,13 @@ ok-cli-build: ## Build the local ok CLI without contacting a cluster
 
 ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries without cluster contact
 	@go test -mod=readonly ./cmd/ok -count=1 \
-		-run 'TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
+		-run 'TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
 	@go test -mod=readonly ./internal/runner -count=1 \
 		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix'
 	@$(SCRIPT_DIR)/.tools/bin/ok --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create requirements >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok cluster create scaffold --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create manifest-template >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create plan-template >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster stage run full prepare --help >/dev/null
