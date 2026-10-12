@@ -2182,7 +2182,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	if err != nil {
 		return fmt.Errorf("parse evaluation time: %w", err)
 	}
-	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
+	expectedObjects := targetAccessExpectedObjects(resume.PlanExpected.ContractIdentity.Name, *observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
 	bundleConfig := runner.TargetAccessStageBundleConfig{
 		PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
 		GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at,

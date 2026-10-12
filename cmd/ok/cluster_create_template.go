@@ -84,7 +84,7 @@ func writeClusterCreateManifestTemplate(stdout io.Writer, namespace, name, root 
 			"receiptPath":  privatePath("runtime", "runtime-binding-receipt.json"),
 		},
 		"targetAccess": map[string]any{
-			"artifactPath": privatePath("target-access.yaml"), "expectedObjects": bareClusterTemplateTargetAccessObjects(),
+			"artifactPath": privatePath("target-access.yaml"), "expectedObjects": bareClusterTemplateTargetAccessObjects(name),
 			"ledger": ledger, "workload": workload,
 		},
 		"receiptDirectory": privatePath("receipts"),
@@ -156,7 +156,7 @@ func bareClusterTemplateAuthority(root, endpoint, identity, tokenName string) ma
 	}
 }
 
-func bareClusterTemplateTargetAccessObjects() []map[string]any {
+func bareClusterTemplateTargetAccessObjects(contractName string) []map[string]any {
 	objects := []map[string]any{
 		bareClusterTemplateObject("v1", "Namespace", "<target-namespace>", ""),
 		bareClusterTemplateObject("v1", "ServiceAccount", "<target-access-service-account>", "<target-namespace>"),
@@ -170,7 +170,7 @@ func bareClusterTemplateTargetAccessObjects() []map[string]any {
 		bareClusterTemplateObject("rbac.authorization.k8s.io/v1", "Role", "<observability-role>", "ok-observability"),
 		bareClusterTemplateObject("rbac.authorization.k8s.io/v1", "RoleBinding", "<observability-role-binding>", "ok-observability"),
 	}
-	for _, identity := range submission.TargetAccessPrerequisiteIdentities() {
+	for _, identity := range submission.TargetAccessPrerequisiteIdentities(contractName) {
 		objects = append(objects, bareClusterTemplateObject(identity.APIVersion, identity.Kind, identity.Name, identity.Namespace))
 	}
 	return objects

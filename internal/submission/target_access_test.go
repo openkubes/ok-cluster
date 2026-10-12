@@ -158,7 +158,7 @@ func targetAccessExpected(raw []byte) TargetAccessExpected {
 			{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
-			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "disposable-ok141-observability-core-kube-state-metrics"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "disposable-ok147-observability-core-kube-state-metrics"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-grafana-clusterrole"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-log-collector"},
 			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-operator"},
@@ -204,7 +204,7 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [clusterroles]
     resourceNames:
-      - disposable-ok141-observability-core-kube-state-metrics
+      - disposable-ok147-observability-core-kube-state-metrics
       - ok-observability-grafana-clusterrole
       - ok-observability-log-collector
       - ok-observability-operator
@@ -301,7 +301,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: disposable-ok141-observability-core-kube-state-metrics
+  name: disposable-ok147-observability-core-kube-state-metrics
 rules:
   - apiGroups: [""]
     resources: [nodes, pods]

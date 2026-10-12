@@ -196,8 +196,11 @@ func TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound(t *testing.T) {
 	}
 	expected := manifest["plan"].(map[string]any)["expected"].(map[string]any)
 	identity := expected["contractIdentity"].(map[string]any)
+	targetObjects := manifest["targetAccess"].(map[string]any)["expectedObjects"].([]any)
+	clusterRole := targetObjects[submission.TargetAccessBaseObjectCount].(map[string]any)
 	if identity["name"] != "ok-cli-mvp" || identity["namespace"] != "ok-cli-mvp" ||
-		manifest["plan"].(map[string]any)["path"] != filepath.Join(output, "staged-plan.json") {
+		manifest["plan"].(map[string]any)["path"] != filepath.Join(output, "staged-plan.json") ||
+		clusterRole["name"] != "ok-cli-mvp-observability-core-kube-state-metrics" {
 		t.Fatalf("scaffold manifest is not name/path bound: %#v", manifest)
 	}
 	if err := run([]string{"cluster", "create", "scaffold", "--name", "ok-cli-mvp", "--output", output}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "already exists") {

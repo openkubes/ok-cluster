@@ -22,19 +22,20 @@ const (
 	TargetAccessObjectCount             = TargetAccessBaseObjectCount + TargetAccessPrerequisiteObjectCount
 )
 
-var targetAccessPrerequisiteNames = [...]string{
-	"disposable-ok141-observability-core-kube-state-metrics",
+var targetAccessFixedPrerequisiteNames = [...]string{
 	"ok-observability-grafana-clusterrole",
 	"ok-observability-log-collector",
 	"ok-observability-operator",
 	"ok-observability-prometheus",
 }
 
-// TargetAccessPrerequisiteIdentities returns the fixed, ordered Platform
-// ClusterRoles that must exist before Argo CD can reconcile their exact rules.
-func TargetAccessPrerequisiteIdentities() []projection.ResourceIdentity {
-	identities := make([]projection.ResourceIdentity, 0, len(targetAccessPrerequisiteNames))
-	for _, name := range targetAccessPrerequisiteNames {
+// TargetAccessPrerequisiteIdentities returns the ordered Platform ClusterRoles
+// that must exist before Argo CD can reconcile their exact rules. The
+// kube-state-metrics role is scoped by name to the Contract cluster.
+func TargetAccessPrerequisiteIdentities(contractName string) []projection.ResourceIdentity {
+	names := append([]string{contractName + "-observability-core-kube-state-metrics"}, targetAccessFixedPrerequisiteNames[:]...)
+	identities := make([]projection.ResourceIdentity, 0, len(names))
+	for _, name := range names {
 		identities = append(identities, projection.ResourceIdentity{
 			APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: name,
 		})
@@ -136,7 +137,7 @@ func validateTargetAccessExpected(expected TargetAccessExpected) error {
 			return errors.New("target-access namespaced identity is invalid")
 		}
 	}
-	for index, prerequisite := range TargetAccessPrerequisiteIdentities() {
+	for index, prerequisite := range TargetAccessPrerequisiteIdentities(expected.ContractIdentity.Name) {
 		if expected.Objects[TargetAccessBaseObjectCount+index] != prerequisite {
 			return errors.New("target-access Platform ClusterRole prerequisite order or identity is invalid")
 		}
@@ -469,7 +470,7 @@ func rejectTargetAccessUnknownKeys(value map[string]any, description string, all
 func validateTargetAccessRelationships(values []map[string]any, identities []projection.ResourceIdentity) error {
 	managerServiceAccount := identities[1]
 	clusterRole := identities[2]
-	if err := validateTargetAccessManagerEscalation(values[2]["rules"]); err != nil {
+	if err := validateTargetAccessManagerEscalation(values[2]["rules"], identities[TargetAccessBaseObjectCount:]); err != nil {
 		return err
 	}
 	for _, index := range []int{3, 5, 7} {
@@ -504,11 +505,12 @@ func validateTargetAccessRelationships(values []map[string]any, identities []pro
 	return nil
 }
 
-func validateTargetAccessManagerEscalation(raw any) error {
+func validateTargetAccessManagerEscalation(raw any, prerequisites []projection.ResourceIdentity) error {
 	rules, _ := raw.([]any)
-	allowed := make(map[string]bool, len(targetAccessPrerequisiteNames))
-	escalated := make(map[string]bool, len(targetAccessPrerequisiteNames))
-	for _, name := range targetAccessPrerequisiteNames {
+	allowed := make(map[string]bool, len(prerequisites))
+	escalated := make(map[string]bool, len(prerequisites))
+	for _, identity := range prerequisites {
+		name := identity.Name
 		allowed[name] = true
 	}
 	for _, rawRule := range rules {
@@ -537,7 +539,8 @@ func validateTargetAccessManagerEscalation(raw any) error {
 			}
 		}
 	}
-	for _, name := range targetAccessPrerequisiteNames {
+	for _, identity := range prerequisites {
+		name := identity.Name
 		if !escalated[name] {
 			return errors.New("target-access manager lacks bounded escalation for every Platform ClusterRole prerequisite")
 		}
