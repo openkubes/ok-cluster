@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -689,6 +690,455 @@ def parse_time(value: str) -> datetime:
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _replicas(resource: dict, description: str, *, positive: bool) -> int:
+    value = resource.get("spec", {}).get("replicas")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < (1 if positive else 0)
+    ):
+        qualifier = "positive" if positive else "non-negative"
+        raise TalosLifecycleError(
+            f"rendered {description} spec.replicas must be a {qualifier} integer"
+        )
+    return value
+
+
+def expected_node_roles(
+    manifest_path: Path, cluster_name: str
+) -> tuple[str, list[dict]]:
+    """Return the exact rendered CAPI namespace and expected node roles."""
+    docs = objects(manifest_path)
+    clusters = [
+        item
+        for item in docs
+        if item.get("kind") == "Cluster"
+        and item.get("metadata", {}).get("name") == cluster_name
+    ]
+    if len(clusters) != 1:
+        raise TalosLifecycleError(
+            f"expected one rendered Cluster named {cluster_name}, observed {len(clusters)}"
+        )
+    cluster = clusters[0]
+    namespace = cluster.get("metadata", {}).get("namespace")
+    if not isinstance(namespace, str) or not namespace:
+        raise TalosLifecycleError(
+            f"rendered Cluster {cluster_name} has no namespace"
+        )
+
+    reference = cluster.get("spec", {}).get("controlPlaneRef")
+    if not isinstance(reference, dict):
+        raise TalosLifecycleError(
+            f"rendered Cluster {namespace}/{cluster_name} has no controlPlaneRef"
+        )
+    reference_namespace = reference.get("namespace", namespace)
+    if (
+        reference.get("apiGroup") != "controlplane.cluster.x-k8s.io"
+        or reference.get("kind") != "TalosControlPlane"
+        or not isinstance(reference.get("name"), str)
+        or not reference["name"]
+        or reference_namespace != namespace
+    ):
+        raise TalosLifecycleError(
+            f"rendered Cluster {namespace}/{cluster_name} has an invalid "
+            "TalosControlPlane reference"
+        )
+    control_planes = [
+        item
+        for item in docs
+        if item.get("kind") == "TalosControlPlane"
+        and item.get("metadata", {}).get("name") == reference["name"]
+        and item.get("metadata", {}).get("namespace") == namespace
+    ]
+    if len(control_planes) != 1:
+        raise TalosLifecycleError(
+            "rendered Cluster controlPlaneRef does not resolve to exactly one "
+            f"TalosControlPlane in namespace {namespace}"
+        )
+
+    matching_deployments = [
+        item
+        for item in docs
+        if item.get("kind") == "MachineDeployment"
+        and item.get("spec", {}).get("clusterName") == cluster_name
+    ]
+    wrong_namespaces = sorted(
+        f"{item.get('metadata', {}).get('namespace', '<missing>')}/"
+        f"{item.get('metadata', {}).get('name', '<missing>')}"
+        for item in matching_deployments
+        if item.get("metadata", {}).get("namespace") != namespace
+    )
+    if wrong_namespaces:
+        raise TalosLifecycleError(
+            "rendered MachineDeployments matching the Cluster have invalid "
+            f"namespaces: {wrong_namespaces}"
+        )
+
+    roles = [
+        {
+            "name": "control-plane",
+            "expected": _replicas(
+                control_planes[0],
+                f"TalosControlPlane {namespace}/{reference['name']}",
+                positive=True,
+            ),
+            "machine_deployment": None,
+        }
+    ]
+    deployment_names: set[str] = set()
+    for deployment in matching_deployments:
+        name = deployment.get("metadata", {}).get("name")
+        if not isinstance(name, str) or not name or name in deployment_names:
+            raise TalosLifecycleError(
+                "rendered MachineDeployment names must be present and unique"
+            )
+        deployment_names.add(name)
+        roles.append(
+            {
+                "name": f"worker/{name}",
+                "expected": _replicas(
+                    deployment,
+                    f"MachineDeployment {namespace}/{name}",
+                    positive=False,
+                ),
+                "machine_deployment": name,
+            }
+        )
+    return namespace, roles
+
+
+def _machine_exclusion(machine: dict) -> str | None:
+    metadata = machine.get("metadata", {})
+    status = machine.get("status", {})
+    if not isinstance(metadata, dict) or not isinstance(status, dict):
+        return "invalid"
+    if metadata.get("deletionTimestamp"):
+        return "deleting"
+    deprecated = status.get("deprecated")
+    if not isinstance(deprecated, dict):
+        deprecated = {}
+    v1beta1 = deprecated.get("v1beta1")
+    if not isinstance(v1beta1, dict):
+        v1beta1 = {}
+    if (
+        status.get("phase") == "Failed"
+        or status.get("failureReason")
+        or status.get("failureMessage")
+        or v1beta1.get("failureReason")
+        or v1beta1.get("failureMessage")
+    ):
+        return "failed"
+    return None
+
+
+def _ready_node(node: dict) -> bool:
+    metadata = node.get("metadata", {})
+    status = node.get("status", {})
+    if not isinstance(metadata, dict) or not isinstance(status, dict):
+        return False
+    if metadata.get("deletionTimestamp"):
+        return False
+    conditions = status.get("conditions", [])
+    if not isinstance(conditions, list):
+        return False
+    return any(
+        isinstance(condition, dict)
+        and condition.get("type") == "Ready"
+        and condition.get("status") == "True"
+        for condition in conditions
+    )
+
+
+def _diagnostic_list(values: list[str]) -> str:
+    return "[" + ",".join(sorted(values)) + "]"
+
+
+def expected_nodes_diagnostics(
+    roles: list[dict], machines: list[dict], nodes: list[dict]
+) -> tuple[bool, list[str]]:
+    """Evaluate one management/guest snapshot without trusting list cardinality."""
+    node_by_name = {
+        item.get("metadata", {}).get("name"): item
+        for item in nodes
+        if isinstance(item.get("metadata", {}).get("name"), str)
+        and not item.get("metadata", {}).get("deletionTimestamp")
+    }
+    claimed_node_refs: set[str] = set()
+    diagnostics = []
+    all_ready = True
+
+    for role in roles:
+        deployment = role["machine_deployment"]
+        matching_machines = []
+        for machine in machines:
+            labels = machine.get("metadata", {}).get("labels", {})
+            if not isinstance(labels, dict):
+                continue
+            if deployment is None:
+                matches = "cluster.x-k8s.io/control-plane" in labels
+            else:
+                matches = (
+                    "cluster.x-k8s.io/control-plane" not in labels
+                    and labels.get("cluster.x-k8s.io/deployment-name") == deployment
+                )
+            if matches:
+                matching_machines.append(machine)
+
+        excluded_machines = [
+            f"{machine.get('metadata', {}).get('name', '<unnamed-machine>')}"
+            f"({_machine_exclusion(machine)})"
+            for machine in matching_machines
+            if _machine_exclusion(machine) is not None
+        ]
+        role_machines = [
+            machine
+            for machine in matching_machines
+            if _machine_exclusion(machine) is None
+        ]
+
+        expected = role["expected"]
+        missing_machines = []
+        if len(role_machines) < expected:
+            missing_machines.append(f"<anonymous:{expected - len(role_machines)}>")
+        missing_nodes = []
+        not_ready_nodes = []
+        unique_node_refs = True
+        registered = 0
+        ready = 0
+        for machine in sorted(
+            role_machines,
+            key=lambda item: item.get("metadata", {}).get("name", ""),
+        ):
+            machine_name = machine.get("metadata", {}).get(
+                "name", "<unnamed-machine>"
+            )
+            node_reference = machine.get("status", {}).get("nodeRef")
+            node_name = (
+                node_reference.get("name")
+                if isinstance(node_reference, dict)
+                else None
+            )
+            if not isinstance(node_name, str) or not node_name:
+                missing_nodes.append(machine_name)
+                continue
+            if node_name in claimed_node_refs:
+                missing_nodes.append(f"{node_name}(duplicate)")
+                unique_node_refs = False
+                continue
+            claimed_node_refs.add(node_name)
+            node = node_by_name.get(node_name)
+            if node is None:
+                missing_nodes.append(node_name)
+                continue
+            registered += 1
+            if _ready_node(node):
+                ready += 1
+            else:
+                not_ready_nodes.append(node_name)
+
+        role_ready = (
+            len(role_machines) == expected
+            and registered == expected
+            and ready == expected
+            and unique_node_refs
+        )
+        all_ready = all_ready and role_ready
+        diagnostics.append(
+            f"role={role['name']} expected={expected} registered={registered} "
+            f"ready={ready} missing_machines={_diagnostic_list(missing_machines)} "
+            f"excluded_machines={_diagnostic_list(excluded_machines)} "
+            f"missing_nodes={_diagnostic_list(missing_nodes)} "
+            f"not_ready_nodes={_diagnostic_list(not_ready_nodes)}"
+        )
+    return all_ready, diagnostics
+
+
+def kubectl_json_bounded(
+    kubeconfig: Path, arguments: list[str], timeout_seconds: float
+) -> dict:
+    if timeout_seconds <= 0:
+        raise TalosLifecycleError("kubectl deadline expired")
+    request_timeout = max(1, math.ceil(timeout_seconds))
+    command = [
+        "kubectl",
+        "--kubeconfig",
+        str(kubeconfig),
+        f"--request-timeout={request_timeout}s",
+        *arguments,
+        "-o",
+        "json",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TalosLifecycleError(
+            f"{' '.join(command[:6])} timed out after {timeout_seconds:.3g}s"
+        ) from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise TalosLifecycleError(
+            f"{' '.join(command[:6])} exited {result.returncode}: {detail}"
+        )
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise TalosLifecycleError(
+            f"{' '.join(command[:6])} returned invalid JSON"
+        ) from error
+    if not isinstance(value, dict):
+        raise TalosLifecycleError(
+            f"{' '.join(command[:6])} returned a non-object JSON value"
+        )
+    return value
+
+
+def _validate_api_items(items: object, description: str) -> list[dict]:
+    if not isinstance(items, list):
+        raise TalosLifecycleError(f"{description} list has invalid items")
+    for item in items:
+        if not isinstance(item, dict):
+            raise TalosLifecycleError(f"{description} list contains a non-object item")
+        metadata = item.get("metadata")
+        if (
+            not isinstance(metadata, dict)
+            or not isinstance(metadata.get("name"), str)
+            or not metadata["name"]
+        ):
+            raise TalosLifecycleError(
+                f"{description} list contains an item without a valid metadata.name"
+            )
+    return items
+
+
+def wait_expected_nodes(args: argparse.Namespace) -> int:
+    if not args.cluster_dir:
+        raise TalosLifecycleError("--wait-expected-nodes requires --cluster-dir")
+    if not args.workload_kubeconfig:
+        raise TalosLifecycleError(
+            "--wait-expected-nodes requires --workload-kubeconfig"
+        )
+    manifest_path = cluster_directory(args) / "cluster-base.yaml"
+    if not manifest_path.is_file():
+        raise TalosLifecycleError(f"rendered manifest is absent: {manifest_path}")
+    namespace, roles = expected_node_roles(manifest_path, args.cluster)
+    management_kubeconfig = Path(args.kubeconfig).expanduser().resolve()
+    workload_kubeconfig = Path(args.workload_kubeconfig).expanduser().resolve()
+    if not management_kubeconfig.is_file():
+        raise TalosLifecycleError(
+            f"explicit management kubeconfig is absent: {management_kubeconfig}"
+        )
+    if not workload_kubeconfig.is_file():
+        raise TalosLifecycleError(
+            f"explicit workload kubeconfig is absent: {workload_kubeconfig}"
+        )
+
+    deadline = time.monotonic() + args.expected_nodes_timeout_seconds
+    diagnostics = expected_nodes_diagnostics(roles, [], [])[1]
+    last_api_error = "API snapshot was not completed"
+    while True:
+        api_errors = []
+        machines = []
+        nodes = []
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        call_budget = min(remaining, max(1.0, args.expected_nodes_poll_seconds))
+        try:
+            machine_response = kubectl_json_bounded(
+                management_kubeconfig,
+                [
+                    "-n",
+                    namespace,
+                    "get",
+                    "machines.cluster.x-k8s.io",
+                    "-l",
+                    f"cluster.x-k8s.io/cluster-name={args.cluster}",
+                ],
+                call_budget,
+            )
+            validated_machines = _validate_api_items(
+                machine_response.get("items"), "management Machine"
+            )
+            for machine in validated_machines:
+                metadata = machine["metadata"]
+                if not isinstance(metadata.get("namespace"), str):
+                    raise TalosLifecycleError(
+                        "management Machine has no valid metadata.namespace"
+                    )
+                if not isinstance(metadata.get("labels"), dict):
+                    raise TalosLifecycleError(
+                        "management Machine has no valid metadata.labels"
+                    )
+            machines = validated_machines
+        except TalosLifecycleError as error:
+            machines = []
+            api_errors.append(f"management API: {error}")
+
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            call_budget = min(
+                remaining, max(1.0, args.expected_nodes_poll_seconds)
+            )
+            try:
+                node_response = kubectl_json_bounded(
+                    workload_kubeconfig, ["get", "nodes"], call_budget
+                )
+                nodes = _validate_api_items(
+                    node_response.get("items"), "workload Node"
+                )
+            except TalosLifecycleError as error:
+                nodes = []
+                api_errors.append(f"workload API: {error}")
+
+        machines = [
+            item
+            for item in machines
+            if item["metadata"].get("namespace") == namespace
+            and isinstance(item["metadata"].get("labels"), dict)
+            and item["metadata"]["labels"].get("cluster.x-k8s.io/cluster-name")
+            == args.cluster
+        ]
+        snapshot_ready, snapshot_diagnostics = expected_nodes_diagnostics(
+            roles, machines, nodes
+        )
+        if (
+            not api_errors
+            and snapshot_ready
+            and time.monotonic() <= deadline
+        ):
+            for diagnostic in snapshot_diagnostics:
+                print(diagnostic)
+            print("READY all expected nodes are registered and Ready")
+            return 0
+        if api_errors:
+            last_api_error = "; ".join(api_errors)
+        else:
+            diagnostics = snapshot_diagnostics
+            if snapshot_ready:
+                last_api_error = "deadline expired before readiness outcome"
+            else:
+                last_api_error = "expected node registration/readiness is incomplete"
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(args.expected_nodes_poll_seconds, remaining))
+
+    raise TalosLifecycleError(
+        "timed out waiting for expected nodes: "
+        + last_api_error
+        + "; "
+        + "; ".join(diagnostics)
+    )
 
 
 def ready_nodes(workload_kubeconfig: Path, expected: int) -> tuple[list, str]:
@@ -2512,6 +2962,15 @@ def teardown(args: argparse.Namespace) -> int:
 
 
 def parse_args() -> argparse.Namespace:
+    def positive_finite(value: str) -> float:
+        try:
+            parsed = float(value)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError("must be a number") from error
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise argparse.ArgumentTypeError("must be positive and finite")
+        return parsed
+
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--preflight", action="store_true")
@@ -2521,6 +2980,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--cleanup-authorization", action="store_true")
     mode.add_argument("--resume-preconditions", action="store_true")
     mode.add_argument("--teardown", action="store_true")
+    mode.add_argument("--wait-expected-nodes", action="store_true")
     parser.add_argument("--cluster", required=True)
     parser.add_argument("--cluster-dir")
     parser.add_argument("--kubeconfig", required=True)
@@ -2530,6 +2990,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cilium-chart")
     parser.add_argument("--data-volume-uids", default="")
     parser.add_argument("--replacement-timeout-seconds", type=int, default=600)
+    parser.add_argument(
+        "--expected-nodes-timeout-seconds", type=positive_finite, default=300.0
+    )
+    parser.add_argument(
+        "--expected-nodes-poll-seconds", type=positive_finite, default=5.0
+    )
     return parser.parse_args()
 
 
@@ -2554,6 +3020,8 @@ def main() -> int:
         return runtime_evidence(args)
     if args.resume_preconditions:
         return resume_preconditions(args)
+    if args.wait_expected_nodes:
+        return wait_expected_nodes(args)
     if args.teardown:
         if not args.cluster_dir:
             raise TalosLifecycleError("--teardown requires --cluster-dir")

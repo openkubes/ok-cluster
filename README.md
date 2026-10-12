@@ -838,6 +838,16 @@ make new CLUSTER=ok-ai TYPE=talos WORKERS=2
 make bootstrap CLUSTER=ok-ai
 ```
 
+`make bootstrap` and `make bootstrap-resume` report “bootstrapped” only after
+the rendered TalosControlPlane and every MachineDeployment have their desired
+number of registered, Ready guest Nodes, identified through this cluster’s
+active CAPI Machines and their `status.nodeRef.name`. Unrelated Nodes and
+deleting or failed Machines cannot satisfy the wait. After CNI installation,
+`TALOS_EXPECTED_NODES_TIMEOUT_SECONDS` defaults to 300 seconds and
+`TALOS_EXPECTED_NODES_POLL_SECONDS` to 5; failures report per-role expected,
+registered and Ready counts with missing or NotReady identities. This is the
+one-shot bootstrap outcome; use `make status` for ongoing health.
+
 ### Opt-in trust for the shared internal registry
 
 Talos clusters that pull from `registry.ok-shared.internal` opt in explicitly:

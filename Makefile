@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok147-runner-image-plan ok147-runner-image-build
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok147-runner-image-plan ok147-runner-image-build ok198-expected-nodes-test
 .DEFAULT_GOAL := help
 
 OK_CLI_VERSION  ?= $(shell git describe --tags --always --dirty)
@@ -61,6 +61,8 @@ TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
 # Directory for guest (workload) kubeconfigs written by `make kubeconfig`.
 GUEST_KUBECONFIG_DIR ?= $(HOME)/.kube
 GUEST_KUBECONFIG      = $(GUEST_KUBECONFIG_DIR)/$(CLUSTER).yaml
+TALOS_EXPECTED_NODES_TIMEOUT_SECONDS ?= 300
+TALOS_EXPECTED_NODES_POLL_SECONDS ?= 5
 TALOS_WORKLOAD_KUBECONFIG ?=
 CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
 CILIUM_CHART_SOURCE ?=
@@ -486,6 +488,9 @@ ok130-test: ## Offline-test the Talos Golden-Image resolver/render/lifecycle
 
 ok136-test: ok130-test ## Offline-test reviewed Talos KubeVirt scheduling profiles
 
+ok198-expected-nodes-test: ## OK-198: offline expected-node registration and readiness contract
+	@python3 $(SCRIPT_DIR)/tests/ok198_expected_nodes_test.py
+
 ok186-lifecycle-test: ## Offline-test kubeconfig overrides, bootstrap-resume and repeatable teardown
 	@python3 $(SCRIPT_DIR)/tests/ok186_lifecycle_test.py
 
@@ -818,7 +823,14 @@ bootstrap-post-apply: require-cluster
 	@echo "✅ Control plane registered — installing Cilium CNI..."
 	@$(MAKE) --no-print-directory install-cni CLUSTER=$(CLUSTER)
 	@echo "⏳ Waiting for all nodes to become Ready..."
-	@kubectl --kubeconfig $(GUEST_KUBECONFIG) wait --for=condition=Ready nodes --all --timeout=300s
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--wait-expected-nodes --cluster "$(CLUSTER)" \
+		--cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--workload-kubeconfig "$(GUEST_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" \
+		--expected-nodes-timeout-seconds "$(TALOS_EXPECTED_NODES_TIMEOUT_SECONDS)" \
+		--expected-nodes-poll-seconds "$(TALOS_EXPECTED_NODES_POLL_SECONDS)"
 	@echo ""
 	@echo "✅ Talos cluster $(CLUSTER) bootstrapped with Cilium. Next steps:"
 	@echo "   make install-storage       CLUSTER=$(CLUSTER)"
@@ -1153,6 +1165,8 @@ help:
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"
 	@echo "  make bootstrap-resume CLUSTER=ok-ai  # talos: resume after apply; never re-applies"
+	@echo "    TALOS_EXPECTED_NODES_TIMEOUT_SECONDS=300 TALOS_EXPECTED_NODES_POLL_SECONDS=5 # after CNI, wait for CAPI-owned Ready nodes"
+	@echo "  make ok198-expected-nodes-test # offline expected-node readiness contract"
 	@echo "  make annotate-pvcs CLUSTER=ok-ai  # annotate PVCs manually"
 	@echo "  make unregister-cluster CLUSTER=ok2-rmf [FORCE=true] [MGMT_CLUSTER=ok-mgmt]  # OK-62: delete secret + ProviderConfig from ok-mgmt"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
