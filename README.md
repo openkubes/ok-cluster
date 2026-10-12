@@ -75,6 +75,13 @@ Both offline modes validate the manifest's referenced private artifacts,
 including credential and TLS material. They do not construct a network client,
 contact a cluster, execute a stage or consume an authorization.
 
+For that completion mode, the manifest needs only the material consumed by
+Stages 1-7. Platform/GitOps applications, target-credential policy,
+Observability credentials and collector activation (Stages 8-12) may be
+omitted; the loader neither reads nor validates them. The staged Plan still
+binds the exact Bare-MVP completion mode and the seven executed inputs remain
+fully digest- and authority-bound.
+
 The output is a redaction-safe workflow receipt suitable for review or
 automation. A preparation result has this shape:
 

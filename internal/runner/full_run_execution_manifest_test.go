@@ -147,6 +147,44 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 	}
 }
 
+func TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial(t *testing.T) {
+	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	document, planDocument := readFullRunExecutionFixture(t, manifestPath)
+	document.Plan.Expected.CompletionMode = stageplan.CompletionModeBareClusterMVP
+	planDocument["completionMode"] = stageplan.CompletionModeBareClusterMVP
+
+	document.Profiles.Platform = postRuntimeProfileReferenceDocument{}
+	document.Profiles.Aggregate = postRuntimeProfileReferenceDocument{}
+	document.TargetCredential = fullRunTargetCredentialDocument{}
+	document.TargetRegistration = fullRunTargetRegistrationDocument{}
+	document.PlatformApplications = fullRunPlatformApplicationsDocument{}
+	document.ObservabilityCredentials = fullRunObservabilityCredentialsDocument{}
+	document.PlatformObservation = fullRunPlatformObservationDocument{}
+	document.AggregateEvidence = fullRunAggregateEvidenceDocument{}
+	document.ObservabilityCollector = fullRunObservabilityCollectorDocument{}
+
+	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, planDocument))
+	writeBundleFile(t, filepath.Dir(manifestPath), filepath.Base(manifestPath), mustJSON(t, document))
+
+	manifest, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+		receipt.NetworkProfileDigest == "" || receipt.PlatformProfileDigest != "" || receipt.AggregateProfileDigest != "" {
+		t.Fatalf("unexpected trimmed Bare-MVP manifest receipt: %#v", receipt)
+	}
+	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.PreRuntime.PlanExpected.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+		config.PostRuntime.TargetCredential.PlanPath != "" || config.PostPrefixActivator != nil {
+		t.Fatalf("trimmed Bare-MVP manifest opened post-runtime configuration: %#v", config)
+	}
+}
+
 func TestFullRunExecutionManifestAttemptFormatFailsClosed(t *testing.T) {
 	tests := map[string]func(*fullRunExecutionManifestDocument, map[string]any){
 		"v3 cannot acquire attempt": func(document *fullRunExecutionManifestDocument, plan map[string]any) {

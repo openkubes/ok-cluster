@@ -17,18 +17,19 @@ const clusterCreateWorkflowFormat = "ok-cli-cluster-create/v1"
 const clusterCreateRequirementsFormat = "ok-cli-cluster-create-requirements/v1"
 
 type clusterCreateRequirements struct {
-	Format                  string   `json:"format"`
-	Operation               string   `json:"operation"`
-	AcceptedManifestFormats []string `json:"acceptedManifestFormats"`
-	RequiredCompletionMode  string   `json:"requiredCompletionMode"`
-	ManifestPathRules       []string `json:"manifestPathRules"`
-	OfflineModes            []string `json:"offlineModes"`
-	OfflineAPIContacted     bool     `json:"offlineApiContacted"`
-	OfflineMutationAllowed  bool     `json:"offlineMutationAllowed"`
-	LiveRequiredFlags       []string `json:"liveRequiredFlags"`
-	TerminalMarkerName      string   `json:"terminalMarkerName"`
-	LiveStageOrder          []string `json:"liveStageOrder"`
-	LiveMutationAllowed     bool     `json:"liveMutationAllowed"`
+	Format                      string   `json:"format"`
+	Operation                   string   `json:"operation"`
+	AcceptedManifestFormats     []string `json:"acceptedManifestFormats"`
+	RequiredCompletionMode      string   `json:"requiredCompletionMode"`
+	ManifestPathRules           []string `json:"manifestPathRules"`
+	OfflineModes                []string `json:"offlineModes"`
+	OfflineAPIContacted         bool     `json:"offlineApiContacted"`
+	OfflineMutationAllowed      bool     `json:"offlineMutationAllowed"`
+	LiveRequiredFlags           []string `json:"liveRequiredFlags"`
+	TerminalMarkerName          string   `json:"terminalMarkerName"`
+	LiveStageOrder              []string `json:"liveStageOrder"`
+	PostRuntimeMaterialRequired bool     `json:"postRuntimeMaterialRequired"`
+	LiveMutationAllowed         bool     `json:"liveMutationAllowed"`
 }
 
 type clusterCreateWorkflowReceipt struct {
@@ -85,7 +86,7 @@ func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
 			"provider-prerequisites", "cluster-lifecycle", "lifecycle-observation", "enablement",
 			"network-observation", "runtime-binding", "target-access",
 		},
-		LiveMutationAllowed: true,
+		PostRuntimeMaterialRequired: false, LiveMutationAllowed: true,
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetEscapeHTML(false)

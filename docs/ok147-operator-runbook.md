@@ -29,6 +29,13 @@ which terminates after the exact Stage 1-7 prefix. The prepare receipt's
 separately approved live invocation. An omitted or different completion mode
 fails closed.
 
+Bare-MVP manifests do not require post-runtime material for Stages 8-12.
+Target-credential, GitOps, Platform application, Observability credential and
+collector activation sections may be omitted; they are not opened or
+validated in this completion mode. Every Stage 1-7 projection, profile,
+credential, authority, output destination and artifact remains mandatory and
+is verified offline.
+
 The redaction-safe receipt states `apiContacted: false`,
 `authorizationConsumed: false` and `mutationAllowed: false`. For `--prepare`,
 its `nextAction` requires separate live approval and binds the next command to

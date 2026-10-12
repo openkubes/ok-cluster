@@ -532,6 +532,7 @@ func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest
 	if plan.Format == stageplan.BindingFormatV2 {
 		receipt.Format = FullRunExecutionManifestReceiptFormatV2
 	}
+	bareCluster := plan.CompletionMode == stageplan.CompletionModeBareClusterMVP
 
 	projected, err := projection.Verify(document.Projection.ManifestPath, document.Projection.Root, plan.IntentRevision, plan.ContractIdentity)
 	if err != nil {
@@ -554,31 +555,34 @@ func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest
 	if err != nil {
 		return VerifiedFullRunExecutionManifest{}, receipt, errors.New("load full-run Network profile")
 	}
-	platform, err := LoadPlatformProfileFile(PlatformProfileFileConfig{
-		Path: document.Profiles.Platform.Path, ExpectedProfileDigest: document.Profiles.Platform.Digest,
-		ExpectedIntentRevision: plan.IntentRevision, ExpectedPlatformRevision: plan.PlatformRevision,
-		ExpectedExecutionFixture: plan.ExecutionFixture,
-	})
-	if err != nil {
-		return VerifiedFullRunExecutionManifest{}, receipt, errors.New("load full-run Platform profile")
+	if err := plan.RequireInput("network-observation", "stage.network-observation", network.Digest); err != nil {
+		return VerifiedFullRunExecutionManifest{}, receipt, errors.New("full-run profile differs from staged input")
 	}
-	aggregate, err := LoadAggregateEvidenceProfileFile(AggregateEvidenceProfileFileConfig{
-		Path: document.Profiles.Aggregate.Path, ExpectedProfileDigest: document.Profiles.Aggregate.Digest,
-		ExpectedIntentRevision: plan.IntentRevision, ExpectedEnablementRevision: plan.EnablementRevision,
-		ExpectedPlatformRevision: plan.PlatformRevision, ExpectedExecutionFixture: plan.ExecutionFixture,
-	})
-	if err != nil {
-		return VerifiedFullRunExecutionManifest{}, receipt, errors.New("load full-run aggregate profile")
-	}
-	receipt.NetworkProfileDigest, receipt.PlatformProfileDigest, receipt.AggregateProfileDigest = network.Digest, platform.Digest, aggregate.Digest
-	for stageID, input := range map[string]struct{ name, digest string }{
-		"network-observation":  {"stage.network-observation", network.Digest},
-		"platform-observation": {"stage.platform-observation", platform.Digest},
-		"aggregate-evidence":   {"stage.aggregate-evidence", aggregate.Digest},
-	} {
-		if err := plan.RequireInput(stageID, input.name, input.digest); err != nil {
+	receipt.NetworkProfileDigest = network.Digest
+	var platform LoadedPlatformProfile
+	var aggregate LoadedAggregateEvidenceProfile
+	if !bareCluster {
+		platform, err = LoadPlatformProfileFile(PlatformProfileFileConfig{
+			Path: document.Profiles.Platform.Path, ExpectedProfileDigest: document.Profiles.Platform.Digest,
+			ExpectedIntentRevision: plan.IntentRevision, ExpectedPlatformRevision: plan.PlatformRevision,
+			ExpectedExecutionFixture: plan.ExecutionFixture,
+		})
+		if err != nil {
+			return VerifiedFullRunExecutionManifest{}, receipt, errors.New("load full-run Platform profile")
+		}
+		aggregate, err = LoadAggregateEvidenceProfileFile(AggregateEvidenceProfileFileConfig{
+			Path: document.Profiles.Aggregate.Path, ExpectedProfileDigest: document.Profiles.Aggregate.Digest,
+			ExpectedIntentRevision: plan.IntentRevision, ExpectedEnablementRevision: plan.EnablementRevision,
+			ExpectedPlatformRevision: plan.PlatformRevision, ExpectedExecutionFixture: plan.ExecutionFixture,
+		})
+		if err != nil {
+			return VerifiedFullRunExecutionManifest{}, receipt, errors.New("load full-run aggregate profile")
+		}
+		if plan.RequireInput("platform-observation", "stage.platform-observation", platform.Digest) != nil ||
+			plan.RequireInput("aggregate-evidence", "stage.aggregate-evidence", aggregate.Digest) != nil {
 			return VerifiedFullRunExecutionManifest{}, receipt, errors.New("full-run profile differs from staged input")
 		}
+		receipt.PlatformProfileDigest, receipt.AggregateProfileDigest = platform.Digest, aggregate.Digest
 	}
 	if err := verifyFullRunStaticArtifacts(document, plan, platform.Profile); err != nil {
 		return VerifiedFullRunExecutionManifest{}, receipt, err
@@ -709,6 +713,9 @@ func verifyFullRunStaticArtifacts(document fullRunExecutionManifestDocument, pla
 	if err != nil || len(access.Workload.Objects) != submission.TargetAccessObjectCount || access.Workload.Objects[1].Identity.Kind != "ServiceAccount" || access.Workload.Objects[8].Identity.Kind != "ServiceAccount" {
 		return errors.New("verify full-run target-access artifact")
 	}
+	if plan.CompletionMode == stageplan.CompletionModeBareClusterMVP {
+		return nil
+	}
 	targetCredentialStage, _, err := plan.Stage("target-credential")
 	if err != nil || len(targetCredentialStage.Inputs) != 1 || targetCredentialStage.Inputs[0].Name != "stage.target-credential" {
 		return errors.New("full-run target-credential input is invalid")
@@ -809,30 +816,37 @@ func verifyFullRunObservabilityCollector(document fullRunObservabilityCollectorD
 }
 
 func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, plan stageplan.Binding) error {
+	bareCluster := plan.CompletionMode == stageplan.CompletionModeBareClusterMVP
 	paths := []string{
 		document.Plan.Path, document.Projection.ManifestPath, document.Projection.Root,
 		document.ProviderAccess.PolicyPath, document.ProviderAccess.KubeconfigFile,
 		document.Authorization.TokenFile, document.Authorization.CAFile, document.Authorization.PublicKeyPath, document.Authorization.OutputDirectory,
-		document.Profiles.Network.Path, document.Profiles.Platform.Path, document.Profiles.Aggregate.Path,
-		document.Enablement.ArtifactPath, document.TargetAccess.ArtifactPath, document.TargetCredential.PolicyPath,
-		document.TargetRegistration.ArtifactPath, document.PlatformApplications.ArtifactPath, document.ReceiptDirectory,
-		document.ObservabilityCredentials.GrafanaAdminUserFile,
-		document.ObservabilityCredentials.GrafanaAdminPasswordFile,
-		document.ObservabilityCredentials.OpenSearchAdminPasswordFile,
-		document.ObservabilityCollector.RuntimeAuthorityPath, document.ObservabilityCollector.JobTemplatePath,
-		document.ObservabilityCollector.WebhookTokenPath, document.ObservabilityCollector.QueryTokenPath,
-		document.ObservabilityCollector.TLSCertificatePath, document.ObservabilityCollector.TLSPrivateKeyPath,
+		document.Profiles.Network.Path, document.Enablement.ArtifactPath, document.TargetAccess.ArtifactPath, document.ReceiptDirectory,
+	}
+	if !bareCluster {
+		paths = append(paths,
+			document.Profiles.Platform.Path, document.Profiles.Aggregate.Path, document.TargetCredential.PolicyPath,
+			document.TargetRegistration.ArtifactPath, document.PlatformApplications.ArtifactPath,
+			document.ObservabilityCredentials.GrafanaAdminUserFile,
+			document.ObservabilityCredentials.GrafanaAdminPasswordFile,
+			document.ObservabilityCredentials.OpenSearchAdminPasswordFile,
+			document.ObservabilityCollector.RuntimeAuthorityPath, document.ObservabilityCollector.JobTemplatePath,
+			document.ObservabilityCollector.WebhookTokenPath, document.ObservabilityCollector.QueryTokenPath,
+			document.ObservabilityCollector.TLSCertificatePath, document.ObservabilityCollector.TLSPrivateKeyPath,
+		)
 	}
 	for _, path := range paths {
 		if !validFullRunAbsolutePath(path) {
 			return errors.New("full-run manifest contains an invalid absolute path")
 		}
 	}
-	credentialPaths := document.ObservabilityCredentials
-	if credentialPaths.GrafanaAdminUserFile == credentialPaths.GrafanaAdminPasswordFile ||
-		credentialPaths.GrafanaAdminUserFile == credentialPaths.OpenSearchAdminPasswordFile ||
-		credentialPaths.GrafanaAdminPasswordFile == credentialPaths.OpenSearchAdminPasswordFile {
-		return errors.New("full-run observability credential source paths must be distinct")
+	if !bareCluster {
+		credentialPaths := document.ObservabilityCredentials
+		if credentialPaths.GrafanaAdminUserFile == credentialPaths.GrafanaAdminPasswordFile ||
+			credentialPaths.GrafanaAdminUserFile == credentialPaths.OpenSearchAdminPasswordFile ||
+			credentialPaths.GrafanaAdminPasswordFile == credentialPaths.OpenSearchAdminPasswordFile {
+			return errors.New("full-run observability credential source paths must be distinct")
+		}
 	}
 	if !validFullRunAuthorization(document.Authorization) {
 		return errors.New("full-run authorization binding is invalid")
@@ -841,18 +855,25 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 		return errors.New("full-run ledger binding is invalid")
 	}
 	workload := document.NetworkObservation.Workload
-	if workload != document.RuntimeBinding.Workload || workload != document.TargetAccess.Workload || workload != document.TargetCredential.Workload ||
+	if workload != document.RuntimeBinding.Workload || workload != document.TargetAccess.Workload || workload.TokenFile != "" || workload.KubeconfigFile == "" {
+		return errors.New("full-run workload runtime binding differs between stages")
+	}
+	if !bareCluster && (workload != document.TargetCredential.Workload ||
 		workload.TokenFile != document.AggregateEvidence.WorkloadTokenFile ||
 		workload.KubeconfigFile != document.AggregateEvidence.WorkloadKubeconfigFile ||
-		workload.CAFile != document.AggregateEvidence.WorkloadCAFile || workload.TokenFile != "" || workload.KubeconfigFile == "" {
+		workload.CAFile != document.AggregateEvidence.WorkloadCAFile) {
 		return errors.New("full-run workload runtime binding differs between stages")
 	}
 	workloadCredentialPath := workload.KubeconfigFile
 	runtimeOutputs := []string{
 		workload.BindingPath, workloadCredentialPath, workload.CAFile,
 		document.RuntimeBinding.MaterialPath, document.RuntimeBinding.ReceiptPath,
-		document.PlatformObservation.Capability.IndependentEvidenceIdentityPath,
-		document.PlatformObservation.Capability.IndependentEvidenceIdentityReceiptPath,
+	}
+	if !bareCluster {
+		runtimeOutputs = append(runtimeOutputs,
+			document.PlatformObservation.Capability.IndependentEvidenceIdentityPath,
+			document.PlatformObservation.Capability.IndependentEvidenceIdentityReceiptPath,
+		)
 	}
 	seenOutputs := make(map[string]struct{}, len(runtimeOutputs)+len(preRuntimeStageOrder)+4)
 	for _, path := range runtimeOutputs {
@@ -874,12 +895,14 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 		}
 		seenOutputs[path] = struct{}{}
 	}
-	for _, stageID := range postRuntimeStageOrder[:4] {
-		path := filepath.Join(document.ReceiptDirectory, postRuntimeReceiptFiles[stageID])
-		if _, exists := seenOutputs[path]; exists || validateRuntimeBindingOutputPath(path) != nil {
-			return errors.New("full-run post-runtime receipt destination is invalid")
+	if !bareCluster {
+		for _, stageID := range postRuntimeStageOrder[:4] {
+			path := filepath.Join(document.ReceiptDirectory, postRuntimeReceiptFiles[stageID])
+			if _, exists := seenOutputs[path]; exists || validateRuntimeBindingOutputPath(path) != nil {
+				return errors.New("full-run post-runtime receipt destination is invalid")
+			}
+			seenOutputs[path] = struct{}{}
 		}
-		seenOutputs[path] = struct{}{}
 	}
 	if document.ProviderPrerequisites.Authority.AuthorityIdentity != plan.Authorities.Infrastructure ||
 		document.ClusterLifecycle.Authority.AuthorityIdentity != plan.Authorities.Management ||
@@ -888,21 +911,25 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 	}
 	if !validFullRunAuthority(document.ProviderPrerequisites.Authority) ||
 		!validFullRunAuthority(document.ClusterLifecycle.Authority) ||
-		!validFullRunAuthority(document.TargetRegistration.GitOps) ||
 		document.ProviderPrerequisites.Authority.Endpoint == document.ClusterLifecycle.Authority.Endpoint ||
+		document.ProviderPrerequisites.Authority.TokenFile == document.ClusterLifecycle.Authority.TokenFile {
+		return errors.New("full-run authority isolation is invalid")
+	}
+	if !bareCluster && (!validFullRunAuthority(document.TargetRegistration.GitOps) ||
 		document.ProviderPrerequisites.Authority.Endpoint == document.TargetRegistration.GitOps.Endpoint ||
 		document.ClusterLifecycle.Authority.Endpoint == document.TargetRegistration.GitOps.Endpoint ||
-		document.ProviderPrerequisites.Authority.TokenFile == document.ClusterLifecycle.Authority.TokenFile ||
 		document.ProviderPrerequisites.Authority.TokenFile == document.TargetRegistration.GitOps.TokenFile ||
-		document.ClusterLifecycle.Authority.TokenFile == document.TargetRegistration.GitOps.TokenFile {
+		document.ClusterLifecycle.Authority.TokenFile == document.TargetRegistration.GitOps.TokenFile) {
 		return errors.New("full-run authority isolation is invalid")
 	}
 	ledger := document.ProviderPrerequisites.Ledger
 	ledgers := []postRuntimeLedgerDocument{
 		document.ClusterLifecycle.Ledger, document.LifecycleObservation.Ledger, document.Enablement.Runtime.Ledger,
 		document.NetworkObservation.Ledger, document.RuntimeBinding.Ledger, document.TargetAccess.Ledger,
-		document.TargetCredential.Ledger, document.TargetRegistration.Ledger, document.PlatformApplications.Ledger,
-		document.PlatformObservation.Ledger, document.AggregateEvidence.Ledger,
+	}
+	if !bareCluster {
+		ledgers = append(ledgers, document.TargetCredential.Ledger, document.TargetRegistration.Ledger,
+			document.PlatformApplications.Ledger, document.PlatformObservation.Ledger, document.AggregateEvidence.Ledger)
 	}
 	for _, candidate := range ledgers {
 		if candidate != ledger {
@@ -910,23 +937,32 @@ func validateFullRunRuntimeBoundary(document fullRunExecutionManifestDocument, p
 		}
 	}
 	management := document.LifecycleObservation.Management
-	if management != document.NetworkObservation.Management || management != document.AggregateEvidence.Management ||
-		management.AuthorityIdentity != plan.Authorities.Management {
+	if management != document.NetworkObservation.Management || management.AuthorityIdentity != plan.Authorities.Management {
 		return errors.New("full-run management observer binding differs between stages")
 	}
-	gitOps := document.TargetRegistration.GitOps
-	if gitOps != document.PlatformApplications.GitOps || gitOps != document.PlatformObservation.Argo ||
-		gitOps != document.AggregateEvidence.Argo || gitOps.AuthorityIdentity != plan.Authorities.GitOps {
-		return errors.New("full-run GitOps binding differs between stages")
+	if !bareCluster {
+		if management != document.AggregateEvidence.Management {
+			return errors.New("full-run management observer binding differs between stages")
+		}
+		gitOps := document.TargetRegistration.GitOps
+		if gitOps != document.PlatformApplications.GitOps || gitOps != document.PlatformObservation.Argo ||
+			gitOps != document.AggregateEvidence.Argo || gitOps.AuthorityIdentity != plan.Authorities.GitOps {
+			return errors.New("full-run GitOps binding differs between stages")
+		}
 	}
 	for _, pair := range [][2]string{
 		{document.LifecycleObservation.PollInterval, document.LifecycleObservation.PollTimeout},
 		{document.NetworkObservation.PollInterval, document.NetworkObservation.PollTimeout},
-		{document.PlatformObservation.PollInterval, document.PlatformObservation.PollTimeout},
 	} {
 		if _, _, err := parsePostRuntimePolling(pair[0], pair[1]); err != nil {
 			return errors.New("full-run polling bounds are invalid")
 		}
+	}
+	if bareCluster {
+		return nil
+	}
+	if _, _, err := parsePostRuntimePolling(document.PlatformObservation.PollInterval, document.PlatformObservation.PollTimeout); err != nil {
+		return errors.New("full-run polling bounds are invalid")
 	}
 	capabilityTimeout, capabilityErr := time.ParseDuration(document.PlatformObservation.Capability.Timeout)
 	cleanupTimeout, cleanupErr := time.ParseDuration(document.PlatformObservation.Capability.CleanupTimeout)

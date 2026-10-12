@@ -249,7 +249,9 @@ Usage:
   ok cluster create requirements
 
 The command reads no file, opens no network client, and emits static JSON for
-renderer and packaging integrations. It does not prepare or authorize a run.
+renderer and packaging integrations. The contract reports that Stage 8-12
+post-runtime material is not required for Bare-MVP. It does not prepare or
+authorize a run.
 `)
 }
 
