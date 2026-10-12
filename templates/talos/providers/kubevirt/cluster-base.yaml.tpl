@@ -83,6 +83,8 @@ spec:
 ${INFRA_CLUSTER_SECRET_REF}  controlPlaneServiceTemplate:
     metadata:
       namespace: ${CLUSTER_NAME}
+      annotations:
+        metallb.io/loadBalancerIPs: ${ENDPOINT_IP}
     spec:
       type: LoadBalancer
 ---
