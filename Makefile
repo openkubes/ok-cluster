@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces contract-executor-test contract-executor-dry-run ok147-runner-image-plan ok147-runner-image-build
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok147-runner-image-plan ok147-runner-image-build
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -18,7 +18,6 @@ K8S_VERSION   ?=
 TALOS_VERSION ?=
 PROVIDER      ?= kubevirt
 ARCHITECTURE  ?= amd64
-GUEST_KUBECONFIG ?= $(HOME)/.kube/$(CLUSTER).yaml
 # OK-82: NODE= is an accepted alias for NODE_SELECTOR= (explicit NODE_SELECTOR wins)
 NODE          ?=
 NODE_SELECTOR ?= $(NODE)
@@ -48,7 +47,7 @@ override export MAX_USER_NAMESPACES := $(value MAX_USER_NAMESPACES)
 
 SCRIPT_DIR    := $(shell pwd)
 CLUSTERS_DIR  := $(SCRIPT_DIR)
-OKB           := kubectl --kubeconfig ~/.kube/ok-infra.yaml
+OKB            = kubectl --kubeconfig "$(TALOS_INFRA_KUBECONFIG)"
 OK_LINUX_PATH ?= $(SCRIPT_DIR)/../ok-linux
 FLATCAR_INFRA_KUBECONFIG ?=
 FLATCAR_CILIUM_CHART     ?=
@@ -56,6 +55,9 @@ FLATCAR_APPLY            ?= no
 FLATCAR_TEARDOWN         ?= no
 FLATCAR_WORKLOAD_KUBECONFIG ?=
 TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
+# Directory for guest (workload) kubeconfigs written by `make kubeconfig`.
+GUEST_KUBECONFIG_DIR ?= $(HOME)/.kube
+GUEST_KUBECONFIG      = $(GUEST_KUBECONFIG_DIR)/$(CLUSTER).yaml
 TALOS_WORKLOAD_KUBECONFIG ?=
 CILIUM_CHART ?= $(SCRIPT_DIR)/.tools/cilium-1.19.6.tgz
 CILIUM_CHART_SOURCE ?=
@@ -184,10 +186,11 @@ new: require-cluster require-type
 	 REGISTRY_TALOSCONFIG_SECRET_KEY=$(REGISTRY_TALOSCONFIG_SECRET_KEY) \
 	 OK_CLUSTER_SCAFFOLD_WORKLOAD_USER_NAMESPACES=1 \
 	 OK_LINUX_PATH=$(OK_LINUX_PATH) \
+	 INFRA_KUBECONFIG="$(TALOS_INFRA_KUBECONFIG)" OKB_KUBECONFIG="$(TALOS_INFRA_KUBECONFIG)" \
 	 bash $(SCRIPT_DIR)/new-cluster.sh
 
 render: require-cluster
-	@START_IP=$(START_IP) python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
+	@START_IP=$(START_IP) OKB_KUBECONFIG="$(TALOS_INFRA_KUBECONFIG)" python3 $(SCRIPT_DIR)/render.py render --cluster $(CLUSTER)
 
 ok178-workload-user-namespaces-test: ## OK-178: offline Talos worker user-namespace render contract
 	@python3 $(SCRIPT_DIR)/tests/ok178_workload_user_namespaces_test.py
@@ -400,11 +403,11 @@ ok128-benchmark-talos: require-cluster ## Observe exact bootstrap lifecycle (req
 		-a -n "$(OK128_TEST_ORDER)" || \
 		(echo "ERROR: explicit OK128 management/workload kubeconfig, output, run ID, and order are required"; exit 1)
 	@test "$$(cd "$$(dirname "$(OK128_MANAGEMENT_KUBECONFIG)")" && pwd)/$$(basename "$(OK128_MANAGEMENT_KUBECONFIG)")" = \
-		"$$(cd "$(HOME)/.kube" && pwd)/ok-infra.yaml" || \
-		(echo "ERROR: bootstrap currently consumes $(HOME)/.kube/ok-infra.yaml; benchmark path must match"; exit 1)
+		"$$(cd "$$(dirname "$(TALOS_INFRA_KUBECONFIG)")" && pwd)/$$(basename "$(TALOS_INFRA_KUBECONFIG)")" || \
+		(echo "ERROR: bootstrap consumes TALOS_INFRA_KUBECONFIG=$(TALOS_INFRA_KUBECONFIG); benchmark path must match"; exit 1)
 	@test "$$(cd "$$(dirname "$(OK128_WORKLOAD_KUBECONFIG)")" && pwd)/$$(basename "$(OK128_WORKLOAD_KUBECONFIG)")" = \
-		"$$(cd "$(HOME)/.kube" && pwd)/$(CLUSTER).yaml" || \
-		(echo "ERROR: bootstrap writes $(HOME)/.kube/$(CLUSTER).yaml; benchmark path must match"; exit 1)
+		"$$(cd "$(GUEST_KUBECONFIG_DIR)" && pwd)/$(CLUSTER).yaml" || \
+		(echo "ERROR: bootstrap writes $(GUEST_KUBECONFIG); benchmark path must match"; exit 1)
 	@OK128_BENCHMARK_APPLY="$(OK128_BENCHMARK_APPLY)" \
 		python3 $(SCRIPT_DIR)/scripts/provisioning_benchmark.py run \
 		--os talos \
@@ -457,6 +460,9 @@ ok130-test: ## Offline-test the Talos Golden-Image resolver/render/lifecycle
 
 ok136-test: ok130-test ## Offline-test reviewed Talos KubeVirt scheduling profiles
 
+ok186-lifecycle-test: ## Offline-test kubeconfig overrides, bootstrap-resume and repeatable teardown
+	@python3 $(SCRIPT_DIR)/tests/ok186_lifecycle_test.py
+
 configure-kubevirt-expand-disks: ## Guardedly enable ExpandDisks on ok-infra (requires APPLY=yes)
 	@if [ "$(KUBEVIRT_EXPAND_DISKS_APPLY)" != "yes" ]; then \
 		echo "Refusing mutation: set KUBEVIRT_EXPAND_DISKS_APPLY=yes after approval."; \
@@ -484,7 +490,7 @@ talos-golden-runtime-evidence: require-cluster ## Record read-only warm provisio
 		--cluster "$(CLUSTER)" \
 		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
 		--ok-linux-path "$(OK_LINUX_PATH)" \
-		--workload-kubeconfig "$(or $(TALOS_WORKLOAD_KUBECONFIG),$(HOME)/.kube/$(CLUSTER).yaml)" \
+		--workload-kubeconfig "$(or $(TALOS_WORKLOAD_KUBECONFIG),$(GUEST_KUBECONFIG))" \
 		--cilium-chart "$(CILIUM_CHART)"
 
 talos-golden-replacement-preflight: require-cluster ## Read-only live-cluster/new-Golden replacement preflight
@@ -512,15 +518,20 @@ install: require-not-flatcar
 	$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-v2.yaml
 	@echo "⏳ Waiting for control plane to be Ready (this may take ~3 min)..."
 	@until $(MAKE) --no-print-directory kubeconfig CLUSTER=$(CLUSTER) 2>/dev/null && \
-		kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes \
+		kubectl --kubeconfig $(GUEST_KUBECONFIG) get nodes \
 		-l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | grep -q "Ready"; \
 		do echo "  ⏳ Not ready yet, retrying in 15s..."; sleep 15; done
 	@echo "✅ Control plane Ready — installing Cilium CNI..."
 	@$(MAKE) --no-print-directory install-cni CLUSTER=$(CLUSTER)
 
 kubeconfig: require-cluster
-	@clusterctl --kubeconfig ~/.kube/ok-infra.yaml get kubeconfig $(CLUSTER) -n $(CLUSTER) > ~/.kube/$(CLUSTER).yaml 2>/dev/null
-	@echo "✅ Kubeconfig saved to ~/.kube/$(CLUSTER).yaml"
+	@set -e; mkdir -p "$(GUEST_KUBECONFIG_DIR)"; \
+	tmp="$$(mktemp "$(GUEST_KUBECONFIG_DIR)/.$(CLUSTER).yaml.XXXXXX")"; \
+	if ! err="$$(clusterctl --kubeconfig "$(TALOS_INFRA_KUBECONFIG)" get kubeconfig $(CLUSTER) -n $(CLUSTER) 2>&1 >"$$tmp")"; then \
+		rm -f "$$tmp"; echo "kubeconfig for $(CLUSTER) not available: $$(printf '%s\n' "$$err" | head -1)" >&2; exit 1; \
+	fi; \
+	chmod 600 "$$tmp"; mv -f "$$tmp" "$(GUEST_KUBECONFIG)"
+	@echo "✅ Kubeconfig saved to $(GUEST_KUBECONFIG)"
 
 install-cni: require-cluster kubeconfig
 	@echo "Installing Cilium CNI on $(CLUSTER)..."
@@ -554,7 +565,7 @@ install-cni: require-cluster kubeconfig
 		echo "   Use install-flatcar with the local digest-pinned Cilium chart."; \
 		exit 2; \
 	fi; \
-	OS_IMG="$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes \
+	OS_IMG="$$(kubectl --kubeconfig $(GUEST_KUBECONFIG) get nodes \
 		-o jsonpath='{.items[0].status.nodeInfo.osImage}' 2>/dev/null || true)"; \
 	if [ -z "$$OS_IMG" ]; then \
 		echo "  (node OS not readable yet — skipping declared-vs-actual cross-check)"; \
@@ -577,7 +588,7 @@ install-cni: require-cluster kubeconfig
 			--verify-only --cache "$(CILIUM_CHART)"; \
 		echo "  Using Talos values (KubePrism localhost:7445, cgroup hostRoot, agent capabilities)"; \
 		helm upgrade --install cilium "$(CILIUM_CHART)" \
-			--kubeconfig ~/.kube/$(CLUSTER).yaml \
+			--kubeconfig $(GUEST_KUBECONFIG) \
 			--namespace kube-system \
 			--set operator.replicas=1 \
 			--set ipam.mode=kubernetes \
@@ -594,10 +605,10 @@ install-cni: require-cluster kubeconfig
 	else \
 		helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true; \
 		helm repo update cilium 2>/dev/null; \
-		CLUSTER_CP_IP=$$(kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'); \
+		CLUSTER_CP_IP=$$(kubectl --kubeconfig $(GUEST_KUBECONFIG) get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'); \
 		echo "  Control plane IP: $$CLUSTER_CP_IP"; \
 		helm upgrade --install cilium cilium/cilium \
-			--kubeconfig ~/.kube/$(CLUSTER).yaml \
+			--kubeconfig $(GUEST_KUBECONFIG) \
 			--namespace kube-system \
 			--set operator.replicas=1 \
 			--set k8sServiceHost=$$CLUSTER_CP_IP \
@@ -606,17 +617,17 @@ install-cni: require-cluster kubeconfig
 	fi
 	@echo ""
 	@echo "✅ Cluster $(CLUSTER) ready!"
-	@echo "   kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes"
+	@echo "   kubectl --kubeconfig $(GUEST_KUBECONFIG) get nodes"
 
 install-storage: require-cluster kubeconfig ## Install local-path StorageClass (required for Talos clusters)
 	@echo "Installing local-path-provisioner on $(CLUSTER)..."
-	kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml apply -f \
+	kubectl --kubeconfig $(GUEST_KUBECONFIG) apply -f \
 		https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
 	@echo "Setting local-path as default StorageClass..."
-	kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml patch storageclass local-path \
+	kubectl --kubeconfig $(GUEST_KUBECONFIG) patch storageclass local-path \
 		-p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 	@echo "Labeling namespaces for privileged pod security (required on Talos)..."
-	kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml label namespace local-path-storage \
+	kubectl --kubeconfig $(GUEST_KUBECONFIG) label namespace local-path-storage \
 		pod-security.kubernetes.io/enforce=privileged \
 		pod-security.kubernetes.io/warn=privileged \
 		pod-security.kubernetes.io/audit=privileged \
@@ -628,7 +639,7 @@ install-ingress: require-cluster kubeconfig ## ingress controller (Traefik) + In
 	@helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true
 	@helm repo update traefik 2>/dev/null
 	helm upgrade --install traefik traefik/traefik \
-		--kubeconfig ~/.kube/$(CLUSTER).yaml \
+		--kubeconfig $(GUEST_KUBECONFIG) \
 		--namespace ingress \
 		--create-namespace \
 		--set deployment.replicas=1 \
@@ -670,9 +681,9 @@ install-vso: require-cluster kubeconfig ## Install the pinned Vault Secrets Oper
 	@# Labelling after helm would be too late: the pods are admitted during helm, not after.
 	@# `baseline` is the least level that admits it; unlike node-exporter/fluent-bit, VSO's
 	@# manager needs no host access, so `privileged` would over-grant.
-	@kubectl --kubeconfig $(HOME)/.kube/$(CLUSTER).yaml create namespace $(VSO_NAMESPACE) \
-		--dry-run=client -o yaml | kubectl --kubeconfig $(HOME)/.kube/$(CLUSTER).yaml apply -f -
-	@kubectl --kubeconfig $(HOME)/.kube/$(CLUSTER).yaml label namespace $(VSO_NAMESPACE) \
+	@kubectl --kubeconfig $(GUEST_KUBECONFIG) create namespace $(VSO_NAMESPACE) \
+		--dry-run=client -o yaml | kubectl --kubeconfig $(GUEST_KUBECONFIG) apply -f -
+	@kubectl --kubeconfig $(GUEST_KUBECONFIG) label namespace $(VSO_NAMESPACE) \
 		pod-security.kubernetes.io/enforce=baseline \
 		pod-security.kubernetes.io/warn=baseline \
 		pod-security.kubernetes.io/audit=baseline \
@@ -684,14 +695,14 @@ install-vso: require-cluster kubeconfig ## Install the pinned Vault Secrets Oper
 	@# before anything applies a VaultConnection/VaultAuth/VaultStaticSecret.
 	helm upgrade --install vault-secrets-operator hashicorp/vault-secrets-operator \
 		--version $(VSO_CHART_VERSION) \
-		--kubeconfig $(HOME)/.kube/$(CLUSTER).yaml \
+		--kubeconfig $(GUEST_KUBECONFIG) \
 		--namespace $(VSO_NAMESPACE) \
 		--wait --timeout 5m
 	@echo "✅ Vault Secrets Operator $(VSO_CHART_VERSION) installed on $(CLUSTER)"
 
 install-keycloak: require-cluster kubeconfig ## Install central Keycloak from a pinned openkubes revision; stops before the approval-gated steps
 	@CLUSTER=$(CLUSTER) \
-	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
+	 KUBECONFIG_PATH=$(GUEST_KUBECONFIG) \
 	 MGMT_KUBECONFIG=$(HOME)/.kube/ok-mgmt.yaml \
 	 OPENKUBES_PATH=$(OK_KEYCLOAK_PATH) \
 	 OK_KEYCLOAK_REF=$(OK_KEYCLOAK_REF) \
@@ -701,7 +712,7 @@ install-keycloak: require-cluster kubeconfig ## Install central Keycloak from a 
 
 install-observability: require-cluster kubeconfig ## Install ok-observability-standard profile + run the gated Contract Test (OK-79). Vars: OBSERVABILITY_SECRET_SOURCE=file|vault, OK_OBSERVABILITY_PATH, OK_OBSERVABILITY_REF, OBSERVABILITY_VALUES, CONTRACT_TEST_TIMEOUT, CONTRACT_TEST_RECEIVER_CAPTURE_URL
 	@CLUSTER=$(CLUSTER) \
-	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
+	 KUBECONFIG_PATH=$(GUEST_KUBECONFIG) \
 	 OK_OBSERVABILITY_PATH=$(OK_OBSERVABILITY_PATH) \
 	 OK_OBSERVABILITY_REF=$(OK_OBSERVABILITY_REF) \
 	 OBSERVABILITY_VALUES=$(OBSERVABILITY_VALUES) \
@@ -722,7 +733,7 @@ install-observability: require-cluster kubeconfig ## Install ok-observability-st
 
 install-observability-metrics: require-cluster kubeconfig ## Install metrics + alerting only and verify zot scraping (OK-138). Vars: OK_OBSERVABILITY_PATH, OK_OBSERVABILITY_REF, OBSERVABILITY_HELM_VALUES, OBSERVABILITY_METRICS_VERIFY_TIMEOUT
 	@CLUSTER=$(CLUSTER) \
-	 KUBECONFIG_PATH=$(HOME)/.kube/$(CLUSTER).yaml \
+	 KUBECONFIG_PATH=$(GUEST_KUBECONFIG) \
 	 OK_OBSERVABILITY_PATH=$(OK_OBSERVABILITY_PATH) \
 	 OK_OBSERVABILITY_REF=$(OK_OBSERVABILITY_REF) \
 	 OBSERVABILITY_VALUES=$(OBSERVABILITY_VALUES) \
@@ -755,12 +766,25 @@ bootstrap: require-not-flatcar
 	else \
 		$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml; \
 	fi
+	@$(MAKE) --no-print-directory bootstrap-post-apply CLUSTER=$(CLUSTER)
+
+# Resume only a rendered, matching Cluster in a supported post-apply state.
+bootstrap-resume: require-not-flatcar
+	@echo "Resuming bootstrap of Talos cluster $(CLUSTER)..."
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--resume-preconditions --cluster "$(CLUSTER)" \
+		--cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"
+	@$(MAKE) --no-print-directory bootstrap-post-apply CLUSTER=$(CLUSTER)
+
+bootstrap-post-apply: require-cluster
 	@echo ""
 	@$(MAKE) --no-print-directory annotate-pvcs CLUSTER=$(CLUSTER)
 	@echo ""
 	@echo "⏳ Waiting for control plane to register (nodes stay NotReady until CNI is installed)..."
-	@i=0; until $(MAKE) --no-print-directory kubeconfig CLUSTER=$(CLUSTER) 2>/dev/null && \
-		kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml get nodes \
+	@i=0; until $(MAKE) --no-print-directory kubeconfig CLUSTER=$(CLUSTER) && \
+		kubectl --kubeconfig $(GUEST_KUBECONFIG) get nodes \
 		-l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | grep -q .; \
 		do i=$$((i+1)); \
 		if [ $$i -ge 40 ]; then echo "❌ Control plane not reachable after 10 min — check: make status CLUSTER=$(CLUSTER)"; exit 1; fi; \
@@ -768,7 +792,7 @@ bootstrap: require-not-flatcar
 	@echo "✅ Control plane registered — installing Cilium CNI..."
 	@$(MAKE) --no-print-directory install-cni CLUSTER=$(CLUSTER)
 	@echo "⏳ Waiting for all nodes to become Ready..."
-	@kubectl --kubeconfig ~/.kube/$(CLUSTER).yaml wait --for=condition=Ready nodes --all --timeout=300s
+	@kubectl --kubeconfig $(GUEST_KUBECONFIG) wait --for=condition=Ready nodes --all --timeout=300s
 	@echo ""
 	@echo "✅ Talos cluster $(CLUSTER) bootstrapped with Cilium. Next steps:"
 	@echo "   make install-storage       CLUSTER=$(CLUSTER)"
@@ -812,50 +836,11 @@ clean: require-not-flatcar
 	@echo "✅ Cluster $(CLUSTER) removed."
 
 teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses teardown-flatcar)
-	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
-	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
-	DV_UIDS=$$($(OKB) get datavolumes -n $(CLUSTER) -o jsonpath='{range .items[*]}{.metadata.uid}{","}{end}' 2>/dev/null); \
-	if [ -n "$$PVS" ]; then \
-		echo "  VM disks use ok-storage-* (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
-		echo "$$PVS" | sed 's/^/    /'; \
-	fi; \
-	if [ "$(CONFIRM)" != "yes" ]; then \
-		printf "⚠️  This will TEAR DOWN %s: Cluster object, namespace, local render directory" "$(CLUSTER)"; \
-		if [ -n "$$PVS" ]; then \
-			PVCOUNT=$$(echo "$$PVS" | grep -c .); \
-			printf ", and %s Retain-policy PV(s)/Longhorn volume(s)" "$$PVCOUNT"; \
-		fi; \
-		echo "."; \
-		printf "Are you sure you want to tear down %s? [y/N] " "$(CLUSTER)"; \
-		if [ -t 0 ]; then read -r ans; else read -r ans < /dev/tty || ans=n; fi; \
-		case "$$ans" in \
-			[yY]|[yY][eE][sS]) ;; \
-			*) echo "Aborted. Re-run with CONFIRM=yes to skip this prompt (e.g. in CI)."; exit 1 ;; \
-		esac; \
-	fi; \
-	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
-	$(OKB) delete namespace $(CLUSTER) --ignore-not-found; \
-	HAS_TALOS_GOLDEN=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])) or {}; print(str(c.get("type") == "talos" and bool(c.get("os",{}).get("goldenImage"))).lower())' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"); \
-	if [ "$$HAS_TALOS_GOLDEN" = "true" ]; then \
-		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
-			--cleanup-authorization \
-			--cluster "$(CLUSTER)" \
-			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
-			--ok-linux-path "$(OK_LINUX_PATH)" \
-			--data-volume-uids "$$DV_UIDS"; \
-	fi; \
-	echo "Removing local cluster directory..."; \
-	rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
-	if [ -n "$$PVS" ]; then \
-		echo "Cleaning up Retain-policy PVs and their underlying Longhorn volumes..."; \
-		for pv in $$PVS; do \
-			echo "  Deleting PV $$pv..."; \
-			$(OKB) delete pv $$pv --ignore-not-found; \
-			echo "  Deleting Longhorn volume $$pv (best-effort -- may already be gone)..."; \
-			$(OKB) -n longhorn-system delete volumes.longhorn.io $$pv --ignore-not-found 2>/dev/null || true; \
-		done; \
-	fi; \
-	echo "✅ Talos cluster $(CLUSTER) torn down (including Retain-policy PV cleanup)."
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--teardown --cluster "$(CLUSTER)" \
+		--cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" --confirm "$(CONFIRM)"
 
 # ── e2e ───────────────────────────────────────────────────────────────────────
 MGMT_CLUSTER       ?= ok-mgmt
@@ -873,7 +858,7 @@ CONFIRM            ?= false
 # <cluster> (provider-helm). Replace semantics — safe to re-run after any
 # re-bootstrap (cluster owner's responsibility). Reference implementation,
 # non-normative. See openkubes/architecture/decisions/ADR-Platform-013.
-KUBECONFIG_SRC     ?= $(HOME)/.kube/$(CLUSTER).yaml
+KUBECONFIG_SRC     ?= $(GUEST_KUBECONFIG)
 MGMT_KUBECONFIG     = $(HOME)/.kube/$(MGMT_CLUSTER).yaml
 
 register-cluster: require-cluster ## Register workload cluster with ok-mgmt (ADR-Platform-013): kubeconfig secret + ProviderConfig, idempotent
@@ -1139,6 +1124,7 @@ help:
 	@echo "  make ok178-workload-user-namespaces-test # offline worker user-namespace render contract"
 	@echo "  make register-cluster CLUSTER=ok2-rmf [KUBECONFIG_SRC=~/path/kubeconfig] [MGMT_CLUSTER=ok-mgmt]  # ADR-013: secret + ProviderConfig in ok-mgmt"
 	@echo "  make bootstrap     CLUSTER=ok-ai  # talos: apply + annotate PVCs + cilium"
+	@echo "  make bootstrap-resume CLUSTER=ok-ai  # talos: resume after apply; never re-applies"
 	@echo "  make annotate-pvcs CLUSTER=ok-ai  # annotate PVCs manually"
 	@echo "  make unregister-cluster CLUSTER=ok2-rmf [FORCE=true] [MGMT_CLUSTER=ok-mgmt]  # OK-62: delete secret + ProviderConfig from ok-mgmt"
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"

@@ -1025,13 +1025,15 @@ def main() -> int:
     check(
         '"rolebinding", "role"' in lifecycle_source
         and "shared Talos Golden PVC changed on cleanup" in lifecycle_source
-        and '"delete",\n                kind,\n                authorization' in lifecycle_source,
+        and 'authorization_objects[kind]' in lifecycle_source
+        and 'preconditioned_delete(' in lifecycle_source,
         "cleanup targets exact clone RBAC and re-verifies the Golden PVC",
     )
     check(
         '"cdi.kubevirt.io/OwnedByUID"' in lifecycle_source
         and "cluster-owned CDI snapshot source is invalid" in lifecycle_source
-        and '--data-volume-uids "$$DV_UIDS"' in (
+        and 'data_volume_uids=set(record["data_volume_uids"])' in lifecycle_source
+        and '--teardown --cluster' in (
             ROOT / "Makefile"
         ).read_text(encoding="utf-8"),
         "cleanup binds temporary CDI snapshots to exact DataVolume UIDs",
