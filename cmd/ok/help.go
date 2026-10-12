@@ -42,6 +42,10 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeEvidenceObservabilityHelp(stdout)
 		return true
 	}
+	if len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" && isHelpArgument(arguments[3]) {
+		writeClusterCreateRequirementsHelp(stdout)
+		return true
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" &&
 		(len(arguments) == 2 || containsHelpArgument(arguments[2:])) {
 		writeClusterCreateHelp(stdout)
@@ -204,6 +208,7 @@ func writeClusterCreateHelp(output io.Writer) {
 	fmt.Fprint(output, `Validate, prepare, or execute one bound Bare-MVP cluster run
 
 Usage:
+  ok cluster create requirements
   ok cluster create --file <private-manifest.json> --dry-run
   ok cluster create --file <private-manifest.json> --prepare
   ok cluster create --file <private-manifest.json> --live --execute \
@@ -234,6 +239,17 @@ Safety:
 
 Legacy contract-planning flags remain available for compatibility; use
 "ok cluster stage --help" for the expert runner surface.
+`)
+}
+
+func writeClusterCreateRequirementsHelp(output io.Writer) {
+	fmt.Fprint(output, `Print the machine-readable Bare-MVP input contract
+
+Usage:
+  ok cluster create requirements
+
+The command reads no file, opens no network client, and emits static JSON for
+renderer and packaging integrations. It does not prepare or authorize a run.
 `)
 }
 

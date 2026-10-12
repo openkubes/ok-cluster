@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +35,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"evidence":               {[]string{"evidence", "--help"}, []string{"ok evidence observability", "independent evidence"}},
 		"evidence observability": {[]string{"evidence", "observability", "--help"}, []string{"observability serve", "configured listener"}},
 		"cluster create":         {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "may create cluster resources"}},
+		"create requirements":    {[]string{"cluster", "create", "requirements", "--help"}, []string{"machine-readable", "reads no file", "does not prepare"}},
 		"create trailing help":   {[]string{"cluster", "create", "--file", "/private/run.json", "--help"}, []string{"--file", "--dry-run", "--live --execute"}},
 		"cluster dry-run":        {[]string{"cluster", "dry-run", "--help"}, []string{"dry-run serve", "legacy HTTP validation"}},
 		"cluster stage":          {[]string{"cluster", "stage", "--help"}, []string{"Expert stage-level", "observe", "launch"}},
@@ -55,6 +58,28 @@ func TestHierarchicalHelp(t *testing.T) {
 				t.Fatalf("unexpected stderr: %s", stderr.String())
 			}
 		})
+	}
+}
+
+func TestClusterCreateRequirementsAreMachineReadableAndNonMutating(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"cluster", "create", "requirements"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var requirements clusterCreateRequirements
+	if err := json.Unmarshal(stdout.Bytes(), &requirements); err != nil {
+		t.Fatal(err)
+	}
+	if requirements.Format != clusterCreateRequirementsFormat || requirements.Operation != "CreateCluster" ||
+		requirements.RequiredCompletionMode != stageplan.CompletionModeBareClusterMVP ||
+		requirements.OfflineAPIContacted || requirements.OfflineMutationAllowed || !requirements.LiveMutationAllowed ||
+		requirements.TerminalMarkerName != runner.FullRunExecutorTerminalMarkerName ||
+		len(requirements.AcceptedManifestFormats) != 2 || len(requirements.LiveStageOrder) != 7 ||
+		requirements.LiveStageOrder[1] != "cluster-lifecycle" || stderr.Len() != 0 {
+		t.Fatalf("unexpected create requirements: %#v stderr=%s", requirements, stderr.String())
+	}
+	if err := run([]string{"cluster", "create", "requirements", "extra"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("requirements command accepted positional input")
 	}
 }
 
@@ -247,5 +272,74 @@ func TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate(t *testi
 	}
 	if calls != 1 || !strings.Contains(stdout.String(), "SUCCEEDED") {
 		t.Fatalf("live execution not forwarded exactly once: calls=%d stdout=%s", calls, stdout.String())
+	}
+}
+
+func TestClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T) {
+	previousPrepare := prepareFullRunExecutionManifest
+	previousOpen := openKubernetesObservabilityFullRunActivation
+	previousWriter := writeFullRunExecutorTerminalMarker
+	defer func() {
+		prepareFullRunExecutionManifest = previousPrepare
+		openKubernetesObservabilityFullRunActivation = previousOpen
+		writeFullRunExecutorTerminalMarker = previousWriter
+	}()
+
+	verified := bareClusterCreateManifestReceipt()
+	prepareCalls := 0
+	prepareFullRunExecutionManifest = func(path string) (runner.FullRunExecutionManifestReceipt, error) {
+		if path != "/private/bare-run.json" {
+			t.Fatalf("manifest path = %q", path)
+		}
+		prepareCalls++
+		return verified, nil
+	}
+	runs := 0
+	openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+		if path != "/private/bare-run.json" || publicKeyPath != "/private/evidence.pub" {
+			t.Fatalf("activation inputs differ: path=%q key=%q", path, publicKeyPath)
+		}
+		return fullRunActivationRunnerFunc(func(context.Context) (runner.FullRunExecutionActivationReceipt, error) {
+				runs++
+				execution := runner.FullRunOrchestrationReceipt{
+					Format: runner.FullRunOrchestrationReceiptFormat, State: "SUCCEEDED",
+					PlanDigest: verified.PlanDigest, CompletionMode: stageplan.CompletionModeBareClusterMVP,
+				}
+				return runner.FullRunExecutionActivationReceipt{
+					Format: runner.FullRunExecutionActivationReceiptFormat, State: "SUCCEEDED",
+					Manifest: verified, Execution: &execution,
+				}, nil
+			}), runner.FullRunExecutionActivationReceipt{
+				Format: runner.FullRunExecutionActivationReceiptFormat, State: "PREPARED", Manifest: verified,
+			}, nil
+	}
+	writeFullRunExecutorTerminalMarker = runner.WriteFullRunExecutorTerminalMarker
+
+	markerDirectory := t.TempDir()
+	if err := os.Chmod(markerDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(markerDirectory, runner.FullRunExecutorTerminalMarkerName)
+	arguments := []string{
+		"cluster", "create", "--file", "/private/bare-run.json", "--live", "--execute",
+		"--expected-manifest-digest", verified.ManifestDigest,
+		"--independent-evidence-public-key", "/private/evidence.pub",
+		"--terminal-marker", markerPath,
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(arguments, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var receipt runner.FullRunExecutionActivationReceipt
+	if err := json.Unmarshal(stdout.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepareCalls != 2 || runs != 1 || receipt.State != "SUCCEEDED" || string(marker) != "TERMINAL\n" || stderr.Len() != 0 {
+		t.Fatalf("CLI did not cross the exact runner boundary: prepare=%d runs=%d receipt=%#v marker=%q stderr=%s",
+			prepareCalls, runs, receipt, string(marker), stderr.String())
 	}
 }

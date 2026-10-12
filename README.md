@@ -52,6 +52,13 @@ Stage-7 Bare-MVP completion and the legacy contract fixture. It creates no
 cluster client and is not a substitute for validating a freshly rendered
 private production manifest.
 
+Renderer and packaging integrations can inspect the accepted input contract
+without reading a private file:
+
+```bash
+.tools/bin/ok cluster create requirements
+```
+
 The initial product surface consumes the private full-run manifest from the
 proven OK-147 runner. It intentionally accepts only a manifest whose reviewed
 Plan binds `completionMode: bare-cluster-mvp/v1`:

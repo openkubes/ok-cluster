@@ -714,6 +714,9 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 3 && arguments[0] == "evidence" && arguments[1] == "observability" && arguments[2] == "serve" {
 		return runEvidenceObservabilityServe(ctx, arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" {
+		return runClusterCreateRequirements(arguments[3:], stdout)
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
 		productFlags := hasClusterCreateProductFlag(arguments[2:])
 		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:])

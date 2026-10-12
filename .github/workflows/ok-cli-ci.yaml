@@ -43,6 +43,7 @@ jobs:
           "$RUNNER_TEMP/ok" --help
           "$RUNNER_TEMP/ok" cluster --help
           "$RUNNER_TEMP/ok" cluster create --help
+          "$RUNNER_TEMP/ok" cluster create requirements
           "$RUNNER_TEMP/ok" cluster stage run --help
           "$RUNNER_TEMP/ok" cluster stage run full prepare --help
           "$RUNNER_TEMP/ok" authority --help

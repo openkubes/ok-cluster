@@ -14,6 +14,22 @@ import (
 )
 
 const clusterCreateWorkflowFormat = "ok-cli-cluster-create/v1"
+const clusterCreateRequirementsFormat = "ok-cli-cluster-create-requirements/v1"
+
+type clusterCreateRequirements struct {
+	Format                  string   `json:"format"`
+	Operation               string   `json:"operation"`
+	AcceptedManifestFormats []string `json:"acceptedManifestFormats"`
+	RequiredCompletionMode  string   `json:"requiredCompletionMode"`
+	ManifestPathRules       []string `json:"manifestPathRules"`
+	OfflineModes            []string `json:"offlineModes"`
+	OfflineAPIContacted     bool     `json:"offlineApiContacted"`
+	OfflineMutationAllowed  bool     `json:"offlineMutationAllowed"`
+	LiveRequiredFlags       []string `json:"liveRequiredFlags"`
+	TerminalMarkerName      string   `json:"terminalMarkerName"`
+	LiveStageOrder          []string `json:"liveStageOrder"`
+	LiveMutationAllowed     bool     `json:"liveMutationAllowed"`
+}
 
 type clusterCreateWorkflowReceipt struct {
 	Format                string `json:"format"`
@@ -47,6 +63,35 @@ var executeClusterCreateLive = func(ctx context.Context, config clusterCreateLiv
 }
 
 var validateClusterCreateTerminalMarker = runner.ValidateFullRunExecutorTerminalMarkerDestination
+
+func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
+	if len(arguments) != 0 {
+		return errors.New("ok cluster create requirements accepts no flags or positional arguments")
+	}
+	requirements := clusterCreateRequirements{
+		Format: clusterCreateRequirementsFormat, Operation: "CreateCluster",
+		AcceptedManifestFormats: []string{runner.FullRunExecutionManifestFormat, runner.FullRunExecutionManifestFormatV4},
+		RequiredCompletionMode:  stageplan.CompletionModeBareClusterMVP,
+		ManifestPathRules: []string{
+			"absolute path", "regular non-symlink file", "owner-only permissions (0600 or stricter)",
+			"all referenced private inputs present and digest-bound",
+		},
+		OfflineModes: []string{"--dry-run", "--prepare"}, OfflineAPIContacted: false, OfflineMutationAllowed: false,
+		LiveRequiredFlags: []string{
+			"--live", "--execute", "--expected-manifest-digest", "--independent-evidence-public-key", "--terminal-marker",
+		},
+		TerminalMarkerName: runner.FullRunExecutorTerminalMarkerName,
+		LiveStageOrder: []string{
+			"provider-prerequisites", "cluster-lifecycle", "lifecycle-observation", "enablement",
+			"network-observation", "runtime-binding", "target-access",
+		},
+		LiveMutationAllowed: true,
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(requirements)
+}
 
 func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	if countClusterCreateFileFlags(arguments) != 1 {
