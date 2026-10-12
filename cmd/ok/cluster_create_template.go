@@ -36,14 +36,13 @@ func writeClusterCreateManifestTemplate(stdout io.Writer, namespace, name, root 
 		"caFile":         privatePath("runtime", "workload-ca.crt"),
 	}
 	manifest := map[string]any{
-		"format": runner.FullRunExecutionManifestFormatV4,
+		"format": runner.FullRunExecutionManifestFormat,
 		"plan": map[string]any{
 			"path": privatePath("staged-plan.json"),
 			"expected": map[string]any{
 				"contractIdentity": map[string]any{"namespace": namespace, "name": name},
 				"intentRevision":   bareClusterTemplateDigest, "enablementRevision": bareClusterTemplateDigest,
 				"platformRevision": bareClusterTemplateDigest, "executionFixture": bareClusterTemplateDigest,
-				"executionAttemptDigest":  bareClusterTemplateDigest,
 				"infrastructureAuthority": "ok-infra", "managementAuthority": "ok-mgmt", "gitOpsAuthority": "ok-gitops",
 				"completionMode": stageplan.CompletionModeBareClusterMVP,
 			},
@@ -104,12 +103,11 @@ func runClusterCreatePlanTemplate(arguments []string, stdout io.Writer) error {
 
 func writeClusterCreatePlanTemplate(stdout io.Writer, namespace, name string) error {
 	plan := map[string]any{
-		"format":           stageplan.FormatV2,
+		"format":           stageplan.Format,
 		"contractIdentity": map[string]any{"namespace": namespace, "name": name},
 		"intentRevision":   bareClusterTemplateDigest, "enablementRevision": bareClusterTemplateDigest,
 		"platformRevision": bareClusterTemplateDigest, "executionFixture": bareClusterTemplateDigest,
-		"executionAttemptDigest": bareClusterTemplateDigest,
-		"authorizationState":     "NO-GO", "completionMode": stageplan.CompletionModeBareClusterMVP,
+		"authorizationState": "NO-GO", "completionMode": stageplan.CompletionModeBareClusterMVP,
 		"authorities": map[string]any{
 			"infrastructure": "ok-infra", "management": "ok-mgmt", "gitOps": "ok-gitops",
 			"workloadIdentityMode": "capi-cluster-uid/v1", "runnerIdentityMode": "bounded-job/v1",
