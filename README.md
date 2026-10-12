@@ -643,10 +643,77 @@ The CA and ingress address are resolved only at execution time; neither is
 stored in rendered files. Existing clusters use the review/dry-run/apply
 targets documented in [Talos registry trust](docs/registry-trust.md).
 
+### Opt-in workload user namespaces
+
+Talos clusters on KubeVirt can opt worker nodes into the host prerequisites
+used by workload user namespaces:
+
+```bash
+make new CLUSTER=my-cluster TYPE=talos \
+  WORKLOAD_USER_NAMESPACES=true \
+  PROVISIONER_BASE_PATH=/var/openebs/ok176-c3
+```
+
+The scaffold persists `workloadUserNamespaces` in `cluster-config.yaml`, so a
+later `make render CLUSTER=my-cluster` reproduces the same worker machine
+configuration:
+
+```yaml
+workloadUserNamespaces:
+  enabled: true
+  maxUserNamespaces: 11255
+  provisionerBasePath: /var/openebs/ok176-c3
+```
+
+The capability is off by default. `MAX_USER_NAMESPACES` defaults to `11255`
+and can be overridden when scaffolding. The provisioner base path is mounted
+into kubelet with a shared bind mount, must be a normalized absolute child of
+`/var`, and must match the base path configured separately on the storage
+provisioner. When enabled, rendering appends the capability's worker-only
+sysctl and mount patches. It fails closed if existing worker `configPatches`
+or `strategicPatches` overlap `/machine/sysctls` or
+`/machine/kubelet/extraMounts`; unrelated worker patches remain available.
+
+This capability changes workers only: workload pods and their storage run
+there, while control-plane nodes retain their narrower machine configuration.
+Enabling it is supported only for `TYPE=talos PROVIDER=kubevirt`; enabling it
+on other OS or provider combinations fails closed. An absent block or
+`enabled: false` is a no-op on every type and provider and preserves existing
+rendered bytes. Disabled blocks still reject unknown keys, non-boolean
+`enabled`, and invalid supplied `maxUserNamespaces` or `provisionerBasePath`.
+Existing configs can set the same
+`workloadUserNamespaces` block directly and use `make render`. This knob only
+creates the Talos host prerequisites. It does not install a storage provisioner
+or set the workload Pod's `hostUsers` policy.
+
 For a complete disposable `ok-infra` meetup deployment with independent
 control-plane/worker sizing, timed warm provisioning, runtime verification,
 and Golden-Image-preserving cleanup, see the
 [Talos on `ok-infra` meetup demo runbook](docs/ok-talos-infra-node-meetup-demo-runbook.md).
+
+To check that the worker mount path still matches the effective OpenEBS path
+on the workload StorageClass, run:
+
+```bash
+make verify-workload-user-namespaces CLUSTER=my-cluster
+# Optional: GUEST_KUBECONFIG=/path/to/guest.yaml
+```
+
+The target validates `workloadUserNamespaces` with the renderer before making
+any guest API request. An absent or disabled capability reports `SKIP` and
+performs no `kubectl` read. When enabled, it reads the
+`ok-storage-local-quota` StorageClass and parses its
+`cas.openebs.io/config` annotation as YAML, requiring exactly one `BasePath`
+entry whose value equals `workloadUserNamespaces.provisionerBasePath`. The
+default guest kubeconfig is `$(HOME)/.kube/$(CLUSTER).yaml`.
+
+This check joins two ownership boundaries: ok-cluster mounts the configured
+host path into worker kubelet with the required propagation, while ok-storage
+owns the provisioner configuration and StorageClass that select the effective
+path for workload PVCs. It confirms that path contract only; it does not prove
+the provisioner is ready or that a PVC can allocate. Use ok-storage's verify
+target for its host prerequisites, sysctl, provisioner readiness, and quota
+probe, including the privileged sysctl check.
 
 ### Ubuntu (kubeadm, flexible)
 
