@@ -24,6 +24,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "ok130-talos" / "cluster-config.yaml"
 CLUSTER = "ok130-talos"
+LEDGER_NAMESPACE = "ok-cluster-teardown"
 sys.path.insert(0, str(ROOT))
 
 import render  # noqa: E402
@@ -70,6 +71,14 @@ verb = next((value for value in ("get", "create", "patch", "delete", "annotate",
 vi = args.index(verb) if verb else -1
 kind = args[vi + 1].lower() if vi >= 0 and len(args) > vi + 1 else ""
 name = args[vi + 2] if vi >= 0 and len(args) > vi + 2 and not args[vi + 2].startswith("-") else ""
+create_body = None
+if verb == "create" and "-f" in args and args[args.index("-f") + 1] == "-":
+    create_body = json.load(sys.stdin)
+    kind = str(create_body.get("kind", "")).lower()
+    name = str(create_body.get("metadata", {}).get("name", ""))
+    namespace = str(create_body.get("metadata", {}).get("namespace", namespace))
+    with open(os.environ["FAKE_LOG"], "a") as log:
+        log.write(json.dumps(["kubectl-stdin", create_body]) + "\n")
 aliases = {
     "clusters.cluster.x-k8s.io": "cluster", "cluster": "cluster", "cluster/" + name: "cluster",
     "namespaces": "namespace", "namespace": "namespace",
@@ -95,10 +104,12 @@ if verb == "delete" and "--raw" in args:
     if parts[:3] == ["api", "v1", "namespaces"] and len(parts) == 4:
         resource = "namespace"
     else:
+        if parts[:3] == ["api", "v1", "namespaces"] and len(parts) >= 6:
+            namespace = parts[3]
         resource = {
             "clusters": "cluster", "roles": "role", "rolebindings": "rolebinding",
             "volumesnapshots": "volumesnapshot", "persistentvolumes": "pv",
-            "volumes": "longhorn",
+            "volumes": "longhorn", "configmaps": "configmap",
         }.get(plural, plural)
     delete_options = json.load(sys.stdin)
     with open(os.environ["FAKE_LOG"], "a") as log:
@@ -116,10 +127,16 @@ def fail(message, code=1):
     sys.exit(code)
 
 fault_key = f"{verb}:{resource}"
-remaining = int(state.get("faults", {}).get(fault_key, 0))
+scoped_fault_key = f"{fault_key}:{namespace}:{name}"
+selected_fault_key = (
+    scoped_fault_key
+    if scoped_fault_key in state.get("faults", {})
+    else fault_key
+)
+remaining = int(state.get("faults", {}).get(selected_fault_key, 0))
 if remaining:
-    state["faults"][fault_key] = remaining - 1
-    fail(f"Error from server (InternalError): injected {fault_key} failure")
+    state["faults"][selected_fault_key] = remaining - 1
+    fail(f"Error from server (InternalError): injected {selected_fault_key} failure")
 delayed = state.get("fault_after", {}).get(fault_key)
 if delayed is not None:
     delayed = int(delayed) - 1
@@ -161,9 +178,13 @@ if verb == "get":
     if resource == "cluster":
         obj = state.get("cluster")
     elif resource == "namespace":
-        obj = state.get("namespace")
+        if name == (state.get("namespace") or {}).get("metadata", {}).get("name"):
+            obj = state.get("namespace")
+        elif name == (state.get("ledger_namespace") or {}).get("metadata", {}).get("name"):
+            obj = state.get("ledger_namespace")
     elif resource == "configmap":
-        obj = state.get("configmaps", {}).get(name)
+        key = f"{namespace}/{name}"
+        obj = state.get("configmaps", {}).get(key)
     elif resource == "role":
         obj = state.get("role")
     elif resource == "rolebinding":
@@ -183,31 +204,64 @@ if verb == "get":
             sys.exit(0)
     if obj is None:
         not_found()
+    if resource == "configmap":
+        remaining_corrupt_reads = int(
+            state.get("corrupt_configmap_reads", {}).get(key, 0)
+        )
+        if remaining_corrupt_reads:
+            state["corrupt_configmap_reads"][key] = remaining_corrupt_reads - 1
+            obj = json.loads(json.dumps(obj))
+            obj.setdefault("data", {})["record.json"] += " "
+            save()
     emit(obj)
     sys.exit(0)
 
 if verb == "create" and resource == "configmap":
-    if name in state.setdefault("configmaps", {}):
+    key = f"{namespace}/{name}"
+    if key in state.setdefault("configmaps", {}):
         fail(f'Error from server (AlreadyExists): configmaps "{name}" already exists')
-    literal = next(value for value in args if value.startswith("--from-literal=record.json="))
-    record = literal.split("=", 2)[2]
-    state["configmaps"][name] = {
-        "apiVersion": "v1", "kind": "ConfigMap",
-        "metadata": {"name": name, "namespace": namespace, "uid": "ledger-uid", "resourceVersion": "1"},
-        "data": {"record.json": record},
-    }
+    if create_body is not None:
+        created = create_body
+        created.setdefault("metadata", {})["uid"] = "ledger-uid"
+        created["metadata"]["resourceVersion"] = "1"
+        state["configmaps"][key] = created
+    else:
+        literal = next(value for value in args if value.startswith("--from-literal=record.json="))
+        record = literal.split("=", 2)[2]
+        state["configmaps"][key] = {
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": name, "namespace": namespace, "uid": "ledger-uid", "resourceVersion": "1"},
+            "data": {"record.json": record},
+        }
+    if create_body is None and "--labels" in args:
+        labels = args[args.index("--labels") + 1]
+        state["configmaps"][key]["metadata"]["labels"] = dict(
+            item.split("=", 1) for item in labels.split(",")
+        )
+    elif create_body is None:
+        label_arg = next(
+            (value for value in args if value.startswith("--labels=")), None
+        )
+        if label_arg:
+            state["configmaps"][key]["metadata"]["labels"] = dict(
+                item.split("=", 1)
+                for item in label_arg.split("=", 1)[1].split(",")
+            )
     save()
-    emit(state["configmaps"][name])
+    emit(state["configmaps"][key])
     sys.exit(0)
 
 if verb == "patch" and resource == "configmap":
-    obj = state.get("configmaps", {}).get(name)
+    obj = state.get("configmaps", {}).get(f"{namespace}/{name}")
     if obj is None:
         not_found()
     patch = json.loads(args[args.index("-p") + 1])
     if patch.get("metadata", {}).get("resourceVersion") != obj["metadata"].get("resourceVersion"):
         fail("Error from server (Conflict): configmap resourceVersion changed")
     obj.setdefault("data", {}).update(patch.get("data", {}))
+    obj.setdefault("metadata", {}).setdefault("labels", {}).update(
+        patch.get("metadata", {}).get("labels", {})
+    )
     obj["metadata"]["resourceVersion"] = str(int(obj["metadata"]["resourceVersion"]) + 1)
     save()
     emit(obj)
@@ -217,6 +271,7 @@ if verb == "delete":
     current = None
     if resource == "cluster": current = state.get("cluster")
     elif resource == "namespace": current = state.get("namespace")
+    elif resource == "configmap": current = state.get("configmaps", {}).get(f"{namespace}/{name}")
     elif resource == "role": current = state.get("role")
     elif resource == "rolebinding": current = state.get("rolebinding")
     elif resource == "volumesnapshot": current = named(state.get("snapshots", []), name)
@@ -253,6 +308,8 @@ if verb == "delete":
         state["namespace"] = None
         state["datavolumes"] = []
         state["pvcs"] = []
+    elif resource == "configmap":
+        state.get("configmaps", {}).pop(f"{namespace}/{name}", None)
     elif resource == "role":
         state["role"] = None
     elif resource == "rolebinding":
@@ -365,6 +422,14 @@ class Sandbox:
                 "apiVersion": "v1", "kind": "Namespace",
                 "metadata": {"name": CLUSTER, "uid": "namespace-original-uid", "resourceVersion": "11"},
             },
+            "ledger_namespace": {
+                "apiVersion": "v1", "kind": "Namespace",
+                "metadata": {
+                    "name": LEDGER_NAMESPACE,
+                    "uid": "ledger-namespace-uid",
+                    "resourceVersion": "12",
+                },
+            },
             "golden": {
                 "apiVersion": "v1", "kind": "PersistentVolumeClaim",
                 "metadata": {
@@ -462,14 +527,20 @@ class Sandbox:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         return result, calls
 
-    def lifecycle(self, mode: str):
+    def lifecycle(self, mode: str, *, confirm: str | None = None):
         self.log.write_text("")
+        if confirm is None and mode in (
+            "--teardown",
+            "--migrate-teardown-ledger",
+            "--prune-teardown-ledger",
+        ):
+            confirm = "yes"
         result = subprocess.run(
             [
                 sys.executable, str(ROOT / "scripts" / "talos_golden_lifecycle.py"),
                 mode, "--cluster", CLUSTER, "--cluster-dir", str(self.rendered),
                 "--kubeconfig", str(self.infra), "--ok-linux-path", str(ROOT.parent / "ok-linux"),
-                *( ["--confirm", "yes"] if mode == "--teardown" else [] ),
+                *(["--confirm", confirm] if confirm is not None else []),
             ],
             env={
                 **os.environ, "HOME": str(self.home),
@@ -562,7 +633,9 @@ def make_defaults() -> None:
 
 
 def ledger(state: dict) -> dict | None:
-    item = state.get("configmaps", {}).get(f"ok-cluster-teardown-{CLUSTER}")
+    item = state.get("configmaps", {}).get(
+        f"{LEDGER_NAMESPACE}/ok-cluster-teardown-{CLUSTER}"
+    )
     return json.loads(item["data"]["record.json"]) if item else None
 
 
@@ -574,6 +647,17 @@ def mutation_calls(calls: list[list[str]]) -> list[list[str]]:
     return [
         call for call in calls
         if any(verb in call for verb in ("create", "patch", "delete", "apply", "annotate"))
+    ]
+
+
+def delete_option_bodies(calls: list[list]) -> list[dict]:
+    return [
+        call[1]
+        for call in calls
+        if call
+        and call[0] == "kubectl-stdin"
+        and isinstance(call[1], dict)
+        and call[1].get("kind") == "DeleteOptions"
     ]
 
 
@@ -652,8 +736,8 @@ def completed_recreation_test(base: Path) -> None:
     ]
     writes = [json.loads(patch["data"]["record.json"]) for patch in patches]
     delete_uids = [
-        call[1]["preconditions"]["uid"]
-        for call in calls if call and call[0] == "kubectl-stdin"
+        body.get("preconditions", {}).get("uid")
+        for body in delete_option_bodies(calls)
     ]
     check(
         first.returncode == 0 and result.returncode == 0
@@ -664,7 +748,9 @@ def completed_recreation_test(base: Path) -> None:
         and writes and writes[0]["complete"] is False
         and writes[0]["cluster"]["uid"] == "new-cluster-uid"
         and patches[0]["metadata"]["resourceVersion"]
-        == receipt[f"ok-cluster-teardown-{CLUSTER}"]["metadata"]["resourceVersion"]
+        == receipt[
+            f"{LEDGER_NAMESPACE}/ok-cluster-teardown-{CLUSTER}"
+        ]["metadata"]["resourceVersion"]
         and {"new-cluster-uid", "new-namespace-uid"}.issubset(delete_uids)
         and all(uid.startswith("new-") or uid in ("role-uid", "rolebinding-uid") for uid in delete_uids)
         and not any("create" in call and "configmap" in call for call in calls),
@@ -852,7 +938,7 @@ def deletion_race_tests(base: Path) -> None:
 
     bodies = Sandbox(base / "delete-options")
     result, calls = bodies.lifecycle("--teardown")
-    options = [call[1] for call in calls if call and call[0] == "kubectl-stdin"]
+    options = delete_option_bodies(calls)
     check(
         result.returncode == 0 and options
         and all(body.get("preconditions", {}).get("uid") for body in options)

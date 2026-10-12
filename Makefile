@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok147-runner-image-plan ok147-runner-image-build
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok147-runner-image-plan ok147-runner-image-build install-teardown-ledger migrate-teardown-ledger prune-teardown-ledger ok197-teardown-ledger-test
 .DEFAULT_GOAL := help
 
 OK_CLI_VERSION  ?= $(shell git describe --tags --always --dirty)
@@ -489,6 +489,9 @@ ok136-test: ok130-test ## Offline-test reviewed Talos KubeVirt scheduling profil
 ok186-lifecycle-test: ## Offline-test kubeconfig overrides, bootstrap-resume and repeatable teardown
 	@python3 $(SCRIPT_DIR)/tests/ok186_lifecycle_test.py
 
+ok197-teardown-ledger-test: ## Offline-test the versioned teardown-ledger contract and admin operations
+	@PYTHONDONTWRITEBYTECODE=1 python3 $(SCRIPT_DIR)/tests/ok197_teardown_ledger_test.py
+
 configure-kubevirt-expand-disks: ## Guardedly enable ExpandDisks on ok-infra (requires APPLY=yes)
 	@if [ "$(KUBEVIRT_EXPAND_DISKS_APPLY)" != "yes" ]; then \
 		echo "Refusing mutation: set KUBEVIRT_EXPAND_DISKS_APPLY=yes after approval."; \
@@ -868,6 +871,38 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
 		--ok-linux-path "$(OK_LINUX_PATH)" --confirm "$(CONFIRM)"
 
+install-teardown-ledger: ## Admin: install the ok-infra teardown-ledger namespace and least-privilege roles [CONFIRM=yes]
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+		echo "ERROR: install-teardown-ledger changes ok-infra; re-run with CONFIRM=yes"; \
+		exit 1; \
+	fi
+	@test -n "$(TALOS_INFRA_KUBECONFIG)" || \
+		(echo "ERROR: TALOS_INFRA_KUBECONFIG is required"; exit 1)
+	@test -f "$(TALOS_INFRA_KUBECONFIG)" || \
+		(echo "ERROR: management kubeconfig not found: $(TALOS_INFRA_KUBECONFIG)"; exit 1)
+	@kubectl --kubeconfig "$(TALOS_INFRA_KUBECONFIG)" apply \
+		-f "$(SCRIPT_DIR)/deploy/talos-teardown-ledger.yaml"
+
+migrate-teardown-ledger: require-cluster ## Admin: copy a legacy kube-system receipt into the owned ledger [CONFIRM=yes]
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+		echo "ERROR: migrate-teardown-ledger changes ok-infra; re-run with CONFIRM=yes"; \
+		exit 1; \
+	fi
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--migrate-teardown-ledger --cluster "$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" --confirm "$(CONFIRM)"
+
+prune-teardown-ledger: require-cluster ## Admin: remove a completed receipt after Cluster and Namespace absence [CONFIRM=yes]
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+		echo "ERROR: prune-teardown-ledger changes ok-infra; re-run with CONFIRM=yes"; \
+		exit 1; \
+	fi
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--prune-teardown-ledger --cluster "$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" --confirm "$(CONFIRM)"
+
 # ── e2e ───────────────────────────────────────────────────────────────────────
 MGMT_CLUSTER       ?= ok-mgmt
 MGMT_WORKERS       ?= 2
@@ -1158,6 +1193,9 @@ help:
 	@echo "  make upgrade       CLUSTER=ok1 K8S_VERSION=v1.35.0"
 	@echo "  make clean         CLUSTER=ok1"
 	@echo "  make teardown      CLUSTER=ok-ai"
+	@echo "  make install-teardown-ledger TALOS_INFRA_KUBECONFIG=<path> CONFIRM=yes # admin: install ledger namespace/RBAC"
+	@echo "  make migrate-teardown-ledger CLUSTER=ok-ai TALOS_INFRA_KUBECONFIG=<path> CONFIRM=yes # admin: move legacy receipt"
+	@echo "  make prune-teardown-ledger CLUSTER=ok-ai TALOS_INFRA_KUBECONFIG=<path> CONFIRM=yes # admin: prune completed receipt"
 	@echo "  make teardown-all                      # tear down ALL rendered clusters"
 	@echo "  make reap-orphaned-volumes [MIN_AGE_HOURS=24] [EXCLUDE_NAMESPACES=ok-x] [CONFIRM=yes] # clean orphaned Longhorn volumes (OK-118)"
 	@echo "  make e2e           [OLLAMA_URL=http://<ip>:11434] [CONFIRM=yes]  # asks for confirmation; rebuilds mgmt only; reuse/create WORKLOAD_CLUSTER; verify (OK-102)"

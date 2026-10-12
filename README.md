@@ -453,46 +453,161 @@ controllers, or a `Provisioning` or `Provisioned` Cluster for which the guest ku
 available, or one or more guest nodes are still `NotReady`. The target does not
 apply manifests or repeat the Golden Image preflight.
 
-`make teardown` is safe to retry after an interruption. Before deleting the
-Cluster or its namespace, it records a versioned teardown entry in a ConfigMap
-in the management cluster's `kube-system` namespace. The entry binds the
-cluster name, Golden Image namespace and claim, OS identity and image digest,
-the original Cluster and Namespace UIDs, the exact observed DataVolume UIDs,
-and the Retain-policy PV names. Its name is `ok-cluster-teardown-<cluster>`.
-It contains no credentials or other secret data. Teardown therefore requires
-the identity used by `TALOS_INFRA_KUBECONFIG` to read, create, and update that ConfigMap as
-well as to perform the existing lifecycle operations. An unavailable or
-unreadable record fails closed. An incomplete entry refuses a same-name Cluster
-or Namespace with a different UID before deletion. A completed receipt is
-superseded by a fresh entry for recreated resources, using the ConfigMap's
-resourceVersion to guard the update.
+#### Talos teardown ledger operational contract
+
+`ok-cluster` owns the durable Talos teardown ledger, including its namespace,
+RBAC manifest, record format and admin lifecycle. Schema `1` stores one
+ConfigMap per consumer cluster in namespace `ok-cluster-teardown`. The exact
+name is `ok-cluster-teardown-<cluster>` and the ConfigMap has these labels:
+
+```yaml
+app.kubernetes.io/managed-by: ok-cluster
+openkubes.io/consumer-cluster: <cluster>
+```
+
+The sole payload is `data["record.json"]`. It binds the cluster name, Golden
+Image namespace and claim, OS identity and image digest, the original Cluster
+and Namespace UIDs, exact observed DataVolume UIDs, Retain-policy PV names and
+completion state. It contains no credentials. Schema `1` remains the current
+format; this contract does not introduce a schema bump. A record with another
+version fails with the exact diagnostic `unsupported teardown ledger schema
+<n>; supported: 1`. A missing payload, malformed JSON, extra or missing field,
+invalid identity, invalid inventory or invalid completion marker is refused.
+
+Install the namespace and roles once with an administrative ok-infra identity:
+
+```bash
+make install-teardown-ledger \
+  TALOS_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
+  CONFIRM=yes
+```
+
+The target applies `deploy/talos-teardown-ledger.yaml` and fails closed unless
+`CONFIRM=yes` is supplied literally. The namespaced Role grants only `get`,
+`create` and `patch` on ConfigMaps. `patch` is required because teardown
+advances the same receipt under its `resourceVersion`; `update`, `delete`,
+`list` and `watch` are not lifecycle authority. A separate ClusterRole grants
+only `get` on the exact Namespace resource named `ok-cluster-teardown`. This
+bounded Namespace read lets lifecycle distinguish an absent or unreadable
+ledger namespace from a missing per-cluster ConfigMap; it does not rely on
+ambiguous ConfigMap `NotFound` responses and grants no namespace creation.
+
+Bind both roles to the identity carried by `TALOS_INFRA_KUBECONFIG`. For a user
+credential, the matching templates are:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ok-cluster-teardown-ledger
+  namespace: ok-cluster-teardown
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ok-cluster-teardown-ledger
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: "<teardown-principal>"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ok-cluster-teardown-namespace-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ok-cluster-teardown-namespace-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: "<teardown-principal>"
+```
+
+Use a ServiceAccount subject instead when the kubeconfig authenticates as a
+ServiceAccount. The bindings are deliberately operator-specific and therefore
+are templates rather than objects installed by the shared manifest.
+
+`make teardown` checks the exact ledger Namespace before reading a receipt or
+deleting anything. If the Namespace is absent or unreadable, it fails with a
+diagnostic naming `ok-cluster-teardown` and the
+`make install-teardown-ledger TALOS_INFRA_KUBECONFIG=<path> CONFIRM=yes`
+recovery target. It then creates
+or patches the schema-1 record before deletion. An unavailable or unreadable
+record fails closed. An incomplete entry refuses a same-name Cluster or
+Namespace with a different UID. A completed receipt returns idempotently when
+both resources remain absent. If the cluster name has been reused and the live
+UIDs differ, the next authorized teardown supersedes the completed receipt
+with the recreated resources' identities using a resourceVersion-guarded
+patch; an incomplete receipt never authorizes that reuse.
+
 Deletes bind to the verified UID on the API server; RBAC and snapshot deletes
 also bind to the resource version whose ownership was checked. Deletion waits
 up to ten minutes per resource for absence; a timeout leaves the entry
-incomplete.
+incomplete. After foreground Cluster deletion, teardown merges final
+DataVolume and PV identities before deleting the workload Namespace. Retained
+volume and Golden clone cleanup runs only after both the CAPI Cluster and its
+Namespace are verified absent. Failures keep the incomplete receipt and local
+render directory for a retry. Only explicit `NotFound` counts as absence.
 
-An incomplete entry retains the original resource identities until every
-cleanup step succeeds; failures also keep the local render directory. After
-foreground Cluster deletion, teardown merges any final DataVolume and PV
-identities into the entry before deleting the namespace. On success, the entry becomes the retained completion receipt, so another
-`make teardown` can return cleanly even if the local render directory and
-workload namespace are already absent. Only explicit `NotFound` responses
-count as already absent. Cluster or namespace delete failures exit non-zero,
-suppress the success line, and retain recovery material. Retain-policy PV and
-Longhorn cleanup runs only after both Cluster and Namespace are verified absent;
-otherwise the entry keeps the PV inventory for a retry.
+Only the separate admin migration target reads legacy schema-1 receipts in
+`kube-system`; ordinary teardown never falls back to that namespace and needs
+no `kube-system` access. Move one into the owned namespace with the guarded
+admin operation:
 
-The ledger is also the safety boundary for cleanup after destructive deletion.
-Clone authorization cannot be removed before the workload namespace because
-live CDI clones may still require it. After DataVolumes are deleted, their UIDs
-cannot be reconstructed safely from snapshots alone. If the namespace and
-ledger entry are both missing, restoring only the local render does not prove
-the prior DataVolume identities, so teardown fails closed instead of recording
-an empty UID set. If both the render and record are lost, the error names the
-missing Golden namespace, claim, OS identity and DataVolume ownership inventory;
-it never treats missing metadata as verified cleanup. Snapshot deletion requires
-a saved DataVolume UID plus the CDI label and expected Golden PVC source; a
-matching source PVC or cluster name alone does not authorize deletion.
+```bash
+make migrate-teardown-ledger \
+  CLUSTER=<cluster> \
+  TALOS_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
+  CONFIRM=yes
+```
+
+Migration validates the legacy record, copies `record.json` byte for byte,
+reads the destination back and verifies the exact bytes before deleting the
+legacy ConfigMap. Re-running after a successful migration is idempotent. An
+existing destination with different bytes is a conflict and neither record is
+changed or deleted.
+
+Completed receipts are retained by default. Pruning is a separate admin action
+that needs ConfigMap `delete` authority outside the lifecycle Role. It succeeds
+only when the receipt is valid and complete and both the CAPI Cluster and
+workload Namespace are absent. An incomplete receipt is never pruned:
+
+```bash
+make prune-teardown-ledger \
+  CLUSTER=<cluster> \
+  TALOS_INFRA_KUBECONFIG=/path/to/ok-infra.yaml \
+  CONFIRM=yes
+```
+
+The ledger is also the safety boundary after destructive deletion. Clone
+authorization cannot be removed before the workload Namespace because live CDI
+clones may still require it. After DataVolumes are deleted, their UIDs cannot
+be reconstructed safely from snapshots alone. If both local render and durable
+record are missing, teardown refuses to infer ownership. Snapshot deletion
+requires a saved DataVolume UID, the CDI label and the expected Golden PVC
+source.
+
+For troubleshooting, use an administrative read credential and preserve raw
+errors:
+
+```bash
+kubectl --kubeconfig /path/to/ok-infra.yaml get namespace ok-cluster-teardown
+kubectl --kubeconfig /path/to/ok-infra.yaml \
+  -n ok-cluster-teardown get configmap ok-cluster-teardown-<cluster> -o yaml
+kubectl --kubeconfig /path/to/ok-infra.yaml \
+  -n ok-cluster-teardown get configmaps \
+  -l app.kubernetes.io/managed-by=ok-cluster
+kubectl --kubeconfig /path/to/ok-infra.yaml \
+  -n kube-system get configmap ok-cluster-teardown-<cluster> -o yaml
+```
+
+An absent or forbidden Namespace requires the install/binding repair before
+teardown. A malformed or unsupported record requires operator investigation;
+do not overwrite it. A migration conflict means the two byte streams differ;
+retain both and resolve their provenance. A prune refusal means the receipt is
+incomplete, a live Cluster or Namespace still exists, or absence could not be
+proved.
 
 #### Reviewed Talos KubeVirt scheduling profiles
 
