@@ -92,7 +92,7 @@ func BuildTargetAccessStagePackage(config TargetAccessStagePackageConfig) (Verif
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: config.ObservabilityNamespace, Name: config.ObserverRole},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: config.ObservabilityNamespace, Name: config.ObserverRoleBinding},
 	}
-	jobObjects = append(jobObjects, submission.TargetAccessPrerequisiteIdentities()...)
+	jobObjects = append(jobObjects, submission.TargetAccessPrerequisiteIdentities(config.Bundle.PlanExpected.ContractIdentity.Name)...)
 	if len(config.Bundle.ExpectedObjects) != len(jobObjects) {
 		return VerifiedTargetAccessStagePackage{}, errors.New("target-access Job object identities differ from verified bundle")
 	}

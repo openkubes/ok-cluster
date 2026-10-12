@@ -119,6 +119,38 @@ func TestVerifyBindsExplicitBareClusterMVPCompletionMode(t *testing.T) {
 	}
 }
 
+func TestVerifyAcceptsExactSevenStageBareClusterPlan(t *testing.T) {
+	plan := validDocument()
+	plan.Format = FormatV2
+	plan.ExecutionAttempt = sha("5")
+	plan.CompletionMode = CompletionModeBareClusterMVP
+	plan.Stages = plan.Stages[:7]
+	want := expected()
+	want.ExecutionAttemptDigest = plan.ExecutionAttempt
+	want.CompletionMode = plan.CompletionMode
+
+	binding, err := Verify(planJSON(t, plan), want)
+	if err != nil || len(binding.Stages) != 7 || binding.Stages[6].ID != "target-access" {
+		t.Fatalf("exact Bare-MVP sequence was not accepted: %#v err=%v", binding, err)
+	}
+	if _, _, err := binding.Stage("target-credential"); err == nil {
+		t.Fatal("seven-stage Bare-MVP binding exposed a post-runtime stage")
+	}
+
+	partial := plan
+	partial.Stages = validDocument().Stages[:8]
+	if _, err := Verify(planJSON(t, partial), want); err == nil {
+		t.Fatal("partial post-runtime sequence was accepted")
+	}
+	fullMode := plan
+	fullMode.CompletionMode = ""
+	fullWant := want
+	fullWant.CompletionMode = ""
+	if _, err := Verify(planJSON(t, fullMode), fullWant); err == nil {
+		t.Fatal("seven-stage plan was accepted without Bare-MVP completion")
+	}
+}
+
 func TestRequireInputBindsExactArtifactIdentity(t *testing.T) {
 	binding, err := Verify(planJSON(t, validDocument()), expected())
 	if err != nil {

@@ -19,7 +19,7 @@ def base_config() -> dict:
         "provider": "kubevirt",
         "versions": {"kubernetes": "v1.36.2", "talos": "v1.9.6"},
         "network": {
-            "endpoint": "provider-allocated",
+            "endpoint": "192.168.100.213",
             "podCIDR": "10.40.0.0/16",
             "serviceCIDR": "10.100.0.0/20",
         },
@@ -65,12 +65,14 @@ def main() -> None:
     }
     assert document["spec"]["controlPlaneServiceTemplate"]["spec"]["type"] == "LoadBalancer"
     assert document["spec"]["controlPlaneServiceTemplate"]["metadata"] == {
-        "namespace": "disposable-ok141"
+        "namespace": "disposable-ok141",
+        "annotations": {"metallb.io/loadBalancerIPs": "192.168.100.213"},
     }
 
     same_cluster_document = kubevirt_cluster_document(same_cluster)
     assert same_cluster_document["spec"]["controlPlaneServiceTemplate"]["metadata"] == {
-        "namespace": "disposable-ok141"
+        "namespace": "disposable-ok141",
+        "annotations": {"metallb.io/loadBalancerIPs": "192.168.100.213"},
     }
 
     incomplete = base_config()

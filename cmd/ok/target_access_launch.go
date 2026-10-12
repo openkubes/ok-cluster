@@ -60,7 +60,7 @@ type targetAccessLaunchPreparation struct {
 	MutationAllowed bool                                           `json:"mutationAllowed"`
 }
 
-func targetAccessExpectedObjects(observabilityNamespace, managerServiceAccount, clusterRole, clusterRoleBinding, platformRole, platformRoleBinding, kubeSystemRole, kubeSystemRoleBinding, observerServiceAccount, observerRole, observerRoleBinding string) []projection.ResourceIdentity {
+func targetAccessExpectedObjects(contractName, observabilityNamespace, managerServiceAccount, clusterRole, clusterRoleBinding, platformRole, platformRoleBinding, kubeSystemRole, kubeSystemRoleBinding, observerServiceAccount, observerRole, observerRoleBinding string) []projection.ResourceIdentity {
 	objects := []projection.ResourceIdentity{
 		{APIVersion: "v1", Kind: "Namespace", Name: observabilityNamespace},
 		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "kube-system", Name: managerServiceAccount},
@@ -74,7 +74,7 @@ func targetAccessExpectedObjects(observabilityNamespace, managerServiceAccount, 
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: observabilityNamespace, Name: observerRole},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: observabilityNamespace, Name: observerRoleBinding},
 	}
-	return append(objects, submission.TargetAccessPrerequisiteIdentities()...)
+	return append(objects, submission.TargetAccessPrerequisiteIdentities(contractName)...)
 }
 
 func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io.Writer) error {
@@ -145,7 +145,7 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 	if err != nil {
 		return fmt.Errorf("read target-access Job template: %w", err)
 	}
-	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
+	expectedObjects := targetAccessExpectedObjects(resume.PlanExpected.ContractIdentity.Name, *observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
 	raw, receipt, err := materializeTargetAccessStagePackage(runner.TargetAccessStagePackageConfig{
 		Bundle: runner.TargetAccessStageBundleConfig{
 			PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
@@ -287,7 +287,7 @@ func (values *targetAccessLaunchMaterialFlags) config() (runner.TargetAccessStag
 	if err != nil {
 		return runner.TargetAccessStageLaunchMaterialConfig{}, fmt.Errorf("read runtime manifest: %w", err)
 	}
-	expectedObjects := targetAccessExpectedObjects(*values.observabilityNamespace, *values.managerServiceAccount, *values.clusterRole, *values.clusterRoleBinding, *values.platformRole, *values.platformRoleBinding, *values.kubeSystemRole, *values.kubeSystemRoleBinding, *values.observerServiceAccount, *values.observerRole, *values.observerRoleBinding)
+	expectedObjects := targetAccessExpectedObjects(resume.PlanExpected.ContractIdentity.Name, *values.observabilityNamespace, *values.managerServiceAccount, *values.clusterRole, *values.clusterRoleBinding, *values.platformRole, *values.platformRoleBinding, *values.kubeSystemRole, *values.kubeSystemRoleBinding, *values.observerServiceAccount, *values.observerRole, *values.observerRoleBinding)
 	return runner.TargetAccessStageLaunchMaterialConfig{
 		Package: runner.TargetAccessStagePackageConfig{
 			Bundle: runner.TargetAccessStageBundleConfig{

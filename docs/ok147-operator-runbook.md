@@ -12,7 +12,67 @@ bounded post-runtime suffix. It is neither a long-running operator nor a
 lifecycle source of truth. CAPI/CAPK, the selected Enablement mechanism and
 GitOps remain the owners of convergence.
 
-The live activation installs exactly four objects on `ok-mgmt`, in this order:
+For the Bare-MVP completion mode, operators use the product CLI facade rather
+than assembling stage commands manually:
+
+```bash
+ok cluster create requirements
+ok cluster create manifest-template > /private/bare-run.template.json
+ok cluster create plan-template > /private/staged-plan.template.json
+ok cluster create --file /private/bare-run.json --dry-run
+ok cluster create --file /private/bare-run.json --prepare
+```
+
+The manifest and seven-stage Plan templates are non-authorizing and
+intentionally invalid until an authoritative renderer replaces every
+placeholder and binds every referenced artifact. The Plan fixes
+`authorizationState: NO-GO`. Do not hand-edit either template into a
+substitute for reviewed renderer output.
+
+Both commands are offline: they read and validate the referenced private
+artifacts, including credential and TLS material, but construct no network
+client, contact no API, execute no stage and consume no authorization. They
+accept only the explicit Plan-bound `bare-cluster-mvp/v1` completion mode,
+which terminates after the exact Stage 1-7 prefix. The prepare receipt's
+`manifestDigest` is the identity that must be reviewed and copied into a
+separately approved live invocation. An omitted or different completion mode
+fails closed.
+
+Bare-MVP manifests do not require post-runtime material for Stages 8-12.
+Target-credential, GitOps, Platform application, Observability credential and
+collector activation sections may be omitted; they are not opened or
+validated in this completion mode. Every Stage 1-7 projection, profile,
+credential, authority, output destination and artifact remains mandatory and
+is verified offline.
+
+The redaction-safe receipt states `apiContacted: false`,
+`authorizationConsumed: false` and `mutationAllowed: false`. For `--prepare`,
+its `nextAction` requires separate live approval and binds the next command to
+the emitted `manifestDigest`; it is guidance, not authorization.
+
+After separate approval, the local live form is:
+
+```bash
+ok cluster create --file /private/bare-run.json \
+  --live --execute \
+  --expected-manifest-digest sha256:<reviewed-digest> \
+  --independent-evidence-public-key /private/evidence.pub \
+  --terminal-marker /private/run-01/executor-terminal
+```
+
+The CLI re-verifies the manifest and exact digest before opening the bounded
+runner. The marker path must be absent and private; it records terminal
+consumption even when execution stops. Never treat `--prepare` output as live
+authorization. This command runs the Stage 1-7 executor directly in the local
+`ok` process. It contacts the APIs bound by the private manifest and does not
+install the four Job-activation wrapper objects described below.
+
+## Job-based activation path
+
+The Job-based live activation is a separate expert deployment path. It is not
+implicitly invoked by `ok cluster create --live`.
+
+That launcher installs exactly four objects on `ok-mgmt`, in this order:
 
 ```text
 immutable executor activation Secret
@@ -28,6 +88,20 @@ activation object or failed read stops before the first write. Once a write has
 been attempted, an error or
 uncertain response is preserved as `STOPPED_PARTIAL_OR_UNKNOWN`; do not retry,
 update, patch, apply, delete or clean up under the same authorization.
+
+## Manual stage-by-stage execution
+
+The expert CLI can expose the same Bare-MVP prefix one stage at a time. Start
+with `ok cluster stage run --help`; it lists the exact order across the `run`,
+`observe` and `bind` command groups. Every invocation must consume the exact
+durable receipt prefix from its predecessors. Each mutation-capable execute or
+launch command requires its own explicit `--execute` gate and a separate
+approval. This surface is intended for controlled diagnosis and recovery, not
+as an authorization shortcut or a replay mechanism.
+
+After a stopped or uncertain mutation, preserve its receipt and inspect the
+durable state. Do not invoke the same mutation again merely because the CLI
+returned an error.
 
 ## Required inputs
 

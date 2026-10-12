@@ -227,7 +227,7 @@ func runnerTargetAccessIdentities() []projection.ResourceIdentity {
 		{APIVersion: "v1", Kind: "ServiceAccount", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", Namespace: "ok-observability", Name: "ok147-observability-autonomy"},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "disposable-ok141-observability-core-kube-state-metrics"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "disposable-ok147-observability-core-kube-state-metrics"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-grafana-clusterrole"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-log-collector"},
 		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "ok-observability-operator"},
@@ -252,7 +252,7 @@ kind: ClusterRole
 metadata: {name: ok147-argocd-platform-cluster}
 rules:
   - {apiGroups: [apiextensions.k8s.io], resources: [customresourcedefinitions], verbs: [get, list, watch]}
-  - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], resourceNames: [disposable-ok141-observability-core-kube-state-metrics, ok-observability-grafana-clusterrole, ok-observability-log-collector, ok-observability-operator, ok-observability-prometheus], verbs: [bind, escalate]}
+  - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], resourceNames: [disposable-ok147-observability-core-kube-state-metrics, ok-observability-grafana-clusterrole, ok-observability-log-collector, ok-observability-operator, ok-observability-prometheus], verbs: [bind, escalate]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -304,7 +304,7 @@ subjects: [{kind: ServiceAccount, name: ok147-observability-autonomy, namespace:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
-metadata: {name: disposable-ok141-observability-core-kube-state-metrics}
+metadata: {name: disposable-ok147-observability-core-kube-state-metrics}
 rules:
   - {apiGroups: [""], resources: [nodes, pods], verbs: [get, list, watch]}
 ---

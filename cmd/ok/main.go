@@ -675,6 +675,20 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 }
 
 func runContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	if routeHelp(arguments, stdout) {
+		return nil
+	}
+	if containsFlagHelp(arguments) {
+		err := dispatchContext(ctx, arguments, stdout, stdout)
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	return dispatchContext(ctx, arguments, stdout, stderr)
+}
+
+func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 1 && arguments[0] == "version" {
 		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil
@@ -700,8 +714,28 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 3 && arguments[0] == "evidence" && arguments[1] == "observability" && arguments[2] == "serve" {
 		return runEvidenceObservabilityServe(ctx, arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" {
+		return runClusterCreateRequirements(arguments[3:], stdout)
+	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "manifest-template" {
+		return runClusterCreateManifestTemplate(arguments[3:], stdout)
+	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "plan-template" {
+		return runClusterCreatePlanTemplate(arguments[3:], stdout)
+	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "scaffold" {
+		return runClusterCreateScaffold(arguments[3:], stdout, stderr)
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
-		return runClusterCreate(arguments[2:], stdout, stderr)
+		productFlags := hasClusterCreateProductFlag(arguments[2:])
+		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:])
+		if productFlags && legacyFlags {
+			return errors.New("product --file workflow flags cannot be combined with legacy --contract workflow flags")
+		}
+		if legacyFlags {
+			return runClusterCreate(arguments[2:], stdout, stderr)
+		}
+		return runClusterCreateWorkflow(ctx, arguments[2:], stdout, stderr)
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "dry-run" && arguments[2] == "serve" {
 		return runClusterDryRunServe(ctx, arguments[3:], stdout, stderr)
@@ -862,7 +896,33 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 	if len(arguments) >= 4 && arguments[0] == "cluster" && arguments[1] == "stage" && arguments[2] == "launch" && arguments[3] == "execute" {
 		return runClusterStageLaunchExecute(ctx, arguments[4:], stdout, stderr)
 	}
-	return errors.New("usage: ok authority stage policy ... | ok authority stage package ... | ok authority stage materialize ... | ok authority stage launch prepare ... | ok authority stage launch execute ... | ok authority stage serve ... | ok evidence observability serve ... | ok cluster create ... | ok cluster stage attempt verify ... | ok cluster stage inspect ... | ok cluster stage resume ... | ok cluster stage receipt materialize ... | ok cluster stage observe lifecycle ... | ok cluster stage observe network ... | ok cluster stage observe platform ... | ok cluster stage evaluate aggregate ... | ok cluster stage evidence observability identity materialize ... | ok cluster stage evidence observability authority materialize ... | ok cluster stage evidence observability collector package ... | ok cluster stage evidence observability collector launch prepare ... | ok cluster stage evidence observability collector launch execute ... | ok cluster stage evidence observability collector materialize ... | ok cluster stage evidence observability produce ... | ok cluster stage bind runtime ... | ok cluster stage bind runtime launch prepare ... | ok cluster stage bind runtime launch execute ... | ok cluster stage observe network package ... | ok cluster stage observe network launch prepare ... | ok cluster stage observe network launch execute ... | ok cluster stage observe lifecycle package ... | ok cluster stage observe lifecycle launch prepare ... | ok cluster stage observe lifecycle launch execute ... | ok cluster stage run ... | ok cluster stage run full bind-v3 ... | ok cluster stage run full prepare ... | ok cluster stage run full package ... | ok cluster stage run full launch prepare ... | ok cluster stage run full launch execute ... | ok cluster stage run full materialize ... | ok cluster stage run full execute ... | ok cluster stage run enablement ... | ok cluster stage run target-access ... | ok cluster stage run platform-applications ... | ok cluster stage run post-runtime package ... | ok cluster stage run post-runtime materialize ... | ok cluster stage run post-runtime launch prepare ... | ok cluster stage run post-runtime launch execute ... | ok cluster stage run post-runtime prepare ... | ok cluster stage run post-runtime execute ... | ok cluster stage run aggregate-evidence launch prepare ... | ok cluster stage run aggregate-evidence launch execute ... | ok cluster stage run enablement package ... | ok cluster stage run enablement launch prepare ... | ok cluster stage run enablement launch execute ... | ok cluster stage package ... | ok cluster stage launch prepare ... | ok cluster stage launch execute ...")
+	return errors.New("unknown command; run 'ok --help' for usage")
+}
+
+func hasClusterCreateProductFlag(arguments []string) bool {
+	return hasAnyCommandFlag(arguments,
+		"--file", "-f", "--prepare", "--live", "--execute", "--expected-manifest-digest",
+		"--independent-evidence-public-key", "--terminal-marker",
+	)
+}
+
+func hasLegacyClusterCreateFlag(arguments []string) bool {
+	return hasAnyCommandFlag(arguments,
+		"--contract", "--schema", "--projection-manifest", "--projection-root", "--authorization",
+		"--authorization-key", "--evaluation-time", "--ledger-inspect", "--ledger-api-endpoint",
+		"--ledger-token-file", "--ledger-ca-file",
+	)
+}
+
+func hasAnyCommandFlag(arguments []string, names ...string) bool {
+	for _, argument := range arguments {
+		for _, name := range names {
+			if argument == name || strings.HasPrefix(argument, name+"=") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func runClusterDryRunServe(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -2122,7 +2182,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	if err != nil {
 		return fmt.Errorf("parse evaluation time: %w", err)
 	}
-	expectedObjects := targetAccessExpectedObjects(*observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
+	expectedObjects := targetAccessExpectedObjects(resume.PlanExpected.ContractIdentity.Name, *observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
 	bundleConfig := runner.TargetAccessStageBundleConfig{
 		PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
 		GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at,

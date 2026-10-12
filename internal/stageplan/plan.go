@@ -25,6 +25,7 @@ const (
 	BindingFormat                = "ok147-verified-staged-execution-plan/v1"
 	BindingFormatV2              = "ok147-verified-staged-execution-plan/v2"
 	CompletionModeBareClusterMVP = "bare-cluster-mvp/v1"
+	BareClusterStageCount        = 7
 	maximumPlanBytes             = 128 * 1024
 )
 
@@ -208,7 +209,7 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 	if source.Authorities.WorkloadIdentityMode != "capi-cluster-uid/v1" || source.Authorities.RunnerIdentityMode != "bounded-job/v1" {
 		return Binding{}, errors.New("staged execution plan uses an unsupported dynamic authority mode")
 	}
-	if err := validateStages(source.Stages); err != nil {
+	if err := validateStages(source.Stages, source.CompletionMode); err != nil {
 		return Binding{}, err
 	}
 	planDigest, err := canonicalDigest(source)
@@ -281,11 +282,19 @@ func ValidateExpected(expected Expected) error {
 	return nil
 }
 
-func validateStages(stages []Stage) error {
-	if len(stages) != len(requiredSequence) {
-		return fmt.Errorf("staged execution plan has %d stages, expected %d", len(stages), len(requiredSequence))
+func validateStages(stages []Stage, completionMode string) error {
+	sequence := requiredSequence
+	if completionMode == CompletionModeBareClusterMVP && len(stages) == BareClusterStageCount {
+		sequence = requiredSequence[:BareClusterStageCount]
 	}
-	for index, rule := range requiredSequence {
+	if len(stages) != len(sequence) {
+		expected := fmt.Sprintf("%d", len(requiredSequence))
+		if completionMode == CompletionModeBareClusterMVP {
+			expected = fmt.Sprintf("%d or %d", BareClusterStageCount, len(requiredSequence))
+		}
+		return fmt.Errorf("staged execution plan has %d stages, expected %s", len(stages), expected)
+	}
+	for index, rule := range sequence {
 		stage := stages[index]
 		if stage.Order != index+1 || stage.ID != rule.id || stage.Kind != rule.kind || stage.Authority != rule.authority || stage.GrantOperation != rule.grantOperation || !equalStrings(stage.Requires, rule.requires) {
 			return fmt.Errorf("stage %d does not match the required bounded sequence", index+1)
@@ -373,7 +382,7 @@ func (binding Binding) Stage(id string) (Stage, string, error) {
 	if binding.ContractIdentity != binding.verifiedIdentity || [5]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture, binding.ExecutionAttempt} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities || binding.NetworkObservationMode != binding.verifiedNetworkObservationMode || binding.CompletionMode != binding.verifiedCompletionMode {
 		return Stage{}, "", errors.New("staged execution top-level binding changed after verification")
 	}
-	if err := validateStages(binding.Stages); err != nil {
+	if err := validateStages(binding.Stages, binding.CompletionMode); err != nil {
 		return Stage{}, "", fmt.Errorf("revalidate staged execution binding: %w", err)
 	}
 	for _, stage := range binding.Stages {

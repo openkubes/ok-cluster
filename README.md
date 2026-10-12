@@ -28,10 +28,143 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Single Makefile UX** — `make new`, `make install`, `make status`, `make upgrade`
 - **Bounded Contract Executor MVP** — one shared Go core powers the local `ok` CLI and short-lived `ok-mgmt` Jobs across twelve bounded stages.
 
+## `ok` CLI: Bare-MVP cluster creation
+
+Build the CLI locally and inspect its hierarchical help:
+
+```bash
+make ok-cli-build
+.tools/bin/ok --help
+.tools/bin/ok cluster --help
+.tools/bin/ok cluster create --help
+```
+
+Run the self-contained offline smoke suite when no current private Bare-MVP
+package is available:
+
+```bash
+make ok-cli-offline-smoke
+```
+
+It builds the binary and checks hierarchical and leaf help, product/legacy
+routing, non-mutating dry-run and prepare boundaries, live double gates, exact
+Stage-7 Bare-MVP completion and the legacy contract fixture. It creates no
+cluster client and is not a substitute for validating a freshly rendered
+private production manifest.
+
+Renderer and packaging integrations can inspect the accepted input contract
+without reading a private file:
+
+```bash
+.tools/bin/ok cluster create requirements
+.tools/bin/ok cluster create manifest-template > /private/bare-run.template.json
+.tools/bin/ok cluster create plan-template > /private/staged-plan.template.json
+```
+
+For a named run, create a new private workspace directly. The output directory
+must not exist; the command refuses to reuse or overwrite it:
+
+```bash
+.tools/bin/ok cluster create scaffold \
+  --name ok-cli-mvp \
+  --output /private/ok-cli-mvp-run
+```
+
+This command is offline and create-only. It creates a `0700` directory with
+`0600` Plan and manifest templates, reports `apiContacted: false` and
+`mutationAllowed: false`, and still leaves all digest, endpoint and private
+material placeholders invalid until authoritative inputs are supplied.
+
+After canonicalizing the reviewed Contract to obtain `R`, the repository
+renderer can split an already rendered Talos/KubeVirt lifecycle into the two
+authority planes expected by OK-147:
+
+```bash
+python3 render.py projection \
+  --cluster ok-cli-mvp \
+  --intent-revision sha256:<R> \
+  --output /private/ok-cli-mvp-run/projection
+```
+
+Projection rendering is also offline, create-only and `NO-GO`. It refuses an
+existing output directory and emits owner-only artifacts; it does not provide
+credentials or authorization.
+
+The templates contain the exact Stage 1-7 manifest shape, seven-stage Plan and
+all sixteen ordered target-access identities. Placeholder digests, names,
+hosts and paths are intentionally invalid, and the Plan remains explicitly
+`NO-GO`. They are renderer input aids, not a runnable manifest or
+authorization; replace and independently bind every placeholder, then start
+with `--dry-run`. A legacy twelve-stage Plan remains accepted with Bare-MVP
+for compatibility, but new Bare-MVP renderers should emit exactly seven.
+
+The initial product surface consumes the private full-run manifest from the
+proven OK-147 runner. It intentionally accepts only a manifest whose reviewed
+Plan binds `completionMode: bare-cluster-mvp/v1`:
+
+```bash
+# Offline validation. Referenced private inputs are read locally; no API is contacted.
+.tools/bin/ok cluster create --file /private/bare-run.json --dry-run
+
+# Offline preparation. Preserve the emitted manifestDigest for review.
+.tools/bin/ok cluster create --file /private/bare-run.json --prepare
+```
+
+Both offline modes validate the manifest's referenced private artifacts,
+including credential and TLS material. They do not construct a network client,
+contact a cluster, execute a stage or consume an authorization.
+
+For that completion mode, the manifest needs only the material consumed by
+Stages 1-7. Platform/GitOps applications, target-credential policy,
+Observability credentials and collector activation (Stages 8-12) may be
+omitted; the loader neither reads nor validates them. The staged Plan still
+binds the exact Bare-MVP completion mode and the seven executed inputs remain
+fully digest- and authority-bound.
+
+The output is a redaction-safe workflow receipt suitable for review or
+automation. A preparation result has this shape:
+
+```json
+{
+  "format": "ok-cli-cluster-create/v1",
+  "operation": "CreateCluster",
+  "mode": "prepare",
+  "state": "PREPARED",
+  "manifestDigest": "sha256:<reviewed-manifest-identity>",
+  "planDigest": "sha256:<reviewed-plan-identity>",
+  "completionMode": "bare-cluster-mvp/v1",
+  "apiContacted": false,
+  "authorizationConsumed": false,
+  "mutationAllowed": false,
+  "nextAction": "obtain separate live approval; pass manifestDigest as --expected-manifest-digest"
+}
+```
+
+Live execution is a separate, fail-closed mode. It requires the exact prepared
+digest, the pinned independent-evidence key, a new terminal-marker path and two
+literal gates (`--live --execute`). It performs the bounded Stage 1-7 run with
+no automatic retry, rollback or cleanup. The command runs the executor in the
+local `ok` process and contacts the APIs bound by the private manifest:
+
+```bash
+.tools/bin/ok cluster create --file /private/bare-run.json \
+  --live --execute \
+  --expected-manifest-digest sha256:<reviewed-digest> \
+  --independent-evidence-public-key /private/evidence.pub \
+  --terminal-marker /private/run-01/executor-terminal
+```
+
+Preparation is not authorization to run that command. Follow the
+[operator runbook](docs/ok147-operator-runbook.md) and obtain a separate live
+execution approval. The older stage-level commands remain available as the
+expert interface.
+
 <details>
 <summary><strong>Bounded Contract Executor MVP — technical details</strong></summary>
 
-  `cluster create` remains non-mutating, while the staged runner models twelve
+  The legacy `cluster create --contract ... --dry-run` form remains
+  non-mutating. The product `cluster create --file ...` facade verifies the
+  Bare-MVP boundary before it can delegate to the staged runner, which models twelve
   predecessor-bound submission, observation,
   binding, credential and evaluation stages with a durable ledger, exact
   split authorities and no retry. The initial `cluster stage run --execute`

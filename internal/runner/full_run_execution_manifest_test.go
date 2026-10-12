@@ -123,6 +123,7 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 	document, planDocument := readFullRunExecutionFixture(t, manifestPath)
 	document.Plan.Expected.CompletionMode = stageplan.CompletionModeBareClusterMVP
 	planDocument["completionMode"] = stageplan.CompletionModeBareClusterMVP
+	planDocument["stages"] = planDocument["stages"].([]any)[:7]
 	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, planDocument))
 	writeBundleFile(t, filepath.Dir(manifestPath), filepath.Base(manifestPath), mustJSON(t, document))
 
@@ -130,7 +131,7 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+	if receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP || len(manifest.plan.Stages) != 7 ||
 		manifest.plan.CompletionMode != stageplan.CompletionModeBareClusterMVP {
 		t.Fatalf("bare-cluster completion was not bound at the manifest edge: %#v", receipt)
 	}
@@ -144,6 +145,44 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 	manifest.plan.CompletionMode = ""
 	if _, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer}); err == nil || !strings.Contains(err.Error(), "plan changed after loading") {
 		t.Fatalf("in-memory completion mode mutation was accepted: %v", err)
+	}
+}
+
+func TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial(t *testing.T) {
+	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	document, planDocument := readFullRunExecutionFixture(t, manifestPath)
+	document.Plan.Expected.CompletionMode = stageplan.CompletionModeBareClusterMVP
+	planDocument["completionMode"] = stageplan.CompletionModeBareClusterMVP
+
+	document.Profiles.Platform = postRuntimeProfileReferenceDocument{}
+	document.Profiles.Aggregate = postRuntimeProfileReferenceDocument{}
+	document.TargetCredential = fullRunTargetCredentialDocument{}
+	document.TargetRegistration = fullRunTargetRegistrationDocument{}
+	document.PlatformApplications = fullRunPlatformApplicationsDocument{}
+	document.ObservabilityCredentials = fullRunObservabilityCredentialsDocument{}
+	document.PlatformObservation = fullRunPlatformObservationDocument{}
+	document.AggregateEvidence = fullRunAggregateEvidenceDocument{}
+	document.ObservabilityCollector = fullRunObservabilityCollectorDocument{}
+
+	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, planDocument))
+	writeBundleFile(t, filepath.Dir(manifestPath), filepath.Base(manifestPath), mustJSON(t, document))
+
+	manifest, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+		receipt.NetworkProfileDigest == "" || receipt.PlatformProfileDigest != "" || receipt.AggregateProfileDigest != "" {
+		t.Fatalf("unexpected trimmed Bare-MVP manifest receipt: %#v", receipt)
+	}
+	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.PreRuntime.PlanExpected.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+		config.PostRuntime.TargetCredential.PlanPath != "" || config.PostPrefixActivator != nil {
+		t.Fatalf("trimmed Bare-MVP manifest opened post-runtime configuration: %#v", config)
 	}
 }
 
