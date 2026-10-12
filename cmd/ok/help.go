@@ -50,6 +50,10 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterCreateManifestTemplateHelp(stdout)
 		return true
 	}
+	if len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "plan-template" && isHelpArgument(arguments[3]) {
+		writeClusterCreatePlanTemplateHelp(stdout)
+		return true
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" &&
 		(len(arguments) == 2 || containsHelpArgument(arguments[2:])) {
 		writeClusterCreateHelp(stdout)
@@ -214,6 +218,7 @@ func writeClusterCreateHelp(output io.Writer) {
 Usage:
   ok cluster create requirements
   ok cluster create manifest-template
+  ok cluster create plan-template
   ok cluster create --file <private-manifest.json> --dry-run
   ok cluster create --file <private-manifest.json> --prepare
   ok cluster create --file <private-manifest.json> --live --execute \
@@ -270,6 +275,18 @@ The command reads no file and opens no network client. Its JSON output contains
 invalid placeholder identities and paths by design; an authoritative renderer
 must replace every placeholder and bind all referenced artifacts before the
 result can pass "ok cluster create --file ... --dry-run".
+`)
+}
+
+func writeClusterCreatePlanTemplateHelp(output io.Writer) {
+	fmt.Fprint(output, `Print a non-authorizing seven-stage Bare-MVP plan skeleton
+
+Usage:
+  ok cluster create plan-template
+
+The command reads no file and opens no network client. The plan fixes the exact
+Stage 1-7 order and authorizationState NO-GO. Its placeholder identities and
+digests are deliberately invalid until supplied by an authoritative renderer.
 `)
 }
 

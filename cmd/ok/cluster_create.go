@@ -30,6 +30,8 @@ type clusterCreateRequirements struct {
 	LiveRequiredFlags           []string `json:"liveRequiredFlags"`
 	TerminalMarkerName          string   `json:"terminalMarkerName"`
 	LiveStageOrder              []string `json:"liveStageOrder"`
+	AcceptedPlanStageCounts     []int    `json:"acceptedPlanStageCounts"`
+	PreferredPlanStageCount     int      `json:"preferredPlanStageCount"`
 	PostRuntimeMaterialRequired bool     `json:"postRuntimeMaterialRequired"`
 	LiveMutationAllowed         bool     `json:"liveMutationAllowed"`
 }
@@ -98,6 +100,7 @@ func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
 			"provider-prerequisites", "cluster-lifecycle", "lifecycle-observation", "enablement",
 			"network-observation", "runtime-binding", "target-access",
 		},
+		AcceptedPlanStageCounts: []int{stageplan.BareClusterStageCount, 12}, PreferredPlanStageCount: stageplan.BareClusterStageCount,
 		PostRuntimeMaterialRequired: false, LiveMutationAllowed: true,
 	}
 	encoder := json.NewEncoder(stdout)

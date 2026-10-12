@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/runner"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 	"github.com/openkubes/ok-cluster/internal/submission"
@@ -38,6 +39,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"cluster create":         {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "may create cluster resources"}},
 		"create requirements":    {[]string{"cluster", "create", "requirements", "--help"}, []string{"machine-readable", "reads no file", "does not prepare"}},
 		"create template":        {[]string{"cluster", "create", "manifest-template", "--help"}, []string{"manifest skeleton", "invalid placeholder", "authoritative renderer"}},
+		"create plan template":   {[]string{"cluster", "create", "plan-template", "--help"}, []string{"seven-stage", "NO-GO", "authoritative renderer"}},
 		"create trailing help":   {[]string{"cluster", "create", "--file", "/private/run.json", "--help"}, []string{"--file", "--dry-run", "--live --execute"}},
 		"cluster dry-run":        {[]string{"cluster", "dry-run", "--help"}, []string{"dry-run serve", "legacy HTTP validation"}},
 		"cluster stage":          {[]string{"cluster", "stage", "--help"}, []string{"Expert stage-level", "observe", "launch"}},
@@ -60,6 +62,56 @@ func TestHierarchicalHelp(t *testing.T) {
 				t.Fatalf("unexpected stderr: %s", stderr.String())
 			}
 		})
+	}
+}
+
+func TestClusterCreatePlanTemplateBindsExactSevenStageSequence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"cluster", "create", "plan-template"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	stages, ok := plan["stages"].([]any)
+	if !ok || len(stages) != 7 || plan["authorizationState"] != "NO-GO" ||
+		plan["completionMode"] != stageplan.CompletionModeBareClusterMVP {
+		t.Fatalf("unexpected Bare-MVP plan template: %#v", plan)
+	}
+	last := stages[6].(map[string]any)
+	if last["id"] != "target-access" || last["grantOperation"] != "CreateTargetAccess" {
+		t.Fatalf("unexpected terminal Bare-MVP stage: %#v", last)
+	}
+
+	identity := contract.Identity{Namespace: "disposable-ok147", Name: "disposable-ok147"}
+	plan["contractIdentity"] = map[string]any{"namespace": identity.Namespace, "name": identity.Name}
+	for _, field := range []string{"intentRevision", "enablementRevision", "platformRevision", "executionFixture", "executionAttemptDigest"} {
+		plan[field] = testSHA("1")
+	}
+	for _, item := range stages {
+		for _, input := range item.(map[string]any)["inputs"].([]any) {
+			input.(map[string]any)["digest"] = testSHA("1")
+		}
+	}
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := stageplan.Verify(raw, stageplan.Expected{
+		ContractIdentity: identity, IntentRevision: testSHA("1"), EnablementRevision: testSHA("1"),
+		PlatformRevision: testSHA("1"), ExecutionFixture: testSHA("1"), ExecutionAttemptDigest: testSHA("1"),
+		InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt", GitOpsAuthority: "ok-gitops",
+		CompletionMode: stageplan.CompletionModeBareClusterMVP,
+	})
+	if err != nil || len(binding.Stages) != 7 {
+		t.Fatalf("rendered plan template did not satisfy the production verifier: %#v err=%v", binding, err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+	if err := run([]string{"cluster", "create", "plan-template", "extra"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("plan-template accepted positional input")
 	}
 }
 
@@ -123,6 +175,8 @@ func TestClusterCreateRequirementsAreMachineReadableAndNonMutating(t *testing.T)
 		requirements.OfflineAPIContacted || requirements.OfflineMutationAllowed || !requirements.LiveMutationAllowed ||
 		requirements.PostRuntimeMaterialRequired || len(requirements.RequiredManifestSections) != 14 ||
 		len(requirements.UnusedPostRuntimeSections) != 9 ||
+		len(requirements.AcceptedPlanStageCounts) != 2 || requirements.AcceptedPlanStageCounts[0] != 7 ||
+		requirements.PreferredPlanStageCount != 7 ||
 		requirements.TerminalMarkerName != runner.FullRunExecutorTerminalMarkerName ||
 		len(requirements.AcceptedManifestFormats) != 2 || len(requirements.LiveStageOrder) != 7 ||
 		requirements.LiveStageOrder[1] != "cluster-lifecycle" || stderr.Len() != 0 {

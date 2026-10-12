@@ -58,13 +58,16 @@ without reading a private file:
 ```bash
 .tools/bin/ok cluster create requirements
 .tools/bin/ok cluster create manifest-template > /private/bare-run.template.json
+.tools/bin/ok cluster create plan-template > /private/staged-plan.template.json
 ```
 
-The template contains the exact Stage 1-7 manifest shape and all sixteen
-ordered target-access identities. Its placeholder digests, names, hosts and
-paths are intentionally invalid. It is a renderer input aid, not a runnable
-manifest or authorization; replace and independently bind every placeholder,
-then start with `--dry-run`.
+The templates contain the exact Stage 1-7 manifest shape, seven-stage Plan and
+all sixteen ordered target-access identities. Placeholder digests, names,
+hosts and paths are intentionally invalid, and the Plan remains explicitly
+`NO-GO`. They are renderer input aids, not a runnable manifest or
+authorization; replace and independently bind every placeholder, then start
+with `--dry-run`. A legacy twelve-stage Plan remains accepted with Bare-MVP
+for compatibility, but new Bare-MVP renderers should emit exactly seven.
 
 The initial product surface consumes the private full-run manifest from the
 proven OK-147 runner. It intentionally accepts only a manifest whose reviewed

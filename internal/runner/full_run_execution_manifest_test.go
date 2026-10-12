@@ -123,6 +123,7 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 	document, planDocument := readFullRunExecutionFixture(t, manifestPath)
 	document.Plan.Expected.CompletionMode = stageplan.CompletionModeBareClusterMVP
 	planDocument["completionMode"] = stageplan.CompletionModeBareClusterMVP
+	planDocument["stages"] = planDocument["stages"].([]any)[:7]
 	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, planDocument))
 	writeBundleFile(t, filepath.Dir(manifestPath), filepath.Base(manifestPath), mustJSON(t, document))
 
@@ -130,7 +131,7 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
+	if receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP || len(manifest.plan.Stages) != 7 ||
 		manifest.plan.CompletionMode != stageplan.CompletionModeBareClusterMVP {
 		t.Fatalf("bare-cluster completion was not bound at the manifest edge: %#v", receipt)
 	}

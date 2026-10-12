@@ -87,6 +87,55 @@ func runClusterCreateManifestTemplate(arguments []string, stdout io.Writer) erro
 	return encoder.Encode(manifest)
 }
 
+func runClusterCreatePlanTemplate(arguments []string, stdout io.Writer) error {
+	if len(arguments) != 0 {
+		return errors.New("ok cluster create plan-template accepts no flags or positional arguments")
+	}
+	plan := map[string]any{
+		"format":           stageplan.FormatV2,
+		"contractIdentity": map[string]any{"namespace": "<contract-namespace>", "name": "<contract-name>"},
+		"intentRevision":   bareClusterTemplateDigest, "enablementRevision": bareClusterTemplateDigest,
+		"platformRevision": bareClusterTemplateDigest, "executionFixture": bareClusterTemplateDigest,
+		"executionAttemptDigest": bareClusterTemplateDigest,
+		"authorizationState":     "NO-GO", "completionMode": stageplan.CompletionModeBareClusterMVP,
+		"authorities": map[string]any{
+			"infrastructure": "ok-infra", "management": "ok-mgmt", "gitOps": "ok-gitops",
+			"workloadIdentityMode": "capi-cluster-uid/v1", "runnerIdentityMode": "bounded-job/v1",
+		},
+		"stages": []map[string]any{
+			bareClusterTemplateStage(1, "provider-prerequisites", "Submission", "infrastructure", "CreateProviderPrerequisites", nil, "projection.provider-prerequisites"),
+			bareClusterTemplateStage(2, "cluster-lifecycle", "Submission", "management", "CreateCluster", []string{"provider-prerequisites"}, "projection.cluster-lifecycle", "stage.provider-access"),
+			bareClusterTemplateStage(3, "lifecycle-observation", "Observation", "management", "", []string{"cluster-lifecycle"}, "stage.lifecycle-observation"),
+			bareClusterTemplateStage(4, "enablement", "Submission", "management", "CreateEnablement", []string{"lifecycle-observation"}, "stage.enablement"),
+			bareClusterTemplateStage(5, "network-observation", "Observation", "workload", "", []string{"enablement"}, "stage.network-observation"),
+			bareClusterTemplateStage(6, "runtime-binding", "Binding", "runner", "", []string{"network-observation"}, "stage.runtime-binding"),
+			bareClusterTemplateStage(7, "target-access", "Submission", "workload", "CreateTargetAccess", []string{"runtime-binding"}, "stage.target-access"),
+		},
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(plan)
+}
+
+func bareClusterTemplateStage(order int, id, kind, authority, operation string, requires []string, inputNames ...string) map[string]any {
+	if requires == nil {
+		requires = []string{}
+	}
+	inputs := make([]map[string]any, 0, len(inputNames))
+	for _, name := range inputNames {
+		inputs = append(inputs, map[string]any{"name": name, "digest": bareClusterTemplateDigest})
+	}
+	stage := map[string]any{
+		"id": id, "order": order, "kind": kind, "authority": authority,
+		"requires": requires, "inputs": inputs,
+	}
+	if operation != "" {
+		stage["grantOperation"] = operation
+	}
+	return stage
+}
+
 func bareClusterTemplateAuthority(endpoint, identity, tokenName string) map[string]any {
 	return map[string]any{
 		"endpoint": endpoint, "authorityIdentity": identity,

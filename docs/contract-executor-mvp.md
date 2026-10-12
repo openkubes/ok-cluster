@@ -2836,6 +2836,12 @@ the redaction-safe manifest/orchestration receipts. Stage CLI and authority
 policy commands must pass the independently reviewed value with
 `--completion-mode bare-cluster-mvp/v1`.
 
+A new Bare-MVP Plan may contain only that exact seven-stage sequence. The
+historical twelve-stage shape remains accepted when it binds the same
+completion mode, but partial suffixes of eight through eleven stages are
+rejected. A plan without the Bare-MVP completion mode must still contain all
+twelve stages.
+
 The concrete full-run execution adapter now opens Stage 1-7 first and defers
 opening Stage 8-12 until all seven receipts are successful and durable. It
 loads the private prefix from the completed adapter, checks every private

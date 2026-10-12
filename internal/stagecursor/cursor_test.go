@@ -52,6 +52,25 @@ func TestCursorSelectsEveryExactNextStageAndCompletes(t *testing.T) {
 	}
 }
 
+func TestBareClusterCursorCompletesAfterExactSevenStagePrefix(t *testing.T) {
+	plan := cursorPlan(t, "e", stageplan.CompletionModeBareClusterMVP)
+	if len(plan.Stages) != 7 {
+		t.Fatalf("unexpected Bare-MVP stage count: %d", len(plan.Stages))
+	}
+	chain := successfulReceiptChain(t, plan)
+	cursor, err := Evaluate(plan, chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := cursor.Decision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.State != "COMPLETED" || decision.CompletedStages != 7 || decision.StageID != "" || decision.RequiresAuthorization {
+		t.Fatalf("seven-stage Bare-MVP cursor did not close terminally: %#v", decision)
+	}
+}
+
 func TestCursorStopsPermanentlyAtTerminalReceipt(t *testing.T) {
 	plan := cursorPlan(t, "e")
 	at := time.Date(2026, 8, 16, 19, 0, 0, 0, time.UTC)
@@ -114,15 +133,23 @@ func successfulReceiptChain(t *testing.T, plan stageplan.Binding) []stagereceipt
 	return result
 }
 
-func cursorPlan(t *testing.T, firstInput string) stageplan.Binding {
+func cursorPlan(t *testing.T, firstInput string, completionMode ...string) stageplan.Binding {
 	t.Helper()
 	identity := contract.Identity{Namespace: "disposable-ok147", Name: "disposable-ok147"}
 	ids := []string{"provider-prerequisites", "cluster-lifecycle", "lifecycle-observation", "enablement", "network-observation", "runtime-binding", "target-access", "target-credential", "target-registration", "platform-applications", "platform-observation", "aggregate-evidence"}
 	kinds := []string{"Submission", "Submission", "Observation", "Submission", "Observation", "Binding", "Submission", "Credential", "Submission", "Submission", "Observation", "Evaluation"}
 	authorities := []string{"infrastructure", "management", "management", "management", "workload", "runner", "workload", "workload", "gitops", "gitops", "gitops", "runner"}
 	operations := []string{"CreateProviderPrerequisites", "CreateCluster", "", "CreateEnablement", "", "", "CreateTargetAccess", "IssueTargetCredential", "RegisterTarget", "CreatePlatformApplications", "", ""}
-	stages := make([]map[string]any, len(ids))
-	for index := range ids {
+	mode := ""
+	if len(completionMode) != 0 {
+		mode = completionMode[0]
+	}
+	stageCount := len(ids)
+	if mode == stageplan.CompletionModeBareClusterMVP {
+		stageCount = 7
+	}
+	stages := make([]map[string]any, stageCount)
+	for index := 0; index < stageCount; index++ {
 		requires := []string{}
 		if index > 0 {
 			requires = []string{ids[index-1]}
@@ -139,17 +166,26 @@ func cursorPlan(t *testing.T, firstInput string) stageplan.Binding {
 			stages[index]["grantOperation"] = operations[index]
 		}
 	}
-	raw, _ := json.Marshal(map[string]any{
+	document := map[string]any{
 		"format": stageplan.Format, "contractIdentity": identity,
 		"intentRevision": cursorSHA("a"), "enablementRevision": cursorSHA("b"), "platformRevision": cursorSHA("c"), "executionFixture": cursorSHA("d"),
 		"authorizationState": "NO-GO",
 		"authorities":        map[string]any{"infrastructure": "ok-infra", "management": "ok-mgmt", "gitOps": "ok-shared", "workloadIdentityMode": "capi-cluster-uid/v1", "runnerIdentityMode": "bounded-job/v1"},
 		"stages":             stages,
-	})
-	plan, err := stageplan.Verify(raw, stageplan.Expected{
+	}
+	expected := stageplan.Expected{
 		ContractIdentity: identity, IntentRevision: cursorSHA("a"), EnablementRevision: cursorSHA("b"), PlatformRevision: cursorSHA("c"), ExecutionFixture: cursorSHA("d"),
 		InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt", GitOpsAuthority: "ok-shared",
-	})
+	}
+	if mode == stageplan.CompletionModeBareClusterMVP {
+		document["format"] = stageplan.FormatV2
+		document["executionAttemptDigest"] = cursorSHA("1")
+		document["completionMode"] = mode
+		expected.ExecutionAttemptDigest = cursorSHA("1")
+		expected.CompletionMode = mode
+	}
+	raw, _ := json.Marshal(document)
+	plan, err := stageplan.Verify(raw, expected)
 	if err != nil {
 		t.Fatal(err)
 	}

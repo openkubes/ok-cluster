@@ -18,13 +18,16 @@ than assembling stage commands manually:
 ```bash
 ok cluster create requirements
 ok cluster create manifest-template > /private/bare-run.template.json
+ok cluster create plan-template > /private/staged-plan.template.json
 ok cluster create --file /private/bare-run.json --dry-run
 ok cluster create --file /private/bare-run.json --prepare
 ```
 
-The manifest template is non-authorizing and intentionally invalid until an
-authoritative renderer replaces every placeholder and binds every referenced
-artifact. Do not hand-edit it into a substitute for reviewed renderer output.
+The manifest and seven-stage Plan templates are non-authorizing and
+intentionally invalid until an authoritative renderer replaces every
+placeholder and binds every referenced artifact. The Plan fixes
+`authorizationState: NO-GO`. Do not hand-edit either template into a
+substitute for reviewed renderer output.
 
 Both commands are offline: they read and validate the referenced private
 artifacts, including credential and TLS material, but construct no network
