@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test contract-executor-test contract-executor-dry-run ok147-runner-image-plan ok147-runner-image-build
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces contract-executor-test contract-executor-dry-run ok147-runner-image-plan ok147-runner-image-build
 .DEFAULT_GOAL := help
 
 CLUSTER       ?=
@@ -18,6 +18,7 @@ K8S_VERSION   ?=
 TALOS_VERSION ?=
 PROVIDER      ?= kubevirt
 ARCHITECTURE  ?= amd64
+GUEST_KUBECONFIG ?= $(HOME)/.kube/$(CLUSTER).yaml
 # OK-82: NODE= is an accepted alias for NODE_SELECTOR= (explicit NODE_SELECTOR wins)
 NODE          ?=
 NODE_SELECTOR ?= $(NODE)
@@ -190,6 +191,10 @@ render: require-cluster
 
 ok178-workload-user-namespaces-test: ## OK-178: offline Talos worker user-namespace render contract
 	@python3 $(SCRIPT_DIR)/tests/ok178_workload_user_namespaces_test.py
+
+verify-workload-user-namespaces: require-cluster ## Read-only: compare worker mount path with ok-storage StorageClass
+	@python3 $(SCRIPT_DIR)/scripts/verify_workload_user_namespaces.py \
+		--cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" --kubeconfig "$(GUEST_KUBECONFIG)"
 
 prepare-cilium-chart: ## Download/verify pinned Cilium 1.19.6 into .tools
 	@python3 $(SCRIPT_DIR)/scripts/prepare_cilium_chart.py \
@@ -1122,6 +1127,7 @@ help:
 	@echo "  make kubeconfig    CLUSTER=ok1"
 	@echo "  make install-cni   CLUSTER=ok1        # cilium only (manual)"
 	@echo "  make install-storage CLUSTER=ok-ai # local-path StorageClass (Talos)"
+	@echo "  make verify-workload-user-namespaces CLUSTER=ok-ai [GUEST_KUBECONFIG=~/.kube/ok-ai.yaml] # read-only worker mount / ok-storage BasePath check"
 	@echo "  make install-ingress CLUSTER=ok-ai # ingress controller (Traefik) + IngressClass ok-ingress"
 	@echo "  make install-observability CLUSTER=ok-ai [OBSERVABILITY_VALUES=<path>] # OK-79: ok-observability-standard + gated contract test"
 	@echo "  make install-observability-metrics CLUSTER=ok-shared # OK-138: Prometheus + Alertmanager only; verify zot scraping"

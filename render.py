@@ -244,7 +244,9 @@ def validate_workload_user_namespaces(cfg: dict) -> dict | None:
         )
     if "enabled" not in capability or not isinstance(capability["enabled"], bool):
         raise SystemExit("ERROR: workloadUserNamespaces.enabled must be a boolean")
-    if cfg.get("type") != "talos" or cfg.get("provider", "kubevirt") != "kubevirt":
+    if capability["enabled"] and (
+        cfg.get("type") != "talos" or cfg.get("provider", "kubevirt") != "kubevirt"
+    ):
         raise SystemExit(
             "ERROR: workloadUserNamespaces is supported only for Talos on KubeVirt"
         )
@@ -313,6 +315,143 @@ def render_workload_user_namespace_patches(cfg: dict) -> str:
         "          - rshared\n"
         "          - rw"
     )
+
+
+WORKLOAD_USER_NAMESPACE_PATCH_PATHS = (
+    "/machine/sysctls",
+    "/machine/kubelet/extraMounts",
+)
+
+
+def _json_pointer_segments(pointer: str) -> tuple[str, ...] | None:
+    if not isinstance(pointer, str):
+        return None
+    if pointer == "":
+        return ()
+    if not pointer.startswith("/"):
+        raise SystemExit(
+            f"ERROR: rendered worker configPatches contains invalid JSON pointer {pointer!r}"
+        )
+    return tuple(
+        segment.replace("~1", "/").replace("~0", "~")
+        for segment in pointer[1:].split("/")
+    )
+
+
+def _paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    common = min(len(left), len(right))
+    return left[:common] == right[:common]
+
+
+def _strategic_patch_paths(value, prefix: tuple[str, ...] = ()):
+    """Yield leaf config paths represented by Talos strategic patch mappings."""
+    if isinstance(value, dict):
+        if not value:
+            yield prefix
+            return
+        for key, child in value.items():
+            if isinstance(key, str):
+                path = prefix + (key,)
+                if isinstance(child, (dict, list)):
+                    yield from _strategic_patch_paths(child, path)
+                else:
+                    yield path
+    elif isinstance(value, list):
+        if not value:
+            yield prefix
+            return
+        # A strategic patch replaces/merges the entire list field.
+        yield prefix
+
+
+def validate_workload_user_namespace_template(rendered: str, cfg: dict) -> None:
+    """Reject worker defaults that overlap fields owned by this opt-in."""
+    resources = [item for item in yaml.safe_load_all(rendered) if item]
+    worker_templates = [
+        item
+        for item in resources
+        if item.get("kind") == "TalosConfigTemplate"
+        and item.get("spec", {}).get("template", {}).get("spec", {}).get("generateType")
+        == "worker"
+    ]
+    if not worker_templates:
+        raise SystemExit(
+            "ERROR: enabled workloadUserNamespaces requires a rendered worker TalosConfigTemplate"
+        )
+
+    targets = tuple(_json_pointer_segments(path) for path in WORKLOAD_USER_NAMESPACE_PATCH_PATHS)
+    capability = validate_workload_user_namespaces(cfg)
+    if capability is None or not capability["enabled"]:
+        return
+    maximum = str(capability["maxUserNamespaces"])
+    base_path = capability["provisionerBasePath"]
+    expected_patches = [
+        {"op": "add", "path": "/machine/sysctls", "value": {"user.max_user_namespaces": maximum}},
+        {
+            "op": "add",
+            "path": "/machine/kubelet/extraMounts",
+            "value": [
+                {
+                    "destination": base_path,
+                    "type": "bind",
+                    "source": base_path,
+                    "options": ["bind", "rshared", "rw"],
+                }
+            ],
+        },
+    ]
+    for resource in worker_templates:
+        spec = resource["spec"]["template"]["spec"]
+        patches = spec.get("configPatches", [])
+        if not isinstance(patches, list):
+            raise SystemExit("ERROR: worker TalosConfigTemplate configPatches must be a list")
+        if patches[-len(expected_patches):] != expected_patches:
+            raise SystemExit(
+                "ERROR: enabled workloadUserNamespaces worker configPatches are missing "
+                "or do not match the expected sysctl and extraMounts patches"
+            )
+        for patch in patches[:-len(expected_patches)]:
+            if not isinstance(patch, dict):
+                continue
+            for pointer_name in ("path", "from"):
+                pointer = patch.get(pointer_name)
+                path = _json_pointer_segments(pointer)
+                if path is None:
+                    continue
+                for target_text, target in zip(WORKLOAD_USER_NAMESPACE_PATCH_PATHS, targets):
+                    if _paths_overlap(path, target):
+                        raise SystemExit(
+                            "ERROR: enabled workloadUserNamespaces conflicts with existing "
+                            f"worker configPatches {pointer_name} {pointer!r} "
+                            f"(overlaps {target_text})"
+                        )
+
+        strategic_patches = spec.get("strategicPatches", [])
+        if not isinstance(strategic_patches, list):
+            strategic_patches = [strategic_patches]
+        for strategic_patch in strategic_patches:
+            parsed_patch = strategic_patch
+            if isinstance(strategic_patch, str):
+                try:
+                    parsed_patch = yaml.safe_load(strategic_patch)
+                except yaml.YAMLError as exc:
+                    raise SystemExit(
+                        "ERROR: enabled workloadUserNamespaces cannot inspect malformed "
+                        f"worker strategicPatches: {exc}"
+                    ) from exc
+            if not isinstance(parsed_patch, dict):
+                raise SystemExit(
+                    "ERROR: enabled workloadUserNamespaces cannot inspect a non-mapping "
+                    "worker strategicPatches entry"
+                )
+            for path in _strategic_patch_paths(parsed_patch):
+                for target_text, target in zip(WORKLOAD_USER_NAMESPACE_PATCH_PATHS, targets):
+                    if _paths_overlap(path, target):
+                        raise SystemExit(
+                            "ERROR: enabled workloadUserNamespaces conflicts with existing "
+                            f"worker strategicPatches path {'/'.join(path)!r} "
+                            f"(overlaps {target_text})"
+                        )
 
 
 def workload_user_namespaces_from_env(cluster_type: str, provider: str) -> dict | None:
@@ -535,22 +674,32 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
             tpl_dirs.append(prov_dir)
         else:
             tpl_dirs = [prov_dir]
+    # Render and validate every artifact before the first filesystem write.
+    templates = {}
+    for tpl_dir in tpl_dirs:
+        for tpl in tpl_dir.glob("*.tpl"):
+            templates[tpl.name] = tpl
+    rendered_templates = {}
+    for tpl in sorted(templates.values(), key=lambda value: value.name):
+        rendered = Template(tpl.read_text()).safe_substitute(ctx)
+        rendered = apply_node_selector(rendered, ctx["NODE_SELECTOR"])
+        if (
+            cfg.get("workloadUserNamespaces", {}).get("enabled") is True
+            and cluster_type == "talos"
+            and cfg.get("provider", "kubevirt") == "kubevirt"
+            and tpl.stem == "cluster-base.yaml"
+        ):
+            validate_workload_user_namespace_template(rendered, cfg)
+        rendered_templates[tpl.stem] = (tpl, rendered)
+
     out_dir = output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-
     resolved_cfg_path = out_dir / "cluster-config.yaml"
     with open(resolved_cfg_path, "w") as f:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
     print(f"  ✔ {resolved_cfg_path.relative_to(SCRIPT_DIR)}")
 
-    templates = {}
-    for tpl_dir in tpl_dirs:
-        for tpl in tpl_dir.glob("*.tpl"):
-            templates[tpl.name] = tpl
-    for tpl in sorted(templates.values(), key=lambda value: value.name):
-        rendered = Template(tpl.read_text()).safe_substitute(ctx)
-        rendered = apply_node_selector(rendered, ctx["NODE_SELECTOR"])
-        out_name = tpl.stem
+    for out_name, (tpl, rendered) in rendered_templates.items():
         out_path = out_dir / out_name
         out_path.write_text(rendered)
         if out_path.suffix == ".sh":
