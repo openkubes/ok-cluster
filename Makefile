@@ -239,6 +239,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create manifest-template >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create plan-template >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster stage run full prepare --help >/dev/null
+	@python3 $(SCRIPT_DIR)/tests/ok147_projection_render_test.py >/dev/null
 	@$(MAKE) --no-print-directory contract-executor-dry-run >/dev/null
 	@echo "Offline ok CLI smoke passed; no cluster was contacted"
 

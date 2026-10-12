@@ -4,6 +4,7 @@ render.py — OpenKubes Cluster Manifest Renderer
 Reads cluster-config.yaml, resolves auto IP/CIDR, renders templates to manifests.
 """
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -751,9 +752,139 @@ def cmd_show_ip(args):
     start_ip = args.start_ip or os.environ.get("START_IP")
     print(next_free_ip(used, start_ip=start_ip))
 
-
 def cmd_validate_workload_user_namespaces_env(args):
     workload_user_namespaces_from_env(args.cluster_type, args.provider)
+
+def sha256_bytes(raw: bytes) -> str:
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+def semantic_digest(value) -> str:
+    raw = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return sha256_bytes(raw)
+
+def projection_resource(document: dict) -> dict:
+    metadata = document.get("metadata", {})
+    resource = {
+        "apiVersion": document["apiVersion"],
+        "kind": document["kind"],
+        "name": metadata["name"],
+    }
+    if metadata.get("namespace"):
+        resource["namespace"] = metadata["namespace"]
+    return resource
+
+def write_private(path: Path, raw: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(raw)
+
+def cmd_projection(args):
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", args.intent_revision):
+        raise SystemExit("ERROR: --intent-revision must be a lowercase SHA-256 digest")
+    cluster_dir = CLUSTERS_DIR / args.cluster
+    config_path = cluster_dir / "cluster-config.yaml"
+    lifecycle_path = cluster_dir / "cluster-base.yaml"
+    if not config_path.is_file() or not lifecycle_path.is_file():
+        raise SystemExit("ERROR: render the cluster before creating its projection")
+    config = load_yaml(config_path)
+    if config.get("name") != args.cluster or config.get("type") != "talos" or config.get("provider", "kubevirt") != "kubevirt":
+        raise SystemExit("ERROR: OK-147 projection requires the named Talos/KubeVirt cluster")
+    secret_ref = config.get("infraClusterSecretRef")
+    if not isinstance(secret_ref, dict) or set(secret_ref) != {"name", "namespace"}:
+        raise SystemExit("ERROR: OK-147 projection requires infraClusterSecretRef")
+    documents = [item for item in yaml.safe_load_all(lifecycle_path.read_text()) if item]
+    expected_kinds = [
+        "Namespace", "Role", "RoleBinding", "Cluster", "KubevirtCluster",
+        "TalosControlPlane", "TalosConfigTemplate", "MachineDeployment",
+        "KubevirtMachineTemplate", "KubevirtMachineTemplate",
+    ]
+    if [item.get("kind") for item in documents] != expected_kinds:
+        raise SystemExit("ERROR: lifecycle manifest has an unexpected object inventory")
+    annotations = {
+        "openkubes.io/contract-name": args.cluster,
+        "openkubes.io/contract-namespace": args.cluster,
+        "openkubes.io/intent-revision": args.intent_revision,
+    }
+    for document in documents:
+        document.setdefault("metadata", {}).setdefault("annotations", {}).update(annotations)
+    infrastructure = documents[:3]
+    management = [documents[0], *documents[3:]]
+    output = Path(args.output).resolve()
+    if output.exists():
+        raise SystemExit("ERROR: projection output already exists; refusing to overwrite it")
+    if not output.parent.is_dir():
+        raise SystemExit("ERROR: projection output parent must exist")
+    output.mkdir(mode=0o700)
+    infra_raw = yaml.safe_dump_all(infrastructure, sort_keys=False).encode()
+    management_raw = yaml.safe_dump_all(management, sort_keys=False).encode()
+    authority = {
+        "format": "ok141-contract-to-capi-projection/v2",
+        "contractIdentity": {"name": args.cluster, "namespace": args.cluster},
+        "intentRevision": args.intent_revision,
+        "infrastructurePlane": {
+            "identity": "ok-infra",
+            "role": "provider-runtime-and-golden-image-prerequisites",
+            "resources": [projection_resource(item) for item in infrastructure],
+        },
+        "managementPlane": {
+            "identity": "ok-mgmt",
+            "role": "single-lifecycle-writer",
+            "resources": [projection_resource(item) for item in management],
+        },
+        "providerAccess": {
+            "mode": "external-cluster-secret",
+            "managementPlane": "ok-mgmt",
+            "providerPlane": "ok-infra",
+            "secretRef": {"apiVersion": "v1", "kind": "Secret", **secret_ref},
+            "targetNamespace": args.cluster,
+            "materialization": "separate-gated-prerequisite-no-credential-bytes-in-projection",
+        },
+        "excludedRendererArtifacts": [{
+            "path": "cluster-v2.yaml",
+            "reason": "auxiliary machine template is outside the initial lifecycle graph",
+        }],
+    }
+    authority_raw = (json.dumps(authority, indent=2) + "\n").encode()
+    artifacts = {
+        "authority-map.json": sha256_bytes(authority_raw),
+        "ok-infra-prerequisites.yaml": sha256_bytes(infra_raw),
+        "ok-mgmt-lifecycle.yaml": sha256_bytes(management_raw),
+    }
+    manifest = {
+        "format": "ok141-contract-to-capi-projection/v2",
+        "R": args.intent_revision,
+        "authorizationState": "NO-GO",
+        "artifacts": artifacts,
+        "objectSets": {
+            "okInfraPrerequisites": {"count": len(infrastructure), "digest": semantic_digest(infrastructure)},
+            "okMgmtLifecycle": {"count": len(management), "digest": semantic_digest(management)},
+        },
+        "providerAccess": authority["providerAccess"],
+        "source": {
+            "clusterConfigDigest": sha256_bytes(config_path.read_bytes()),
+            "clusterBaseDigest": sha256_bytes(lifecycle_path.read_bytes()),
+            "renderer": "ok-cluster/render.py",
+        },
+    }
+    manifest_raw = (json.dumps(manifest, indent=2) + "\n").encode()
+    for name, raw in (
+        ("authority-map.json", authority_raw),
+        ("ok-infra-prerequisites.yaml", infra_raw),
+        ("ok-mgmt-lifecycle.yaml", management_raw),
+        ("manifest.json", manifest_raw),
+    ):
+        write_private(output / name, raw)
+    print(json.dumps({
+        "format": "ok147-offline-projection-render/v1",
+        "state": "RENDERED",
+        "cluster": args.cluster,
+        "intentRevision": args.intent_revision,
+        "outputDirectory": str(output),
+        "apiContacted": False,
+        "mutationAllowed": False,
+    }, indent=2))
 
 def main():
     p = argparse.ArgumentParser(description="OpenKubes cluster manifest renderer")
@@ -765,6 +896,11 @@ def main():
     wuns.add_argument("--type", dest="cluster_type", required=True)
     wuns.add_argument("--provider", required=True)
     wuns.set_defaults(func=cmd_validate_workload_user_namespaces_env)
+    projection = sub.add_parser("projection")
+    projection.add_argument("--cluster", required=True)
+    projection.add_argument("--intent-revision", required=True)
+    projection.add_argument("--output", required=True)
+    projection.set_defaults(func=cmd_projection)
     args = p.parse_args()
     args.func(args)
 

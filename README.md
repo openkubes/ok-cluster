@@ -75,6 +75,21 @@ This command is offline and create-only. It creates a `0700` directory with
 `mutationAllowed: false`, and still leaves all digest, endpoint and private
 material placeholders invalid until authoritative inputs are supplied.
 
+After canonicalizing the reviewed Contract to obtain `R`, the repository
+renderer can split an already rendered Talos/KubeVirt lifecycle into the two
+authority planes expected by OK-147:
+
+```bash
+python3 render.py projection \
+  --cluster ok-cli-mvp \
+  --intent-revision sha256:<R> \
+  --output /private/ok-cli-mvp-run/projection
+```
+
+Projection rendering is also offline, create-only and `NO-GO`. It refuses an
+existing output directory and emits owner-only artifacts; it does not provide
+credentials or authorization.
+
 The templates contain the exact Stage 1-7 manifest shape, seven-stage Plan and
 all sixteen ordered target-access identities. Placeholder digests, names,
 hosts and paths are intentionally invalid, and the Plan remains explicitly
