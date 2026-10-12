@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok147-runner-image-plan ok147-runner-image-build
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok147-runner-image-plan ok147-runner-image-build
 .DEFAULT_GOAL := help
 
 OK_CLI_VERSION  ?= $(shell git describe --tags --always --dirty)
@@ -226,6 +226,17 @@ ok-cli-build: ## Build the local ok CLI without contacting a cluster
 		-ldflags "-s -w -X=main.version=$(OK_CLI_VERSION) -X=main.revision=$(OK_CLI_REVISION)" \
 		-o $(SCRIPT_DIR)/.tools/bin/ok ./cmd/ok
 	@echo "Built $(SCRIPT_DIR)/.tools/bin/ok"
+
+ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries without cluster contact
+	@go test -mod=readonly ./cmd/ok -count=1 \
+		-run 'TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate'
+	@go test -mod=readonly ./internal/runner -count=1 \
+		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix'
+	@$(SCRIPT_DIR)/.tools/bin/ok --help >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok cluster create --help >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok cluster stage run full prepare --help >/dev/null
+	@$(MAKE) --no-print-directory contract-executor-dry-run >/dev/null
+	@echo "Offline ok CLI smoke passed; no cluster was contacted"
 
 contract-executor-dry-run: ## Reproduce the OK-141 R and emit a non-mutating plan
 	@go run ./cmd/ok cluster create \
@@ -1117,6 +1128,7 @@ help:
 	@echo "  make contract-executor-test          # OK-147: offline Go core tests"
 	@echo "  make contract-executor-dry-run       # OK-147: immutable plan; no cluster contact"
 	@echo "  make ok-cli-build                     # local .tools/bin/ok binary; no cluster contact"
+	@echo "  make ok-cli-offline-smoke             # product CLI safety smoke; no cluster contact"
 	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
 	@echo "  make install       CLUSTER=ok1        # ubuntu: apply + cilium"

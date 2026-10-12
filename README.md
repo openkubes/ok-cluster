@@ -39,6 +39,19 @@ make ok-cli-build
 .tools/bin/ok cluster create --help
 ```
 
+Run the self-contained offline smoke suite when no current private Bare-MVP
+package is available:
+
+```bash
+make ok-cli-offline-smoke
+```
+
+It builds the binary and checks hierarchical and leaf help, product/legacy
+routing, non-mutating dry-run and prepare boundaries, live double gates, exact
+Stage-7 Bare-MVP completion and the legacy contract fixture. It creates no
+cluster client and is not a substitute for validating a freshly rendered
+private production manifest.
+
 The initial product surface consumes the private full-run manifest from the
 proven OK-147 runner. It intentionally accepts only a manifest whose reviewed
 Plan binds `completionMode: bare-cluster-mvp/v1`:
