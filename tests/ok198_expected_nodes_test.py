@@ -90,6 +90,8 @@ os.replace(temporary, state_path)
 
 phases = scenario["phases"]
 phase = phases[min(index, len(phases) - 1)]
+if phase.get("hang"):
+    time.sleep(60)
 print(json.dumps({"apiVersion": "v1", "kind": "List", "items": phase[kind]}))
 '''
 
@@ -209,9 +211,9 @@ class Sandbox:
         self,
         phases: list[dict[str, list[dict]]],
         *,
-        timeout: float = 0.6,
+        timeout: float = 2.6,
         poll: float = 0.02,
-        process_timeout: float = 3.0,
+        process_timeout: float = 5.0,
         api_failure: bool = False,
         hang: bool = False,
     ) -> subprocess.CompletedProcess[str] | None:
@@ -285,7 +287,7 @@ class Sandbox:
                 f"TALOS_INFRA_KUBECONFIG={self.management}",
                 f"GUEST_KUBECONFIG_DIR={self.base}",
                 f"OK_LINUX_PATH={ROOT.parent / 'ok-linux'}",
-                "TALOS_EXPECTED_NODES_TIMEOUT_SECONDS=0.3",
+                "TALOS_EXPECTED_NODES_TIMEOUT_SECONDS=2.3",
                 "TALOS_EXPECTED_NODES_POLL_SECONDS=0.05",
             ],
             env={
@@ -297,7 +299,7 @@ class Sandbox:
             capture_output=True,
             text=True,
             check=False,
-            timeout=3,
+            timeout=5,
         )
 
 
@@ -347,11 +349,22 @@ def positive_tests(base: Path) -> None:
     phase2 = ready_phase(1, ())
     phase2["machines"].append(machine("machine-worker", "worker", "worker-0"))
     phase2["nodes"].append(node("worker-0", True))
-    result = late.run([phase0, phase1, phase2], timeout=0.8)
+    result = late.run([phase0, phase0, phase1, phase1, phase2], timeout=2.8)
     counters = json.loads(late.counter.read_text(encoding="utf-8"))
     check(
         successful(result) and counters["machines"] >= 3 and counters["nodes"] >= 3,
         "late worker is observed missing, NotReady, then Ready before success",
+    )
+
+    lines = [] if result is None else [
+        line for line in result.stdout.splitlines() if line.startswith("role=")
+    ]
+    check(
+        len(lines) == 6
+        and sum("role=worker/workers-a expected=1 registered=0" in line for line in lines) == 1
+        and sum("role=worker/workers-a expected=1 registered=1 ready=0" in line for line in lines) == 1
+        and sum("role=worker/workers-a expected=1 registered=1 ready=1" in line for line in lines) == 1,
+        "progress prints one line per role only when the complete snapshot changes",
     )
 
     deployments = (("gpu-workers", 1), ("general-workers", 2))
@@ -368,14 +381,14 @@ def missing_worker_test(base: Path) -> None:
     missing = Sandbox(base / "missing")
     phase = ready_phase(1, ())
     started = time.monotonic()
-    result = missing.run([phase], timeout=0.6, poll=0.03, process_timeout=2.5)
+    result = missing.run([phase], timeout=2.6, poll=0.03, process_timeout=5.0)
     elapsed = time.monotonic() - started
     stderr = result.stderr if result is not None else ""
     check(
-        result is not None and result.returncode != 0 and elapsed < 2.5
+        result is not None and result.returncode != 0 and elapsed < 5.0
         and "role=worker/workers-a expected=1 registered=0 ready=0" in stderr
-        and "missing_machines=[<anonymous:1>]" in stderr,
-        "missing worker times out boundedly with named-role counts and missing identity",
+        and "machines_not_created=1" in stderr,
+        "missing worker times out boundedly with named-role counts and Machines not created",
     )
     check(
         result is not None
@@ -383,10 +396,30 @@ def missing_worker_test(base: Path) -> None:
         "timeout never emits readiness success",
     )
 
+    check(
+        stderr.startswith("FAIL timed out waiting for expected nodes: worker/workers-a: 0 of 1 expected nodes registered;")
+        and "management API:" not in stderr and "workload API:" not in stderr,
+        "complete missing-worker snapshot leads with shortfall without an API-error cause",
+    )
+    final_timeout = Sandbox(base / "final-poll-timeout", deployments=(("workers-a", 2),))
+    result = final_timeout.run(
+        [ready_phase(1, (("workers-a", 1),)), {"hang": True}],
+        timeout=2.8, poll=0.03, process_timeout=5.0,
+    )
+    stderr = result.stderr if result is not None else ""
+    check(
+        result is not None and result.returncode != 0
+        and stderr.startswith("FAIL timed out waiting for expected nodes: worker/workers-a: 1 of 2 expected nodes registered;")
+        and "machines_not_created=1" in stderr
+        and "role=control-plane expected=1 registered=1 ready=1" in stderr
+        and "; last API error: management API:" in stderr and "timed out after" in stderr,
+        "final poll timeout preserves the last complete worker shortfall as the leading cause",
+    )
+
     no_ref = Sandbox(base / "named-no-node-ref")
     phase = ready_phase(1, ())
     phase["machines"].append(machine("worker-without-node", "worker"))
-    result = no_ref.run([phase], timeout=0.6, poll=0.03)
+    result = no_ref.run([phase], timeout=2.6, poll=0.03)
     stderr = result.stderr if result is not None else ""
     check(
         result is not None and result.returncode != 0
@@ -400,7 +433,7 @@ def identity_test(base: Path) -> None:
     phase = ready_phase(1, ())
     phase["machines"].append(machine("machine-worker", "worker", "expected-worker"))
     phase["nodes"].append(node("unrelated-ready"))
-    result = unrelated.run([phase], timeout=0.6, poll=0.03)
+    result = unrelated.run([phase], timeout=2.6, poll=0.03)
     stderr = result.stderr if result is not None else ""
     check(
         result is not None and result.returncode != 0
@@ -414,7 +447,7 @@ def not_ready_test(base: Path) -> None:
     not_ready = Sandbox(base / "not-ready-cp", deployments=())
     phase = ready_phase(1, ())
     phase["nodes"] = [node("cp-0", False)]
-    result = not_ready.run([phase], timeout=0.6, poll=0.03)
+    result = not_ready.run([phase], timeout=2.6, poll=0.03)
     stderr = result.stderr if result is not None else ""
     check(
         result is not None and result.returncode != 0
@@ -432,7 +465,7 @@ def inactive_test(base: Path) -> None:
         machine("failed-worker", "worker", "failed-node", failed=True),
     ])
     phase["nodes"].extend([node("deleted-node"), node("failed-node")])
-    result = inactive.run([phase], timeout=0.6, poll=0.03)
+    result = inactive.run([phase], timeout=2.6, poll=0.03)
     stderr = result.stderr if result is not None else ""
     check(
         result is not None and result.returncode != 0
@@ -464,30 +497,39 @@ def api_error_test(base: Path) -> None:
     api = Sandbox(base / "api-error")
     result = api.run(
         [ready_phase(1, (("workers-a", 1),))],
-        timeout=0.6,
+        timeout=2.6,
         poll=0.03,
         api_failure=True,
     )
     combined = "" if result is None else result.stdout + result.stderr
     check(
         result is not None and result.returncode != 0
+        and "FAIL timed out waiting for expected nodes: management API:" in combined
         and "expected-node test denial" in combined,
         "management or workload API errors remain actionable at timeout",
+    )
+
+    insufficient = Sandbox(base / "insufficient-poll-budget")
+    result = insufficient.run([ready_phase(1, ())], timeout=1.0)
+    check(
+        result is not None and result.returncode != 0 and not insufficient.calls()
+        and "API snapshot was not completed" in result.stderr,
+        "less than two seconds of remaining budget starts no API poll",
     )
 
     hung = Sandbox(base / "hung-kubectl")
     started = time.monotonic()
     result = hung.run(
         [ready_phase(1, (("workers-a", 1),))],
-        timeout=0.6,
+        timeout=2.6,
         poll=0.03,
-        process_timeout=2.5,
+        process_timeout=5.0,
         hang=True,
     )
     combined = "" if result is None else result.stdout + result.stderr
     check(
         result is not None and result.returncode != 0
-        and time.monotonic() - started < 2.5 and "timed out" in combined,
+        and time.monotonic() - started < 5.0 and "timed out" in combined,
         "hung kubectl is killed within the overall expected-node deadline",
     )
 
@@ -496,7 +538,7 @@ def multiple_deployment_deficiency_test(base: Path) -> None:
     deployments = (("gpu-workers", 1), ("general-workers", 1))
     box = Sandbox(base, deployments=deployments)
     phase = ready_phase(1, (("gpu-workers", 1),))
-    result = box.run([phase], timeout=0.6, poll=0.03)
+    result = box.run([phase], timeout=2.6, poll=0.03)
     stderr = result.stderr if result is not None else ""
     check(
         result is not None and result.returncode != 0
@@ -508,7 +550,7 @@ def multiple_deployment_deficiency_test(base: Path) -> None:
 def surplus_test(base: Path) -> None:
     box = Sandbox(base)
     phase = ready_phase(1, (("workers-a", 2),))
-    result = box.run([phase], timeout=0.6, poll=0.03)
+    result = box.run([phase], timeout=2.6, poll=0.03)
     stderr = result.stderr if result is not None else ""
     check(
         result is not None and result.returncode != 0

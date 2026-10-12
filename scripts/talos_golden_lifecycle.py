@@ -857,7 +857,7 @@ def _diagnostic_list(values: list[str]) -> str:
 
 def expected_nodes_diagnostics(
     roles: list[dict], machines: list[dict], nodes: list[dict]
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], list[str]]:
     """Evaluate one management/guest snapshot without trusting list cardinality."""
     node_by_name = {
         item.get("metadata", {}).get("name"): item
@@ -867,6 +867,7 @@ def expected_nodes_diagnostics(
     }
     claimed_node_refs: set[str] = set()
     diagnostics = []
+    shortfalls = []
     all_ready = True
 
     for role in roles:
@@ -899,9 +900,7 @@ def expected_nodes_diagnostics(
         ]
 
         expected = role["expected"]
-        missing_machines = []
-        if len(role_machines) < expected:
-            missing_machines.append(f"<anonymous:{expected - len(role_machines)}>")
+        machines_not_created = max(0, expected - len(matching_machines))
         missing_nodes = []
         not_ready_nodes = []
         unique_node_refs = True
@@ -945,14 +944,27 @@ def expected_nodes_diagnostics(
             and unique_node_refs
         )
         all_ready = all_ready and role_ready
+        if not role_ready:
+            if registered != expected:
+                shortfalls.append(
+                    f"{role['name']}: {registered} of {expected} expected nodes registered"
+                )
+            elif ready != expected:
+                shortfalls.append(
+                    f"{role['name']}: {ready} of {expected} expected nodes Ready"
+                )
+            else:
+                shortfalls.append(
+                    f"{role['name']}: active Machine count or node identities do not match render"
+                )
         diagnostics.append(
             f"role={role['name']} expected={expected} registered={registered} "
-            f"ready={ready} missing_machines={_diagnostic_list(missing_machines)} "
+            f"ready={ready} machines_not_created={machines_not_created} "
             f"excluded_machines={_diagnostic_list(excluded_machines)} "
             f"missing_nodes={_diagnostic_list(missing_nodes)} "
             f"not_ready_nodes={_diagnostic_list(not_ready_nodes)}"
         )
-    return all_ready, diagnostics
+    return all_ready, diagnostics, shortfalls
 
 
 def kubectl_json_bounded(
@@ -1043,15 +1055,17 @@ def wait_expected_nodes(args: argparse.Namespace) -> int:
 
     deadline = time.monotonic() + args.expected_nodes_timeout_seconds
     diagnostics = expected_nodes_diagnostics(roles, [], [])[1]
-    last_api_error = "API snapshot was not completed"
+    shortfalls = []
+    complete_snapshot = False
+    last_api_error = ""
     while True:
         api_errors = []
         machines = []
         nodes = []
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if remaining < 2.0:
             break
-        call_budget = min(remaining, max(1.0, args.expected_nodes_poll_seconds))
+        call_budget = min(remaining, max(2.0, args.expected_nodes_poll_seconds))
         try:
             machine_response = kubectl_json_bounded(
                 management_kubeconfig,
@@ -1086,7 +1100,7 @@ def wait_expected_nodes(args: argparse.Namespace) -> int:
         remaining = deadline - time.monotonic()
         if remaining > 0:
             call_budget = min(
-                remaining, max(1.0, args.expected_nodes_poll_seconds)
+                remaining, max(2.0, args.expected_nodes_poll_seconds)
             )
             try:
                 node_response = kubectl_json_bounded(
@@ -1099,6 +1113,9 @@ def wait_expected_nodes(args: argparse.Namespace) -> int:
                 nodes = []
                 api_errors.append(f"workload API: {error}")
 
+        else:
+            api_errors.append("workload API: deadline expired before Node snapshot")
+
         machines = [
             item
             for item in machines
@@ -1107,37 +1124,38 @@ def wait_expected_nodes(args: argparse.Namespace) -> int:
             and item["metadata"]["labels"].get("cluster.x-k8s.io/cluster-name")
             == args.cluster
         ]
-        snapshot_ready, snapshot_diagnostics = expected_nodes_diagnostics(
-            roles, machines, nodes
-        )
-        if (
-            not api_errors
-            and snapshot_ready
-            and time.monotonic() <= deadline
-        ):
-            for diagnostic in snapshot_diagnostics:
-                print(diagnostic)
-            print("READY all expected nodes are registered and Ready")
-            return 0
         if api_errors:
             last_api_error = "; ".join(api_errors)
         else:
+            snapshot_ready, snapshot_diagnostics, shortfalls = expected_nodes_diagnostics(
+                roles, machines, nodes
+            )
+            if snapshot_diagnostics != diagnostics or not complete_snapshot:
+                for diagnostic in snapshot_diagnostics:
+                    print(diagnostic, flush=True)
             diagnostics = snapshot_diagnostics
-            if snapshot_ready:
-                last_api_error = "deadline expired before readiness outcome"
-            else:
-                last_api_error = "expected node registration/readiness is incomplete"
+            complete_snapshot = True
+            if snapshot_ready and time.monotonic() <= deadline:
+                print("READY all expected nodes are registered and Ready")
+                return 0
 
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if remaining < 2.0:
             break
-        time.sleep(min(args.expected_nodes_poll_seconds, remaining))
+        time.sleep(min(args.expected_nodes_poll_seconds, remaining - 2.0))
 
+    if complete_snapshot:
+        cause = "; ".join(shortfalls) or "deadline expired before readiness outcome"
+        api_note = f"; last API error: {last_api_error}" if last_api_error else ""
+    else:
+        cause = last_api_error or "API snapshot was not completed"
+        api_note = ""
     raise TalosLifecycleError(
         "timed out waiting for expected nodes: "
-        + last_api_error
+        + cause
         + "; "
         + "; ".join(diagnostics)
+        + api_note
     )
 
 
