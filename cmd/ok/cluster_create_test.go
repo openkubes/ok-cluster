@@ -87,8 +87,11 @@ func TestClusterCreatePlanTemplateBindsExactSevenStageSequence(t *testing.T) {
 
 	identity := contract.Identity{Namespace: "disposable-ok147", Name: "disposable-ok147"}
 	plan["contractIdentity"] = map[string]any{"namespace": identity.Namespace, "name": identity.Name}
-	for _, field := range []string{"intentRevision", "enablementRevision", "platformRevision", "executionFixture", "executionAttemptDigest"} {
+	for _, field := range []string{"intentRevision", "enablementRevision", "platformRevision", "executionFixture"} {
 		plan[field] = testSHA("1")
+	}
+	if _, exists := plan["executionAttemptDigest"]; exists || plan["format"] != stageplan.Format {
+		t.Fatalf("first-run plan template bound recovery identity: %#v", plan)
 	}
 	for _, item := range stages {
 		for _, input := range item.(map[string]any)["inputs"].([]any) {
@@ -101,7 +104,7 @@ func TestClusterCreatePlanTemplateBindsExactSevenStageSequence(t *testing.T) {
 	}
 	binding, err := stageplan.Verify(raw, stageplan.Expected{
 		ContractIdentity: identity, IntentRevision: testSHA("1"), EnablementRevision: testSHA("1"),
-		PlatformRevision: testSHA("1"), ExecutionFixture: testSHA("1"), ExecutionAttemptDigest: testSHA("1"),
+		PlatformRevision: testSHA("1"), ExecutionFixture: testSHA("1"),
 		InfrastructureAuthority: "ok-infra", ManagementAuthority: "ok-mgmt", GitOpsAuthority: "ok-gitops",
 		CompletionMode: stageplan.CompletionModeBareClusterMVP,
 	})
@@ -131,8 +134,53 @@ func TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing(t *test
 	}
 	expected, ok := plan["expected"].(map[string]any)
 	if !ok || expected["completionMode"] != stageplan.CompletionModeBareClusterMVP ||
-		expected["executionAttemptDigest"] != bareClusterTemplateDigest {
+		manifest["format"] != runner.FullRunExecutionManifestFormat {
 		t.Fatalf("template plan boundary is invalid: %#v", plan)
+	}
+	if _, exists := expected["executionAttemptDigest"]; exists {
+		t.Fatalf("first-run manifest template bound recovery identity: %#v", expected)
+	}
+	providerAccess, ok := manifest["providerAccess"].(map[string]any)
+	if !ok || providerAccess["kubeconfigFile"] != "/private/replace/provider-access.kubeconfig" {
+		t.Fatalf("template provider-access kubeconfig path is not explicit: %#v", providerAccess)
+	}
+	wantWorkload := map[string]any{
+		"bindingPath":    "/private/replace/runtime/workload-authority.json",
+		"kubeconfigFile": "/private/replace/runtime/workload.kubeconfig",
+		"caFile":         "/private/replace/runtime/workload-ca.crt",
+	}
+	for _, section := range []string{"networkObservation", "runtimeBinding", "targetAccess"} {
+		value, ok := manifest[section].(map[string]any)
+		if !ok {
+			t.Fatalf("template section %s is missing: %#v", section, manifest)
+		}
+		workload, ok := value["workload"].(map[string]any)
+		if !ok || len(workload) != len(wantWorkload) {
+			t.Fatalf("template section %s lacks the exact workload path binding: %#v", section, workload)
+		}
+		for field, want := range wantWorkload {
+			if workload[field] != want {
+				t.Fatalf("template section %s %s = %#v, want %q", section, field, workload[field], want)
+			}
+		}
+	}
+	for _, source := range []struct{ section, field string }{
+		{"providerPrerequisites", "authority"},
+		{"clusterLifecycle", "authority"},
+		{"lifecycleObservation", "management"},
+	} {
+		section, ok := manifest[source.section].(map[string]any)
+		authority, authorityOK := section[source.field].(map[string]any)
+		if !ok || !authorityOK || authority["endpoint"] == "" || authority["tokenFile"] == "" ||
+			authority["caFile"] == "" || authority["caBundleDigest"] == "" {
+			t.Fatalf("template section %s lacks its explicit authority: %#v", source.section, section)
+		}
+		if _, exists := authority["kubeconfigFile"]; exists {
+			t.Fatalf("management authority section %s silently selected a kubeconfig: %#v", source.section, authority)
+		}
+	}
+	if strings.Contains(stdout.String(), "~/.kube") || strings.Contains(stdout.String(), "$HOME") {
+		t.Fatalf("template contains an implicit home-directory kubeconfig path: %s", stdout.String())
 	}
 	targetAccess, ok := manifest["targetAccess"].(map[string]any)
 	if !ok {

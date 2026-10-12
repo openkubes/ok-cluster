@@ -29,6 +29,12 @@ placeholder and binds every referenced artifact. The Plan fixes
 `authorizationState: NO-GO`. Do not hand-edit either template into a
 substitute for reviewed renderer output.
 
+For a new cluster the templates emit full-run manifest v3 and staged Plan v1.
+They intentionally contain no `executionAttemptDigest`: Plan v2/manifest v4
+is the additive recovery protocol for a previously consumed claim and must
+bind reviewed predecessor or stopped evidence. Never manufacture that lineage
+for a first run.
+
 Both commands are offline: they read and validate the referenced private
 artifacts, including credential and TLS material, but construct no network
 client, contact no API, execute no stage and consume no authorization. They
@@ -44,6 +50,22 @@ collector activation sections may be omitted; they are not opened or
 validated in this completion mode. Every Stage 1-7 projection, profile,
 credential, authority, output destination and artifact remains mandatory and
 is verified offline.
+
+### Explicit lifecycle access paths
+
+The local runner does not read an implicit management kubeconfig. Management
+access is the exact endpoint, CA digest/CA file, bearer-token file and authority
+identity bound by the private manifest. Provider access and the lifecycle-
+derived guest access use separate absolute private kubeconfig paths. The guest
+kubeconfig path is the same immutable destination across network observation,
+runtime binding and target access; it is populated create-only from the CAPI-
+owned Secret only after the durable lifecycle receipt prefix exists. Templates
+must not contain `~/.kube`, `$HOME` or another ambient fallback.
+
+The repository-owned Talos lifecycle commands use the corresponding explicit
+operator inputs `TALOS_INFRA_KUBECONFIG` and `GUEST_KUBECONFIG_DIR`. The Go
+runner does not invoke those Make targets and must not reimplement their path,
+resume or storage validation logic.
 
 The redaction-safe receipt states `apiContacted: false`,
 `authorizationConsumed: false` and `mutationAllowed: false`. For `--prepare`,
@@ -102,6 +124,27 @@ as an authorization shortcut or a replay mechanism.
 After a stopped or uncertain mutation, preserve its receipt and inspect the
 durable state. Do not invoke the same mutation again merely because the CLI
 returned an error.
+
+### Recovery boundary
+
+Three states are intentionally distinct:
+
+1. A durable successful runner receipt prefix selects only the next bound
+   stage. `ok cluster stage resume` verifies that prefix; it does not replay a
+   completed mutation.
+2. A separately reviewed Talos bootstrap that was interrupted after the CAPI
+   manifests were applied may use the repository-owned `bootstrap-resume`
+   workflow. It must receive its own authorization and explicit management and
+   guest kubeconfig paths. Its preconditions compare the live Cluster with the
+   render, and it never reapplies the infrastructure manifests.
+3. A terminal runner receipt with a stopped, partial or unknown mutation is a
+   STOP. Preserve the receipt, terminal marker and remote state. Do not run
+   `ok cluster create --live` again and do not translate the error into
+   `bootstrap-resume` without an independently reviewed recovery decision.
+
+Teardown is not part of `ok cluster create`. It remains a separately
+authorized lifecycle operation with its own durable recovery record; create
+failure never implies permission to delete or clean up resources.
 
 ## Required inputs
 

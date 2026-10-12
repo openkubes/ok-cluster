@@ -74,6 +74,10 @@ This command is offline and create-only. It creates a `0700` directory with
 `0600` Plan and manifest templates, reports `apiContacted: false` and
 `mutationAllowed: false`, and still leaves all digest, endpoint and private
 material placeholders invalid until authoritative inputs are supplied.
+The scaffold is deliberately a first-run manifest v3 with Plan v1: a new
+cluster has no consumed claim, predecessor attempt or stopped evidence.
+Manifest v4 and Plan v2 remain accepted only for an explicitly reviewed
+recovery attempt; do not invent recovery lineage for a fresh cluster.
 
 After canonicalizing the reviewed Contract to obtain `R`, the repository
 renderer can split an already rendered Talos/KubeVirt lifecycle into the two
