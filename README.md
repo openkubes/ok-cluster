@@ -275,7 +275,7 @@ make bootstrap CLUSTER=my-cluster
 # Get kubeconfig once nodes are Running
 make kubeconfig CLUSTER=my-cluster
 
-# If bootstrap was interrupted after the manifests were applied, resume it
+# If bootstrap was interrupted in a supported post-apply state, resume it
 # (annotate PVCs, kubeconfig, Cilium, wait for Ready) without re-applying:
 make bootstrap-resume CLUSTER=my-cluster
 
@@ -307,9 +307,59 @@ make bootstrap CLUSTER=my-cluster \
 ```
 
 `make kubeconfig` writes the file atomically with mode `0600` and prints the
-`clusterctl` error instead of leaving an empty file behind. `make teardown` is
-safe to repeat: resources that are already gone are reported as `SKIP`, while
-any other cleanup error stops the teardown with a non-zero exit.
+`clusterctl` error instead of leaving an empty file behind.
+
+`make bootstrap-resume` is only for a cluster whose rendered manifests were
+already applied and whose bootstrap did not finish. Before continuing, it
+compares the live CAPI Cluster's name, namespace, rendered labels, object
+references, and cluster-network fields with `cluster-base.yaml`. It refuses a
+paused or deleting Cluster, a failed or otherwise unsupported lifecycle phase,
+and any live object that differs from the render. Supported recovery states are
+an applied Cluster with an empty or `Pending` phase still awaiting its
+controllers, or a `Provisioning` or `Provisioned` Cluster for which the guest kubeconfig or CNI is not yet
+available, or one or more guest nodes are still `NotReady`. The target does not
+apply manifests or repeat the Golden Image preflight.
+
+`make teardown` is safe to retry after an interruption. Before deleting the
+Cluster or its namespace, it records a versioned teardown entry in a ConfigMap
+in the management cluster's `kube-system` namespace. The entry binds the
+cluster name, Golden Image namespace and claim, OS identity and image digest,
+the original Cluster and Namespace UIDs, the exact observed DataVolume UIDs,
+and the Retain-policy PV names. Its name is `ok-cluster-teardown-<cluster>`.
+It contains no credentials or other secret data. Teardown therefore requires
+the identity used by `TALOS_INFRA_KUBECONFIG` to read, create, and update that ConfigMap as
+well as to perform the existing lifecycle operations. An unavailable or
+unreadable record fails closed. An incomplete entry refuses a same-name Cluster
+or Namespace with a different UID before deletion. A completed receipt is
+superseded by a fresh entry for recreated resources, using the ConfigMap's
+resourceVersion to guard the update.
+Deletes bind to the verified UID on the API server; RBAC and snapshot deletes
+also bind to the resource version whose ownership was checked. Deletion waits
+up to ten minutes per resource for absence; a timeout leaves the entry
+incomplete.
+
+An incomplete entry retains the original resource identities until every
+cleanup step succeeds; failures also keep the local render directory. After
+foreground Cluster deletion, teardown merges any final DataVolume and PV
+identities into the entry before deleting the namespace. On success, the entry becomes the retained completion receipt, so another
+`make teardown` can return cleanly even if the local render directory and
+workload namespace are already absent. Only explicit `NotFound` responses
+count as already absent. Cluster or namespace delete failures exit non-zero,
+suppress the success line, and retain recovery material. Retain-policy PV and
+Longhorn cleanup runs only after both Cluster and Namespace are verified absent;
+otherwise the entry keeps the PV inventory for a retry.
+
+The ledger is also the safety boundary for cleanup after destructive deletion.
+Clone authorization cannot be removed before the workload namespace because
+live CDI clones may still require it. After DataVolumes are deleted, their UIDs
+cannot be reconstructed safely from snapshots alone. If the namespace and
+ledger entry are both missing, restoring only the local render does not prove
+the prior DataVolume identities, so teardown fails closed instead of recording
+an empty UID set. If both the render and record are lost, the error names the
+missing Golden namespace, claim, OS identity and DataVolume ownership inventory;
+it never treats missing metadata as verified cleanup. Snapshot deletion requires
+a saved DataVolume UID plus the CDI label and expected Golden PVC source; a
+matching source PVC or cluster name alone does not authorize deletion.
 
 #### Reviewed Talos KubeVirt scheduling profiles
 
@@ -554,7 +604,7 @@ make prepare-cilium-chart                            # acquire/reuse pinned Cili
 make verify-cilium-chart                             # offline digest verification
 make install       CLUSTER=<name>                    # ubuntu: apply + wait + cilium
 make bootstrap     CLUSTER=<name>                    # talos: apply + annotate PVCs + cilium
-make bootstrap-resume CLUSTER=<name>                 # talos: resume after apply (refuses if the Cluster is absent)
+make bootstrap-resume CLUSTER=<name>                 # talos: resume a validated, supported post-apply state
 make flatcar-preflight CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz"
 make install-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz" FLATCAR_APPLY=yes
 make teardown-flatcar CLUSTER=<name> FLATCAR_INFRA_KUBECONFIG=<path> FLATCAR_TEARDOWN=yes
@@ -570,7 +620,7 @@ make annotate-pvcs CLUSTER=<name>                    # annotate PVCs for node bi
 make upgrade       CLUSTER=<name> K8S_VERSION=v1.x.y [TALOS_VERSION=v1.x.y]
 make status        CLUSTER=<name>                    # show cluster, machines, VMs
 make clean         CLUSTER=<name>                    # delete ubuntu cluster + local files
-make teardown      CLUSTER=<name>                    # delete talos cluster + local files
+make teardown      CLUSTER=<name>                    # ledger-backed Talos deletion; safe to retry
 make teardown-all                                    # tear down ALL rendered clusters
 make e2e           [OLLAMA_URL=http://<ip>:11434]    # full clean rebuild + verify
 make e2e-verify                                      # verification matrix only

@@ -768,15 +768,14 @@ bootstrap: require-not-flatcar
 	fi
 	@$(MAKE) --no-print-directory bootstrap-post-apply CLUSTER=$(CLUSTER)
 
-# Resume an interrupted bootstrap: only the steps after cluster-base was applied.
-# Never re-applies cluster-base and never runs the golden preflight (the
-# cluster's own VMs would fail it). Refuses when the Cluster object is absent.
+# Resume only a rendered, matching Cluster in a supported post-apply state.
 bootstrap-resume: require-not-flatcar
 	@echo "Resuming bootstrap of Talos cluster $(CLUSTER)..."
-	@if ! err="$$($(OKB) -n $(CLUSTER) get clusters.cluster.x-k8s.io $(CLUSTER) -o name 2>&1)"; then \
-		echo "❌ Cluster $(CLUSTER)/$(CLUSTER) not found on the management cluster; run 'make bootstrap CLUSTER=$(CLUSTER)' instead."; \
-		printf '   %s\n' "$$err" | head -1; exit 1; \
-	fi
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--resume-preconditions --cluster "$(CLUSTER)" \
+		--cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"
 	@$(MAKE) --no-print-directory bootstrap-post-apply CLUSTER=$(CLUSTER)
 
 bootstrap-post-apply: require-cluster
@@ -837,70 +836,11 @@ clean: require-not-flatcar
 	@echo "✅ Cluster $(CLUSTER) removed."
 
 teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses teardown-flatcar)
-	@echo "Tearing down Talos cluster $(CLUSTER)..."; \
-	PVS=$$($(OKB) get pvc -n $(CLUSTER) -o jsonpath='{range .items[*]}{.spec.volumeName}{"\n"}{end}' 2>/dev/null); \
-	DV_UIDS=$$($(OKB) get datavolumes -n $(CLUSTER) -o jsonpath='{range .items[*]}{.metadata.uid}{","}{end}' 2>/dev/null); \
-	if [ -n "$$PVS" ]; then \
-		echo "  VM disks use ok-storage-* (reclaimPolicy: Retain) -- these PV(s) survive cluster deletion by design and will be cleaned up here:"; \
-		echo "$$PVS" | sed 's/^/    /'; \
-	fi; \
-	if [ "$(CONFIRM)" != "yes" ]; then \
-		printf "⚠️  This will TEAR DOWN %s: Cluster object, namespace, local render directory" "$(CLUSTER)"; \
-		if [ -n "$$PVS" ]; then \
-			PVCOUNT=$$(echo "$$PVS" | grep -c .); \
-			printf ", and %s Retain-policy PV(s)/Longhorn volume(s)" "$$PVCOUNT"; \
-		fi; \
-		echo "."; \
-		printf "Are you sure you want to tear down %s? [y/N] " "$(CLUSTER)"; \
-		if [ -t 0 ]; then read -r ans; else read -r ans < /dev/tty || ans=n; fi; \
-		case "$$ans" in \
-			[yY]|[yY][eE][sS]) ;; \
-			*) echo "Aborted. Re-run with CONFIRM=yes to skip this prompt (e.g. in CI)."; exit 1 ;; \
-		esac; \
-	fi; \
-	CFG="$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml"; \
-	UIDS_FILE="$(CLUSTERS_DIR)/$(CLUSTER)/.teardown-data-volume-uids"; \
-	if [ -n "$$DV_UIDS" ] && [ -d "$(CLUSTERS_DIR)/$(CLUSTER)" ]; then \
-		printf '%s' "$$DV_UIDS" > "$$UIDS_FILE"; \
-	elif [ -r "$$UIDS_FILE" ]; then \
-		DV_UIDS=$$(cat "$$UIDS_FILE"); \
-	fi; \
-	$(OKB) delete cluster/$(CLUSTER) -n $(CLUSTER) --ignore-not-found --cascade=foreground; \
-	$(OKB) delete namespace $(CLUSTER) --ignore-not-found; \
-	CLEANUP_FAILED=0; \
-	if [ ! -r "$$CFG" ]; then \
-		echo "SKIP local render directory $(CLUSTER) already absent; nothing to clean up for the Golden Image."; \
-		HAS_TALOS_GOLDEN=false; \
-	else \
-		HAS_TALOS_GOLDEN=$$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1])) or {}; print(str(c.get("type") == "talos" and bool(c.get("os",{}).get("goldenImage"))).lower())' "$$CFG"); \
-	fi; \
-	if [ "$$HAS_TALOS_GOLDEN" = "true" ]; then \
-		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
-			--cleanup-authorization \
-			--cluster "$(CLUSTER)" \
-			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
-			--ok-linux-path "$(OK_LINUX_PATH)" \
-			--data-volume-uids "$$DV_UIDS" \
-			|| { echo "❌ Golden clone-authorization cleanup failed for $(CLUSTER); local directory kept for retry."; CLEANUP_FAILED=1; }; \
-	fi; \
-	if [ "$$CLEANUP_FAILED" = 0 ]; then \
-		echo "Removing local cluster directory..."; \
-		rm -rf $(CLUSTERS_DIR)/$(CLUSTER); \
-	fi; \
-	if [ -n "$$PVS" ]; then \
-		echo "Cleaning up Retain-policy PVs and their underlying Longhorn volumes..."; \
-		for pv in $$PVS; do \
-			echo "  Deleting PV $$pv..."; \
-			$(OKB) delete pv $$pv --ignore-not-found; \
-			echo "  Deleting Longhorn volume $$pv (best-effort -- may already be gone)..."; \
-			$(OKB) -n longhorn-system delete volumes.longhorn.io $$pv --ignore-not-found 2>/dev/null || true; \
-		done; \
-	fi; \
-	if [ "$$CLEANUP_FAILED" != 0 ]; then \
-		echo "❌ Teardown of $(CLUSTER) incomplete; re-run make teardown CLUSTER=$(CLUSTER) after fixing the error above."; \
-		exit 1; \
-	fi; \
-	echo "✅ Talos cluster $(CLUSTER) torn down (including Retain-policy PV cleanup)."
+	@python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
+		--teardown --cluster "$(CLUSTER)" \
+		--cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)" --confirm "$(CONFIRM)"
 
 # ── e2e ───────────────────────────────────────────────────────────────────────
 MGMT_CLUSTER       ?= ok-mgmt
