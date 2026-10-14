@@ -205,7 +205,7 @@ func validOrchestrationMismatchEvidence(evidence *execution.SubmissionMismatchEv
 	if evidence == nil {
 		return true
 	}
-	return evidence.ObservationCount >= 0 && evidence.ObservationCount <= 300 &&
+	return evidence.ObservationCount >= 0 && evidence.ObservationCount <= execution.MaximumSubmissionMismatchEvidenceObservations &&
 		stageReceiptPrefixDigestPattern.MatchString(evidence.ExpectedDigest) &&
 		stageReceiptPrefixDigestPattern.MatchString(evidence.LastObservedDigest) &&
 		evidence.RuntimeIdentityStable &&

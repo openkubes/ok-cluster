@@ -87,6 +87,33 @@ func TestStageAuthorizationHTTPResolverRequestsAndPersistsExactGrant(t *testing.
 	}
 }
 
+func TestStageAuthorizationHTTPResolverAcceptsAuthorityTokenWithSingleTrailingLF(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
+		Endpoint:        server.URL + "/v1/stage-authorizations",
+		TokenFile:       writeBundleFile(t, root, "token", []byte("authority-token\n")),
+		CAFile:          writeRuntimeBindingServerCA(t, root, "ca.crt", server),
+		PublicKeyPath:   writeBundleFile(t, root, "authority.pub", []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n")),
+		OutputDirectory: root,
+		Clock:           time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver.token != "authority-token" {
+		t.Fatal("stage authorization token was not normalized")
+	}
+}
+
 func TestStageAuthorizationHTTPResolverReportsOnlySafeHTTPStatus(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusForbidden)

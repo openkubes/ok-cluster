@@ -120,7 +120,18 @@ def main() -> None:
             management = list(yaml.safe_load_all((output / "ok-mgmt-lifecycle.yaml").read_text()))
             assert manifest["authorizationState"] == "NO-GO"
             assert manifest["R"] == revision
-            assert len(infra) == 3 and len(management) == 8
+            assert len(infra) == 5 and len(management) == 8
+            lifecycle_role, lifecycle_binding = infra[-2:]
+            assert lifecycle_role["kind"] == "Role"
+            assert lifecycle_role["metadata"]["namespace"] == "ok-cli-mvp"
+            assert lifecycle_role["metadata"]["name"] == "ok147-ok-cli-mvp-provider-lifecycle"
+            assert lifecycle_binding["kind"] == "RoleBinding"
+            assert lifecycle_binding["roleRef"]["name"] == lifecycle_role["metadata"]["name"]
+            assert lifecycle_binding["subjects"] == [{
+                "kind": "ServiceAccount",
+                "name": "ok147-ok-cli-mvp-provider-writer",
+                "namespace": "openkubes-execution-system",
+            }]
             assert authority["contractIdentity"] == {
                 "name": "ok-cli-mvp", "namespace": "ok-cli-mvp"
             }

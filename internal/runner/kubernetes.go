@@ -462,10 +462,22 @@ func openBoundedKubernetesHTTP(tokenFile, caFile string) (string, *http.Client, 
 	return token, client, err
 }
 
+func openBoundedStageAuthorizationHTTP(tokenFile, caFile string) (string, *http.Client, error) {
+	token, _, client, err := openBoundedBearerMaterial(tokenFile, caFile, true)
+	return token, client, err
+}
+
 func openBoundedKubernetesMaterial(tokenFile, caFile string) (string, []byte, *http.Client, error) {
+	return openBoundedBearerMaterial(tokenFile, caFile, false)
+}
+
+func openBoundedBearerMaterial(tokenFile, caFile string, allowSingleTrailingLF bool) (string, []byte, *http.Client, error) {
 	tokenRaw, err := readBoundedRegular(tokenFile, maximumTokenBytes)
 	if err != nil {
 		return "", nil, nil, errors.New("read projected Kubernetes token")
+	}
+	if allowSingleTrailingLF {
+		tokenRaw = bytes.TrimSuffix(tokenRaw, []byte("\n"))
 	}
 	token := string(tokenRaw)
 	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") {

@@ -479,11 +479,13 @@ func TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate(t *testi
 
 func TestClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T) {
 	previousPrepare := prepareFullRunExecutionManifest
-	previousOpen := openKubernetesObservabilityFullRunActivation
+	previousBareOpen := openBareClusterFullRunActivation
+	previousObservabilityOpen := openKubernetesObservabilityFullRunActivation
 	previousWriter := writeFullRunExecutorTerminalMarker
 	defer func() {
 		prepareFullRunExecutionManifest = previousPrepare
-		openKubernetesObservabilityFullRunActivation = previousOpen
+		openBareClusterFullRunActivation = previousBareOpen
+		openKubernetesObservabilityFullRunActivation = previousObservabilityOpen
 		writeFullRunExecutorTerminalMarker = previousWriter
 	}()
 
@@ -497,9 +499,9 @@ func TestClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T) {
 		return verified, nil
 	}
 	runs := 0
-	openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
-		if path != "/private/bare-run.json" || publicKeyPath != "/private/evidence.pub" {
-			t.Fatalf("activation inputs differ: path=%q key=%q", path, publicKeyPath)
+	openBareClusterFullRunActivation = func(path string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+		if path != "/private/bare-run.json" {
+			t.Fatalf("activation input differs: path=%q", path)
 		}
 		return fullRunActivationRunnerFunc(func(context.Context) (runner.FullRunExecutionActivationReceipt, error) {
 				runs++
@@ -514,6 +516,10 @@ func TestClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T) {
 			}), runner.FullRunExecutionActivationReceipt{
 				Format: runner.FullRunExecutionActivationReceiptFormat, State: "PREPARED", Manifest: verified,
 			}, nil
+	}
+	openKubernetesObservabilityFullRunActivation = func(string, string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+		t.Fatal("Bare-MVP execution opened the unused Observability activation")
+		return nil, runner.FullRunExecutionActivationReceipt{}, errors.New("unexpected Observability activation")
 	}
 	writeFullRunExecutorTerminalMarker = runner.WriteFullRunExecutorTerminalMarker
 

@@ -69,7 +69,7 @@ type StageAuthorizationHTTPResolver struct {
 // private create-only grant directory. Opening reads bounded local credential
 // files but performs no network request.
 func OpenStageAuthorizationHTTPResolver(config StageAuthorizationHTTPResolverConfig) (*StageAuthorizationHTTPResolver, error) {
-	token, client, err := openBoundedKubernetesHTTP(config.TokenFile, config.CAFile)
+	token, client, err := openBoundedStageAuthorizationHTTP(config.TokenFile, config.CAFile)
 	if err != nil {
 		return nil, errors.New("open stage authorization authority credential")
 	}
