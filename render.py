@@ -809,7 +809,54 @@ def cmd_projection(args):
     }
     for document in documents:
         document.setdefault("metadata", {}).setdefault("annotations", {}).update(annotations)
-    infrastructure = documents[:3]
+    provider_lifecycle_name = f"ok147-{args.cluster}-provider-lifecycle"
+    provider_lifecycle = [
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "Role",
+            "metadata": {
+                "name": provider_lifecycle_name,
+                "namespace": args.cluster,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "ok-cluster-projection",
+                    "openkubes.io/contract-name": args.cluster,
+                    "openkubes.io/contract-namespace": args.cluster,
+                },
+                "annotations": dict(annotations),
+            },
+            "rules": [
+                {"apiGroups": [""], "resources": ["secrets", "services"], "verbs": ["create", "delete", "get", "list", "patch", "update", "watch"]},
+                {"apiGroups": ["cdi.kubevirt.io"], "resources": ["datavolumes"], "verbs": ["get", "list", "watch"]},
+                {"apiGroups": ["kubevirt.io"], "resources": ["virtualmachineinstances"], "verbs": ["delete", "get"]},
+                {"apiGroups": ["kubevirt.io"], "resources": ["virtualmachines"], "verbs": ["create", "delete", "get", "patch", "update"]},
+            ],
+        },
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "metadata": {
+                "name": provider_lifecycle_name,
+                "namespace": args.cluster,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "ok-cluster-projection",
+                    "openkubes.io/contract-name": args.cluster,
+                    "openkubes.io/contract-namespace": args.cluster,
+                },
+                "annotations": dict(annotations),
+            },
+            "roleRef": {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "Role",
+                "name": provider_lifecycle_name,
+            },
+            "subjects": [{
+                "kind": "ServiceAccount",
+                "name": f"ok147-{args.cluster}-provider-writer",
+                "namespace": "openkubes-execution-system",
+            }],
+        },
+    ]
+    infrastructure = [*documents[:3], *provider_lifecycle]
     management = [documents[0], *documents[3:]]
     output = Path(args.output).resolve()
     if output.exists():

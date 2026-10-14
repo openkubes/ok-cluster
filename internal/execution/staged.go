@@ -242,12 +242,15 @@ func validSubmissionMismatchEvidence(evidence *SubmissionMismatchEvidence) bool 
 	}
 	return submissionMismatchEvidenceCategoryPattern.MatchString(evidence.FirstCategory) &&
 		submissionMismatchEvidenceCategoryPattern.MatchString(evidence.LastCategory) &&
-		evidence.ObservationCount >= 0 && evidence.ObservationCount <= objectMismatchMaximumEvidenceObservations &&
+		evidence.ObservationCount >= 0 && evidence.ObservationCount <= MaximumSubmissionMismatchEvidenceObservations &&
 		stagedDigestPattern.MatchString(evidence.ExpectedDigest) && stagedDigestPattern.MatchString(evidence.LastObservedDigest) &&
 		evidence.RuntimeIdentityStable
 }
 
-const objectMismatchMaximumEvidenceObservations = submission.MaximumMismatchEvidenceObservations
+// MaximumSubmissionMismatchEvidenceObservations keeps every orchestration
+// layer on the same public evidence bound as the submission adapter that
+// produces the evidence.
+const MaximumSubmissionMismatchEvidenceObservations = submission.MaximumMismatchEvidenceObservations
 
 func validStageFailureCategory(category string) bool {
 	if submissionObjectStopCategoryPattern.MatchString(category) {

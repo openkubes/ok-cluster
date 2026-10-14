@@ -196,7 +196,8 @@ func TestFullRunOrchestrationPropagatesBoundedMismatchEvidence(t *testing.T) {
 	evidence := &execution.SubmissionMismatchEvidence{
 		FirstCategory:    "SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH",
 		LastCategory:     "SUBMISSION_OBJECT_CONTENT_ROLE_REF_MISMATCH",
-		ObservationCount: 300, ExpectedDigest: runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
+		ObservationCount: execution.MaximumSubmissionMismatchEvidenceObservations,
+		ExpectedDigest:   runnerStageSHA("e"), LastObservedDigest: runnerStageSHA("f"), RuntimeIdentityStable: true,
 	}
 	prefix := &fakePreRuntimeContinuation{
 		receipt: PreRuntimeOrchestrationReceipt{

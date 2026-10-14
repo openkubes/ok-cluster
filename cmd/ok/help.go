@@ -229,7 +229,7 @@ Usage:
   ok cluster create --file <private-manifest.json> --live --execute \
     --expected-manifest-digest sha256:<digest> \
     --independent-evidence-public-key <file> \
-    --terminal-marker <private-dir>/executor-terminal
+    --terminal-marker /absolute/private-dir/executor-terminal
 
 Modes (exactly one is required):
   --dry-run    Verify all bound local inputs and print a non-mutating summary
@@ -241,8 +241,8 @@ Input:
   -f, --file   Private full-run manifest bound to completionMode bare-cluster-mvp/v1
 
 Live inputs:
-  --terminal-marker must name an absent executor-terminal file in an existing
-                    private directory (mode 0700 or stricter)
+  --terminal-marker must be an absolute path naming an absent executor-terminal
+                    file in an existing private directory (mode 0700 or stricter)
 
 Safety:
   The scaffold command is offline and create-only: it refuses an existing

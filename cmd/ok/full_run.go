@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/runner"
+	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
 const fullRunExecutionTimeout = 3 * time.Hour
@@ -87,6 +88,12 @@ var executeFullRunExecutionActivationLaunch = func(ctx context.Context, config r
 var openKubernetesObservabilityFullRunActivation = func(path, publicKeyPath string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
 	return runner.OpenKubernetesObservabilityFullRunActivation(path, runner.KubernetesObservabilityFullRunActivationConfig{
 		IndependentEvidencePublicKeyPath: publicKeyPath, Clock: time.Now, Wait: runner.WaitWithTimer,
+	})
+}
+
+var openBareClusterFullRunActivation = func(path string) (fullRunActivationRunner, runner.FullRunExecutionActivationReceipt, error) {
+	return runner.OpenFullRunExecutionActivation(path, runner.FullRunExecutionManifestRuntime{
+		Clock: time.Now, Wait: runner.WaitWithTimer,
 	})
 }
 
@@ -397,7 +404,13 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 	if verified.ManifestDigest != *expectedManifestDigest {
 		return errors.New("full-run manifest differs from the prepared identity")
 	}
-	activation, prepared, err := openKubernetesObservabilityFullRunActivation(*manifestPath, *evidencePublicKey)
+	var activation fullRunActivationRunner
+	var prepared runner.FullRunExecutionActivationReceipt
+	if verified.CompletionMode == stageplan.CompletionModeBareClusterMVP {
+		activation, prepared, err = openBareClusterFullRunActivation(*manifestPath)
+	} else {
+		activation, prepared, err = openKubernetesObservabilityFullRunActivation(*manifestPath, *evidencePublicKey)
+	}
 	if err != nil {
 		return err
 	}
