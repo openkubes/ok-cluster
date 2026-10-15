@@ -20,9 +20,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "docs" / "adoption" / "OK-130" / ".evidence"
-TEARDOWN_LEDGER_NAMESPACE = "kube-system"
+TEARDOWN_LEDGER_NAMESPACE = "ok-cluster-teardown"
+LEGACY_TEARDOWN_LEDGER_NAMESPACE = "kube-system"
 TEARDOWN_LEDGER_PREFIX = "ok-cluster-teardown-"
 TEARDOWN_LEDGER_SCHEMA = 1
+TEARDOWN_LEDGER_SUPPORTED_SCHEMAS = (TEARDOWN_LEDGER_SCHEMA,)
 sys.path.insert(0, str(ROOT))
 
 from profile_resolvers.talos import (  # noqa: E402
@@ -111,7 +113,7 @@ def inputs(args: argparse.Namespace) -> tuple[dict, Path, Path]:
     manifest_path = cluster_dir / "cluster-base.yaml"
     if not config_path.is_file() or not manifest_path.is_file():
         raise TalosLifecycleError("rendered Talos config/manifest is absent")
-    ok_linux = Path(args.ok_linux_path).expanduser().resolve()
+    ok_linux = required_ok_linux_path(args)
     config = load_yaml(config_path)
     resolved = resolve_talos_config(config, ok_linux)
     if resolved != config:
@@ -124,6 +126,12 @@ def inputs(args: argparse.Namespace) -> tuple[dict, Path, Path]:
             f"explicit management kubeconfig is absent: {kubeconfig}"
         )
     return config, manifest_path, kubeconfig
+
+
+def required_ok_linux_path(args: argparse.Namespace) -> Path:
+    if not args.ok_linux_path:
+        raise TalosLifecycleError("--ok-linux-path is required")
+    return Path(args.ok_linux_path).expanduser().resolve()
 
 
 def cluster_directory(args: argparse.Namespace) -> Path:
@@ -1596,7 +1604,7 @@ def local_teardown_config(args: argparse.Namespace) -> dict | None:
         )
     if has_golden_config(config):
         resolved = resolve_talos_config(
-            config, Path(args.ok_linux_path).expanduser().resolve()
+            config, required_ok_linux_path(args)
         )
         if resolved != config:
             raise TalosLifecycleError(
@@ -1635,7 +1643,24 @@ def validate_teardown_record(record: dict, cluster: str) -> None:
         "persistent_volumes",
         "complete",
     }
-    if set(record) != required or record.get("schema_version") != TEARDOWN_LEDGER_SCHEMA:
+    schema = record.get("schema_version")
+    if (
+        isinstance(schema, int)
+        and not isinstance(schema, bool)
+        and schema not in TEARDOWN_LEDGER_SUPPORTED_SCHEMAS
+    ):
+        supported = ", ".join(
+            str(value) for value in TEARDOWN_LEDGER_SUPPORTED_SCHEMAS
+        )
+        raise TalosLifecycleError(
+            f"unsupported teardown ledger schema {schema}; supported: {supported}"
+        )
+    if (
+        set(record) != required
+        or not isinstance(schema, int)
+        or isinstance(schema, bool)
+        or schema != TEARDOWN_LEDGER_SCHEMA
+    ):
         raise TalosLifecycleError("teardown record schema is invalid")
     cluster_identity = record.get("cluster")
     if (
@@ -1687,11 +1712,29 @@ def validate_teardown_record(record: dict, cluster: str) -> None:
         raise TalosLifecycleError("teardown record completion marker is invalid")
 
 
-def teardown_record_from_configmap(configmap: dict, cluster: str) -> dict:
+def teardown_ledger_name(cluster: str) -> str:
+    return f"{TEARDOWN_LEDGER_PREFIX}{cluster}"
+
+
+def teardown_ledger_labels(cluster: str) -> dict[str, str]:
+    return {
+        "app.kubernetes.io/managed-by": "ok-cluster",
+        "openkubes.io/consumer-cluster": cluster,
+    }
+
+
+def teardown_record_text(configmap: dict) -> str:
     try:
         encoded = configmap["data"]["record.json"]
     except (KeyError, TypeError) as error:
         raise TalosLifecycleError("teardown ConfigMap record is absent") from error
+    if not isinstance(encoded, str):
+        raise TalosLifecycleError("teardown ConfigMap record is not text")
+    return encoded
+
+
+def teardown_record_from_configmap(configmap: dict, cluster: str) -> dict:
+    encoded = teardown_record_text(configmap)
     record = json.loads(encoded)
     if not isinstance(record, dict):
         raise TalosLifecycleError("teardown ConfigMap record is not an object")
@@ -1699,52 +1742,140 @@ def teardown_record_from_configmap(configmap: dict, cluster: str) -> dict:
     return record
 
 
-def read_teardown_configmap(kubeconfig: Path, cluster: str) -> dict | None:
-    return kubectl_json_optional(
+def require_teardown_ledger_namespace(kubeconfig: Path) -> dict:
+    result = kubectl(
+        kubeconfig,
+        ["get", "namespace", TEARDOWN_LEDGER_NAMESPACE, "-o", "json"],
+        expected=(0, 1),
+    )
+    failure = (
+        f"teardown ledger namespace {TEARDOWN_LEDGER_NAMESPACE} is absent or "
+        "unreadable; run make install-teardown-ledger "
+        "TALOS_INFRA_KUBECONFIG=<path> CONFIRM=yes"
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        if detail:
+            failure += f"; kubectl: {detail}"
+        raise TalosLifecycleError(failure)
+    try:
+        namespace = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise TalosLifecycleError(failure) from error
+    if (
+        not isinstance(namespace, dict)
+        or namespace.get("apiVersion") != "v1"
+        or namespace.get("kind") != "Namespace"
+        or namespace.get("metadata", {}).get("name")
+        != TEARDOWN_LEDGER_NAMESPACE
+        or namespace.get("metadata", {}).get("deletionTimestamp")
+        or namespace.get("status", {}).get("phase") == "Terminating"
+    ):
+        raise TalosLifecycleError(failure)
+    return namespace
+
+
+def validate_teardown_configmap_identity(
+    configmap: dict,
+    namespace: str,
+    cluster: str,
+    *,
+    require_labels: bool = False,
+) -> None:
+    metadata = configmap.get("metadata")
+    if (
+        configmap.get("apiVersion") != "v1"
+        or configmap.get("kind") != "ConfigMap"
+        or not isinstance(metadata, dict)
+        or metadata.get("name") != teardown_ledger_name(cluster)
+        or metadata.get("namespace") != namespace
+    ):
+        raise TalosLifecycleError("teardown ConfigMap identity is invalid")
+    labels = metadata.get("labels") or {}
+    expected_labels = teardown_ledger_labels(cluster)
+    if require_labels and (
+        not isinstance(labels, dict)
+        or any(labels.get(key) != value for key, value in expected_labels.items())
+    ):
+        raise TalosLifecycleError(
+            "teardown ConfigMap ownership labels are invalid"
+        )
+
+
+def read_teardown_configmap(
+    kubeconfig: Path,
+    cluster: str,
+    *,
+    require_labels: bool = True,
+) -> dict | None:
+    configmap = kubectl_json_optional(
         kubeconfig,
         [
             "-n",
             TEARDOWN_LEDGER_NAMESPACE,
             "get",
             "configmap",
-            f"{TEARDOWN_LEDGER_PREFIX}{cluster}",
+            teardown_ledger_name(cluster),
         ],
     )
+    if configmap is not None:
+        validate_teardown_configmap_identity(
+            configmap,
+            TEARDOWN_LEDGER_NAMESPACE,
+            cluster,
+            require_labels=require_labels,
+        )
+    return configmap
 
 
-def persist_teardown_record(
-    kubeconfig: Path, cluster: str, record: dict, existing: dict | None
+def write_teardown_configmap(
+    kubeconfig: Path,
+    namespace: str,
+    cluster: str,
+    record_text: str,
+    existing: dict | None,
 ) -> dict:
-    validate_teardown_record(record, cluster)
-    name = f"{TEARDOWN_LEDGER_PREFIX}{cluster}"
-    encoded = canonical_record(record)
+    name = teardown_ledger_name(cluster)
+    labels = teardown_ledger_labels(cluster)
     if existing is None:
+        body = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+                "labels": labels,
+            },
+            "data": {"record.json": record_text},
+        }
         kubectl(
             kubeconfig,
-            [
-                "-n",
-                TEARDOWN_LEDGER_NAMESPACE,
-                "create",
-                "configmap",
-                name,
-                f"--from-literal=record.json={encoded}",
-            ],
+            ["-n", namespace, "create", "-f", "-"],
+            input_text=json.dumps(
+                body, sort_keys=True, separators=(",", ":")
+            ),
         )
     else:
+        validate_teardown_configmap_identity(
+            existing, namespace, cluster, require_labels=False
+        )
         resource_version = existing.get("metadata", {}).get("resourceVersion")
         if not resource_version:
             raise TalosLifecycleError(
                 "teardown ConfigMap resourceVersion is absent"
             )
         patch = {
-            "metadata": {"resourceVersion": resource_version},
-            "data": {"record.json": encoded},
+            "metadata": {
+                "resourceVersion": resource_version,
+                "labels": labels,
+            },
+            "data": {"record.json": record_text},
         }
         kubectl(
             kubeconfig,
             [
                 "-n",
-                TEARDOWN_LEDGER_NAMESPACE,
+                namespace,
                 "patch",
                 "configmap",
                 name,
@@ -1753,8 +1884,39 @@ def persist_teardown_record(
                 json.dumps(patch, sort_keys=True, separators=(",", ":")),
             ],
         )
-    observed = read_teardown_configmap(kubeconfig, cluster)
-    if observed is None or teardown_record_from_configmap(observed, cluster) != record:
+    observed = kubectl_json_optional(
+        kubeconfig,
+        ["-n", namespace, "get", "configmap", name],
+    )
+    if observed is None:
+        raise TalosLifecycleError("teardown ConfigMap disappeared after write")
+    validate_teardown_configmap_identity(
+        observed, namespace, cluster, require_labels=True
+    )
+    observed_labels = observed.get("metadata", {}).get("labels", {})
+    if (
+        teardown_record_text(observed).encode("utf-8")
+        != record_text.encode("utf-8")
+        or not isinstance(observed_labels, dict)
+        or any(observed_labels.get(key) != value for key, value in labels.items())
+    ):
+        raise TalosLifecycleError("teardown ConfigMap did not persist exactly")
+    return observed
+
+
+def persist_teardown_record(
+    kubeconfig: Path, cluster: str, record: dict, existing: dict | None
+) -> dict:
+    validate_teardown_record(record, cluster)
+    encoded = canonical_record(record)
+    observed = write_teardown_configmap(
+        kubeconfig,
+        TEARDOWN_LEDGER_NAMESPACE,
+        cluster,
+        encoded,
+        existing,
+    )
+    if teardown_record_from_configmap(observed, cluster) != record:
         raise TalosLifecycleError("teardown record did not persist exactly")
     return observed
 
@@ -2225,12 +2387,161 @@ def cleanup_authorization(
     return 0
 
 
+def teardown_admin_kubeconfig(
+    args: argparse.Namespace, mode: str
+) -> Path:
+    if args.confirm != "yes":
+        raise TalosLifecycleError(f"{mode} requires --confirm yes")
+    if not args.cluster:
+        raise TalosLifecycleError(f"{mode} requires --cluster")
+    kubeconfig = Path(args.kubeconfig).expanduser().resolve()
+    if not kubeconfig.is_file():
+        raise TalosLifecycleError(
+            f"explicit management kubeconfig is absent: {kubeconfig}"
+        )
+    return kubeconfig
+
+
+def migrate_teardown_ledger(args: argparse.Namespace) -> int:
+    mode = "--migrate-teardown-ledger"
+    kubeconfig = teardown_admin_kubeconfig(args, mode)
+    require_teardown_ledger_namespace(kubeconfig)
+    name = teardown_ledger_name(args.cluster)
+    legacy = kubectl_json_optional(
+        kubeconfig,
+        [
+            "-n",
+            LEGACY_TEARDOWN_LEDGER_NAMESPACE,
+            "get",
+            "configmap",
+            name,
+        ],
+    )
+    if legacy is None:
+        print(
+            "SKIP legacy teardown record "
+            f"{LEGACY_TEARDOWN_LEDGER_NAMESPACE}/{name} already absent"
+        )
+        return 0
+    validate_teardown_configmap_identity(
+        legacy, LEGACY_TEARDOWN_LEDGER_NAMESPACE, args.cluster
+    )
+    legacy_metadata = legacy.get("metadata", {})
+    if (
+        not legacy_metadata.get("uid")
+        or not legacy_metadata.get("resourceVersion")
+    ):
+        raise TalosLifecycleError(
+            "legacy teardown ConfigMap UID/resourceVersion is absent"
+        )
+    legacy_text = teardown_record_text(legacy)
+    teardown_record_from_configmap(legacy, args.cluster)
+    destination = read_teardown_configmap(
+        kubeconfig, args.cluster, require_labels=False
+    )
+    if destination is not None:
+        teardown_record_from_configmap(destination, args.cluster)
+        if (
+            teardown_record_text(destination).encode("utf-8")
+            != legacy_text.encode("utf-8")
+        ):
+            raise TalosLifecycleError(
+                "destination teardown record differs from legacy record; "
+                "refusing migration"
+            )
+    destination = write_teardown_configmap(
+        kubeconfig,
+        TEARDOWN_LEDGER_NAMESPACE,
+        args.cluster,
+        legacy_text,
+        destination,
+    )
+    if (
+        teardown_record_text(destination).encode("utf-8")
+        != legacy_text.encode("utf-8")
+    ):
+        raise TalosLifecycleError(
+            "migrated teardown record does not match legacy bytes"
+        )
+    preconditioned_delete(
+        kubeconfig,
+        legacy,
+        api_path(legacy, "configmaps"),
+        [
+            "-n",
+            LEGACY_TEARDOWN_LEDGER_NAMESPACE,
+            "get",
+            "configmap",
+            name,
+        ],
+        f"legacy teardown ConfigMap {LEGACY_TEARDOWN_LEDGER_NAMESPACE}/{name}",
+    )
+    print(
+        f"PASS migrated teardown record {LEGACY_TEARDOWN_LEDGER_NAMESPACE}/"
+        f"{name} to {TEARDOWN_LEDGER_NAMESPACE}/{name}"
+    )
+    return 0
+
+
+def prune_teardown_ledger(args: argparse.Namespace) -> int:
+    mode = "--prune-teardown-ledger"
+    kubeconfig = teardown_admin_kubeconfig(args, mode)
+    require_teardown_ledger_namespace(kubeconfig)
+    name = teardown_ledger_name(args.cluster)
+    configmap = read_teardown_configmap(kubeconfig, args.cluster)
+    if configmap is None:
+        print(
+            f"SKIP teardown record {TEARDOWN_LEDGER_NAMESPACE}/{name} "
+            "already absent"
+        )
+        return 0
+    record = teardown_record_from_configmap(configmap, args.cluster)
+    if record["complete"] is not True:
+        raise TalosLifecycleError(
+            f"incomplete teardown record {TEARDOWN_LEDGER_NAMESPACE}/{name} "
+            "cannot be pruned"
+        )
+    cluster = kubectl_json_optional(
+        kubeconfig,
+        ["-n", args.cluster, "get", "cluster", args.cluster],
+    )
+    namespace = kubectl_json_optional(
+        kubeconfig, ["get", "namespace", args.cluster]
+    )
+    if cluster is not None or namespace is not None:
+        live = []
+        if cluster is not None:
+            live.append(f"CAPI Cluster {args.cluster}/{args.cluster}")
+        if namespace is not None:
+            live.append(f"Namespace {args.cluster}")
+        raise TalosLifecycleError(
+            f"teardown record {TEARDOWN_LEDGER_NAMESPACE}/{name} cannot be "
+            f"pruned while {' and '.join(live)} exists"
+        )
+    preconditioned_delete(
+        kubeconfig,
+        configmap,
+        api_path(configmap, "configmaps"),
+        [
+            "-n",
+            TEARDOWN_LEDGER_NAMESPACE,
+            "get",
+            "configmap",
+            name,
+        ],
+        f"teardown ConfigMap {TEARDOWN_LEDGER_NAMESPACE}/{name}",
+    )
+    print(f"PASS pruned teardown record {TEARDOWN_LEDGER_NAMESPACE}/{name}")
+    return 0
+
+
 def teardown(args: argparse.Namespace) -> int:
     kubeconfig = Path(args.kubeconfig).expanduser().resolve()
     if not kubeconfig.is_file():
         raise TalosLifecycleError(
             f"explicit management kubeconfig is absent: {kubeconfig}"
         )
+    require_teardown_ledger_namespace(kubeconfig)
     local_config = local_teardown_config(args)
     configmap = read_teardown_configmap(kubeconfig, args.cluster)
     record = (
@@ -2521,10 +2832,12 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--cleanup-authorization", action="store_true")
     mode.add_argument("--resume-preconditions", action="store_true")
     mode.add_argument("--teardown", action="store_true")
+    mode.add_argument("--migrate-teardown-ledger", action="store_true")
+    mode.add_argument("--prune-teardown-ledger", action="store_true")
     parser.add_argument("--cluster", required=True)
     parser.add_argument("--cluster-dir")
     parser.add_argument("--kubeconfig", required=True)
-    parser.add_argument("--ok-linux-path", required=True)
+    parser.add_argument("--ok-linux-path")
     parser.add_argument("--confirm", default="false")
     parser.add_argument("--workload-kubeconfig")
     parser.add_argument("--cilium-chart")
@@ -2535,6 +2848,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.migrate_teardown_ledger:
+        return migrate_teardown_ledger(args)
+    if args.prune_teardown_ledger:
+        return prune_teardown_ledger(args)
+    # All pre-existing modes required this globally before the two ledger-only
+    # admin modes were added. Keep that CLI contract unchanged.
+    required_ok_linux_path(args)
     if args.preflight:
         return preflight(args)
     if args.replacement_preflight:
