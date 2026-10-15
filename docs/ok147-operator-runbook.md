@@ -89,6 +89,77 @@ authorization. This command runs the Stage 1-7 executor directly in the local
 `ok` process. It contacts the APIs bound by the private manifest and does not
 install the four Job-activation wrapper objects described below.
 
+## Bare-MVP closure and ongoing provider access
+
+Keep three different results separate in the operator handoff:
+
+- **Execution outcome:** the exact seven-stage durable receipt chain verifies
+  as completed. A successful process exit alone is not this proof.
+- **Current convergence:** independently read the bound CAPI target and the
+  profile-required workload/Enablement sources. Retain the observed generation,
+  target identity and observation time. A later regression does not rewrite an
+  earlier immutable receipt, but must prevent an unqualified current-health claim.
+- **Access lifetime:** record the next known provider credential expiry in the
+  private handoff, including its timezone. Current availability is not a promise
+  that ongoing reconciliation will work after that deadline.
+
+For `bare-cluster-mvp/v1`, completion ends after Stage 7. Do not require or imply
+that Stages 8–12, GitOps registration, Platform applications or full aggregate
+evaluation have run. Those belong to the separately bound full workflow below.
+
+If an explicitly approved recovery inherits the original four receipts and
+completes Stages 5–7 under the recovery binding, describe it as a **recovered
+Bare-MVP completion**. Preserve the source full-run STOP and terminal marker;
+do not relabel it as a successful fresh, single-invocation `cluster create` run.
+The narrow recovery formats and paired flags are described in the README.
+
+### Execution credentials are not lifecycle credential ownership
+
+The external infrastructure kubeconfig installed for CAPK is an ongoing provider
+dependency. It is not merely an executor capability that can stop working when
+the local `ok` process exits. In contrast, the runner's management and ledger
+credentials remain short-lived, isolated execution capabilities.
+
+Current local `--dry-run`/`--prepare` validation does not establish that provider
+access will remain valid for the cluster lifetime. A one-hour provider credential
+can permit provisioning and then expire while the provider continues reconciling.
+Bootstrap material may still exist and workload Nodes may remain Ready while
+CAPI availability regresses because the provider can no longer authenticate.
+Verify the active kubeconfig user, credential expiry and a narrowly scoped GET
+using that actual provider identity before attributing such a failure to missing
+bootstrap data. Never print tokens, bootstrap data or unredacted kubeconfigs.
+
+The CLI is not a token-renewal controller. It must not silently increase token
+lifetimes, rotate credentials, change RBAC, restart controllers, modify provider
+references, invoke Talos bootstrap or replay a completed runner to repair access.
+The lifecycle operator owns continuing provider credential validity and rotation;
+see the [ownership boundary](ok147-provider-access-ownership.md). This assigns a
+responsibility, not a new component. A concrete renewal mechanism, installation
+authority and any changed provider input/Secret protocol still require separate
+design and approval; this work implements none of them.
+
+### Separately approved immutable-Secret recovery
+
+An immutable provider Secret cannot be patched in place. If an explicitly
+reviewed recovery chooses same-name replacement, preserve all references and
+bind the current Secret UID/resourceVersion/data identity, replacement payload,
+reference identities and credential deadline. Issuing a new credential and
+applying the resulting replacement are separate approval boundaries. An expired
+approved payload does not authorize issuing another credential under its digest.
+
+Replacement is not atomic: at most one UID/resourceVersion-preconditioned
+DELETE, an independent absence GET, then at most one CREATE. A successful empty
+DELETE response is not itself an error; observed absence is the create gate.
+Precondition or lifetime drift means STOP before deletion. A post-delete failure
+means preserve the event journal and absence evidence, with no automatic retry,
+rollback or delete replay. Observe convergence read-only after installing and
+verifying the replacement; do not re-run provisioning.
+
+Same-name Secret recovery and local one-shot orchestration used for an operator
+handoff are not new product CLI commands or standing recovery authority. A
+finite renewed credential supplies only a bounded MVP window, not durable
+lifecycle access. Teardown and OK-197/OK-198 remain outside this change.
+
 ## Job-based activation path
 
 The Job-based live activation is a separate expert deployment path. It is not

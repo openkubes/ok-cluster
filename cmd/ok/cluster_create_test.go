@@ -36,7 +36,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"authority stage":        {[]string{"authority", "stage", "--help"}, []string{"launch execute", "separate approval"}},
 		"evidence":               {[]string{"evidence", "--help"}, []string{"ok evidence observability", "independent evidence"}},
 		"evidence observability": {[]string{"evidence", "observability", "--help"}, []string{"observability serve", "configured listener"}},
-		"cluster create":         {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "may create cluster resources"}},
+		"cluster create":         {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "may create cluster resources", "lifecycle operator owns", "does not renew provider credentials"}},
 		"create requirements":    {[]string{"cluster", "create", "requirements", "--help"}, []string{"machine-readable", "reads no file", "does not prepare"}},
 		"create template":        {[]string{"cluster", "create", "manifest-template", "--help"}, []string{"manifest skeleton", "invalid placeholder", "authoritative renderer"}},
 		"create plan template":   {[]string{"cluster", "create", "plan-template", "--help"}, []string{"seven-stage", "NO-GO", "authoritative renderer"}},
@@ -282,6 +282,47 @@ func TestClusterCreateRequirementsAreMachineReadableAndNonMutating(t *testing.T)
 	}
 	if err := run([]string{"cluster", "create", "requirements", "extra"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("requirements command accepted positional input")
+	}
+}
+
+func TestClusterCreateProviderOwnershipIsDescriptiveAndDoesNotChangeManifest(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"cluster", "create", "requirements"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var requirements clusterCreateRequirements
+	if err := json.Unmarshal(stdout.Bytes(), &requirements); err != nil {
+		t.Fatal(err)
+	}
+	ownership := requirements.ProviderAccessOwnership
+	if ownership.LifecycleOwner != "lifecycle-operator" || !ownership.RequiredAfterExecution || ownership.AutomaticRenewalByCLI || ownership.OfflineValidationProvesOngoingAccess || len(ownership.OperatorHandoff) != 3 {
+		t.Fatalf("provider lifecycle responsibility differs: %#v", ownership)
+	}
+	if stderr.Len() != 0 || requirements.Format != clusterCreateRequirementsFormat {
+		t.Fatal("requirements routing or format changed")
+	}
+	for _, section := range requirements.RequiredManifestSections {
+		if strings.Contains(strings.ToLower(section), "ownership") || strings.Contains(strings.ToLower(section), "rotation") {
+			t.Fatal("descriptive ownership became a required manifest input")
+		}
+	}
+	stdout.Reset()
+	if err := run([]string{"cluster", "create", "manifest-template"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := manifest["providerAccessOwnership"]; exists {
+		t.Fatal("descriptive requirements metadata changed the manifest contract")
+	}
+	var providerAccess map[string]json.RawMessage
+	if err := json.Unmarshal(manifest["providerAccess"], &providerAccess); err != nil {
+		t.Fatal(err)
+	}
+	if len(providerAccess) != 2 || providerAccess["policyPath"] == nil || providerAccess["kubeconfigFile"] == nil {
+		t.Fatal("provider credential input contract changed")
 	}
 }
 

@@ -70,6 +70,9 @@ func (operation ObservationStageOperation) Run(ctx context.Context, plan stagepl
 // deterministic receipt remains untouched; StoreStageReceipt persists the
 // new result in its digest-addressed attempt slot.
 func (operation ObservationStageOperation) Retry(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, failedReceiptDigest string) (ObservationStageRunReceipt, error) {
+	if plan.RecoverySourcePlanDigest != "" {
+		return ObservationStageRunReceipt{Format: ObservationStageReceiptFormat, State: "PREOBSERVATION"}, errors.New("recovery suffix is single-use; terminal outcomes cannot be retried")
+	}
 	if !stagedDigestPattern.MatchString(failedReceiptDigest) {
 		return ObservationStageRunReceipt{Format: ObservationStageReceiptFormat, State: "PREOBSERVATION"}, errors.New("failed observation receipt digest is invalid")
 	}

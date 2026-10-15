@@ -20,6 +20,7 @@ import (
 
 const (
 	Format              = "ok147-stage-receipt/v1"
+	RecoveryFormat      = "ok147-stage-receipt/recovery-v1"
 	maximumReceiptBytes = 128 * 1024
 )
 
@@ -52,15 +53,19 @@ type Receipt struct {
 	EvidenceDigest         string            `json:"evidenceDigest"`
 	TargetClusterUIDDigest string            `json:"targetClusterUidDigest,omitempty"`
 	CompletedAt            string            `json:"completedAt"`
+	RecoveryBindingDigest  string            `json:"recoveryBindingDigest,omitempty"`
 }
 
 // Verified can only be produced by New, Verify or Load. It retains canonical
 // bytes so later links cannot observe caller mutation of a Receipt copy.
 type Verified struct {
-	receipt  Receipt
-	digest   string
-	raw      []byte
-	verified bool
+	receipt        Receipt
+	digest         string
+	raw            []byte
+	verified       bool
+	recoveryPlan   string
+	recoveryDigest string
+	sourcePlan     *stageplan.Binding
 }
 
 // New builds a receipt only after all direct predecessor receipts have been
@@ -89,6 +94,10 @@ func NewWithTargetClusterUIDDigest(plan stageplan.Binding, stageID string, prede
 		State: state, MutationState: mutationState, OperationOutcomeDigest: operationOutcomeDigest,
 		EvidenceDigest: evidenceDigest, TargetClusterUIDDigest: targetClusterUIDDigest,
 		CompletedAt: completedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if len(predecessors) == 1 && predecessors[0].recoveryPlan == plan.PlanDigest {
+		receipt.Format = RecoveryFormat
+		receipt.RecoveryBindingDigest = predecessors[0].recoveryDigest
 	}
 	return verifyReceipt(receipt, plan, predecessors)
 }
@@ -168,7 +177,14 @@ func verifyReceipt(receipt Receipt, plan stageplan.Binding, predecessors []Verif
 	if err != nil {
 		return Verified{}, err
 	}
-	if receipt.Format != Format || receipt.PlanDigest != plan.PlanDigest || receipt.ContractIdentity != plan.ContractIdentity || receipt.ContractRevision != plan.IntentRevision || receipt.EnablementRevision != plan.EnablementRevision || receipt.PlatformRevision != plan.PlatformRevision || receipt.ExecutionFixture != plan.ExecutionFixture {
+	wantFormat, wantRecovery := Format, ""
+	if plan.RecoverySourcePlanDigest != "" {
+		if stage.Order < 5 || len(predecessors) != 1 || predecessors[0].recoveryPlan != plan.PlanDigest || !receiptDigestPattern.MatchString(predecessors[0].recoveryDigest) {
+			return Verified{}, errors.New("recovery receipt requires the inherited source prefix and remaining-stage boundary")
+		}
+		wantFormat, wantRecovery = RecoveryFormat, predecessors[0].recoveryDigest
+	}
+	if receipt.Format != wantFormat || receipt.RecoveryBindingDigest != wantRecovery || receipt.PlanDigest != plan.PlanDigest || receipt.ContractIdentity != plan.ContractIdentity || receipt.ContractRevision != plan.IntentRevision || receipt.EnablementRevision != plan.EnablementRevision || receipt.PlatformRevision != plan.PlatformRevision || receipt.ExecutionFixture != plan.ExecutionFixture {
 		return Verified{}, errors.New("stage receipt plan or Contract identity differs")
 	}
 	if receipt.StageOrder != stage.Order || receipt.StageDigest != stageDigest || receipt.Kind != stage.Kind || receipt.Authority != stage.Authority || receipt.Operation != stage.GrantOperation {
@@ -205,7 +221,11 @@ func verifyReceipt(receipt Receipt, plan stageplan.Binding, predecessors []Verif
 	if err != nil {
 		return Verified{}, err
 	}
-	return Verified{receipt: receipt, digest: receiptDigest, raw: raw, verified: true}, nil
+	verified := Verified{receipt: receipt, digest: receiptDigest, raw: raw, verified: true}
+	if wantRecovery != "" {
+		verified.recoveryPlan, verified.recoveryDigest = plan.PlanDigest, wantRecovery
+	}
+	return verified, nil
 }
 
 func verifiedLinks(plan stageplan.Binding, stage stageplan.Stage, predecessors []Verified, completedAt time.Time) ([]Predecessor, error) {
@@ -222,7 +242,7 @@ func verifiedLinks(plan stageplan.Binding, stage stageplan.Stage, predecessors [
 		if err != nil {
 			return nil, err
 		}
-		if receipt.PlanDigest != plan.PlanDigest || receipt.StageID != stage.Requires[index] || receipt.State != "SUCCEEDED" || receipt.StageOrder >= stage.Order {
+		if (receipt.PlanDigest != plan.PlanDigest && predecessor.recoveryPlan != plan.PlanDigest) || receipt.StageID != stage.Requires[index] || receipt.State != "SUCCEEDED" || receipt.StageOrder >= stage.Order {
 			return nil, errors.New("stage receipt predecessor is foreign, unsuccessful or out of order")
 		}
 		predecessorCompletedAt, err := time.Parse(time.RFC3339Nano, receipt.CompletedAt)

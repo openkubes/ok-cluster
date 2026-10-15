@@ -20,14 +20,16 @@ const TargetAccessStageBundleReceiptFormat = "ok147-target-access-stage-bundle/v
 // CreateTargetAccess grant and one externally rendered sixteen-object artifact.
 // Loading remains entirely offline.
 type TargetAccessStageBundleConfig struct {
-	PlanPath           string
-	PlanExpected       stageplan.Expected
-	Receipts           []StageReceiptSource
-	GrantPath          string
-	GrantPublicKeyPath string
-	EvaluationTime     time.Time
-	ArtifactPath       string
-	ExpectedObjects    []projection.ResourceIdentity
+	PlanPath              string
+	PlanExpected          stageplan.Expected
+	Receipts              []StageReceiptSource
+	RecoveryBindingPath   string
+	RecoveryBindingDigest string
+	GrantPath             string
+	GrantPublicKeyPath    string
+	EvaluationTime        time.Time
+	ArtifactPath          string
+	ExpectedObjects       []projection.ResourceIdentity
 }
 
 type TargetAccessStageBundleReceipt struct {
@@ -76,6 +78,7 @@ func LoadTargetAccessStageBundle(config TargetAccessStageBundleConfig) (Verified
 	}
 	plan, cursor, prefix, err := loadStageResumeWithPrefix(StageResumeConfig{
 		PlanPath: config.PlanPath, PlanExpected: config.PlanExpected, Receipts: config.Receipts,
+		RecoveryBindingPath: config.RecoveryBindingPath, RecoveryBindingDigest: config.RecoveryBindingDigest,
 	})
 	if err != nil {
 		return VerifiedTargetAccessStageBundle{}, err

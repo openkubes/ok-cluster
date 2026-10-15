@@ -62,6 +62,18 @@ Therefore their lifecycle is part of the operational risk: they
 must not be reused, copied to Git or treated as a durable credential store.
 Cleanup requires separate authority.
 
+Provider credentials consumed by an ongoing infrastructure controller have a
+different lifetime responsibility from the executor's short-lived management
+and ledger capabilities. Ending a runner does not end the provider's need to
+authenticate. A finite provider token therefore bounds continued reconciliation,
+not just the execution window. The current CLI does not own automatic renewal,
+choose a longer lifetime or guarantee durable rotation. The lifecycle operator
+owns continuing provider access; its renewal mechanism remains outside bounded
+runner authority and is not implemented here.
+See the operator runbook for current-health reporting and separately authorized
+immutable-Secret recovery; neither a completed receipt chain nor an expired
+replacement package grants repair or credential-renewal authority.
+
 ## Installation boundary
 
 The launcher can only perform exact-name `GET` operations for the required

@@ -74,6 +74,9 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 	if !bundle.verified || config.Clock == nil || config.Wait == nil {
 		return OpenedNetworkObservationStage{}, errors.New("verified network observation bundle, clock, and waiter are required")
 	}
+	if err := bundle.plan.RequireInput("network-observation", "stage.network-observation", config.ExpectedNetworkProfileDigest); err != nil {
+		return OpenedNetworkObservationStage{}, errors.New("network observation requires the exact plan-bound network profile")
+	}
 	lifecycle, err := bundle.prefix[1].Receipt()
 	if err != nil {
 		return OpenedNetworkObservationStage{}, errors.New("read durable network target correlation")

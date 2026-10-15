@@ -67,18 +67,24 @@ func Evaluate(plan stageplan.Binding, prefix []stagereceipt.Verified) (Cursor, e
 	if len(prefix) > len(plan.Stages) {
 		return Cursor{}, errors.New("stage receipt prefix exceeds the staged plan")
 	}
+	if plan.RecoverySourcePlanDigest != "" {
+		if len(prefix) < 4 {
+			return Cursor{}, errors.New("recovery cannot start or replay Stages 1-4")
+		}
+		for _, inherited := range prefix[:4] {
+			if !inherited.InheritedFor(plan) {
+				return Cursor{}, errors.New("recovery requires the verified original prefix")
+			}
+		}
+	}
 	previous := []stagereceipt.Verified{}
 	for index, verified := range prefix {
 		expected := plan.Stages[index]
-		raw, err := verified.Bytes()
-		if err != nil {
-			return Cursor{}, err
-		}
 		receiptDigest, err := verified.Digest()
 		if err != nil {
 			return Cursor{}, err
 		}
-		rechecked, err := stagereceipt.Verify(raw, receiptDigest, plan, previous)
+		rechecked, err := verified.Reverify(plan, previous)
 		if err != nil {
 			return Cursor{}, fmt.Errorf("verify stage receipt prefix item %d: %w", index+1, err)
 		}

@@ -77,6 +77,9 @@ func (operation BindingStageOperation) Run(ctx context.Context, plan stageplan.B
 // Retry invokes the binder again only when the caller binds the exact digest
 // of an immutable FAILED or STOPPED receipt. Earlier receipts remain intact.
 func (operation BindingStageOperation) Retry(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, terminalReceiptDigest string) (BindingStageRunReceipt, error) {
+	if plan.RecoverySourcePlanDigest != "" {
+		return BindingStageRunReceipt{Format: BindingStageReceiptFormat, State: "PREBINDING"}, errors.New("recovery suffix is single-use; terminal outcomes cannot be retried")
+	}
 	if !stagedDigestPattern.MatchString(terminalReceiptDigest) {
 		return BindingStageRunReceipt{Format: BindingStageReceiptFormat, State: "PREBINDING"}, errors.New("terminal binding receipt digest is invalid")
 	}

@@ -52,6 +52,65 @@ Stage-7 Bare-MVP completion and the legacy contract fixture. It creates no
 cluster client and is not a substitute for validating a freshly rendered
 private production manifest.
 
+For an explicitly authorized continuation through the expert Stage 5–7
+commands (`stage observe network`, `stage bind runtime`, `stage run target-access`),
+`--workload-kubeconfig-file` accepts the client-certificate kubeconfig produced
+by the lifecycle stage. Supply exactly one of that flag and
+`--workload-token-file`. Both modes still require the digest-bound
+`--workload-binding`, its digest and `--workload-ca-file`; neither selects a
+default kubeconfig or context. Existing token-based invocations remain valid.
+
+Inspect a stopped run's exact durable receipt prefix with `ok cluster stage
+resume` before planning any continuation. A terminal full-run STOP stays
+immutable; the new credential flag does not authorize replay or make
+`cluster create --live` resumable. Network observation and runtime binding
+persist ledger evidence; target access additionally requires its separate
+predecessor-bound Stage grant. None is executed by an offline inspection.
+
+An explicit, narrow recovery format is available for a source Bare-MVP run
+that stopped with `OBSERVATION_SOURCE_ERROR` at Stage 5 after exactly four
+successful durable stage receipts. It is **not** a general resume switch:
+
+- Retain the original manifest, plan, four receipts, STOP receipt and executor
+  terminal marker unchanged. Their independently reviewed identities, including
+  the lifecycle receipt's target Cluster UID digest, are pinned in an
+  `ok147-network-profile-recovery/v1` binding (`authorizationState: NO-GO`).
+- The successor plan uses `ok147-staged-execution-plan/recovery-v1` and pins
+  `recoverySourcePlanDigest`. The sole permitted input change is Stage 5's
+  expected HelmReleaseProxy spec digest: the old value must be reproducible
+  from the approved literal HelmChartProxy values and former Cluster reference,
+  and the corrected value from the same values and current Cluster reference.
+  Node count, image requirements, probes, other inputs and authorities cannot change.
+- Supply **both** `--recovery-binding <file>` and
+  `--recovery-binding-digest sha256:<reviewed-digest>` to `cluster stage resume`
+  and the expert Stage 5–7 commands, together with the successor `--plan`,
+  unchanged expected Contract identities, and four original ordered `--receipt`
+  inputs. Append only the newly persisted successor receipts as stages finish.
+  `resume` reads local evidence only; `NEXT` means eligible for a separately
+  authorized stage, not a successful cluster or permission to execute it.
+- The old receipts retain their source plan and bytes. New Stage 5–7 receipts
+  use `ok147-stage-receipt/recovery-v1`, pinning the successor plan and recovery
+  binding digest. Stages 1–4 cannot be replayed. A failed or stopped successor
+  receipt remains terminal. Missing convergence evidence cannot yield success.
+- `authority stage policy` accepts the same recovery pair and independently
+  re-verifies the source evidence. Its generated policy permits only Stage 7
+  `CreateTargetAccess`, bound to the new predecessor; generation does not
+  install a policy or grant authority. Stages 5–6 retain normal ledger/evidence
+  requirements. Any authority rebinding, credential renewal, publication or
+  live execution needs separate approval.
+
+This additive format leaves ordinary v1/v2 plans and first-run receipts
+unchanged. It does not make `cluster create --live` replayable, add teardown,
+or invoke Talos `bootstrap-resume`. The latter remains a separately authorized
+lifecycle action, never an automatic response to a runner STOP.
+
+The provider controller still needs valid infrastructure access after `ok` exits.
+A completed receipt chain is not a guarantee of continuing availability after a
+provider credential expires. The CLI does not automatically renew credentials or
+replace immutable Secrets. See the [operator runbook](docs/ok147-operator-runbook.md#bare-mvp-closure-and-ongoing-provider-access)
+for the distinction between recovered completion, current convergence and
+ongoing credential ownership.
+
 Renderer and packaging integrations can inspect the accepted input contract
 without reading a private file:
 
