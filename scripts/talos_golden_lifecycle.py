@@ -23,6 +23,7 @@ EVIDENCE_DIR = ROOT / "docs" / "adoption" / "OK-130" / ".evidence"
 TEARDOWN_LEDGER_NAMESPACE = "kube-system"
 TEARDOWN_LEDGER_PREFIX = "ok-cluster-teardown-"
 TEARDOWN_LEDGER_SCHEMA = 1
+SPLIT_TEARDOWN_LEDGER_SCHEMA = 2
 sys.path.insert(0, str(ROOT))
 
 from profile_resolvers.talos import (  # noqa: E402
@@ -1635,7 +1636,20 @@ def validate_teardown_record(record: dict, cluster: str) -> None:
         "persistent_volumes",
         "complete",
     }
-    if set(record) != required or record.get("schema_version") != TEARDOWN_LEDGER_SCHEMA:
+    if record.get("schema_version") == SPLIT_TEARDOWN_LEDGER_SCHEMA:
+        required.add("planes")
+        required.add("storage_uids")
+        planes = record.get("planes")
+        if (
+            not isinstance(planes, dict)
+            or set(planes) != {"management_uid", "provider_uid", "provider_namespace_uid"}
+            or not all(isinstance(value, str) and value for value in planes.values())
+            or planes["management_uid"] == planes["provider_uid"]
+        ):
+            raise TalosLifecycleError("teardown record plane identity is invalid")
+    elif record.get("schema_version") != TEARDOWN_LEDGER_SCHEMA:
+        raise TalosLifecycleError("teardown record schema is invalid")
+    if set(record) != required:
         raise TalosLifecycleError("teardown record schema is invalid")
     cluster_identity = record.get("cluster")
     if (
@@ -1683,6 +1697,22 @@ def validate_teardown_record(record: dict, cluster: str) -> None:
             or values != sorted(set(values))
         ):
             raise TalosLifecycleError(f"teardown record {key} is invalid")
+    if record.get("schema_version") == SPLIT_TEARDOWN_LEDGER_SCHEMA:
+        storage = record.get("storage_uids")
+        if (
+            not isinstance(storage, dict)
+            or set(storage) != set(record["persistent_volumes"])
+            or any(
+                not isinstance(value, dict)
+                or set(value) != {"pv", "longhorn"}
+                or not isinstance(value["pv"], str) or not value["pv"]
+                or (value["longhorn"] is not None and (
+                    not isinstance(value["longhorn"], str) or not value["longhorn"]
+                ))
+                for value in storage.values()
+            )
+        ):
+            raise TalosLifecycleError("teardown record storage identity is invalid")
     if not isinstance(record.get("complete"), bool):
         raise TalosLifecycleError("teardown record completion marker is invalid")
 
@@ -1981,9 +2011,37 @@ def delete_resource(
     )
 
 
+def teardown_storage_uids(
+    kubeconfig: Path, names: list[str], saved: dict,
+) -> dict:
+    """Capture new storage provenance, but never rebind an existing name."""
+    identities = dict(saved)
+    for name in names:
+        observed = {}
+        for kind, arguments in (
+            ("pv", ["get", "pv", name]),
+            ("longhorn", ["-n", "longhorn-system", "get", "volumes.longhorn.io", name]),
+        ):
+            resource = kubectl_json_optional(kubeconfig, arguments)
+            uid = None
+            if resource is not None:
+                uid = resource.get("metadata", {}).get("uid")
+                if not isinstance(uid, str) or not uid:
+                    raise TalosLifecycleError(f"{kind} {name} storage UID is absent")
+            if name in saved and resource is not None and uid != saved[name][kind]:
+                raise TalosLifecycleError(f"{kind} {name} differs from durable storage UID")
+            observed[kind] = uid
+        if name not in saved:
+            if observed["pv"] is None:
+                raise TalosLifecycleError(f"PV {name} disappeared before storage provenance")
+            identities[name] = observed
+    return identities
+
+
 def cleanup_retained_volumes(
-    kubeconfig: Path, names: list[str]
+    kubeconfig: Path, names: list[str], *, storage_uids: dict | None = None,
 ) -> list[str]:
+    require_longhorn_absence = storage_uids is not None
     failures = []
     if names:
         print(
@@ -1995,6 +2053,8 @@ def cleanup_retained_volumes(
             if volume is None:
                 print(f"SKIP PersistentVolume {name} already absent")
             else:
+                if storage_uids is not None and volume.get("metadata", {}).get("uid") != storage_uids[name]["pv"]:
+                    raise TalosLifecycleError(f"PV {name} differs from durable storage UID")
                 if volume.get("metadata", {}).get("name") != name:
                     raise TalosLifecycleError(
                         f"PersistentVolume {name} identity is invalid"
@@ -2008,7 +2068,24 @@ def cleanup_retained_volumes(
                 )
         except TalosLifecycleError as error:
             failures.append(str(error))
+            if require_longhorn_absence:
+                # Do not delete backing storage after an uncertain PV operation.
+                continue
         try:
+            if require_longhorn_absence:
+                volume = kubectl_json_optional(
+                    kubeconfig, ["-n", "longhorn-system", "get", "volumes.longhorn.io", name]
+                )
+                if volume is not None:
+                    if volume.get("metadata", {}).get("uid") != storage_uids[name]["longhorn"]:
+                        raise TalosLifecycleError(f"Longhorn volume {name} differs from durable storage UID")
+                    preconditioned_delete(
+                        kubeconfig, volume,
+                        api_path(volume, "volumes", expected_group="longhorn.io"),
+                        ["-n", "longhorn-system", "get", "volumes.longhorn.io", name],
+                        f"Longhorn volume {name}",
+                    )
+                continue
             delete_resource(
                 kubeconfig,
                 [
@@ -2021,7 +2098,10 @@ def cleanup_retained_volumes(
                 f"Longhorn volume {name}",
             )
         except TalosLifecycleError as error:
-            print(f"WARN {error}", file=sys.stderr)
+            if require_longhorn_absence:
+                failures.append(str(error))
+            else:
+                print(f"WARN {error}", file=sys.stderr)
     return failures
 
 
@@ -2031,11 +2111,12 @@ def cleanup_authorization(
     config: dict | None = None,
     data_volume_uids: set[str] | None = None,
     golden_before: dict | None = None,
+    kubeconfig: Path | None = None,
 ) -> int:
     if config is None:
         config, manifest, kubeconfig = inputs(args)
         validate_manifest(config, manifest)
-    else:
+    elif kubeconfig is None:
         kubeconfig = Path(args.kubeconfig).expanduser().resolve()
         if not kubeconfig.is_file():
             raise TalosLifecycleError(
@@ -2225,19 +2306,61 @@ def cleanup_authorization(
     return 0
 
 
+def teardown_plane_uid(kubeconfig: Path) -> str:
+    """Bind authority to a live cluster identity, never a token or path name."""
+    namespace = kubectl_json(kubeconfig, ["get", "namespace", "kube-system"])
+    uid = namespace.get("metadata", {}).get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise TalosLifecycleError("kube-system UID is required to bind teardown authority")
+    return uid
+
+
+def remove_local_teardown_files(args: argparse.Namespace) -> None:
+    cluster_dir = cluster_directory(args)
+    # Split-plane runs contain immutable CLI evidence. Never remove it as a
+    # side effect of infrastructure teardown, including completed-record retries.
+    if getattr(args, "provider_kubeconfig", None) or getattr(args, "preserve_local", False):
+        print(f"PRESERVE local cluster directory {cluster_dir}")
+    elif cluster_dir.exists():
+        shutil.rmtree(cluster_dir)
+
+
 def teardown(args: argparse.Namespace) -> int:
     kubeconfig = Path(args.kubeconfig).expanduser().resolve()
     if not kubeconfig.is_file():
         raise TalosLifecycleError(
             f"explicit management kubeconfig is absent: {kubeconfig}"
         )
+    provider_argument = getattr(args, "provider_kubeconfig", None)
+    provider = Path(provider_argument).expanduser().resolve() if provider_argument else kubeconfig
+    if not provider.is_file():
+        raise TalosLifecycleError(f"explicit provider kubeconfig is absent: {provider}")
+    planes = None
+    if provider_argument:
+        planes = {
+            "management_uid": teardown_plane_uid(kubeconfig),
+            "provider_uid": teardown_plane_uid(provider),
+        }
+        if planes["management_uid"] == planes["provider_uid"]:
+            raise TalosLifecycleError("separate provider kubeconfig must identify a different plane")
     local_config = local_teardown_config(args)
+    if local_config is not None and local_config.get("infraClusterSecretRef") and not planes:
+        raise TalosLifecycleError(
+            "external provider reference requires explicit --provider-kubeconfig for teardown"
+        )
     configmap = read_teardown_configmap(kubeconfig, args.cluster)
     record = (
         teardown_record_from_configmap(configmap, args.cluster)
         if configmap is not None
         else None
     )
+    if record is not None:
+        saved_planes = record.get("planes")
+        if (saved_planes is None) != (planes is None) or (
+            saved_planes is not None
+            and any(saved_planes[key] != value for key, value in planes.items())
+        ):
+            raise TalosLifecycleError("teardown plane authority differs from durable record")
     if local_config is None and record is None:
         raise TalosLifecycleError(
             "cleanup state cannot be determined: local cluster config and durable "
@@ -2251,10 +2374,14 @@ def teardown(args: argparse.Namespace) -> int:
         namespace = kubectl_json_optional(
             kubeconfig, ["get", "namespace", args.cluster]
         )
-        if cluster is None and namespace is None:
-            cluster_dir = cluster_directory(args)
-            if local_config is not None and cluster_dir.exists():
-                shutil.rmtree(cluster_dir)
+        provider_namespace = (
+            bound_resource(provider, ["get", "namespace", args.cluster],
+                           record["planes"]["provider_namespace_uid"], "Provider Namespace")
+            if planes else None
+        )
+        if cluster is None and namespace is None and provider_namespace is None:
+            if local_config is not None:
+                remove_local_teardown_files(args)
             print(f"SKIP Talos cluster {args.cluster} already torn down")
             return 0
         if any(
@@ -2264,6 +2391,8 @@ def teardown(args: argparse.Namespace) -> int:
                 (namespace, record["namespace_uid"]),
             )
         ):
+            if planes:
+                raise TalosLifecycleError("completed split-plane record belongs to another generation")
             record = None
         else:
             raise TalosLifecycleError(
@@ -2293,6 +2422,11 @@ def teardown(args: argparse.Namespace) -> int:
             record["namespace_uid"],
             "Namespace",
         )
+        bound_provider_namespace = (
+            bound_resource(provider, ["get", "namespace", args.cluster],
+                           record["planes"]["provider_namespace_uid"], "Provider Namespace")
+            if planes else bound_namespace
+        )
     else:
         namespace = kubectl_json_optional(
             kubeconfig, ["get", "namespace", args.cluster]
@@ -2310,16 +2444,23 @@ def teardown(args: argparse.Namespace) -> int:
         cluster_uid = cluster.get("metadata", {}).get("uid")
         if not namespace_uid or not cluster_uid:
             raise TalosLifecycleError("live Cluster or Namespace UID is absent")
+        bound_provider_namespace = (
+            kubectl_json_optional(provider, ["get", "namespace", args.cluster])
+            if planes else namespace
+        )
+        provider_namespace_uid = (bound_provider_namespace or {}).get("metadata", {}).get("uid")
+        if not provider_namespace_uid:
+            raise TalosLifecycleError("Provider Namespace UID is absent before durable provenance")
         config_identity = teardown_config_subset(local_config)
         data_volume_uids, persistent_volumes = teardown_inventory(
-            kubeconfig,
+            provider,
             args.cluster,
             config_identity,
-            namespace_uid,
+            provider_namespace_uid,
             set(),
         )
         golden_before = (
-            verify_golden(local_config, kubeconfig)
+            verify_golden(local_config, provider)
             if has_golden_config(local_config)
             else None
         )
@@ -2337,12 +2478,21 @@ def teardown(args: argparse.Namespace) -> int:
             "persistent_volumes": sorted(persistent_volumes),
             "complete": False,
         }
+        if planes:
+            record["schema_version"] = SPLIT_TEARDOWN_LEDGER_SCHEMA
+            record["planes"] = {**planes, "provider_namespace_uid": provider_namespace_uid}
+            record["storage_uids"] = teardown_storage_uids(
+                provider, record["persistent_volumes"], {},
+            )
         bound_cluster = cluster
         bound_namespace = namespace
 
     confirm_teardown(
         args.cluster, record["persistent_volumes"], args.confirm
     )
+    if planes:
+        # Check saved identities before any mutation, including an operator retry.
+        teardown_storage_uids(provider, record["persistent_volumes"], record["storage_uids"])
     if fresh_record:
         current_cluster = bound_resource(
             kubeconfig,
@@ -2361,6 +2511,11 @@ def teardown(args: argparse.Namespace) -> int:
                 "Cluster or Namespace disappeared before durable teardown "
                 "provenance could be recorded"
             )
+        if planes and bound_resource(
+            provider, ["get", "namespace", args.cluster],
+            record["planes"]["provider_namespace_uid"], "Provider Namespace",
+        ) is None:
+            raise TalosLifecycleError("Provider Namespace disappeared before durable provenance")
         configmap = persist_teardown_record(
             kubeconfig, args.cluster, record, configmap
         )
@@ -2412,14 +2567,15 @@ def teardown(args: argparse.Namespace) -> int:
         failures.append(str(error))
         cluster_after = {"read_failed": True}
 
-    inventory_ready = bound_namespace is None
-    if cluster_after is None and bound_namespace is not None:
+    provider_namespace_uid = record["planes"]["provider_namespace_uid"] if planes else record["namespace_uid"]
+    inventory_ready = bound_provider_namespace is None
+    if cluster_after is None and bound_provider_namespace is not None:
         try:
             refreshed_uids, refreshed_volumes = teardown_inventory(
-                kubeconfig,
+                provider,
                 args.cluster,
                 record["config"],
-                record["namespace_uid"],
+                provider_namespace_uid,
                 set(record["persistent_volumes"]),
             )
             refreshed = dict(record)
@@ -2429,6 +2585,10 @@ def teardown(args: argparse.Namespace) -> int:
             refreshed["persistent_volumes"] = sorted(
                 set(record["persistent_volumes"]) | refreshed_volumes
             )
+            if planes:
+                refreshed["storage_uids"] = teardown_storage_uids(
+                    provider, refreshed["persistent_volumes"], record["storage_uids"],
+                )
             configmap = persist_teardown_record(
                 kubeconfig, args.cluster, refreshed, configmap
             )
@@ -2437,49 +2597,40 @@ def teardown(args: argparse.Namespace) -> int:
         except TalosLifecycleError as error:
             failures.append(f"namespace inventory refresh failed: {error}")
 
-    if cluster_after is None and inventory_ready:
-        try:
-            if bound_namespace is None:
-                print(f"SKIP Namespace {args.cluster} already absent")
-            else:
+    namespace_targets = [(provider, provider_namespace_uid)]
+    if planes:
+        namespace_targets.append((kubeconfig, record["namespace_uid"]))
+    namespace_absent = True
+    for namespace_kubeconfig, namespace_uid in namespace_targets:
+        if cluster_after is None and inventory_ready and namespace_absent:
+            try:
                 current_namespace = bound_resource(
-                    kubeconfig,
-                    ["get", "namespace", args.cluster],
-                    record["namespace_uid"],
-                    "Namespace",
+                    namespace_kubeconfig, ["get", "namespace", args.cluster],
+                    namespace_uid, "Namespace",
                 )
-                if current_namespace is None:
-                    print(f"SKIP Namespace {args.cluster} already absent")
-                else:
+                if current_namespace is not None:
                     preconditioned_delete(
-                        kubeconfig,
-                        current_namespace,
+                        namespace_kubeconfig, current_namespace,
                         api_path(current_namespace, "namespaces"),
-                        ["get", "namespace", args.cluster],
-                        f"Namespace {args.cluster}",
-                        propagation_policy="Foreground",
-                        include_resource_version=False,
+                        ["get", "namespace", args.cluster], f"Namespace {args.cluster}",
+                        propagation_policy="Foreground", include_resource_version=False,
                     )
+            except TalosLifecycleError as error:
+                failures.append(str(error))
+        try:
+            if bound_resource(namespace_kubeconfig, ["get", "namespace", args.cluster],
+                              namespace_uid, "Namespace") is not None:
+                namespace_absent = False
+                failures.append("original Namespace remains after delete")
         except TalosLifecycleError as error:
+            namespace_absent = False
             failures.append(str(error))
 
-    namespace_after = None
-    try:
-        namespace_after = bound_resource(
-            kubeconfig,
-            ["get", "namespace", args.cluster],
-            record["namespace_uid"],
-            "Namespace",
-        )
-        if namespace_after is not None:
-            failures.append("original Namespace remains after delete")
-    except TalosLifecycleError as error:
-        failures.append(str(error))
-        namespace_after = {"read_failed": True}
-
-    if cluster_after is None and namespace_after is None:
+    if cluster_after is None and namespace_absent:
         failures.extend(
-            cleanup_retained_volumes(kubeconfig, record["persistent_volumes"])
+            cleanup_retained_volumes(
+                provider, record["persistent_volumes"], storage_uids=record.get("storage_uids")
+            )
         )
         config = config_from_teardown_record(record)
         if has_golden_config(config):
@@ -2489,6 +2640,7 @@ def teardown(args: argparse.Namespace) -> int:
                     config=config,
                     data_volume_uids=set(record["data_volume_uids"]),
                     golden_before=record["golden_before"],
+                    kubeconfig=provider,
                 )
             except TalosLifecycleError as error:
                 failures.append(f"Golden clone cleanup failed: {error}")
@@ -2501,9 +2653,7 @@ def teardown(args: argparse.Namespace) -> int:
     completed = dict(record)
     completed["complete"] = True
     persist_teardown_record(kubeconfig, args.cluster, completed, configmap)
-    cluster_dir = cluster_directory(args)
-    if cluster_dir.exists():
-        shutil.rmtree(cluster_dir)
+    remove_local_teardown_files(args)
     print(
         f"✅ Talos cluster {args.cluster} torn down "
         "(including Retain-policy PV cleanup)"
@@ -2524,6 +2674,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cluster", required=True)
     parser.add_argument("--cluster-dir")
     parser.add_argument("--kubeconfig", required=True)
+    parser.add_argument("--provider-kubeconfig", help="Separate provider plane (teardown only; preserves local files)")
+    parser.add_argument("--preserve-local", action="store_true", help="Keep local render and evidence after teardown")
     parser.add_argument("--ok-linux-path", required=True)
     parser.add_argument("--confirm", default="false")
     parser.add_argument("--workload-kubeconfig")
@@ -2535,6 +2687,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if (args.provider_kubeconfig or args.preserve_local) and not args.teardown:
+        raise TalosLifecycleError("--provider-kubeconfig and --preserve-local require --teardown")
     if args.preflight:
         return preflight(args)
     if args.replacement_preflight:
