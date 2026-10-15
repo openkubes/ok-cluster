@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import sys
@@ -174,6 +175,73 @@ class SplitTeardownTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires explicit --provider-kubeconfig", result.stderr)
         self.assert_no_mutations(calls)
+
+    def add_external_provider_reference(self):
+        path = self.box.rendered / "cluster-config.yaml"
+        config = yaml.safe_load(path.read_text())
+        reference = {"name": "external-provider", "namespace": CLUSTER}
+        config["infraClusterSecretRef"] = reference
+        path.write_text(yaml.safe_dump(config))
+        manifest_path = self.box.rendered / "cluster-base.yaml"
+        docs = list(yaml.safe_load_all(manifest_path.read_text()))
+        infrastructure = next(obj for obj in docs if obj and obj.get("kind") == "KubevirtCluster")
+        infrastructure["spec"]["infraClusterSecretRef"] = {
+            **reference, "apiVersion": "v1", "kind": "Secret",
+        }
+        manifest_path.write_text(yaml.safe_dump_all(docs))
+        self.initial_files = {path.relative_to(self.box.rendered): path.read_bytes()
+                              for path in self.box.rendered.rglob("*") if path.is_file()}
+        return config, manifest_path
+
+    def test_external_provider_secret_reference_local_validation(self):
+        config, _ = self.add_external_provider_reference()
+        args = argparse.Namespace(cluster=CLUSTER, cluster_dir=str(self.box.rendered),
+                                  ok_linux_path=str(lifecycle.ROOT.parent / "ok-linux"))
+        with mock.patch.object(lifecycle.subprocess, "run", side_effect=AssertionError(
+            "local manifest validation must not invoke operator tools"
+        )):
+            self.assertEqual(lifecycle.local_teardown_config(args), config)
+
+    def test_external_provider_secret_reference_teardown_success(self):
+        self.add_external_provider_reference()
+        result, _ = self.run_teardown()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.record()["complete"])
+        self.assert_preserved()
+
+    def test_actual_secret_resources_remain_forbidden(self):
+        config, manifest_path = self.add_external_provider_reference()
+        manifest = manifest_path.read_text()
+        secret = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "fixture-only"}}
+        fragments = [
+            yaml.safe_dump(secret),
+            'apiVersion: v1\nkind: "Secret"\nmetadata: {name: fixture-only}\n',
+            json.dumps(secret),
+            yaml.safe_dump({"apiVersion": "v1", "kind": "List", "items": [secret]}),
+            yaml.safe_dump({"apiVersion": "v1", "kind": "List", "items": [
+                {"apiVersion": "v1", "kind": "List", "items": [secret]}]}),
+            yaml.safe_dump({"apiVersion": "v1", "kind": "SecretList", "items": []}),
+        ]
+        for fragment in fragments:
+            with self.subTest(fragment=fragment):
+                manifest_path.write_text(manifest + "\n---\n" + fragment)
+                with mock.patch.object(lifecycle, "kubectl") as kubectl:
+                    with self.assertRaisesRegex(lifecycle.TalosLifecycleError, "secret input"):
+                        lifecycle.validate_manifest(config, manifest_path)
+                    kubectl.assert_not_called()
+
+    def test_other_manifest_input_guards_remain_active(self):
+        config, manifest_path = self.add_external_provider_reference()
+        # Use the original valid manifest to isolate the other guard conditions.
+        manifest = manifest_path.read_text()
+        for marker in ("${UNRESOLVED}", "factory.talos.dev/image/", "PRIVATE KEY",
+                       "source:\n                http:", "source:\n                      registry:"):
+            with self.subTest(marker=marker):
+                # A block scalar keeps the marker YAML-valid without a Secret resource.
+                manifest_path.write_text(manifest + "\n---\napiVersion: v1\nkind: ConfigMap\n"
+                    "metadata: {name: fixture-only}\ndata:\n  marker: |\n    " + marker + "\n")
+                with self.assertRaisesRegex(lifecycle.TalosLifecycleError, "secret input"):
+                    lifecycle.validate_manifest(config, manifest_path)
 
     def test_same_plane_flag_rejected(self):
         self.provider_mutate(lambda state: state.update(plane_uid="management-system-uid"))

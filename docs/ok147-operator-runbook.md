@@ -366,6 +366,11 @@ Routing is explicit:
 
 An external `infraClusterSecretRef` requires the explicit provider argument.
 The provider argument is teardown-only; other lifecycle modes are unchanged.
+Its nested `kind: Secret` is a reference, not an embedded Secret resource.
+Manifest validation checks parsed resource kinds (including Secrets inside
+Kubernetes Lists) rather than rejecting this reference as a text match. Actual
+Secret/SecretList resources, unresolved inputs, remote image sources and private
+key markers remain forbidden; no credentials are materialized by this check.
 Both kubeconfigs must exist and identify distinct planes. The narrowly extended
 schema-2 record binds each plane's `kube-system` UID and the provider namespace
 UID in addition to the existing management Cluster/namespace provenance. It

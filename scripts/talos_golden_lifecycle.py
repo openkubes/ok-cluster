@@ -140,6 +140,20 @@ def cluster_directory(args: argparse.Namespace) -> Path:
     return clusters_dir / args.cluster
 
 
+def contains_secret_resource(document: dict) -> bool:
+    """Inspect Kubernetes objects, not nested references such as SecretRef.kind."""
+    if not isinstance(document, dict):
+        raise TalosLifecycleError("Talos manifest resource must be a mapping")
+    if document.get("kind") in ("Secret", "SecretList"):
+        return True
+    if document.get("kind") == "List":
+        items = document.get("items", [])
+        if not isinstance(items, list):
+            raise TalosLifecycleError("Talos manifest List.items must be a list")
+        return any(contains_secret_resource(item) for item in items)
+    return False
+
+
 def validate_manifest(config: dict, manifest_path: Path) -> None:
     docs = objects(manifest_path)
     text = manifest_path.read_text(encoding="utf-8")
@@ -148,7 +162,7 @@ def validate_manifest(config: dict, manifest_path: Path) -> None:
         or "source:\n                http:" in text
         or "source:\n                      registry:" in text
         or "factory.talos.dev/image/" in text
-        or "kind: Secret" in text
+        or any(contains_secret_resource(document) for document in docs)
         or "PRIVATE KEY" in text
     ):
         raise TalosLifecycleError(
