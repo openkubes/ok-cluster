@@ -673,7 +673,7 @@ func main() {
 	defer stop()
 	if err := runContext(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
-		os.Exit(2)
+		os.Exit(cliExitCode(err))
 	}
 }
 
@@ -696,6 +696,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 }
 
 func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	if len(arguments) >= 2 && arguments[0] == "destroy" && arguments[1] == "cluster" {
+		return runDestroyCluster(ctx, arguments[2:], stdout, stderr)
+	}
 	if len(arguments) == 1 && arguments[0] == "version" {
 		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil

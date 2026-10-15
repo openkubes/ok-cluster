@@ -330,11 +330,58 @@ preflight, digest and authorization.
 
 ### Explicit split-plane teardown (separate authorization)
 
-`ok cluster create` does not delete clusters, and there is no product
-`ok cluster delete` command yet. Teardown stays owned by the existing Python
-lifecycle implementation, not by a second implementation in Go. Do not use
+`ok cluster create` does not delete clusters. The separate interactive entry
+point is `ok destroy cluster <name>`; `ok cluster delete` is not an alias.
+Teardown stays owned by the existing Python lifecycle implementation, not by a
+second implementation in Go. Do not use
 `make clean`: it removes the local render directory and is not the durable,
 split-plane cleanup path.
+
+#### Interactive CLI entry point
+
+Run from a trusted, current ok-cluster checkout, or select one explicitly:
+
+```sh
+ok destroy cluster <approved-old-candidate> \
+  --lifecycle-root <trusted-ok-cluster-checkout> \
+  --cluster-dir <absolute-render-parent>/<approved-old-candidate> \
+  --management-kubeconfig <management-kubeconfig> \
+  --provider-kubeconfig <provider-kubeconfig>
+```
+
+The cluster name comes before flags. The CLI displays the exact target,
+kubeconfig paths, lifecycle checkout and retained local directory, then asks:
+
+```text
+Type ok to delete, or no to cancel [no]:
+```
+
+Only an explicit lowercase `ok` followed by Enter launches one lifecycle
+invocation. `no` or an empty answer cancels without starting the lifecycle or
+contacting an API. EOF, invalid answers and Ctrl+C cannot start teardown.
+Interactive terminal input is mandatory: there is no piped confirmation,
+`--yes`, `--force` or credential renewal. Both kubeconfigs are explicit; no
+default kubectl context is selected. This is a separate destroy authorization
+boundary, not a reuse or broadening of create-run authority or old plan approvals.
+Organizational deletion approval is still required before confirming a target.
+
+This first CLI bridge requires Python 3 with PyYAML, kubectl and a trusted,
+current lifecycle checkout. The binary does not bundle that runtime or download
+one. `--lifecycle-root` defaults to the current directory; `--cluster-dir`
+defaults to `<lifecycle-root>/<name>`. `--ok-linux-path` can select the profile
+checkout, defaulting to the lifecycle checkout's sibling `ok-linux` directory.
+The first CLI surface supports split-plane teardown only. Existing expert
+single-plane `make teardown` calls remain unchanged.
+
+The CLI passes `--preserve-local` unconditionally and streams the lifecycle
+owner's output. It does not manufacture a successful operation receipt from a
+child exit code. The owner retains its durable identity, storage and convergence
+checks. Child failures propagate as non-zero exit codes with no automatic retry.
+Interruption is not rollback: preserve the incomplete durable state and inspect
+it before any separately authorized retry. Separately installed runner authorities
+are not removed.
+
+#### Expert lifecycle entry point
 
 After a separately reviewed cleanup inventory and explicit deletion approval,
 the lifecycle entry point supports:
@@ -417,6 +464,9 @@ the MetalLB allocation lookup before any subprocess environment is installed;
 it must not fall back to the operator's real management kubeconfig. Regression
 tests cover replaced storage, late inventory, interrupted teardown, retained
 evidence and that offline fixture boundary.
+`make ok-cli-offline-smoke` also exercises the real CLI with a simulated terminal
+and the real lifecycle against fake API states: confirmation, cancellation,
+EOF/interrupt, piped input, durable completion and non-zero failure propagation.
 
 ## Closure record
 
