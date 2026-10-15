@@ -17,6 +17,16 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 	if arguments[0] == "help" {
 		arguments = arguments[1:]
 	}
+	if len(arguments) == 1 && arguments[0] == "destroy" ||
+		len(arguments) == 2 && arguments[0] == "destroy" && isHelpArgument(arguments[1]) {
+		writeDestroyHelp(stdout)
+		return true
+	}
+	if len(arguments) >= 2 && arguments[0] == "destroy" && arguments[1] == "cluster" &&
+		(len(arguments) == 2 || containsFlagHelp(arguments[2:])) {
+		writeDestroyClusterHelp(stdout)
+		return true
+	}
 	if len(arguments) == 1 && arguments[0] == "cluster" ||
 		len(arguments) == 2 && arguments[0] == "cluster" && isHelpArgument(arguments[1]) {
 		writeClusterHelp(stdout)
@@ -126,6 +136,7 @@ Usage:
 
 Commands:
   cluster     Validate, prepare, and explicitly run cluster workflows
+  destroy     Interactively tear down a cluster through the existing lifecycle
   version     Print version and source revision
   authority   Expert commands for the bounded stage authority
   evidence    Expert commands for independent evidence collection

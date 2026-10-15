@@ -41,6 +41,8 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false -o "$RUNNER_TEMP/ok" ./cmd/ok
           "$RUNNER_TEMP/ok" --help
+          "$RUNNER_TEMP/ok" destroy --help
+          "$RUNNER_TEMP/ok" destroy cluster --help
           "$RUNNER_TEMP/ok" cluster --help
           "$RUNNER_TEMP/ok" cluster create --help
           "$RUNNER_TEMP/ok" cluster create requirements
