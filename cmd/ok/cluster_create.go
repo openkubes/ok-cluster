@@ -17,23 +17,34 @@ const clusterCreateWorkflowFormat = "ok-cli-cluster-create/v1"
 const clusterCreateRequirementsFormat = "ok-cli-cluster-create-requirements/v1"
 
 type clusterCreateRequirements struct {
-	Format                      string   `json:"format"`
-	Operation                   string   `json:"operation"`
-	AcceptedManifestFormats     []string `json:"acceptedManifestFormats"`
-	RequiredCompletionMode      string   `json:"requiredCompletionMode"`
-	ManifestPathRules           []string `json:"manifestPathRules"`
-	RequiredManifestSections    []string `json:"requiredManifestSections"`
-	UnusedPostRuntimeSections   []string `json:"unusedPostRuntimeSections"`
-	OfflineModes                []string `json:"offlineModes"`
-	OfflineAPIContacted         bool     `json:"offlineApiContacted"`
-	OfflineMutationAllowed      bool     `json:"offlineMutationAllowed"`
-	LiveRequiredFlags           []string `json:"liveRequiredFlags"`
-	TerminalMarkerName          string   `json:"terminalMarkerName"`
-	LiveStageOrder              []string `json:"liveStageOrder"`
-	AcceptedPlanStageCounts     []int    `json:"acceptedPlanStageCounts"`
-	PreferredPlanStageCount     int      `json:"preferredPlanStageCount"`
-	PostRuntimeMaterialRequired bool     `json:"postRuntimeMaterialRequired"`
-	LiveMutationAllowed         bool     `json:"liveMutationAllowed"`
+	Format                      string                               `json:"format"`
+	Operation                   string                               `json:"operation"`
+	AcceptedManifestFormats     []string                             `json:"acceptedManifestFormats"`
+	RequiredCompletionMode      string                               `json:"requiredCompletionMode"`
+	ManifestPathRules           []string                             `json:"manifestPathRules"`
+	RequiredManifestSections    []string                             `json:"requiredManifestSections"`
+	UnusedPostRuntimeSections   []string                             `json:"unusedPostRuntimeSections"`
+	OfflineModes                []string                             `json:"offlineModes"`
+	OfflineAPIContacted         bool                                 `json:"offlineApiContacted"`
+	OfflineMutationAllowed      bool                                 `json:"offlineMutationAllowed"`
+	LiveRequiredFlags           []string                             `json:"liveRequiredFlags"`
+	TerminalMarkerName          string                               `json:"terminalMarkerName"`
+	LiveStageOrder              []string                             `json:"liveStageOrder"`
+	AcceptedPlanStageCounts     []int                                `json:"acceptedPlanStageCounts"`
+	PreferredPlanStageCount     int                                  `json:"preferredPlanStageCount"`
+	PostRuntimeMaterialRequired bool                                 `json:"postRuntimeMaterialRequired"`
+	LiveMutationAllowed         bool                                 `json:"liveMutationAllowed"`
+	ProviderAccessOwnership     clusterCreateProviderAccessOwnership `json:"providerAccessOwnership"`
+}
+
+// Descriptive requirements metadata only: this adds no manifest input,
+// credential capability, renewal path or execution gate.
+type clusterCreateProviderAccessOwnership struct {
+	LifecycleOwner                       string   `json:"lifecycleOwner"`
+	RequiredAfterExecution               bool     `json:"requiredAfterExecution"`
+	AutomaticRenewalByCLI                bool     `json:"automaticRenewalByCli"`
+	OfflineValidationProvesOngoingAccess bool     `json:"offlineValidationProvesOngoingAccess"`
+	OperatorHandoff                      []string `json:"operatorHandoff"`
 }
 
 type clusterCreateWorkflowReceipt struct {
@@ -102,6 +113,11 @@ func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
 		},
 		AcceptedPlanStageCounts: []int{stageplan.BareClusterStageCount, 12}, PreferredPlanStageCount: stageplan.BareClusterStageCount,
 		PostRuntimeMaterialRequired: false, LiveMutationAllowed: true,
+		ProviderAccessOwnership: clusterCreateProviderAccessOwnership{
+			LifecycleOwner: "lifecycle-operator", RequiredAfterExecution: true,
+			AutomaticRenewalByCLI: false, OfflineValidationProvesOngoingAccess: false,
+			OperatorHandoff: []string{"provider credential validity window", "credential rotation responsibility", "current convergence evidence"},
+		},
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetEscapeHTML(false)

@@ -254,6 +254,11 @@ Safety:
   Live mode runs the Stage 1-7 executor locally, may create cluster resources,
   is single-use and bounded, and has no retry, rollback, or cleanup.
 
+Provider access:
+  The lifecycle operator owns provider credential validity and rotation after
+  ok exits. The CLI does not renew provider credentials. Offline validation
+  does not prove ongoing provider access or future cluster availability.
+
 Legacy contract-planning flags remain available for compatibility; use
 "ok cluster stage --help" for the expert runner surface.
 `)
@@ -269,6 +274,9 @@ The command reads no file, opens no network client, and emits static JSON for
 renderer and packaging integrations. The contract reports that Stage 8-12
 post-runtime material is not required for Bare-MVP. It does not prepare or
 authorize a run.
+
+providerAccessOwnership is descriptive handoff metadata: the lifecycle operator
+owns ongoing provider access; it adds no manifest fields or renewal authority.
 `)
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -361,6 +362,23 @@ func addonSpecDigest(spec map[string]any, includeClusterRef bool) (string, error
 		semantic[key] = value
 	}
 	return canonicalDigest(semantic)
+}
+
+// ExpectedLiteralReleaseSpecDigest derives the exact HRP semantic identity
+// from an already verified HCP and an explicit Cluster reference. Templates
+// require runtime rendering and are outside this narrow recovery contract.
+func ExpectedLiteralReleaseSpecDigest(hcpSpec map[string]any, namespace, name string) (string, error) {
+	values, ok := hcpSpec["valuesTemplate"].(string)
+	if !ok || strings.Contains(values, "{{") || strings.Contains(values, "}}") || !validDNSLabel(namespace) || !validDNSLabel(name) {
+		return "", errors.New("literal release values and exact Cluster identity are required")
+	}
+	spec := make(map[string]any)
+	for _, key := range []string{"chartName", "repoURL", "version", "releaseName", "namespace", "reconcileStrategy"} {
+		spec[key] = hcpSpec[key]
+	}
+	spec["values"] = values
+	spec["clusterRef"] = map[string]any{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "name": name, "namespace": namespace}
+	return addonSpecDigest(spec, true)
 }
 
 func normalizeNodes(list map[string]any) ([]NetworkNode, map[string]string, error) {

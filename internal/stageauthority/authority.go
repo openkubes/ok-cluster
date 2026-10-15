@@ -160,7 +160,7 @@ func FromPlan(plan stageplan.Binding) ([]byte, PolicyReceipt, error) {
 		if err != nil {
 			return nil, PolicyReceipt{}, errors.New("reverify staged plan while deriving authority policy")
 		}
-		if !stageplan.IsMutating(stage) {
+		if !stageplan.IsMutating(stage) || plan.RecoverySourcePlanDigest != "" && stage.Order < 5 {
 			continue
 		}
 		policy.Stages = append(policy.Stages, StagePolicy{

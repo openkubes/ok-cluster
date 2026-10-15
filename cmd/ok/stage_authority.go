@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/contract"
+	"github.com/openkubes/ok-cluster/internal/runner"
 	"github.com/openkubes/ok-cluster/internal/stageauthority"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
@@ -129,6 +130,8 @@ func runAuthorityStagePolicy(arguments []string, stdout, stderr io.Writer) error
 	managementAuthority := flags.String("management-authority", "", "expected management authority")
 	gitOpsAuthority := flags.String("gitops-authority", "", "expected GitOps authority")
 	output := flags.String("output", "", "new canonical bounded policy file")
+	recoveryPath := flags.String("recovery-binding", "", "explicit non-authorizing Stage-5 profile recovery binding")
+	recoveryDigest := flags.String("recovery-binding-digest", "", "independently reviewed recovery binding digest")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -143,7 +146,7 @@ func runAuthorityStagePolicy(arguments []string, stdout, stderr io.Writer) error
 			return errors.New("all bounded stage-authority policy inputs are required")
 		}
 	}
-	plan, err := stageplan.Load(*planPath, stageplan.Expected{
+	expected := stageplan.Expected{
 		ContractIdentity: contract.Identity{Namespace: *contractNamespace, Name: *contractName},
 		IntentRevision:   *intentRevision, EnablementRevision: *enablementRevision,
 		PlatformRevision: *platformRevision, ExecutionFixture: *executionFixture,
@@ -151,7 +154,20 @@ func runAuthorityStagePolicy(arguments []string, stdout, stderr io.Writer) error
 		InfrastructureAuthority: *infrastructureAuthority, ManagementAuthority: *managementAuthority, GitOpsAuthority: *gitOpsAuthority,
 		NetworkObservationMode: *networkObservationMode,
 		CompletionMode:         *completionMode,
-	})
+	}
+	var plan stageplan.Binding
+	var err error
+	if *recoveryPath != "" || *recoveryDigest != "" {
+		recovered, verifyErr := runner.VerifyNetworkRecovery(runner.StageResumeConfig{
+			PlanPath: *planPath, PlanExpected: expected, RecoveryBindingPath: *recoveryPath, RecoveryBindingDigest: *recoveryDigest,
+		})
+		if verifyErr != nil {
+			return verifyErr
+		}
+		plan = recovered.Plan
+	} else {
+		plan, err = stageplan.Load(*planPath, expected)
+	}
 	if err != nil {
 		return err
 	}

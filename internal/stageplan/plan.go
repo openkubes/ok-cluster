@@ -22,6 +22,7 @@ import (
 const (
 	Format                       = "ok147-staged-execution-plan/v1"
 	FormatV2                     = "ok147-staged-execution-plan/v2"
+	FormatRecovery               = "ok147-staged-execution-plan/recovery-v1"
 	BindingFormat                = "ok147-verified-staged-execution-plan/v1"
 	BindingFormatV2              = "ok147-verified-staged-execution-plan/v2"
 	CompletionModeBareClusterMVP = "bare-cluster-mvp/v1"
@@ -37,17 +38,18 @@ var (
 // Expected is supplied from already verified Contract, fixture and topology
 // inputs. It prevents a plan file from selecting different authority planes.
 type Expected struct {
-	ContractIdentity        contract.Identity
-	IntentRevision          string
-	EnablementRevision      string
-	PlatformRevision        string
-	ExecutionFixture        string
-	ExecutionAttemptDigest  string
-	InfrastructureAuthority string
-	ManagementAuthority     string
-	GitOpsAuthority         string
-	NetworkObservationMode  string
-	CompletionMode          string
+	ContractIdentity         contract.Identity
+	IntentRevision           string
+	EnablementRevision       string
+	PlatformRevision         string
+	ExecutionFixture         string
+	ExecutionAttemptDigest   string
+	RecoverySourcePlanDigest string
+	InfrastructureAuthority  string
+	ManagementAuthority      string
+	GitOpsAuthority          string
+	NetworkObservationMode   string
+	CompletionMode           string
 }
 
 type Authorities struct {
@@ -76,18 +78,19 @@ type Stage struct {
 }
 
 type document struct {
-	Format                 string            `json:"format"`
-	ContractIdentity       contract.Identity `json:"contractIdentity"`
-	IntentRevision         string            `json:"intentRevision"`
-	EnablementRevision     string            `json:"enablementRevision"`
-	PlatformRevision       string            `json:"platformRevision"`
-	ExecutionFixture       string            `json:"executionFixture"`
-	ExecutionAttempt       string            `json:"executionAttemptDigest,omitempty"`
-	AuthorizationState     string            `json:"authorizationState"`
-	NetworkObservationMode string            `json:"networkObservationMode,omitempty"`
-	CompletionMode         string            `json:"completionMode,omitempty"`
-	Authorities            Authorities       `json:"authorities"`
-	Stages                 []Stage           `json:"stages"`
+	Format                   string            `json:"format"`
+	ContractIdentity         contract.Identity `json:"contractIdentity"`
+	IntentRevision           string            `json:"intentRevision"`
+	EnablementRevision       string            `json:"enablementRevision"`
+	PlatformRevision         string            `json:"platformRevision"`
+	ExecutionFixture         string            `json:"executionFixture"`
+	ExecutionAttempt         string            `json:"executionAttemptDigest,omitempty"`
+	RecoverySourcePlanDigest string            `json:"recoverySourcePlanDigest,omitempty"`
+	AuthorizationState       string            `json:"authorizationState"`
+	NetworkObservationMode   string            `json:"networkObservationMode,omitempty"`
+	CompletionMode           string            `json:"completionMode,omitempty"`
+	Authorities              Authorities       `json:"authorities"`
+	Stages                   []Stage           `json:"stages"`
 }
 
 // Binding is the immutable, redaction-safe result of successful verification.
@@ -101,6 +104,7 @@ type Binding struct {
 	PlatformRevision               string            `json:"platformRevision"`
 	ExecutionFixture               string            `json:"executionFixture"`
 	ExecutionAttempt               string            `json:"executionAttemptDigest,omitempty"`
+	RecoverySourcePlanDigest       string            `json:"recoverySourcePlanDigest,omitempty"`
 	NetworkObservationMode         string            `json:"networkObservationMode,omitempty"`
 	CompletionMode                 string            `json:"completionMode,omitempty"`
 	Authorities                    Authorities       `json:"authorities"`
@@ -112,6 +116,7 @@ type Binding struct {
 	verifiedAuthorities            Authorities
 	verifiedNetworkObservationMode string
 	verifiedCompletionMode         string
+	verifiedRecoverySource         string
 	stageDigests                   map[string]string
 }
 
@@ -172,10 +177,18 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 	if err := jsonstrict.Decode(raw, &source); err != nil {
 		return Binding{}, fmt.Errorf("decode staged execution plan: %w", err)
 	}
-	if source.Format != Format && source.Format != FormatV2 {
+	if source.Format != Format && source.Format != FormatV2 && source.Format != FormatRecovery {
 		return Binding{}, fmt.Errorf("staged execution plan format %q is not supported", source.Format)
 	}
-	if source.Format == Format {
+	if source.Format == FormatRecovery {
+		if !digestPattern.MatchString(source.RecoverySourcePlanDigest) || source.RecoverySourcePlanDigest != expected.RecoverySourcePlanDigest ||
+			source.ExecutionAttempt != "" || expected.ExecutionAttemptDigest != "" || source.CompletionMode != CompletionModeBareClusterMVP || len(source.Stages) != BareClusterStageCount {
+			return Binding{}, errors.New("recovery plan requires its exact source identity and seven-stage Bare-MVP scope")
+		}
+	} else if source.RecoverySourcePlanDigest != "" || expected.RecoverySourcePlanDigest != "" {
+		return Binding{}, errors.New("ordinary plans cannot select recovery source identities")
+	}
+	if source.Format == Format || source.Format == FormatRecovery {
 		if source.ExecutionAttempt != "" || expected.ExecutionAttemptDigest != "" {
 			return Binding{}, errors.New("staged execution plan v1 cannot bind an execution attempt")
 		}
@@ -233,15 +246,17 @@ func Verify(raw []byte, expected Expected) (Binding, error) {
 		ContractIdentity: source.ContractIdentity,
 		IntentRevision:   source.IntentRevision, EnablementRevision: source.EnablementRevision,
 		PlatformRevision: source.PlatformRevision, ExecutionFixture: source.ExecutionFixture,
-		ExecutionAttempt:       source.ExecutionAttempt,
-		NetworkObservationMode: source.NetworkObservationMode,
-		CompletionMode:         source.CompletionMode,
-		Authorities:            source.Authorities, Stages: cloneStages(source.Stages),
+		ExecutionAttempt:         source.ExecutionAttempt,
+		RecoverySourcePlanDigest: source.RecoverySourcePlanDigest,
+		NetworkObservationMode:   source.NetworkObservationMode,
+		CompletionMode:           source.CompletionMode,
+		Authorities:              source.Authorities, Stages: cloneStages(source.Stages),
 		verified: true, verifiedDigest: planDigest, verifiedIdentity: source.ContractIdentity,
 		verifiedRevisions:   [5]string{source.IntentRevision, source.EnablementRevision, source.PlatformRevision, source.ExecutionFixture, source.ExecutionAttempt},
 		verifiedAuthorities: source.Authorities, stageDigests: stageDigests,
 		verifiedNetworkObservationMode: source.NetworkObservationMode,
 		verifiedCompletionMode:         source.CompletionMode,
+		verifiedRecoverySource:         source.RecoverySourcePlanDigest,
 	}, nil
 }
 
@@ -261,6 +276,9 @@ func ValidateExpected(expected Expected) error {
 	}
 	if expected.ExecutionAttemptDigest != "" && !digestPattern.MatchString(expected.ExecutionAttemptDigest) {
 		return errors.New("expected execution attempt digest is invalid")
+	}
+	if expected.RecoverySourcePlanDigest != "" && !digestPattern.MatchString(expected.RecoverySourcePlanDigest) {
+		return errors.New("expected recovery source plan digest is invalid")
 	}
 	if expected.NetworkObservationMode != "" && expected.NetworkObservationMode != "deferred-mvp/v1" {
 		return errors.New("expected network observation mode is unsupported")
@@ -379,7 +397,7 @@ func (binding Binding) Stage(id string) (Stage, string, error) {
 	if !binding.verified || binding.Format != BindingFormat && binding.Format != BindingFormatV2 || binding.PlanDigest != binding.verifiedDigest || !digestPattern.MatchString(binding.PlanDigest) {
 		return Stage{}, "", errors.New("verified staged execution binding is required")
 	}
-	if binding.ContractIdentity != binding.verifiedIdentity || [5]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture, binding.ExecutionAttempt} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities || binding.NetworkObservationMode != binding.verifiedNetworkObservationMode || binding.CompletionMode != binding.verifiedCompletionMode {
+	if binding.RecoverySourcePlanDigest != binding.verifiedRecoverySource || binding.ContractIdentity != binding.verifiedIdentity || [5]string{binding.IntentRevision, binding.EnablementRevision, binding.PlatformRevision, binding.ExecutionFixture, binding.ExecutionAttempt} != binding.verifiedRevisions || binding.Authorities != binding.verifiedAuthorities || binding.NetworkObservationMode != binding.verifiedNetworkObservationMode || binding.CompletionMode != binding.verifiedCompletionMode {
 		return Stage{}, "", errors.New("staged execution top-level binding changed after verification")
 	}
 	if err := validateStages(binding.Stages, binding.CompletionMode); err != nil {

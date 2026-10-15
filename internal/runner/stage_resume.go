@@ -12,9 +12,11 @@ import (
 // canonical receipt prefix. It carries no grant, credential, endpoint or
 // implementation selector.
 type StageResumeConfig struct {
-	PlanPath     string
-	PlanExpected stageplan.Expected
-	Receipts     []StageReceiptSource
+	PlanPath              string
+	PlanExpected          stageplan.Expected
+	Receipts              []StageReceiptSource
+	RecoveryBindingPath   string
+	RecoveryBindingDigest string
 }
 
 // InspectStageResume verifies the complete receipt prefix and returns the only
@@ -34,6 +36,9 @@ func loadStageResume(config StageResumeConfig) (stageplan.Binding, stagecursor.C
 }
 
 func loadStageResumeWithPrefix(config StageResumeConfig) (stageplan.Binding, stagecursor.Cursor, []stagereceipt.Verified, error) {
+	if config.RecoveryBindingPath != "" || config.RecoveryBindingDigest != "" {
+		return loadNetworkRecoveryResume(config)
+	}
 	if config.Receipts == nil {
 		return stageplan.Binding{}, stagecursor.Cursor{}, nil, errors.New("stage receipt prefix must be explicit")
 	}

@@ -312,6 +312,7 @@ type stageResumeFlags struct {
 	receipts                                                      receiptFlags
 	receiptPrefix, receiptPrefixDigest                            *string
 	completionMode                                                *string
+	recoveryBinding, recoveryBindingDigest                        *string
 }
 
 func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
@@ -328,6 +329,8 @@ func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
 	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
 	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
 	values.completionMode = flags.String("completion-mode", "", "expected plan-bound completion mode")
+	values.recoveryBinding = flags.String("recovery-binding", "", "explicit non-authorizing Stage-5 profile recovery binding")
+	values.recoveryBindingDigest = flags.String("recovery-binding-digest", "", "independently reviewed recovery binding digest")
 	flags.Var(&values.receipts, "receipt", "ordered canonical receipt as PATH@sha256:<digest>; repeat for each completed stage")
 	values.receiptPrefix = flags.String("receipt-prefix", "", "path to a digest-bound ordered receipt-prefix manifest")
 	values.receiptPrefixDigest = flags.String("receipt-prefix-digest", "", "expected SHA-256 digest of the receipt-prefix manifest")
@@ -335,6 +338,9 @@ func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
 }
 
 func (values *stageResumeFlags) config() (runner.StageResumeConfig, error) {
+	if (*values.recoveryBinding == "") != (*values.recoveryBindingDigest == "") {
+		return runner.StageResumeConfig{}, errors.New("--recovery-binding and --recovery-binding-digest must be provided together")
+	}
 	required := []struct{ name, value string }{
 		{"--plan", *values.planPath}, {"--contract-namespace", *values.contractNamespace}, {"--contract-name", *values.contractName},
 		{"--intent-revision", *values.intentRevision}, {"--enablement-revision", *values.enablementRevision}, {"--platform-revision", *values.platformRevision},
@@ -367,7 +373,8 @@ func (values *stageResumeFlags) config() (runner.StageResumeConfig, error) {
 		}
 	}
 	return runner.StageResumeConfig{
-		PlanPath: *values.planPath,
+		PlanPath:            *values.planPath,
+		RecoveryBindingPath: *values.recoveryBinding, RecoveryBindingDigest: *values.recoveryBindingDigest,
 		PlanExpected: stageplan.Expected{
 			ContractIdentity: contract.Identity{Namespace: *values.contractNamespace, Name: *values.contractName},
 			IntentRevision:   *values.intentRevision, EnablementRevision: *values.enablementRevision,
@@ -1288,6 +1295,7 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 	workloadBinding := flags.String("workload-binding", "", "path to the private runtime workload-authority binding")
 	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected workload-authority binding digest")
 	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived read-only workload token")
+	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "path to the lifecycle-derived workload client-certificate kubeconfig; mutually exclusive with --workload-token-file")
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the workload Kubernetes API CA bundle")
 	networkProfile := flags.String("network-profile", "", "path to the immutable NetworkReady profile")
 	networkProfileDigest := flags.String("network-profile-digest", "", "expected NetworkReady profile digest")
@@ -1311,12 +1319,15 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
 		{"--management-api-endpoint", *managementAPIEndpoint}, {"--management-token-file", *managementTokenFile}, {"--management-ca-file", *managementCAFile},
 		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
-		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile},
+		{"--workload-ca-file", *workloadCAFile},
 		{"--network-profile", *networkProfile}, {"--network-profile-digest", *networkProfileDigest},
 	} {
 		if input.value == "" {
 			return fmt.Errorf("%s is required", input.name)
 		}
+	}
+	if (*workloadTokenFile == "") == (*workloadKubeconfigFile == "") {
+		return errors.New("exactly one of --workload-token-file or --workload-kubeconfig-file is required")
 	}
 	if !sha256DigestPattern.MatchString(*workloadBindingDigest) || !sha256DigestPattern.MatchString(*networkProfileDigest) {
 		return errors.New("workload binding and network profile digests must be lowercase SHA-256 identities")
@@ -1338,7 +1349,7 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 		},
 		Workload: runner.WorkloadAuthorityFileResolverConfig{
 			Path: *workloadBinding, ExpectedBindingDigest: *workloadBindingDigest,
-			TokenFile: *workloadTokenFile, CAFile: *workloadCAFile,
+			TokenFile: *workloadTokenFile, KubeconfigFile: *workloadKubeconfigFile, CAFile: *workloadCAFile,
 		},
 		NetworkProfilePath: *networkProfile, ExpectedNetworkProfileDigest: *networkProfileDigest,
 		PollInterval: *pollInterval, PollTimeout: *pollTimeout,
@@ -1373,6 +1384,7 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	workloadBinding := flags.String("workload-binding", "", "path to the private workload-authority binding")
 	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected workload-authority binding digest")
 	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived read-only workload token")
+	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "path to the lifecycle-derived workload client-certificate kubeconfig; mutually exclusive with --workload-token-file")
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the workload Kubernetes API CA bundle")
 	persistenceMode := flags.String("persistence-mode", "local-file", "exact persistence mode: local-file or immutable-secret")
 	persistenceTokenFile := flags.String("persistence-token-file", "", "path to the distinct short-lived runtime-binding Secret writer token")
@@ -1395,11 +1407,14 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	for _, input := range []struct{ name, value string }{
 		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
 		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
-		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile},
+		{"--workload-ca-file", *workloadCAFile},
 	} {
 		if input.value == "" {
 			return fmt.Errorf("%s is required", input.name)
 		}
+	}
+	if (*workloadTokenFile == "") == (*workloadKubeconfigFile == "") {
+		return errors.New("exactly one of --workload-token-file or --workload-kubeconfig-file is required")
 	}
 	if !sha256DigestPattern.MatchString(*workloadBindingDigest) {
 		return errors.New("workload binding digest must be a lowercase SHA-256 identity")
@@ -1430,7 +1445,7 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	ledgerConfig := runner.KubernetesLedgerConfig{Endpoint: *ledgerAPIEndpoint, Namespace: ledgerNamespace, TokenFile: *ledgerTokenFile, CAFile: *ledgerCAFile}
 	workloadConfig := runner.WorkloadAuthorityFileResolverConfig{
 		Path: *workloadBinding, ExpectedBindingDigest: *workloadBindingDigest,
-		TokenFile: *workloadTokenFile, CAFile: *workloadCAFile,
+		TokenFile: *workloadTokenFile, KubeconfigFile: *workloadKubeconfigFile, CAFile: *workloadCAFile,
 	}
 	var receipt execution.BindingStageRunReceipt
 	var evidence *runner.RuntimeBindingStageEvidenceReceipt
@@ -2149,6 +2164,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	workloadBinding := flags.String("workload-binding", "", "path to the private runtime-bound workload authority record")
 	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected digest of the private workload authority record")
 	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived workload writer token")
+	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "path to the lifecycle-derived workload client-certificate kubeconfig; mutually exclusive with --workload-token-file")
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the runtime-bound workload Kubernetes API CA bundle")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -2172,11 +2188,14 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 		{"--observer-serviceaccount", *observerServiceAccount}, {"--observer-role", *observerRole}, {"--observer-rolebinding", *observerRoleBinding},
 		{"--ledger-api-endpoint", *ledgerAPIEndpoint}, {"--ledger-token-file", *ledgerTokenFile}, {"--ledger-ca-file", *ledgerCAFile},
 		{"--workload-binding", *workloadBinding}, {"--workload-binding-digest", *workloadBindingDigest},
-		{"--workload-token-file", *workloadTokenFile}, {"--workload-ca-file", *workloadCAFile},
+		{"--workload-ca-file", *workloadCAFile},
 	} {
 		if input.value == "" {
 			return fmt.Errorf("%s is required", input.name)
 		}
+	}
+	if (*workloadTokenFile == "") == (*workloadKubeconfigFile == "") {
+		return errors.New("exactly one of --workload-token-file or --workload-kubeconfig-file is required")
 	}
 	at, err := time.Parse(time.RFC3339, *evaluationTime)
 	if err != nil {
@@ -2185,6 +2204,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	expectedObjects := targetAccessExpectedObjects(resume.PlanExpected.ContractIdentity.Name, *observabilityNamespace, *managerServiceAccount, *clusterRole, *clusterRoleBinding, *platformRole, *platformRoleBinding, *kubeSystemRole, *kubeSystemRoleBinding, *observerServiceAccount, *observerRole, *observerRoleBinding)
 	bundleConfig := runner.TargetAccessStageBundleConfig{
 		PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
+		RecoveryBindingPath: resume.RecoveryBindingPath, RecoveryBindingDigest: resume.RecoveryBindingDigest,
 		GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: at,
 		ArtifactPath: *artifactPath, ExpectedObjects: expectedObjects,
 	}
@@ -2196,7 +2216,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 		},
 		Workload: runner.WorkloadAuthorityFileResolverConfig{
 			Path: *workloadBinding, ExpectedBindingDigest: *workloadBindingDigest,
-			TokenFile: *workloadTokenFile, CAFile: *workloadCAFile,
+			TokenFile: *workloadTokenFile, KubeconfigFile: *workloadKubeconfigFile, CAFile: *workloadCAFile,
 		},
 		Clock: func() time.Time { return time.Now().UTC() },
 	})
