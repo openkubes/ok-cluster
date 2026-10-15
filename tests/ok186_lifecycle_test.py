@@ -51,6 +51,8 @@ if "FAKE_STATE" not in os.environ:
     sys.exit(0)
 
 state_path = os.environ["FAKE_STATE"]
+if "FAKE_STATE_MAP" in os.environ:
+    state_path = json.loads(os.environ["FAKE_STATE_MAP"])[raw[raw.index("--kubeconfig") + 1]]
 with open(state_path) as stream:
     state = json.load(stream)
 
@@ -161,7 +163,8 @@ if verb == "get":
     if resource == "cluster":
         obj = state.get("cluster")
     elif resource == "namespace":
-        obj = state.get("namespace")
+        obj = ({"metadata": {"uid": state.get("plane_uid")}}
+               if name == "kube-system" else state.get("namespace"))
     elif resource == "configmap":
         obj = state.get("configmaps", {}).get(name)
     elif resource == "role":
@@ -307,7 +310,10 @@ class Sandbox:
             directory.mkdir(parents=True)
         if golden:
             raw = yaml.safe_load(FIXTURE.read_text())
-            config = render.resolve_config(raw, CLUSTER)
+            # Fixture rendering must never query the operator's management
+            # kubeconfig before the subprocess fake PATH/HOME are installed.
+            with mock.patch.object(render, "live_metallb_allocations", return_value={}):
+                config = render.resolve_config(raw, CLUSTER)
             with open(os.devnull, "w") as sink:
                 old_stdout = sys.stdout
                 old_script_dir = render.SCRIPT_DIR
@@ -462,7 +468,7 @@ class Sandbox:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         return result, calls
 
-    def lifecycle(self, mode: str):
+    def lifecycle(self, mode: str, *extra: str, **env: str):
         self.log.write_text("")
         result = subprocess.run(
             [
@@ -470,11 +476,13 @@ class Sandbox:
                 mode, "--cluster", CLUSTER, "--cluster-dir", str(self.rendered),
                 "--kubeconfig", str(self.infra), "--ok-linux-path", str(ROOT.parent / "ok-linux"),
                 *( ["--confirm", "yes"] if mode == "--teardown" else [] ),
+                *extra,
             ],
             env={
                 **os.environ, "HOME": str(self.home),
                 "PATH": f"{self.bin}:{os.environ['PATH']}",
                 "FAKE_LOG": str(self.log), "FAKE_STATE": str(self.state_path),
+                **env,
             },
             capture_output=True, text=True, check=False,
         )

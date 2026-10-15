@@ -58,6 +58,10 @@ FLATCAR_APPLY            ?= no
 FLATCAR_TEARDOWN         ?= no
 FLATCAR_WORKLOAD_KUBECONFIG ?=
 TALOS_INFRA_KUBECONFIG ?= $(HOME)/.kube/ok-infra.yaml
+# Teardown only: empty keeps legacy single-plane routing. Split-plane teardown
+# always preserves the local render/evidence directory.
+TALOS_TEARDOWN_PROVIDER_KUBECONFIG ?=
+TALOS_TEARDOWN_PRESERVE_LOCAL ?= no
 # Directory for guest (workload) kubeconfigs written by `make kubeconfig`.
 GUEST_KUBECONFIG_DIR ?= $(HOME)/.kube
 GUEST_KUBECONFIG      = $(GUEST_KUBECONFIG_DIR)/$(CLUSTER).yaml
@@ -488,6 +492,7 @@ ok136-test: ok130-test ## Offline-test reviewed Talos KubeVirt scheduling profil
 
 ok186-lifecycle-test: ## Offline-test kubeconfig overrides, bootstrap-resume and repeatable teardown
 	@python3 $(SCRIPT_DIR)/tests/ok186_lifecycle_test.py
+	@python3 $(SCRIPT_DIR)/tests/ok147_split_teardown_test.py
 
 configure-kubevirt-expand-disks: ## Guardedly enable ExpandDisks on ok-infra (requires APPLY=yes)
 	@if [ "$(KUBEVIRT_EXPAND_DISKS_APPLY)" != "yes" ]; then \
@@ -866,6 +871,8 @@ teardown: require-not-flatcar ## Tear down a non-Flatcar cluster (Flatcar uses t
 		--teardown --cluster "$(CLUSTER)" \
 		--cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
 		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		$(if $(strip $(TALOS_TEARDOWN_PROVIDER_KUBECONFIG)),--provider-kubeconfig "$(TALOS_TEARDOWN_PROVIDER_KUBECONFIG)") \
+		$(if $(filter yes,$(TALOS_TEARDOWN_PRESERVE_LOCAL)),--preserve-local) \
 		--ok-linux-path "$(OK_LINUX_PATH)" --confirm "$(CONFIRM)"
 
 # ── e2e ───────────────────────────────────────────────────────────────────────

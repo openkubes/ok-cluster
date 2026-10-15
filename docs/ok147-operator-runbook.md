@@ -328,6 +328,91 @@ No automatic retry, rollback or cleanup is part of this run. Cleanup, deletion,
 failure injection and executor-termination conformance require their own
 preflight, digest and authorization.
 
+### Explicit split-plane teardown (separate authorization)
+
+`ok cluster create` does not delete clusters, and there is no product
+`ok cluster delete` command yet. Teardown stays owned by the existing Python
+lifecycle implementation, not by a second implementation in Go. Do not use
+`make clean`: it removes the local render directory and is not the durable,
+split-plane cleanup path.
+
+After a separately reviewed cleanup inventory and explicit deletion approval,
+the lifecycle entry point supports:
+
+```sh
+make teardown CLUSTER=<approved-old-candidate> \
+  CLUSTERS_DIR=<absolute-render-parent> \
+  TALOS_INFRA_KUBECONFIG=<absolute-management-kubeconfig> \
+  TALOS_TEARDOWN_PROVIDER_KUBECONFIG=<absolute-provider-kubeconfig> \
+  TALOS_TEARDOWN_PRESERVE_LOCAL=yes CONFIRM=yes
+```
+
+This is a **destructive execution**, not a preview or a digest-verifying
+approval tool. Do not substitute `ok-cli-mvp-3`, the successful reference run,
+for an approved old candidate. The command does not issue credentials, start
+the create runner, repair finalizers or remove separately installed runner
+authorities. Shared Golden images and unrelated snapshots are preserved.
+
+Routing is explicit:
+
+- Management: CAPI Cluster, management namespace and durable teardown ConfigMap
+  in `kube-system`.
+- Provider: candidate namespace, DataVolumes/PVC inventory, retained PV cleanup,
+  existing Longhorn cleanup, clone RBAC and proven cluster-owned CDI snapshots.
+- Local: split-plane teardown **always preserves** the render directory,
+  manifests, receipts and terminal evidence. Single-plane callers can opt in
+  with `TALOS_TEARDOWN_PRESERVE_LOCAL=yes` / `--preserve-local`; their previous
+  default behavior is otherwise unchanged.
+
+An external `infraClusterSecretRef` requires the explicit provider argument.
+The provider argument is teardown-only; other lifecycle modes are unchanged.
+Both kubeconfigs must exist and identify distinct planes. The narrowly extended
+schema-2 record binds each plane's `kube-system` UID and the provider namespace
+UID in addition to the existing management Cluster/namespace provenance. It
+also pins the inventoried Retain PV and Longhorn UIDs (or explicitly observed
+Longhorn absence). Retries never adopt a same-name replacement volume; late
+inventory entries require persisted provenance before namespace deletion. UIDs
+are checked again at storage cleanup and deletes retain server-side
+preconditions. The record contains no credentials.
+Existing single-plane schema-1 records remain readable
+and writable unchanged; switching schema/plane routing on a retry is refused,
+not migrated automatically. Older lifecycle code rejects schema-2 records.
+Reading `kube-system` on both planes therefore requires explicit RBAC access;
+absence or denial stops before any delete.
+Cleanup identities must remain usable after deleting the candidate namespaces:
+do not assume a create-runner ServiceAccount inside a target namespace can
+observe deletion or finish storage cleanup after its own identity is removed.
+Any required independent cleanup authority needs separate approval; this code
+does not issue or broaden credentials.
+
+Before the first delete, inventory and identities must persist and read back
+exactly. CAPI deletion/observed absence precedes namespace deletion. Provider
+inventory is refreshed and persisted before deleting the provider namespace;
+management namespace deletion follows provider namespace absence. Read errors,
+UID changes, failed writes or deletes return non-zero and leave the durable
+record incomplete. Completion requires observed absence and successful cleanup,
+not merely a successful command invocation. A separately authorized operator
+retry uses that record; there is no automatic replay or retry of runner stages.
+Completed split-plane records cannot be reused for a new same-name generation.
+Split-plane completion also requires observed Longhorn volume absence using
+UID/resourceVersion-preconditioned deletion; a storage read/delete error keeps
+the record incomplete. Backing storage is not deleted after an uncertain PV
+operation. The legacy single-plane best-effort Longhorn behavior is unchanged.
+
+The plane UID binding does not grant authority or turn this command into a
+generic recovery controller. Full candidate-authority removal, richer ledger
+RBAC/retention policy (OK-197), and readiness expansion (OK-198) remain outside
+this change. A live cleanup still needs its own current inventory, bounded
+authorization and review of the existing storage cleanup contract.
+
+Offline verification: `make ok186-lifecycle-test` runs both the existing
+single-plane lifecycle checks and the split-plane integration tests against
+fake executables and independent simulated API states. Fixture rendering mocks
+the MetalLB allocation lookup before any subprocess environment is installed;
+it must not fall back to the operator's real management kubeconfig. Regression
+tests cover replaced storage, late inventory, interrupted teardown, retained
+evidence and that offline fixture boundary.
+
 ## Closure record
 
 The final redacted record must bind the source commit, image digest, activation
