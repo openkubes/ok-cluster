@@ -23,6 +23,23 @@ ok cluster create --file /private/bare-run.json --dry-run
 ok cluster create --file /private/bare-run.json --prepare
 ```
 
+The canonical lifecycle command family is `ok cluster create` / `ok cluster destroy`.
+`ok up` is an exact shorthand for `ok cluster create`, including its preparation
+subcommands. For example:
+
+```sh
+ok up --file /private/bare-run.json --dry-run
+ok up --file /private/bare-run.json --prepare
+```
+
+The shorthand only rewrites the command prefix. It does not render a simple YAML
+cluster description, infer a mode, use saved path-config credentials for create,
+renew access, prompt for or implicitly grant live authority. Existing private JSON
+manifest, Plan, digest, evidence and terminal-marker requirements are unchanged.
+Live `ok up` still requires all of the `--live --execute` inputs described below.
+Bare `ok up` displays help and performs no operation. There is no additional
+`ok create cluster` spelling.
+
 The manifest and seven-stage Plan templates are non-authorizing and
 intentionally invalid until an authoritative renderer replaces every
 placeholder and binds every referenced artifact. The Plan fixes
@@ -331,7 +348,9 @@ preflight, digest and authorization.
 ### Explicit split-plane teardown (separate authorization)
 
 `ok cluster create` does not delete clusters. The separate interactive entry
-point is `ok destroy cluster <name>`; `ok cluster delete` is not an alias.
+point is `ok cluster destroy <name>`. The published `ok destroy cluster <name>`
+remains a compatibility alias with identical inputs, confirmation and outcomes;
+`ok cluster delete` is not an alias.
 Teardown stays owned by the existing Python lifecycle implementation, not by a
 second implementation in Go. Do not use
 `make clean`: it removes the local render directory and is not the durable,
@@ -365,7 +384,7 @@ The default file is `<OS user configuration directory>/ok/config.json`:
 `$XDG_CONFIG_HOME/ok/config.json` (or `~/.config/ok/config.json`) on Linux.
 The file/directory must be private (0600/0700 or stricter); configuration file
 and immediate parent symlinks are rejected. `ok config init`, `ok config show`
-and `ok destroy cluster` accept `--config <file>` for an explicit location.
+and `ok cluster destroy` (also `ok destroy cluster`) accept `--config <file>` for an explicit location.
 Use a new private location to prepare a replacement configuration; init has no
 overwrite/force switch. The strict `ok-cli-paths/v1` JSON schema rejects unknown,
 duplicate, missing, relative or unsupported-format fields.
@@ -373,7 +392,7 @@ duplicate, missing, relative or unsupported-format fields.
 After setup, from any directory:
 
 ```sh
-ok destroy cluster <approved-old-candidate>
+ok cluster destroy <approved-old-candidate>
 ```
 
 Omitted flags use the saved paths. `clustersDir` is the parent of retained
@@ -393,7 +412,7 @@ unchanged. No credentials are renewed or rotated automatically.
 Run from a trusted, current ok-cluster checkout, or select one explicitly:
 
 ```sh
-ok destroy cluster <approved-old-candidate> \
+ok cluster destroy <approved-old-candidate> \
   --lifecycle-root <trusted-ok-cluster-checkout> \
   --cluster-dir <absolute-render-parent>/<approved-old-candidate> \
   --management-kubeconfig <management-kubeconfig> \

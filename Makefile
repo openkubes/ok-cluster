@@ -235,11 +235,15 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@go test -mod=readonly ./cmd/ok -count=1 \
 		-run 'TestDestroy|TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestLocalConfig'
+	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
 	@go test -mod=readonly ./internal/runner -count=1 \
 		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix'
 	@$(SCRIPT_DIR)/.tools/bin/ok --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok destroy --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok destroy cluster --help >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok cluster destroy --help >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok up --help >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok up requirements >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config init --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config show --help >/dev/null

@@ -29,7 +29,7 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeDestroyHelp(stdout)
 		return true
 	}
-	if len(arguments) >= 2 && arguments[0] == "destroy" && arguments[1] == "cluster" &&
+	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "destroy" &&
 		(len(arguments) == 2 || containsFlagHelp(arguments[2:])) {
 		writeDestroyClusterHelp(stdout)
 		return true
@@ -143,7 +143,8 @@ Usage:
 
 Commands:
   cluster     Validate, prepare, and explicitly run cluster workflows
-  destroy     Interactively tear down a cluster through the existing lifecycle
+  up          Shorthand for cluster create (same flags and safety gates)
+  destroy     Compatibility spelling: ok destroy cluster (prefer ok cluster destroy)
   config      Save and inspect local CLI paths (no cluster contact)
   version     Print version and source revision
   authority   Expert commands for the bounded stage authority
@@ -154,17 +155,18 @@ Run "ok <command> --help" for command-specific help.
 }
 
 func writeClusterHelp(output io.Writer) {
-	fmt.Fprint(output, `Create and inspect bounded cluster workflows
+	fmt.Fprint(output, `Create, inspect, and explicitly destroy bounded cluster workflows
 
 Usage:
   ok cluster <command> [flags]
 
 Commands:
   create      Validate, prepare, or explicitly execute a Bare-MVP run
+  destroy     Interactively tear down a cluster through the existing lifecycle
   stage       Expert stage-level commands
   dry-run     Read-only HTTP validation service (expert)
 
-Start with "ok cluster create --help".
+Start with "ok cluster create --help" or "ok cluster destroy --help".
 `)
 }
 
@@ -239,6 +241,8 @@ func writeClusterCreateHelp(output io.Writer) {
 	fmt.Fprint(output, `Validate, prepare, or execute one bound Bare-MVP cluster run
 
 Usage:
+  ok up --file <private-manifest.json> --dry-run
+  ok up --file <private-manifest.json> --prepare
   ok cluster create requirements
   ok cluster create scaffold --name <new-name> --output <new-private-directory>
   ok cluster create manifest-template
@@ -249,6 +253,12 @@ Usage:
     --expected-manifest-digest sha256:<digest> \
     --independent-evidence-public-key <file> \
     --terminal-marker /absolute/private-dir/executor-terminal
+
+"ok up" is an exact shorthand for "ok cluster create", including preparation
+subcommands and legacy contract-planning flags. It does not select a mode, infer
+credentials from local config, render YAML, renew access, or bypass live approval.
+All options below work with either spelling; JSON manifest/evidence requirements
+and operation receipts are unchanged. Bare "ok up" only displays this help.
 
 Modes (exactly one is required):
   --dry-run    Verify all bound local inputs and print a non-mutating summary

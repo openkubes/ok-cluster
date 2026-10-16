@@ -682,6 +682,7 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 }
 
 func runContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	arguments = canonicalProductArguments(arguments)
 	if routeHelp(arguments, stdout) {
 		return nil
 	}
@@ -699,7 +700,7 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 1 && arguments[0] == "config" {
 		return runConfig(arguments[1:], stdout, stderr)
 	}
-	if len(arguments) >= 2 && arguments[0] == "destroy" && arguments[1] == "cluster" {
+	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "destroy" {
 		return runDestroyCluster(ctx, arguments[2:], stdout, stderr)
 	}
 	if len(arguments) == 1 && arguments[0] == "version" {
