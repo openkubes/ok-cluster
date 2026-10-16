@@ -65,6 +65,9 @@ func (materializer *KubernetesLifecycleWorkloadAuthorityMaterializer) ResolvePre
 	if materializer == nil {
 		return WorkloadAuthorityFileResolverConfig{}, errors.New("lifecycle workload authority materializer is required")
 	}
+	if materializer.config.KubeconfigFile != "" {
+		return WorkloadAuthorityFileResolverConfig{}, ErrClientCertificateDisabled
+	}
 	materializer.mu.Lock()
 	if materializer.used {
 		materializer.mu.Unlock()

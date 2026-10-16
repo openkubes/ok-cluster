@@ -177,11 +177,18 @@ For `bare-cluster-mvp/v1`, completion ends after Stage 7. Do not require or impl
 that Stages 8–12, GitOps registration, Platform applications or full aggregate
 evaluation have run. Those belong to the separately bound full workflow below.
 
-If an explicitly approved recovery inherits the original four receipts and
-completes Stages 5–7 under the recovery binding, describe it as a **recovered
-Bare-MVP completion**. Preserve the source full-run STOP and terminal marker;
-do not relabel it as a successful fresh, single-invocation `cluster create` run.
-The narrow recovery formats and paired flags are described in the README.
+Following the PR #430 review, certificate execution and network-profile recovery
+execution are disabled. The default lifecycle-derived Stage 5–7 path is blocked
+pending bounded credential bootstrap. Offline recovery inspection is still
+available, but `NEXT` grants no permission to execute. Do not work around the stop
+with the CAPI admin kubeconfig, a new successor Plan, another grant or a local
+STOP file. No atomic reservation/fencing protocol has been deployed.
+
+See the [security follow-up contract](ok147-security-review-contract.md) for the
+credential-bootstrap and source-ledger gate dependencies. Preserve original STOP
+and terminal evidence. ADR-030 security acceptance item 9 remains open until the
+fixes and evidence receive independent review; ADR-031 disaster-recovery
+requirements are unchanged.
 
 ### Execution credentials are not lifecycle credential ownership
 

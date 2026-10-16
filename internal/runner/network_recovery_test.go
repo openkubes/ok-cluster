@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestNetworkRecoveryPreservesOriginalsAndCompletesOnlySuccessorSuffix(t *testing.T) {
+// Synthetic receipts below test offline lineage only, not an executable recovery.
+func TestNetworkRecoveryOfflineInspectionPreservesOriginalsAndSuccessorLineage(t *testing.T) {
 	config := networkRecoveryFixture(t)
 	l, err := ledger.Open(filepath.Join(t.TempDir(), "ledger"))
 	if err != nil {
@@ -50,12 +52,28 @@ func TestNetworkRecoveryPreservesOriginalsAndCompletesOnlySuccessorSuffix(t *tes
 		if decision.StageID != stage || decision.State != "NEXT" {
 			t.Fatalf("wrong successor cursor: %#v", decision)
 		}
+		assertRecoveryExecutionDenied(t, plan, cursor)
+		var bundleErr error
+		switch stage {
+		case "network-observation":
+			_, bundleErr = LoadNetworkObservationStageBundle(config)
+		case "runtime-binding":
+			_, bundleErr = LoadRuntimeBindingStageBundle(config)
+		case "target-access":
+			bundleConfig := TargetAccessStageBundleConfig{PlanPath: config.PlanPath, PlanExpected: config.PlanExpected, Receipts: config.Receipts,
+				RecoveryBindingPath: config.RecoveryBindingPath, RecoveryBindingDigest: config.RecoveryBindingDigest, EvaluationTime: time.Now()}
+			_, bundleErr = LoadTargetAccessStageBundle(bundleConfig)
+			if input, err := BuildTargetAccessStageInput(bundleConfig, "ok147-recovery-test"); !errors.Is(err, stageplan.ErrRecoveryExecutionDisabled) || input.verified {
+				t.Fatalf("runnable recovery Job input emitted: %v", err)
+			}
+		}
+		if !errors.Is(bundleErr, stageplan.ErrRecoveryExecutionDisabled) {
+			t.Fatalf("recovery stage bundle enabled: %v", bundleErr)
+		}
 		previous := []stagereceipt.Verified{prefix[len(prefix)-1]}
 		if stage == "target-access" {
-			request, err := newStageAuthorizationRequest(plan, decision)
-			predecessorDigest, _ := previous[0].Digest()
-			if err != nil || request.PlanDigest != plan.PlanDigest || request.StageOrder != 7 || len(request.Predecessors) != 1 || request.Predecessors[0].ReceiptDigest != predecessorDigest {
-				t.Fatalf("recovery grant request lost successor/predecessor binding: %#v %v", request, err)
+			if _, err := newStageAuthorizationRequest(plan, decision); !errors.Is(err, stageplan.ErrRecoveryExecutionDisabled) {
+				t.Fatalf("recovery grant request enabled without atomic source reservation: %v", err)
 			}
 		}
 		mutation, outcome := "NOT_APPLICABLE", ""
@@ -142,6 +160,31 @@ func TestNetworkRecoveryFailsClosedOnIdentityScopeAndEvidenceDrift(t *testing.T)
 		name   string
 		mutate func(*testing.T, *StageResumeConfig, *NetworkRecoveryDocument)
 	}{
+		{"authorization-state", func(_ *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) { d.AuthorizationState = "GO" }},
+		{"source-plan-digest", func(_ *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) {
+			d.SourcePlanDigest = runnerStageSHA("f")
+		}},
+		{"successor-plan-digest", func(_ *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) {
+			d.SuccessorPlanDigest = runnerStageSHA("f")
+		}},
+		{"stop-category", func(t *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) {
+			mutateRecoveryStop(t, d, func(s *FullRunExecutionActivationReceipt) { s.Execution.StopCategory = "TIMEOUT" })
+		}},
+		{"stop-checkpoint", func(t *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) {
+			mutateRecoveryStop(t, d, func(s *FullRunExecutionActivationReceipt) {
+				s.Execution.Checkpoints[3].StageReceiptDigest = runnerStageSHA("f")
+			})
+		}},
+		{"stop-checkpoint-state", func(t *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) {
+			mutateRecoveryStop(t, d, func(s *FullRunExecutionActivationReceipt) { s.Execution.Checkpoints[3].State = "COMPLETED_FAILED" })
+		}},
+		{"arbitrary-terminal-bytes", func(t *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) {
+			raw := []byte("retained-source-terminal")
+			if err := os.WriteFile(d.SourceTerminalPath, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			d.SourceTerminalDigest = digest.SHA256(raw)
+		}},
 		{"missing-source-prefix", func(_ *testing.T, c *StageResumeConfig, _ *NetworkRecoveryDocument) { c.Receipts = c.Receipts[:3] }},
 		{"mixed-source-path", func(_ *testing.T, c *StageResumeConfig, _ *NetworkRecoveryDocument) { c.Receipts[0].Path += "-foreign" }},
 		{"target-uid", func(_ *testing.T, _ *StageResumeConfig, d *NetworkRecoveryDocument) {
@@ -309,7 +352,7 @@ func networkRecoveryFixture(t *testing.T) StageResumeConfig {
 			CompletionMode: stageplan.CompletionModeBareClusterMVP, StoppedAt: "network-observation", StopCategory: "OBSERVATION_SOURCE_ERROR", Checkpoints: checkpoints}}
 	stopRaw := mustJSON(t, stop)
 	stopPath := writeBundleFile(t, root, "stop.json", stopRaw)
-	terminalRaw := []byte("retained-source-terminal")
+	terminalRaw := []byte("TERMINAL\n")
 	terminalPath := writeBundleFile(t, root, "executor-terminal", terminalRaw)
 	plan["format"] = stageplan.FormatRecovery
 	plan["recoverySourcePlanDigest"] = source.PlanDigest
@@ -329,4 +372,22 @@ func networkRecoveryFixture(t *testing.T) StageResumeConfig {
 	docRaw := mustJSON(t, doc)
 	docPath := writeBundleFile(t, root, "recovery.json", docRaw)
 	return StageResumeConfig{PlanPath: successorPath, PlanExpected: expected, Receipts: sources, RecoveryBindingPath: docPath, RecoveryBindingDigest: digest.SHA256(docRaw)}
+}
+
+func mutateRecoveryStop(t *testing.T, d *NetworkRecoveryDocument, mutate func(*FullRunExecutionActivationReceipt)) {
+	t.Helper()
+	raw, err := os.ReadFile(d.SourceStopReceiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stop FullRunExecutionActivationReceipt
+	if err := json.Unmarshal(raw, &stop); err != nil {
+		t.Fatal(err)
+	}
+	mutate(&stop)
+	raw = mustJSON(t, stop)
+	if err := os.WriteFile(d.SourceStopReceiptPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.SourceStopReceiptDigest = digest.SHA256(raw)
 }

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -43,7 +44,7 @@ type NetworkRecoveryDocument struct {
 }
 
 // VerifiedNetworkRecovery exposes an immutable successor Plan and the exact
-// original receipt sources for offline policy generation and inspection.
+// original receipt sources for offline consistency inspection only.
 type VerifiedNetworkRecovery struct {
 	Plan           stageplan.Binding
 	SourceReceipts []StageReceiptSource
@@ -62,9 +63,11 @@ func readRecoveryArtifact(path, expected string) ([]byte, error) {
 	return raw, nil
 }
 
-// VerifyNetworkRecovery performs only bounded local reads. It permits exactly
+// VerifyNetworkRecovery is artifact consistency inspection, never execution
+// authorization. Recovery execution is disabled pending an atomic ledger gate.
+// It performs only bounded local reads and describes exactly
 // one corrected HRP cluster reference, never a policy, authority or convergence
-// change. Execution still requires the normal stage gates and Stage-7 grant.
+// change. It cannot enable execution or authority-policy generation.
 func VerifyNetworkRecovery(config StageResumeConfig) (VerifiedNetworkRecovery, error) {
 	raw, err := readRecoveryArtifact(config.RecoveryBindingPath, config.RecoveryBindingDigest)
 	if err != nil {
@@ -140,8 +143,12 @@ func VerifyNetworkRecovery(config StageResumeConfig) (VerifiedNetworkRecovery, e
 			return VerifiedNetworkRecovery{}, errors.New("source STOP checkpoint differs from original prefix")
 		}
 	}
-	if _, err := readRecoveryArtifact(doc.SourceTerminalPath, doc.SourceTerminalDigest); err != nil {
+	terminal, err := readRecoveryArtifact(doc.SourceTerminalPath, doc.SourceTerminalDigest)
+	if err != nil {
 		return VerifiedNetworkRecovery{}, err
+	}
+	if !bytes.Equal(terminal, []byte("TERMINAL\n")) {
+		return VerifiedNetworkRecovery{}, errors.New("source executor terminal marker has unsupported content")
 	}
 	oldProfile, err := LoadNetworkProfileFile(NetworkProfileFileConfig{Path: sourceManifest.Profiles.Network.Path,
 		ExpectedProfileDigest: sourceManifest.Profiles.Network.Digest, ExpectedIntentRevision: source.IntentRevision, ExpectedEnablementRevision: source.EnablementRevision})

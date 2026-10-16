@@ -287,7 +287,7 @@ func TestClusterCreateRequirementsAreMachineReadableAndNonMutating(t *testing.T)
 
 func TestClusterCreateProviderOwnershipIsDescriptiveAndDoesNotChangeManifest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{"cluster", "create", "requirements"}, &stdout, &stderr); err != nil {
+	if err := run([]string{"cluster", "create", "requirements", "--format", clusterCreateRequirementsFormatV2}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	var requirements clusterCreateRequirements
@@ -295,10 +295,13 @@ func TestClusterCreateProviderOwnershipIsDescriptiveAndDoesNotChangeManifest(t *
 		t.Fatal(err)
 	}
 	ownership := requirements.ProviderAccessOwnership
+	if ownership == nil {
+		t.Fatal("v2 omitted ownership metadata")
+	}
 	if ownership.LifecycleOwner != "lifecycle-operator" || !ownership.RequiredAfterExecution || ownership.AutomaticRenewalByCLI || ownership.OfflineValidationProvesOngoingAccess || len(ownership.OperatorHandoff) != 3 {
 		t.Fatalf("provider lifecycle responsibility differs: %#v", ownership)
 	}
-	if stderr.Len() != 0 || requirements.Format != clusterCreateRequirementsFormat {
+	if stderr.Len() != 0 || requirements.Format != clusterCreateRequirementsFormatV2 {
 		t.Fatal("requirements routing or format changed")
 	}
 	for _, section := range requirements.RequiredManifestSections {

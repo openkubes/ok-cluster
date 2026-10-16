@@ -307,14 +307,15 @@ func writeClusterCreateRequirementsHelp(output io.Writer) {
 	fmt.Fprint(output, `Print the machine-readable Bare-MVP input contract
 
 Usage:
-  ok cluster create requirements
+  ok cluster create requirements [--format ok-cli-cluster-create-requirements/v1|ok-cli-cluster-create-requirements/v2]
 
 The command reads no file, opens no network client, and emits static JSON for
 renderer and packaging integrations. The contract reports that Stage 8-12
 post-runtime material is not required for Bare-MVP. It does not prepare or
 authorize a run.
 
-providerAccessOwnership is descriptive handoff metadata: the lifecycle operator
+The default v1 omits providerAccessOwnership. Explicit v2 includes that
+descriptive handoff metadata: the lifecycle operator
 owns ongoing provider access; it adds no manifest fields or renewal authority.
 `)
 }

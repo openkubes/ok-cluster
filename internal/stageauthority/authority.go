@@ -140,6 +140,9 @@ type claimRecord struct {
 // It never accepts caller-authored stage fields, and it includes only stages
 // that the plan itself classifies as mutating.
 func FromPlan(plan stageplan.Binding) ([]byte, PolicyReceipt, error) {
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return nil, PolicyReceipt{}, err
+	}
 	if !digestPattern.MatchString(plan.PlanDigest) || len(plan.Stages) == 0 {
 		return nil, PolicyReceipt{}, errors.New("verified staged plan is required")
 	}

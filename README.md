@@ -52,57 +52,54 @@ Stage-7 Bare-MVP completion and the legacy contract fixture. It creates no
 cluster client and is not a substitute for validating a freshly rendered
 private production manifest.
 
-For an explicitly authorized continuation through the expert Stage 5–7
-commands (`stage observe network`, `stage bind runtime`, `stage run target-access`),
-`--workload-kubeconfig-file` accepts the client-certificate kubeconfig produced
-by the lifecycle stage. Supply exactly one of that flag and
-`--workload-token-file`. Both modes still require the digest-bound
-`--workload-binding`, its digest and `--workload-ca-file`; neither selects a
-default kubeconfig or context. Existing token-based invocations remain valid.
+Client-certificate workload execution is **disabled** following the PR #430
+security review. `--workload-kubeconfig-file` is retained for explicit rejection,
+not as a supported continuation path. CAPI admin kubeconfigs are rejected before
+credential-file reads or workload API contact. The lifecycle-derived materializer
+also stops before reading the CAPI Secret. The existing separately supported
+token paths retain their prior constraints; arbitrary bearer tokens are not
+thereby certified as least privilege.
 
-Inspect a stopped run's exact durable receipt prefix with `ok cluster stage
-resume` before planning any continuation. A terminal full-run STOP stays
-immutable; the new credential flag does not authorize replay or make
-`cluster create --live` resumable. Network observation and runtime binding
-persist ledger evidence; target access additionally requires its separate
-predecessor-bound Stage grant. None is executed by an offline inspection.
+**Dependency: bounded workload credential bootstrap.** The default lifecycle-derived
+Stage 5–7 path cannot complete until a reviewed issuer defines exact per-role
+subjects, complete group allowlists, least-privilege RBAC and a justified maximum
+certificate lifetime (or a separately approved bounded token bootstrap). The
+executor must not use the CAPI admin credential to mint its own bounded access.
+No numeric certificate TTL is inferred from CAPI's controller-admin lifetime or
+from the separate TokenRequest policy.
 
-An explicit, narrow recovery format is available for a source Bare-MVP run
-that stopped with `OBSERVATION_SOURCE_ERROR` at Stage 5 after exactly four
-successful durable stage receipts. It is **not** a general resume switch:
+`ok cluster stage resume` may inspect a stopped run's local receipt chain.
+The narrow `ok147-network-profile-recovery/v1` binding and
+`ok147-staged-execution-plan/recovery-v1` remain available for **offline artifact
+consistency inspection only**. Both `--recovery-binding` and
+`--recovery-binding-digest` are required. Original Stage 1–4 receipts retain their
+bytes and source identity; only the corrected HRP-reference input may differ.
+STOP fields and the exact `TERMINAL\n` marker content are checked, but these
+operator-supplied artifacts do not authenticate source execution state. An
+inspection result of `NEXT` is structural information, not execution permission.
 
-- Retain the original manifest, plan, four receipts, STOP receipt and executor
-  terminal marker unchanged. Their independently reviewed identities, including
-  the lifecycle receipt's target Cluster UID digest, are pinned in an
-  `ok147-network-profile-recovery/v1` binding (`authorizationState: NO-GO`).
-- The successor plan uses `ok147-staged-execution-plan/recovery-v1` and pins
-  `recoverySourcePlanDigest`. The sole permitted input change is Stage 5's
-  expected HelmReleaseProxy spec digest: the old value must be reproducible
-  from the approved literal HelmChartProxy values and former Cluster reference,
-  and the corrected value from the same values and current Cluster reference.
-  Node count, image requirements, probes, other inputs and authorities cannot change.
-- Supply **both** `--recovery-binding <file>` and
-  `--recovery-binding-digest sha256:<reviewed-digest>` to `cluster stage resume`
-  and the expert Stage 5–7 commands, together with the successor `--plan`,
-  unchanged expected Contract identities, and four original ordered `--receipt`
-  inputs. Append only the newly persisted successor receipts as stages finish.
-  `resume` reads local evidence only; `NEXT` means eligible for a separately
-  authorized stage, not a successful cluster or permission to execute it.
-- The old receipts retain their source plan and bytes. New Stage 5–7 receipts
-  use `ok147-stage-receipt/recovery-v1`, pinning the successor plan and recovery
-  binding digest. Stages 1–4 cannot be replayed. A failed or stopped successor
-  receipt remains terminal. Missing convergence evidence cannot yield success.
-- `authority stage policy` accepts the same recovery pair and independently
-  re-verifies the source evidence. Its generated policy permits only Stage 7
-  `CreateTargetAccess`, bound to the new predecessor; generation does not
-  install a policy or grant authority. Stages 5–6 retain normal ledger/evidence
-  requirements. Any authority rebinding, credential renewal, publication or
-  live execution needs separate approval.
+**Recovery execution, grant-request preparation and authority-policy derivation
+are disabled.** Stage 5–7 bundle loading and the underlying execution operations
+reject recovery before opening capabilities. Stage-7 package/launch adapters retain
+the recovery binding and reject it explicitly rather than emitting an unusable
+Job with missing lineage. Shared resume flags are registered on additional expert
+commands; their presence does not imply that recovery execution is supported.
+No command or credential flag makes `cluster create --live` replayable.
 
-This additive format leaves ordinary v1/v2 plans and first-run receipts
-unchanged. It does not make `cluster create --live` replayable, add teardown,
-or invoke Talos `bootstrap-resume`. The latter remains a separately authorized
-lifecycle action, never an automatic response to a runner STOP.
+**Dependency: atomic source-state reservation and legacy fencing.** Before recovery
+can be enabled, source Stage-5 execution and recovery must share one authoritative
+compare-and-swap gate. The gate binds the source execution, target, Stage-4 outcome
+and one successor; per-stage claims prevent repeated Stage 5–7 work. Completed,
+claimed, missing, unreadable or ambiguous source state must deny recovery.
+A missing legacy gate is not an available slot. Existing executors and grants
+must be fenced under a reviewed activation procedure; a new client-side check
+cannot stop an old executable. Crashed reservations/claims remain indeterminate
+without automatic release, expiry takeover or replay. This release implements the
+disabled fallback, **not** that atomic protocol or its deployment.
+
+See [the security follow-up contract](docs/ok147-security-review-contract.md).
+ADR-030 security acceptance remains open. This workflow recovery does not implement
+ADR-031 management-plane disaster recovery or authorize Talos `bootstrap-resume`.
 
 The provider controller still needs valid infrastructure access after `ok` exits.
 A completed receipt chain is not a guarantee of continuing availability after a

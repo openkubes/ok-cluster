@@ -5,17 +5,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
-func TestKubernetesLifecycleWorkloadAuthorityMaterializerUsesExactStageFiveAuthority(t *testing.T) {
+func TestKubernetesLifecycleWorkloadAuthorityMaterializerRejectsBeforeAPIContact(t *testing.T) {
 	workloadCA, workloadCertificate, workloadKey := testClientCredential(t)
 	workloadEndpoint := "https://192.0.2.90:6443"
 	kubeconfig := testClientKubeconfig(workloadEndpoint, workloadCA, workloadCertificate, workloadKey)
@@ -97,28 +97,19 @@ func TestKubernetesLifecycleWorkloadAuthorityMaterializerUsesExactStageFiveAutho
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt, err := executor.Run(context.Background()); err != nil || receipt.State != "SUCCEEDED" {
-		t.Fatalf("pre-runtime execution did not reach materializer: %#v err=%v materializer=%v requests=%v", receipt, err, materializeErr, requests)
+	if receipt, err := executor.Run(context.Background()); err == nil || receipt.State == "SUCCEEDED" || !errors.Is(materializeErr, ErrClientCertificateDisabled) {
+		t.Fatalf("unbounded workload bootstrap enabled: %#v err=%v materializer=%v", receipt, err, materializeErr)
 	}
-	if !reflect.DeepEqual(requests, wantPaths) {
-		t.Fatalf("materializer request surface differs: got=%v want=%v", requests, wantPaths)
+	if len(requests) != 0 {
+		t.Fatalf("credential bootstrap contacted API before denial: %v", requests)
 	}
-	for _, path := range []string{materialized.KubeconfigFile, materialized.CAFile, materialized.Path} {
-		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-			t.Fatalf("private material is not a regular 0600 file: %s %#v %v", path, info, err)
+	if materialized != (WorkloadAuthorityFileResolverConfig{}) {
+		t.Fatal("denied bootstrap returned credential material")
+	}
+	for _, name := range []string{"workload.kubeconfig", "workload-ca.crt", "workload-authority.json"} {
+		if _, err := os.Lstat(filepath.Join(privateRoot, name)); !os.IsNotExist(err) {
+			t.Fatalf("denied bootstrap wrote %s: %v", name, err)
 		}
-	}
-	resolver, err := OpenWorkloadAuthorityFileResolver(materialized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, err := resolver.ResolveWorkloadAuthority(context.Background(), networkPolicyForMaterializedAuthority(config, "11111111-1111-4111-8111-111111111111"))
-	if err != nil || authority.Endpoint != workloadEndpoint || authority.TokenFile != "" || authority.KubeconfigFile != materialized.KubeconfigFile {
-		t.Fatalf("materialized workload authority is not replayable: %#v err=%v", authority, err)
-	}
-	if _, err := materializer.ResolvePreRuntimeWorkloadAuthority(context.Background(), StageResumeConfig{}); err == nil {
-		t.Fatal("single-use materializer resolved twice")
 	}
 }
 

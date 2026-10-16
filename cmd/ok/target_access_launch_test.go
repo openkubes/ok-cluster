@@ -33,10 +33,13 @@ func TestTargetAccessStagePackageWritesVerifiedOfflineArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := filepath.Join(root, "target-access-package.yaml")
-	arguments := targetAccessStagePackageArguments(template, output)
+	arguments := append(targetAccessStagePackageArguments(template, output), "--recovery-binding", "/private/recovery.json", "--recovery-binding-digest", testSHA("d"))
 	var stdout, stderr bytes.Buffer
 	if err := run(arguments, &stdout, &stderr); err != nil {
 		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Bundle.RecoveryBindingPath != "/private/recovery.json" || captured.Bundle.RecoveryBindingDigest != testSHA("d") {
+		t.Fatal("Stage-7 package lost recovery identity")
 	}
 	if captured.Bundle.PlanPath != "/tmp/plan.json" || len(captured.Bundle.Receipts) != 6 || len(captured.Bundle.ExpectedObjects) != 16 || captured.RunID != "ok147-target-access-20260817-01" {
 		t.Fatalf("unexpected target-access package config: %#v", captured)
@@ -95,8 +98,11 @@ func TestTargetAccessLaunchPrepareBuildsOneNonMutatingCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if err := run(targetAccessLaunchPrepareArguments(template, runtimeManifest), &stdout, &stderr); err != nil {
+	if err := run(append(targetAccessLaunchPrepareArguments(template, runtimeManifest), "--recovery-binding", "/private/recovery.json", "--recovery-binding-digest", testSHA("d")), &stdout, &stderr); err != nil {
 		t.Fatalf("run: %v; stderr=%s", err, stderr.String())
+	}
+	if captured.Package.Bundle.RecoveryBindingPath != "/private/recovery.json" || captured.Package.Bundle.RecoveryBindingDigest != testSHA("d") {
+		t.Fatal("Stage-7 launch lost recovery identity")
 	}
 	if captured.Package.Bundle.PlanExpected.GitOpsAuthority != "ok-shared" || len(captured.Package.Bundle.ExpectedObjects) != 16 || captured.Package.RunID != "ok147-target-access-20260817-01" {
 		t.Fatalf("target-access package identity differs: %#v", captured.Package)

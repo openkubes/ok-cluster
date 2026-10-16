@@ -3,7 +3,7 @@
 Status: responsibility boundary agreed; concrete rotation integration not implemented.
 This note does not accept or amend ADR-030/031 and grants no live authority.
 
-## Decision
+## Operational responsibility (not ADR acceptance)
 
 The **lifecycle operator** is responsible for valid provider access for as long
 as the external infrastructure controller needs it. This names an operational
@@ -18,7 +18,8 @@ or repair provider access by replaying lifecycle operations.
 ## Minimal current CLI integration
 
 `ok cluster create --help` explains this responsibility and the limits of
-offline validation. `ok cluster create requirements` adds a descriptive
+offline validation. `ok cluster create requirements --format ok-cli-cluster-create-requirements/v2`
+includes a descriptive
 `providerAccessOwnership` object with:
 
 - `lifecycleOwner: lifecycle-operator`;
@@ -28,9 +29,11 @@ offline validation. `ok cluster create requirements` adds a descriptive
 - operator handoff topics: validity window, rotation responsibility and current
   convergence evidence.
 
-This is additive requirements-output metadata, not a new manifest schema or
-authorization input. Existing requirements fields and their meaning remain
-unchanged. Renderer/packaging consumers should treat it as operator guidance,
+The default requirements/v1 output omits this object and preserves its earlier
+fields and meaning. PR #430's unversioned v1 addition is corrected; consumers
+needing this metadata must explicitly request v2. Unsupported versions fail
+without output. This is requirements-output metadata, not a new manifest schema
+or authorization input. Renderer/packaging consumers should treat it as operator guidance,
 not as evidence that rotation is configured or access has been verified live.
 
 The accepted manifest versions, `providerAccess.policyPath` and
@@ -68,3 +71,13 @@ No particular mechanism or TTL is selected here. A separately approved one-hour
 Secret recovery remains a bounded MVP intervention, not the durable integration.
 Do not infer permission to delete/create a Secret, issue another credential,
 establish an automation, or implement OK-197/OK-198 from this ownership decision.
+
+## Security acceptance remains open
+
+This responsibility statement does not satisfy ADR-030 security acceptance item 9.
+Credential expiry/rotation, bounded execution identities, negative RBAC evidence
+and independent security review remain required. The default lifecycle-derived
+Stage 5–7 execution path is blocked pending bounded credential bootstrap.
+Network-profile recovery execution is disabled pending an atomic authoritative
+reservation and legacy-executor fencing. See the security follow-up contract.
+This note does not implement ADR-031 management-plane disaster recovery.

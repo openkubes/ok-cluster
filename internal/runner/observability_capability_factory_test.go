@@ -22,7 +22,7 @@ import (
 	"github.com/openkubes/ok-cluster/internal/observation"
 )
 
-func TestKubernetesObservabilityPlatformCapabilityFactoryResolvesLazily(t *testing.T) {
+func TestKubernetesObservabilityPlatformCapabilityFactoryRejectsCertificateLazily(t *testing.T) {
 	root := t.TempDir()
 	requests := 0
 	server, ca, certificate, key := newObservabilityFactoryTLSServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
@@ -42,10 +42,6 @@ func TestKubernetesObservabilityPlatformCapabilityFactoryResolvesLazily(t *testi
 	boundAuthority := KubernetesAuthorityConfig{
 		Endpoint: server.URL, AuthorityIdentity: evidenceMaterial.identity.TargetClusterUID, KubeconfigFile: kubeconfigPath,
 		CAFile: caPath, CABundleDigest: digest.SHA256(ca),
-	}
-	openedTransport, err := openBoundedKubernetesAuthorityTransport(boundAuthority)
-	if err != nil || !openedTransport.clientCertificate || digest.SHA256(openedTransport.caData) != boundAuthority.CABundleDigest {
-		t.Fatalf("test workload authority is invalid: cert=%v ca=%v err=%v", openedTransport.clientCertificate, digest.SHA256(openedTransport.caData) == boundAuthority.CABundleDigest, err)
 	}
 	workload := WorkloadAuthorityResolverFunc(func(_ context.Context, policy observation.Policy) (KubernetesAuthorityConfig, error) {
 		workloadCalls++
@@ -79,7 +75,7 @@ func TestKubernetesObservabilityPlatformCapabilityFactoryResolvesLazily(t *testi
 		Required: []string{"PlatformReady"},
 	}
 	source, err := resolver.ResolvePlatformCapability(context.Background(), policy, platformProfile)
-	if err != nil || source == nil || workloadCalls != 1 || requests != 0 {
+	if err == nil || source != nil || workloadCalls != 1 || requests != 0 {
 		t.Fatalf("lazy capability resolution differs: source=%T workload=%d requests=%d err=%v", source, workloadCalls, requests, err)
 	}
 	if _, err := resolver.ResolvePlatformCapability(context.Background(), policy, platformProfile); err == nil || workloadCalls != 1 || requests != 0 {

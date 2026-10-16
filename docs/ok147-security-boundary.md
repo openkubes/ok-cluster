@@ -28,6 +28,23 @@ Authority remains split:
 The runner may observe, correlate and report those sources. It may not repair
 them outside the exact authorized stage operation.
 
+## PR #430 security follow-up
+
+ADR-030 security acceptance item 9 remains **OPEN** pending independent review and
+credential/negative-RBAC/expiry evidence. The retained local CAPI credential was
+an administrator certificate, not bounded executor authority. Certificate mode
+is denied before constructing clients. The default lifecycle-derived Stage 5–7
+path remains blocked pending a reviewed bounded credential bootstrap.
+
+Network-profile recovery execution is disabled at bundle, authorization-request,
+authority-policy and core execution boundaries. Offline artifact verification
+does not check authoritative source ledger state and does not grant execution
+permission. No atomic gate, legacy migration or executor fencing is implemented
+by this release. An empty-slot read alone would have a concurrency race.
+See [the follow-up contract](ok147-security-review-contract.md) for the exact
+enablement requirements and remaining evidence. Ordinary execution and the ledger
+remain separate from lifecycle desired state; ADR-031 is unchanged.
+
 ## Authorization and replay protection
 
 Every mutating stage uses a signed grant bound to its exact operation, request,

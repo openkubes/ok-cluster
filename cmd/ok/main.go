@@ -1311,7 +1311,7 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 	workloadBinding := flags.String("workload-binding", "", "path to the private runtime workload-authority binding")
 	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected workload-authority binding digest")
 	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived read-only workload token")
-	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "path to the lifecycle-derived workload client-certificate kubeconfig; mutually exclusive with --workload-token-file")
+	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "disabled pending bounded credential bootstrap; client-certificate kubeconfigs are rejected")
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the workload Kubernetes API CA bundle")
 	networkProfile := flags.String("network-profile", "", "path to the immutable NetworkReady profile")
 	networkProfileDigest := flags.String("network-profile-digest", "", "expected NetworkReady profile digest")
@@ -1400,7 +1400,7 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	workloadBinding := flags.String("workload-binding", "", "path to the private workload-authority binding")
 	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected workload-authority binding digest")
 	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived read-only workload token")
-	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "path to the lifecycle-derived workload client-certificate kubeconfig; mutually exclusive with --workload-token-file")
+	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "disabled pending bounded credential bootstrap; client-certificate kubeconfigs are rejected")
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the workload Kubernetes API CA bundle")
 	persistenceMode := flags.String("persistence-mode", "local-file", "exact persistence mode: local-file or immutable-secret")
 	persistenceTokenFile := flags.String("persistence-token-file", "", "path to the distinct short-lived runtime-binding Secret writer token")
@@ -2180,7 +2180,7 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	workloadBinding := flags.String("workload-binding", "", "path to the private runtime-bound workload authority record")
 	workloadBindingDigest := flags.String("workload-binding-digest", "", "expected digest of the private workload authority record")
 	workloadTokenFile := flags.String("workload-token-file", "", "path to the short-lived workload writer token")
-	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "path to the lifecycle-derived workload client-certificate kubeconfig; mutually exclusive with --workload-token-file")
+	workloadKubeconfigFile := flags.String("workload-kubeconfig-file", "", "disabled pending bounded credential bootstrap; client-certificate kubeconfigs are rejected")
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the runtime-bound workload Kubernetes API CA bundle")
 	if err := flags.Parse(arguments); err != nil {
 		return err

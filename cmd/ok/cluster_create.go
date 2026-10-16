@@ -15,26 +15,27 @@ import (
 
 const clusterCreateWorkflowFormat = "ok-cli-cluster-create/v1"
 const clusterCreateRequirementsFormat = "ok-cli-cluster-create-requirements/v1"
+const clusterCreateRequirementsFormatV2 = "ok-cli-cluster-create-requirements/v2"
 
 type clusterCreateRequirements struct {
-	Format                      string                               `json:"format"`
-	Operation                   string                               `json:"operation"`
-	AcceptedManifestFormats     []string                             `json:"acceptedManifestFormats"`
-	RequiredCompletionMode      string                               `json:"requiredCompletionMode"`
-	ManifestPathRules           []string                             `json:"manifestPathRules"`
-	RequiredManifestSections    []string                             `json:"requiredManifestSections"`
-	UnusedPostRuntimeSections   []string                             `json:"unusedPostRuntimeSections"`
-	OfflineModes                []string                             `json:"offlineModes"`
-	OfflineAPIContacted         bool                                 `json:"offlineApiContacted"`
-	OfflineMutationAllowed      bool                                 `json:"offlineMutationAllowed"`
-	LiveRequiredFlags           []string                             `json:"liveRequiredFlags"`
-	TerminalMarkerName          string                               `json:"terminalMarkerName"`
-	LiveStageOrder              []string                             `json:"liveStageOrder"`
-	AcceptedPlanStageCounts     []int                                `json:"acceptedPlanStageCounts"`
-	PreferredPlanStageCount     int                                  `json:"preferredPlanStageCount"`
-	PostRuntimeMaterialRequired bool                                 `json:"postRuntimeMaterialRequired"`
-	LiveMutationAllowed         bool                                 `json:"liveMutationAllowed"`
-	ProviderAccessOwnership     clusterCreateProviderAccessOwnership `json:"providerAccessOwnership"`
+	Format                      string                                `json:"format"`
+	Operation                   string                                `json:"operation"`
+	AcceptedManifestFormats     []string                              `json:"acceptedManifestFormats"`
+	RequiredCompletionMode      string                                `json:"requiredCompletionMode"`
+	ManifestPathRules           []string                              `json:"manifestPathRules"`
+	RequiredManifestSections    []string                              `json:"requiredManifestSections"`
+	UnusedPostRuntimeSections   []string                              `json:"unusedPostRuntimeSections"`
+	OfflineModes                []string                              `json:"offlineModes"`
+	OfflineAPIContacted         bool                                  `json:"offlineApiContacted"`
+	OfflineMutationAllowed      bool                                  `json:"offlineMutationAllowed"`
+	LiveRequiredFlags           []string                              `json:"liveRequiredFlags"`
+	TerminalMarkerName          string                                `json:"terminalMarkerName"`
+	LiveStageOrder              []string                              `json:"liveStageOrder"`
+	AcceptedPlanStageCounts     []int                                 `json:"acceptedPlanStageCounts"`
+	PreferredPlanStageCount     int                                   `json:"preferredPlanStageCount"`
+	PostRuntimeMaterialRequired bool                                  `json:"postRuntimeMaterialRequired"`
+	LiveMutationAllowed         bool                                  `json:"liveMutationAllowed"`
+	ProviderAccessOwnership     *clusterCreateProviderAccessOwnership `json:"providerAccessOwnership,omitempty"`
 }
 
 // Descriptive requirements metadata only: this adds no manifest input,
@@ -81,11 +82,20 @@ var executeClusterCreateLive = func(ctx context.Context, config clusterCreateLiv
 var validateClusterCreateTerminalMarker = runner.ValidateFullRunExecutorTerminalMarkerDestination
 
 func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
-	if len(arguments) != 0 {
-		return errors.New("ok cluster create requirements accepts no flags or positional arguments")
+	flags := flag.NewFlagSet("ok cluster create requirements", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	format := flags.String("format", clusterCreateRequirementsFormat, "requirements output format (v1 or v2)")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("ok cluster create requirements accepts no positional arguments")
+	}
+	if *format != clusterCreateRequirementsFormat && *format != clusterCreateRequirementsFormatV2 {
+		return errors.New("unsupported cluster create requirements format")
 	}
 	requirements := clusterCreateRequirements{
-		Format: clusterCreateRequirementsFormat, Operation: "CreateCluster",
+		Format: *format, Operation: "CreateCluster",
 		AcceptedManifestFormats: []string{runner.FullRunExecutionManifestFormat, runner.FullRunExecutionManifestFormatV4},
 		RequiredCompletionMode:  stageplan.CompletionModeBareClusterMVP,
 		ManifestPathRules: []string{
@@ -113,11 +123,14 @@ func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
 		},
 		AcceptedPlanStageCounts: []int{stageplan.BareClusterStageCount, 12}, PreferredPlanStageCount: stageplan.BareClusterStageCount,
 		PostRuntimeMaterialRequired: false, LiveMutationAllowed: true,
-		ProviderAccessOwnership: clusterCreateProviderAccessOwnership{
+		ProviderAccessOwnership: &clusterCreateProviderAccessOwnership{
 			LifecycleOwner: "lifecycle-operator", RequiredAfterExecution: true,
 			AutomaticRenewalByCLI: false, OfflineValidationProvesOngoingAccess: false,
 			OperatorHandoff: []string{"provider credential validity window", "credential rotation responsibility", "current convergence evidence"},
 		},
+	}
+	if *format == clusterCreateRequirementsFormat {
+		requirements.ProviderAccessOwnership = nil
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetEscapeHTML(false)

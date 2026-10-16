@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +20,6 @@ import (
 	"github.com/openkubes/ok-cluster/internal/ledger"
 	"github.com/openkubes/ok-cluster/internal/observation"
 	"github.com/openkubes/ok-cluster/internal/submission"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -179,125 +177,17 @@ func openBoundedKubernetesAuthorityTransport(config KubernetesAuthorityConfig) (
 	return openBoundedKubernetesKubeconfigTransport(config.KubeconfigFile, config.Endpoint, config.CAFile)
 }
 
+// No bounded certificate issuer/subject/group/lifetime policy is approved.
+// CA-signed CAPI admin certificates must never become executor credentials.
+var ErrClientCertificateDisabled = errors.New("client-certificate execution is disabled pending a bounded credential bootstrap policy")
+
 func openBoundedKubernetesKubeconfigTransport(kubeconfigFile, expectedEndpoint, caFile string) (boundedKubernetesTransport, error) {
-	raw, err := readBoundedRegular(kubeconfigFile, maximumCABytes)
-	if err != nil {
-		return boundedKubernetesTransport{}, errors.New("read temporary Kubernetes kubeconfig")
-	}
-	boundCA, err := readBoundedRegular(caFile, maximumCABytes)
-	if err != nil {
-		return boundedKubernetesTransport{}, errors.New("read runtime-bound Kubernetes API CA")
-	}
-	return parseBoundedKubernetesKubeconfig(raw, expectedEndpoint, boundCA)
+	// Reject before reading credential files or constructing an HTTP client.
+	return boundedKubernetesTransport{}, ErrClientCertificateDisabled
 }
 
 func parseBoundedKubernetesKubeconfig(raw []byte, expectedEndpoint string, boundCA []byte) (boundedKubernetesTransport, error) {
-	type namedCluster struct {
-		Name    string `yaml:"name"`
-		Cluster struct {
-			Server                   string `yaml:"server"`
-			CertificateAuthorityData string `yaml:"certificate-authority-data"`
-		} `yaml:"cluster"`
-	}
-	type namedContext struct {
-		Name    string `yaml:"name"`
-		Context struct {
-			Cluster   string `yaml:"cluster"`
-			User      string `yaml:"user"`
-			Namespace string `yaml:"namespace,omitempty"`
-		} `yaml:"context"`
-	}
-	type namedUser struct {
-		Name string `yaml:"name"`
-		User struct {
-			ClientCertificateData string `yaml:"client-certificate-data"`
-			ClientKeyData         string `yaml:"client-key-data"`
-		} `yaml:"user"`
-	}
-	var document struct {
-		APIVersion     string         `yaml:"apiVersion"`
-		Kind           string         `yaml:"kind"`
-		CurrentContext string         `yaml:"current-context"`
-		Clusters       []namedCluster `yaml:"clusters"`
-		Contexts       []namedContext `yaml:"contexts"`
-		Preferences    map[string]any `yaml:"preferences,omitempty"`
-		Users          []namedUser    `yaml:"users"`
-	}
-	decoder := yaml.NewDecoder(bytes.NewReader(raw))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&document); err != nil {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig is invalid")
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig has trailing content")
-	}
-	if document.APIVersion != "v1" || document.Kind != "Config" || document.CurrentContext == "" ||
-		len(document.Clusters) != 1 || len(document.Contexts) != 1 || len(document.Users) != 1 {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig shape is invalid")
-	}
-	cluster := document.Clusters[0]
-	contextEntry := document.Contexts[0]
-	user := document.Users[0]
-	if contextEntry.Name != document.CurrentContext || contextEntry.Context.Cluster != cluster.Name ||
-		contextEntry.Context.User != user.Name || cluster.Name == "" || user.Name == "" ||
-		cluster.Cluster.Server != expectedEndpoint || !validFullRunKubernetesEndpoint(expectedEndpoint) {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig differs from runtime authority")
-	}
-	decode := func(encoded string) ([]byte, error) {
-		if encoded == "" || strings.TrimSpace(encoded) != encoded || strings.ContainsAny(encoded, "\r\n") {
-			return nil, errors.New("empty or non-canonical base64")
-		}
-		return base64.StdEncoding.Strict().DecodeString(encoded)
-	}
-	caData, err := decode(cluster.Cluster.CertificateAuthorityData)
-	if err != nil {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes CA encoding is invalid")
-	}
-	certificateData, err := decode(user.User.ClientCertificateData)
-	if err != nil {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes certificate encoding is invalid")
-	}
-	keyData, err := decode(user.User.ClientKeyData)
-	if err != nil {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes key encoding is invalid")
-	}
-	if boundCA != nil && !bytes.Equal(caData, boundCA) {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes kubeconfig CA differs from runtime binding")
-	}
-	certificate, err := tls.X509KeyPair(certificateData, keyData)
-	if err != nil || len(certificate.Certificate) == 0 {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client credential is invalid")
-	}
-	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
-	if err != nil {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client certificate is invalid")
-	}
-	certificate.Leaf = leaf
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(caData) {
-		return boundedKubernetesTransport{}, errors.New("runtime-bound Kubernetes API CA contains no certificate")
-	}
-	intermediates := x509.NewCertPool()
-	for _, rawCertificate := range certificate.Certificate[1:] {
-		intermediate, err := x509.ParseCertificate(rawCertificate)
-		if err != nil {
-			return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client certificate chain is invalid")
-		}
-		intermediates.AddCert(intermediate)
-	}
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
-		return boundedKubernetesTransport{}, errors.New("temporary Kubernetes client certificate is not trusted by the runtime-bound CA")
-	}
-	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{
-		Proxy: nil, DisableCompression: true, ForceAttemptHTTP2: true,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{certificate}},
-	}}
-	identityMaterial := append(append([]byte(nil), certificateData...), keyData...)
-	return boundedKubernetesTransport{
-		clientCertificate: true, caData: append([]byte(nil), caData...), certificateData: certificateData,
-		keyData: keyData, credentialIdentity: digest.SHA256(identityMaterial), client: client,
-	}, nil
+	return boundedKubernetesTransport{}, ErrClientCertificateDisabled
 }
 
 // OpenKubernetesCAPILifecycleObserver materializes a bounded management-plane

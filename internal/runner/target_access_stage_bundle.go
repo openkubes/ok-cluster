@@ -83,6 +83,9 @@ func LoadTargetAccessStageBundle(config TargetAccessStageBundleConfig) (Verified
 	if err != nil {
 		return VerifiedTargetAccessStageBundle{}, err
 	}
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return VerifiedTargetAccessStageBundle{}, err
+	}
 	decision, err := cursor.Decision()
 	if err != nil || decision.State != "NEXT" || decision.StageID != "target-access" || decision.Authority != "workload" || !decision.RequiresAuthorization || decision.Operation != "CreateTargetAccess" {
 		return VerifiedTargetAccessStageBundle{}, errors.New("verified prefix does not select target access")
