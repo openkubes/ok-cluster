@@ -17,13 +17,15 @@ BINARY = ROOT / '.tools/bin/ok'
 
 
 class DestroyCLIIntegrationTests(unittest.TestCase):
+    command_prefix = ('destroy', 'cluster')
+
     def setUp(self):
         self.assertTrue(BINARY.is_file(), 'build the CLI first with make ok-cli-build')
         self.fixture = fixtures.SplitTeardownTests('test_success_routes_and_preserves_evidence')
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         box = self.fixture.box
-        self.arguments = [str(BINARY), 'destroy', 'cluster', fixtures.CLUSTER,
+        self.arguments = [str(BINARY), *self.command_prefix, fixtures.CLUSTER,
             '--lifecycle-root', str(ROOT), '--cluster-dir', str(box.rendered),
             '--management-kubeconfig', str(box.infra),
             '--provider-kubeconfig', str(self.fixture.provider),
@@ -90,7 +92,7 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
         self.assertNotEqual(repeated.returncode, 0)
         self.assertEqual(path.read_bytes(), raw)
         self.assert_no_owner_calls()
-        self.arguments = [str(BINARY), 'destroy', 'cluster', fixtures.CLUSTER]
+        self.arguments = [str(BINARY), *self.command_prefix, fixtures.CLUSTER]
         return path
 
     def test_configured_no_from_unrelated_directory_never_contacts_owner(self):
@@ -178,6 +180,10 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(len(deletes), 1)
         self.assertIsNotNone(self.fixture.box.read_state()['namespace'])
         self.fixture.assert_preserved()
+
+
+class CanonicalDestroyCLIIntegrationTests(DestroyCLIIntegrationTests):
+    command_prefix = ('cluster', 'destroy')
 
 
 if __name__ == '__main__':

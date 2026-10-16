@@ -41,13 +41,13 @@ func runDestroyCluster(ctx context.Context, arguments []string, stdout, stderr i
 
 func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdout, stderr io.Writer, runtime destroyClusterRuntime) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: ok destroy cluster <name> [flags]; see --help")
+		return errors.New("usage: ok cluster destroy <name> [flags]; see --help")
 	}
 	name := arguments[0]
 	if len(name) > 63 || !destroyClusterName.MatchString(name) || name == "default" || strings.HasPrefix(name, "kube-") {
 		return errors.New("cluster name must be a non-reserved Kubernetes namespace name (lowercase, at most 63 characters)")
 	}
-	flags := flag.NewFlagSet("ok destroy cluster", flag.ContinueOnError)
+	flags := flag.NewFlagSet("ok cluster destroy", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("lifecycle-root", "", "Trusted ok-cluster checkout (saved path, otherwise current directory)")
 	clusterDir := flags.String("cluster-dir", "", "Render/evidence directory (default: <lifecycle-root>/<name>)")
@@ -59,7 +59,7 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("unexpected positional arguments; use ok destroy cluster <name> [flags]")
+		return errors.New("unexpected positional arguments; use ok cluster destroy <name> [flags]")
 	}
 	explicitEmpty := false
 	flags.Visit(func(f *flag.Flag) {
@@ -234,12 +234,14 @@ func cliExitCode(err error) int {
 }
 
 func writeDestroyHelp(output io.Writer) {
-	fmt.Fprint(output, `Interactively destroy a bounded cluster through the existing lifecycle
+	fmt.Fprint(output, `Compatibility spelling for interactive cluster destruction
 
 Usage:
   ok destroy cluster <name> [flags]
 
-Run "ok destroy cluster --help" for required inputs and confirmation rules.
+Prefer "ok cluster destroy <name>". Both spellings use the same lifecycle,
+configuration, interactive confirmation and durable evidence requirements.
+Run "ok cluster destroy --help" for required inputs and confirmation rules.
 `)
 }
 
@@ -247,8 +249,10 @@ func writeDestroyClusterHelp(output io.Writer) {
 	fmt.Fprint(output, `Destroy one split-plane cluster through the existing Python lifecycle
 
 Usage:
-  ok destroy cluster <name>                 # after ok config init
-  ok destroy cluster <name> --management-kubeconfig <file> --provider-kubeconfig <file> [flags]
+  ok cluster destroy <name>                 # after ok config init
+  ok cluster destroy <name> --management-kubeconfig <file> --provider-kubeconfig <file> [flags]
+
+Compatibility alias: ok destroy cluster <name> [same flags]
 
 Inputs:
   --lifecycle-root          Trusted current ok-cluster checkout (default: current directory)

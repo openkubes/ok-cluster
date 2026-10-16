@@ -391,6 +391,14 @@ func TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly(t *testing.T
 }
 
 func TestClusterCreateFileDryRunAndPrepareAreNonMutating(t *testing.T) {
+	for _, prefix := range [][]string{{"cluster", "create"}, {"up"}} {
+		t.Run(strings.Join(prefix, " "), func(t *testing.T) {
+			testClusterCreateFileDryRunAndPrepareAreNonMutating(t, prefix)
+		})
+	}
+}
+
+func testClusterCreateFileDryRunAndPrepareAreNonMutating(t *testing.T, prefix []string) {
 	previousPrepare := prepareFullRunExecutionManifest
 	previousExecute := executeClusterCreateLive
 	previousMarkerValidation := validateClusterCreateTerminalMarker
@@ -421,7 +429,7 @@ func TestClusterCreateFileDryRunAndPrepareAreNonMutating(t *testing.T) {
 		{"--prepare", "PREPARED", "obtain separate live approval; pass manifestDigest as --expected-manifest-digest"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if err := run([]string{"cluster", "create", "--file", "/private/bare-run.json", mode.flag}, &stdout, &stderr); err != nil {
+		if err := run(append(append([]string{}, prefix...), "--file", "/private/bare-run.json", mode.flag), &stdout, &stderr); err != nil {
 			t.Fatalf("%s: %v", mode.flag, err)
 		}
 		var receipt clusterCreateWorkflowReceipt
@@ -460,6 +468,14 @@ func TestClusterCreateFileRejectsNonBareManifest(t *testing.T) {
 }
 
 func TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate(t *testing.T) {
+	for _, prefix := range [][]string{{"cluster", "create"}, {"up"}} {
+		t.Run(strings.Join(prefix, " "), func(t *testing.T) {
+			testClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate(t, prefix)
+		})
+	}
+}
+
+func testClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate(t *testing.T, prefix []string) {
 	previousPrepare := prepareFullRunExecutionManifest
 	previousExecute := executeClusterCreateLive
 	previousMarkerValidation := validateClusterCreateTerminalMarker
@@ -487,12 +503,12 @@ func TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate(t *testi
 		_, _ = stdout.Write([]byte("{\"state\":\"SUCCEEDED\"}\n"))
 		return nil
 	}
-	valid := []string{
-		"cluster", "create", "--file", "/private/bare-run.json", "--live", "--execute",
+	valid := append(append([]string{}, prefix...),
+		"--file", "/private/bare-run.json", "--live", "--execute",
 		"--expected-manifest-digest", testSHA("1"),
 		"--independent-evidence-public-key", "/private/evidence.pub",
 		"--terminal-marker", "/private/executor-terminal",
-	}
+	)
 	for name, arguments := range map[string][]string{
 		"missing live":            removeArgument(valid, "--live"),
 		"missing execute":         removeArgument(valid, "--execute"),
@@ -519,6 +535,14 @@ func TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate(t *testi
 }
 
 func TestClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T) {
+	for _, prefix := range [][]string{{"cluster", "create"}, {"up"}} {
+		t.Run(strings.Join(prefix, " "), func(t *testing.T) {
+			testClusterCreateLiveDelegatesThroughFullRunnerBoundary(t, prefix)
+		})
+	}
+}
+
+func testClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T, prefix []string) {
 	previousPrepare := prepareFullRunExecutionManifest
 	previousBareOpen := openBareClusterFullRunActivation
 	previousObservabilityOpen := openKubernetesObservabilityFullRunActivation
@@ -569,12 +593,12 @@ func TestClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	markerPath := filepath.Join(markerDirectory, runner.FullRunExecutorTerminalMarkerName)
-	arguments := []string{
-		"cluster", "create", "--file", "/private/bare-run.json", "--live", "--execute",
+	arguments := append(append([]string{}, prefix...),
+		"--file", "/private/bare-run.json", "--live", "--execute",
 		"--expected-manifest-digest", verified.ManifestDigest,
 		"--independent-evidence-public-key", "/private/evidence.pub",
 		"--terminal-marker", markerPath,
-	}
+	)
 	var stdout, stderr bytes.Buffer
 	if err := run(arguments, &stdout, &stderr); err != nil {
 		t.Fatal(err)
@@ -590,5 +614,14 @@ func TestClusterCreateLiveDelegatesThroughFullRunnerBoundary(t *testing.T) {
 	if prepareCalls != 2 || runs != 1 || receipt.State != "SUCCEEDED" || string(marker) != "TERMINAL\n" || stderr.Len() != 0 {
 		t.Fatalf("CLI did not cross the exact runner boundary: prepare=%d runs=%d receipt=%#v marker=%q stderr=%s",
 			prepareCalls, runs, receipt, string(marker), stderr.String())
+	}
+	// A different spelling cannot replay a consumed terminal identity.
+	retryPrefix := []string{"up"}
+	if len(prefix) == 1 {
+		retryPrefix = []string{"cluster", "create"}
+	}
+	retry := append(retryPrefix, arguments[len(prefix):]...)
+	if err := run(retry, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || runs != 1 {
+		t.Fatal("switching command spelling bypassed the terminal marker")
 	}
 }
