@@ -116,11 +116,13 @@ class IntentRenderTests(unittest.TestCase):
         spec['connectivity']['serviceCIDR'] = '10.96.0.0/20'
         return contract
 
-    def bind(self, contract):
+    def bind(self, contract, *, prepare=False, canonical=False):
         source = self.home / 'reviewed-contract.yaml'
         source.write_text(yaml.safe_dump(contract, sort_keys=False))
         self.source_contract_raw = source.read_bytes()
-        return subprocess.run([str(BINARY), 'up', 'bind', '--file', str(self.input),
+        command = ['cluster', 'create'] if canonical else ['up']
+        command += ['--prepare'] if prepare else ['bind']
+        return subprocess.run([str(BINARY), *command, '--file', str(self.input),
             '--contract', str(source), '--output', str(self.output), '--lifecycle-root', str(ROOT),
             '--ok-linux-path', str(ROOT.parent / 'ok-linux')], capture_output=True, text=True,
             env=self.env, cwd=self.home, timeout=20)
@@ -174,6 +176,36 @@ class IntentRenderTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(self.output.exists())
                 self.assertFalse(self.marker.exists())
+
+    def test_prepare_internally_binds_but_returns_incomplete_not_success(self):
+        for canonical in (False, True):
+            with self.subTest(canonical=canonical):
+                self.output = self.home / ('canonical-prepare' if canonical else 'up-prepare')
+                result = self.bind(self.reviewed_contract(), prepare=True, canonical=canonical)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('preparation incomplete (NO-GO)', result.stderr)
+                receipt = json.loads(result.stdout)
+                self.assertEqual(receipt, json.loads((self.output / 'binding-receipt.json').read_text()))
+                self.assertEqual(receipt['state'], 'CONTRACT_PROJECTION_BOUND_NO_GO')
+                for field in ('runnerReady', 'mutationAllowed', 'apiContacted', 'authorizationConsumed'):
+                    self.assertIs(receipt[field], False)
+                self.assertNotIn('manifestDigest', receipt)
+                self.assertFalse((self.output / 'full-run-manifest.json').exists())
+                before = {str(p.relative_to(self.output)): p.read_bytes() for p in self.output.rglob('*') if p.is_file()}
+                repeated = self.bind(self.reviewed_contract(), prepare=True, canonical=canonical)
+                self.assertNotEqual(repeated.returncode, 0)
+                self.assertEqual(repeated.stdout, '')
+                self.assertEqual(before, {str(p.relative_to(self.output)): p.read_bytes() for p in self.output.rglob('*') if p.is_file()})
+                self.assertFalse(self.marker.exists())
+
+    def test_prepare_rejects_contract_drift_before_output(self):
+        contract = self.reviewed_contract()
+        contract['spec']['connectivity']['podCIDR'] = '10.43.0.0/16'
+        result = self.bind(contract, prepare=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.marker.exists())
 
     def test_dry_run_writes_nothing_and_claims_no_preparation(self):
         before = sorted(str(p.relative_to(self.home)) for p in self.home.rglob('*'))

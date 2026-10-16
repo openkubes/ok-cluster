@@ -158,3 +158,35 @@ func TestClusterIntentBindingRequiresExplicitContractAndBoundedFiles(t *testing.
 		t.Fatal("oversized binding input accepted")
 	}
 }
+
+func TestClusterIntentPreparationInputsAreModeSpecific(t *testing.T) {
+	yamlPath := intentFixture(t, nil)
+	jsonPath := intentFixture(t, func(string) string { return `{ "format": "technical-json-fixture" }` })
+	for _, path := range []string{yamlPath, jsonPath} {
+		for _, mode := range []string{"--dry-run", "--prepare", "--live"} {
+			if path == yamlPath && mode == "--prepare" {
+				continue
+			}
+			for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config"} {
+				var stdout bytes.Buffer
+				err := run([]string{"up", "--file", path, mode, "--" + name, "/must-not-read"}, &stdout, &bytes.Buffer{})
+				if err == nil || !strings.Contains(err.Error(), "only accepted with YAML --prepare") || stdout.Len() != 0 {
+					t.Fatalf("preparation input escaped mode gate: %s %s %s: %v", path, mode, name, err)
+				}
+			}
+		}
+	}
+	output := filepath.Join(t.TempDir(), "new-prepare")
+	err := run([]string{"up", "--file", yamlPath, "--prepare", "--output", output}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "NO-GO") {
+		t.Fatalf("missing Contract accepted: %v", err)
+	}
+	if _, err := os.Lstat(output); !os.IsNotExist(err) {
+		t.Fatal("incomplete inputs reserved output")
+	}
+	var help bytes.Buffer
+	writeClusterCreateHelp(&help)
+	if strings.Contains(help.String(), "ok up bind") || !strings.Contains(help.String(), "exits\nnon-zero") {
+		t.Fatal("help presents an extra binding step or successful partial preparation")
+	}
+}

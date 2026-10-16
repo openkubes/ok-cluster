@@ -150,12 +150,16 @@ source/profile digests but remains `RENDERED_NO_GO` / `runnerReady=false`.
 An operator can now provide an explicit fresh reviewed Contract:
 
 ```sh
-ok up bind --file cluster.yaml \
+ok up --file cluster.yaml --prepare \
   --contract /private/reviewed-contract.yaml \
   --output /private/new-binding
 ```
 
-This is the first static binding stage, not full-run prepare. No old Candidate,
+Preparation currently performs only the first static binding stage, not full-run
+prepare, and therefore exits non-zero even after writing valid partial artifacts.
+No separate binding command is required. The previous `ok up bind` spelling is
+retained only for compatibility with its existing static-only receipt/exit behavior;
+it is not an additional operator step. No old Candidate,
 Contract identity, UID, resourceVersion or operation outcome is renamed/copied.
 The supplied Contract must already have exactly the YAML name/namespace, and
 its metadata must contain only those two fields. The operator, not this command,
@@ -183,8 +187,10 @@ tokens, grants, client certificates or existing stage receipts are imported.
 The result is `CONTRACT_PROJECTION_BOUND_NO_GO`, not `PREPARED` or provisioning
 success. `runnerReady=false`, `apiContacted=false`, `authorizationConsumed=false`
 and `mutationAllowed=false`. The receipt enumerates missing bindings; it is not
-accepted as a full-run manifest. Friendly YAML `--prepare` and `--live` remain
-blocked. Existing technical JSON execution is unchanged.
+accepted as a full-run manifest. YAML `--prepare` returns an explicit incomplete
+error (non-zero) and never emits `PREPARED` or a live approval digest. The new
+preparation inputs are rejected for JSON, dry-run and live modes. YAML `--live`
+remains blocked. Existing technical JSON execution is unchanged.
 
 **Missing next step:** a reusable authoritative binder for execution fixture,
 seven-stage Plan, reviewed authority policies, private
