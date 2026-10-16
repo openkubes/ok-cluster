@@ -559,7 +559,14 @@ split-plane cleanup path.
 ##### Save local paths once
 
 The standalone binary still uses the trusted Python lifecycle and ok-linux
-checkout. To avoid repeating implementation paths, save them once:
+checkout. To avoid repeating implementation paths, save them once. On a terminal,
+run `ok config init`: it asks for the five paths, shows their normalized values,
+and saves only after you type `ok`. Empty input, `no`, EOF or interruption cancels
+without creating the configuration directory. Enter literal paths (spaces are
+accepted, without shell quoting); prompted `~/` expands to your home directory.
+No repository or credential is downloaded or discovered automatically.
+Use `--interactive` with some path flags to prompt only for the missing paths.
+For scripts, supply all five flags without interactive mode:
 
 ```sh
 ok config init \
@@ -571,7 +578,7 @@ ok config init \
 ok config show
 ```
 
-Initialization performs local path checks only. It requires all five path flags,
+Initialization performs local path checks only. It requires all five paths,
 normalizes them to absolute paths, stores no credential contents and never
 invokes the lifecycle or contacts a cluster. It is create-only: existing files
 are not overwritten, and existing directory permissions are not changed.
@@ -603,9 +610,10 @@ file never falls back. With all five original path flags supplied explicitly,
 no default configuration is read. With no saved file, original path defaults
 and explicit kubeconfig requirements remain available.
 
-Create and expert runner commands do **not** read this configuration: their
-manifest-bound credentials, authority boundaries and receipt contracts are
-unchanged. No credentials are renewed or rotated automatically.
+YAML preparation may use saved lifecycle/ok-linux source paths, but does not
+infer runtime credentials from this configuration. Expert runner manifest-bound
+credentials, authority boundaries and receipt contracts are unchanged.
+No credentials are renewed or rotated automatically.
 
 Run from a trusted, current ok-cluster checkout, or select one explicitly:
 

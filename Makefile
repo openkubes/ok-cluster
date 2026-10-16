@@ -260,6 +260,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@python3 $(SCRIPT_DIR)/tests/ok147_projection_render_test.py >/dev/null
 	@python3 $(SCRIPT_DIR)/tests/ok147_destroy_cli_test.py
 	@python3 -B $(SCRIPT_DIR)/tests/ok147_cluster_intent_test.py
+	@python3 -B $(SCRIPT_DIR)/tests/ok_cli_config_interactive_test.py
 	@$(MAKE) --no-print-directory contract-executor-dry-run >/dev/null
 	@echo "Offline ok CLI smoke passed; no cluster was contacted"
 
