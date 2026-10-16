@@ -263,7 +263,8 @@ func validBearerToken(token []byte) bool {
 }
 
 // ServeHTTP accepts only the exact normal stage-authorization protocol. It
-// intentionally rejects recovery media types; those require separate policy.
+// rejects recovery media types and all Stage-7/target-access signing, regardless
+// of policy origin. Previously issued grants require separate key retirement.
 func (authority *Authority) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
@@ -333,6 +334,12 @@ func (authority *Authority) ServeHTTP(response http.ResponseWriter, request *htt
 }
 
 func (authority *Authority) verifyRequest(request runner.StageAuthorizationRequest) error {
+	// Legacy policies/requests cannot distinguish ordinary and recovery target
+	// access. Policy derivation is not a signing boundary: deny every Stage-7
+	// signing request, including externally supplied policies and old clients.
+	if request.StageID == "target-access" || request.StageOrder == 7 || request.Operation == "CreateTargetAccess" {
+		return errors.New("target-access signing is disabled pending authenticated plan provenance and recovery fencing")
+	}
 	if authority.policy.Format == PolicyFormat && request.Format != runner.StageAuthorizationRequestFormat ||
 		authority.policy.Format == PolicyFormatV2 && request.Format != runner.StageAuthorizationRequestFormatV2 ||
 		request.ExecutionAttempt != authority.policy.ExecutionAttempt {

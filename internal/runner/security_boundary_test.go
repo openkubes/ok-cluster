@@ -15,6 +15,8 @@ import (
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
+// Every case below exercises blanket mode denial, not independent CN/group/TTL
+// validators. A bounded issuer profile and those validators remain unimplemented.
 func TestNoClientCertificateProfileIsImplicitlyAuthorized(t *testing.T) {
 	now := time.Now().UTC()
 	for _, test := range []struct {

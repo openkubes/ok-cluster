@@ -58,6 +58,9 @@ func openFullRunExecutionActivation(path string, runtime FullRunExecutionManifes
 	}
 	execution, manifest, err := factories.open(path, runtime)
 	receipt.Manifest = manifest
+	if err != nil {
+		return nil, receipt, err
+	}
 	if err != nil || execution == nil || !validFullRunExecutionManifestReceiptFormat(manifest.Format) || manifest.State != "VERIFIED" || manifest.MutationAllowed {
 		return nil, receipt, errors.New("open verified full-run activation")
 	}

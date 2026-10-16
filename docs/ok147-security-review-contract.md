@@ -29,12 +29,15 @@ certificate-lifetime validation or bounded identity.
 
 The accepted executor certificate identity/group set is **empty**. No certificate
 lifetime is accepted. A short-lived admin certificate is also rejected. The
-parser cannot construct a transport, and the lifecycle-derived materializer
-stops before Cluster/Secret reads or credential output. Inert construction of
-that materializer remains possible; it grants no usable workload capability.
+parser cannot construct a transport. The lifecycle-derived materializer cannot
+be constructed; its obsolete admin Cluster/Secret reader is removed. Public
+manifest loading rejects before referenced inputs or Stage 1. ExecutionConfig
+and full-run activation Job launch also deny before runtime capabilities or API
+requests. Private structural inspection is confined to offline evidence/snapshot
+builders and returns no executable capability.
 
 **Open integration dependency: bounded workload credential bootstrap.** The default
-lifecycle-derived Stage 5–7 path cannot complete until an independently reviewed
+lifecycle-derived Stage 1–7 path and downstream Stages 8–12 / PlatformReady cannot complete until an independently reviewed
 issuer policy defines exact per-role CN, complete O/group allowlists, trusted
 issuer/CA, clientAuth usage, target binding, corresponding least-privilege RBAC
 and maximum NotAfter-minus-NotBefore. The cap must be justified by that issuance
@@ -100,11 +103,14 @@ credential policies or bound digests, and does not claim rotation integration.
 
 ## Validation scope
 
-Synthetic certificate tests reproduce the admin subject/group and lifetime
-without copying the real credential, and reject short admin, unknown subjects,
-extra/duplicate groups, missing CN, expired and future certificates. Denial occurs
-before credential reads or HTTP-client construction. Local fake servers verify
-zero materializer API requests and zero workload-credential output.
+The synthetic subject/group/lifetime cases exercise **blanket rejection** of all
+certificate mode. They do not demonstrate individual CN, group, issuer or TTL
+enforcement. No such approved profile exists. No real credential is copied into
+fixtures. Public manifest loading and actual built CLI subprocess tests prove
+rejection before Stage 1 for create/up, without preparation output, API requests,
+mutations or grant requests. The materializer constructor and direct resolver
+both deny; the old test that counted only its own management requests could not
+establish zero earlier stages or grants and is replaced.
 
 Recovery tests use valid offline lineage, assert denial at all suffix bundle
 and core execution boundaries, run repeated/concurrent attempts with capabilities
@@ -118,3 +124,59 @@ ledger corruption/unavailability, legacy fencing, source-versus-recovery and
 successor-versus-successor races, reservation/claim crash points and alternate
 Stage-7 grants. ADR-030 negative-RBAC and credential expiry/rotation evidence
 remain outstanding. No offline test establishes live RBAC conformance.
+
+## Signer boundary and legacy authority exposure (S2)
+
+The only in-repository stage-grant signing call is the stage-authority HTTP
+service. `StageSigningBytes` constructs bytes but does not sign. CLI `authority
+stage serve` uses that same service; independent-evidence signing produces
+non-executable evidence, not Stage grants. Blocking `FromPlan` alone was
+insufficient: old/external policies can be supplied with matching digests.
+
+The HTTP service now unconditionally rejects a request if StageID is target-access,
+StageOrder is 7, or Operation is CreateTargetAccess, before a claim or signature.
+This applies to all policy formats and sources. The existing wire protocol has
+no authenticated provenance that separates ordinary target access from recovery.
+Consequently **ordinary Stage-7 signing is disabled too**. Supported earlier-stage
+signing stays policy-bound, but the default manifest cannot start those stages.
+Tests construct external full and legacy recovery-shaped policies, bypass policy
+derivation, and assert repeated/concurrent HTTP 403, no signature and no claims.
+
+This is a local code correction, not deployed revocation. Already issued grants
+may remain trusted by old executors, and old running signers can still issue
+under the old implementation. No current/live deployment or issuance inventory
+was inspected. Do not infer that those authorities were retired by this PR.
+
+Explicit proposed operational remediation, requiring separate authority:
+
+1. Inventory recovery-derived policies, signing key IDs, grants and running
+   signers/executors since 2026-10-15 using redacted issuance/claim evidence.
+2. Suspend affected signer access and fence legacy executors/credentials before
+   enabling any continuation; stopping issuance alone does not revoke grants.
+3. Retire affected policy/key trust, rotate and pin approved signer keys and
+   client trust roots, and verify old grants are rejected. Fence any old executor
+   still retaining old trust or workload authority. Preserve audit evidence;
+   do not automatically release an indeterminate execution.
+4. Before selective Stage-7 signing returns, design reviewed authenticated Plan
+   provenance at signer open/request verification, plus atomic recovery reservation
+   and fencing. A caller-authored policy or source-plan flag is not provenance.
+
+No key/token retirement, trust-root replacement, deployment, cluster mutation or
+atomic-gate migration is performed here. These remain explicit dependencies.
+
+## Review corrections and evidence limits
+
+B1 establishes that the old path could mutate before denial and could not complete.
+Recovery was disabled. It did **not** establish destroy as the only operational
+exit; no such claim is made here. Do not infer authority to retry another Plan.
+
+Suchit's corrected record (Jira 14978) reports non-root ordinary tests passing,
+root runs failing only the permission-sensitive test, and no retained complete
+non-root race transcript. Those review runs are not relabeled as non-root race
+success. The new re-review evidence records its own effective UID, Go version,
+command, complete output and exit status; it does not retroactively fill that gap.
+
+Requirements/v1/v2 wire fixtures remain unchanged. Their historical
+liveMutationAllowed/stage-order fields describe the operation schema, not current
+availability. Certificate-bound --dry-run/--prepare/--live return an explicit
+error, not a success receipt directing the operator to run Stage 1–7.

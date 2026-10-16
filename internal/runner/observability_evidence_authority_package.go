@@ -108,7 +108,7 @@ func BuildObservabilityEvidenceAuthorityPackage(config ObservabilityEvidenceAuth
 		config.CollectionTimeout < time.Second || config.CollectionTimeout > maximumObservabilityIndependentEvidenceWindow {
 		return VerifiedObservabilityEvidenceAuthorityPackage{}, errors.New("observability evidence authority time bounds are invalid")
 	}
-	manifest, manifestReceipt, err := LoadFullRunExecutionManifest(config.ManifestPath)
+	manifest, manifestReceipt, err := inspectFullRunExecutionManifest(config.ManifestPath)
 	if err != nil || !manifest.verified || manifestReceipt.State != "VERIFIED" || manifestReceipt.MutationAllowed {
 		return VerifiedObservabilityEvidenceAuthorityPackage{}, errors.New("verify observability evidence authority full-run manifest")
 	}

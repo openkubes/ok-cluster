@@ -329,7 +329,7 @@ func addStageResumeFlags(flags *flag.FlagSet) *stageResumeFlags {
 	values.managementAuthority = flags.String("management-authority", "", "expected management authority identity")
 	values.gitOpsAuthority = flags.String("gitops-authority", "", "expected GitOps authority identity")
 	values.completionMode = flags.String("completion-mode", "", "expected plan-bound completion mode")
-	values.recoveryBinding = flags.String("recovery-binding", "", "explicit non-authorizing Stage-5 profile recovery binding")
+	values.recoveryBinding = flags.String("recovery-binding", "", "offline inspection only; recovery execution is disabled")
 	values.recoveryBindingDigest = flags.String("recovery-binding-digest", "", "independently reviewed recovery binding digest")
 	flags.Var(&values.receipts, "receipt", "ordered canonical receipt as PATH@sha256:<digest>; repeat for each completed stage")
 	values.receiptPrefix = flags.String("receipt-prefix", "", "path to a digest-bound ordered receipt-prefix manifest")
@@ -1321,6 +1321,9 @@ func runClusterStageObserveNetwork(ctx context.Context, arguments []string, stdo
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
+	if *workloadKubeconfigFile != "" {
+		return runner.ErrClientCertificateDisabled
+	}
 	if flags.NArg() != 0 {
 		return errors.New("positional arguments are not accepted")
 	}
@@ -1409,6 +1412,9 @@ func runClusterStageBindRuntime(ctx context.Context, arguments []string, stdout,
 	retryAfterReceipt := flags.String("retry-after-terminal-receipt-digest", "", "retry only after the exact immutable FAILED or STOPPED binding receipt")
 	if err := flags.Parse(arguments); err != nil {
 		return err
+	}
+	if *workloadKubeconfigFile != "" {
+		return runner.ErrClientCertificateDisabled
 	}
 	if flags.NArg() != 0 {
 		return errors.New("positional arguments are not accepted")
@@ -2184,6 +2190,9 @@ func runClusterStageRunTargetAccess(ctx context.Context, arguments []string, std
 	workloadCAFile := flags.String("workload-ca-file", "", "path to the runtime-bound workload Kubernetes API CA bundle")
 	if err := flags.Parse(arguments); err != nil {
 		return err
+	}
+	if *workloadKubeconfigFile != "" {
+		return runner.ErrClientCertificateDisabled
 	}
 	if flags.NArg() != 0 {
 		return errors.New("positional arguments are not accepted")

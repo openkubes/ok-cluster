@@ -77,7 +77,8 @@ establish an automation, or implement OK-197/OK-198 from this ownership decision
 This responsibility statement does not satisfy ADR-030 security acceptance item 9.
 Credential expiry/rotation, bounded execution identities, negative RBAC evidence
 and independent security review remain required. The default lifecycle-derived
-Stage 5–7 execution path is blocked pending bounded credential bootstrap.
+create path is rejected before Stage 1, blocking Stages 1–7 and downstream
+Stages 8–12 / PlatformReady pending bounded credential bootstrap.
 Network-profile recovery execution is disabled pending an atomic authoritative
 reservation and legacy-executor fencing. See the security follow-up contract.
 This note does not implement ADR-031 management-plane disaster recovery.

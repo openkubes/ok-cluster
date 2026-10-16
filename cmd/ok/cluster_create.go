@@ -84,7 +84,7 @@ var validateClusterCreateTerminalMarker = runner.ValidateFullRunExecutorTerminal
 func runClusterCreateRequirements(arguments []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("ok cluster create requirements", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	format := flags.String("format", clusterCreateRequirementsFormat, "requirements output format (v1 or v2)")
+	format := flags.String("format", clusterCreateRequirementsFormat, "requirements output format (full version identifier required)")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -148,8 +148,8 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 	flags.StringVar(&manifestPath, "file", "", "private Bare-MVP full-run manifest")
 	flags.StringVar(&manifestPath, "f", "", "private Bare-MVP full-run manifest (shorthand)")
 	dryRun := flags.Bool("dry-run", false, "verify locally and emit a non-mutating summary")
-	prepare := flags.Bool("prepare", false, "verify locally and emit the identity required by live mode")
-	live := flags.Bool("live", false, "select live cluster execution")
+	prepare := flags.Bool("prepare", false, "validate locally; currently blocked by bounded credential bootstrap")
+	live := flags.Bool("live", false, "request execution; currently blocked before Stage 1")
 	execute := flags.Bool("execute", false, "explicitly authorize the selected live execution")
 	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact digest emitted by --prepare")
 	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent evidence public key")
@@ -215,7 +215,7 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 	nextAction := "review the validated identities, then run --prepare with the same file"
 	if *prepare {
 		mode, state = "prepare", "PREPARED"
-		nextAction = "obtain separate live approval; pass manifestDigest as --expected-manifest-digest"
+		nextAction = "execution blocked pending bounded workload credential bootstrap; no live run is supported"
 	}
 	receipt := clusterCreateWorkflowReceipt{
 		Format: clusterCreateWorkflowFormat, Operation: "CreateCluster", Mode: mode, State: state,

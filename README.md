@@ -61,7 +61,7 @@ token paths retain their prior constraints; arbitrary bearer tokens are not
 thereby certified as least privilege.
 
 **Dependency: bounded workload credential bootstrap.** The default lifecycle-derived
-Stage 5–7 path cannot complete until a reviewed issuer defines exact per-role
+Stage 1–7 path and downstream Stages 8–12 cannot complete until a reviewed issuer defines exact per-role
 subjects, complete group allowlists, least-privilege RBAC and a justified maximum
 certificate lifetime (or a separately approved bounded token bootstrap). The
 executor must not use the CAPI admin credential to mint its own bounded access.
@@ -154,8 +154,8 @@ The templates contain the exact Stage 1-7 manifest shape, seven-stage Plan and
 all sixteen ordered target-access identities. Placeholder digests, names,
 hosts and paths are intentionally invalid, and the Plan remains explicitly
 `NO-GO`. They are renderer input aids, not a runnable manifest or
-authorization; replace and independently bind every placeholder, then start
-with `--dry-run`. A legacy twelve-stage Plan remains accepted with Bare-MVP
+authorization. Even a fully bound current manifest is rejected by the
+credential gate; replacing placeholders does not enable execution. A legacy twelve-stage Plan remains accepted with Bare-MVP
 for compatibility, but new Bare-MVP renderers should emit exactly seven.
 
 The initial product surface consumes the private full-run manifest from the
@@ -163,64 +163,48 @@ proven OK-147 runner. It intentionally accepts only a manifest whose reviewed
 Plan binds `completionMode: bare-cluster-mvp/v1`:
 
 ```bash
-# Offline validation. Referenced private inputs are read locally; no API is contacted.
+# Both commands currently return the explicit unsupported-credential error.
+# They issue no grants and contact no API.
 .tools/bin/ok cluster create --file /private/bare-run.json --dry-run
 
-# Offline preparation. Preserve the emitted manifestDigest for review.
+# No successful preparation receipt is emitted for this credential mode.
 .tools/bin/ok cluster create --file /private/bare-run.json --prepare
 ```
 
-Both offline modes validate the manifest's referenced private artifacts,
-including credential and TLS material. They do not construct a network client,
-contact a cluster, execute a stage or consume an authorization.
+Current private full-run manifests require an unsupported lifecycle-derived
+certificate bootstrap. Consequently `--dry-run`, `--prepare` and `--live` fail
+with an explicit credential-policy error **before Stage 1**, referenced
+credential opening, grant resolution or API contact. No successful preparation
+receipt or live execution identity is emitted for these manifests. Friendly YAML
+intent validation/rendering and the separate legacy contract-only dry-run remain
+offline surfaces; they do not establish executor readiness.
 
-For that completion mode, the manifest needs only the material consumed by
-Stages 1-7. Platform/GitOps applications, target-credential policy,
-Observability credentials and collector activation (Stages 8-12) may be
-omitted; the loader neither reads nor validates them. The staged Plan still
-binds the exact Bare-MVP completion mode and the seven executed inputs remain
-fully digest- and authority-bound.
+The default Stage 1–7 workflow cannot complete, and the same certificate gate
+also blocks the downstream Stage 8–12 / PlatformReady workflow. This establishes
+neither destroy as the only operational option nor permission to invent another
+Plan or privileged bootstrap workaround. Preserve evidence and use separately
+reviewed operational decisions.
 
-The output is a redaction-safe workflow receipt suitable for review or
-automation. A preparation result has this shape:
+Requirements/v1 remains wire-compatible, including its historical
+`liveMutationAllowed: true` and seven-stage schema description. Requirements/v2
+still adds only descriptive ownership metadata. Those static schema fields are
+not a statement of current execution availability. Neither format bypasses the
+manifest gate or grants authority. Full-run activation Job launch is also denied
+before any API request; offline snapshots/packages are structural artifacts only.
 
-```json
-{
-  "format": "ok-cli-cluster-create/v1",
-  "operation": "CreateCluster",
-  "mode": "prepare",
-  "state": "PREPARED",
-  "manifestDigest": "sha256:<reviewed-manifest-identity>",
-  "planDigest": "sha256:<reviewed-plan-identity>",
-  "completionMode": "bare-cluster-mvp/v1",
-  "apiContacted": false,
-  "authorizationConsumed": false,
-  "mutationAllowed": false,
-  "nextAction": "obtain separate live approval; pass manifestDigest as --expected-manifest-digest"
-}
-```
-
-Live execution is a separate, fail-closed mode. It requires the exact prepared
-digest, the pinned independent-evidence key, a new terminal-marker path and two
-literal gates (`--live --execute`). It performs the bounded Stage 1-7 run with
-no automatic retry, rollback or cleanup. The command runs the executor in the
-local `ok` process and contacts the APIs bound by the private manifest:
-
-```bash
-.tools/bin/ok cluster create --file /private/bare-run.json \
-  --live --execute \
-  --expected-manifest-digest sha256:<reviewed-digest> \
-  --independent-evidence-public-key /private/evidence.pub \
-  --terminal-marker /private/run-01/executor-terminal
-```
-
-Preparation is not authorization to run that command. Follow the
-[operator runbook](docs/ok147-operator-runbook.md) and obtain a separate live
-execution approval. The older stage-level commands remain available as the
-expert interface.
+The grant signer rejects **all Stage-7 / CreateTargetAccess requests**, including
+ordinary and externally supplied legacy policies: their wire representation
+cannot prove normal-versus-recovery provenance. This compatibility restriction
+remains until authenticated Plan provenance and reviewed recovery fencing exist.
+Already issued grants and old running signers are not revoked by new client
+code; see the [remediation contract](docs/ok147-security-review-contract.md).
 
 <details>
 <summary><strong>Bounded Contract Executor MVP — technical details</strong></summary>
+
+  The stage/library descriptions below retain the historical workflow model.
+  They do not enable the blocked full-run create/launch paths or Stage-7 signing.
+  The current execution gates and unresolved dependencies above take precedence.
 
   The legacy `cluster create --contract ... --dry-run` form remains
   non-mutating. The product `cluster create --file ...` facade verifies the

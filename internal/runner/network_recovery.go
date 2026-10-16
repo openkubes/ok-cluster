@@ -147,7 +147,7 @@ func VerifyNetworkRecovery(config StageResumeConfig) (VerifiedNetworkRecovery, e
 	if err != nil {
 		return VerifiedNetworkRecovery{}, err
 	}
-	if !bytes.Equal(terminal, []byte("TERMINAL\n")) {
+	if !bytes.Equal(terminal, []byte(fullRunExecutorTerminalContents)) {
 		return VerifiedNetworkRecovery{}, errors.New("source executor terminal marker has unsupported content")
 	}
 	oldProfile, err := LoadNetworkProfileFile(NetworkProfileFileConfig{Path: sourceManifest.Profiles.Network.Path,

@@ -1,0 +1,150 @@
+OK-147 / PR #437 re-review evidence
+Started (UTC): 2026-10-16T19:54:20.866479+00:00
+Effective UID: 501
+Go: go version go1.26.7 darwin/amd64
+Go/Makefile source SHA-256: 9d21657d578ef21ecae3826bddf4d3241a95318cc41e2e9d4ae408cf5717fde1
+Command: go test -v -count=1 ./internal/runner ./internal/stageauthority ./cmd/ok -run 'TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne|TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature|TestStageWorkloadCredentialSelection|TestKubernetesLifecycleWorkloadAuthorityMaterializerRejectsBeforeAPIContact|TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction|TestFullRunExecutionActivationLauncherPreflightsThenCreates|TestRequirementsVersionCompatibility'
+--- complete combined stdout/stderr ---
+=== RUN   TestFullRunExecutionActivationLauncherPreflightsThenCreates
+--- PASS: TestFullRunExecutionActivationLauncherPreflightsThenCreates (0.06s)
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--dry-run
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--prepare
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--live
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--dry-run
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--prepare
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--live
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/prepare
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/execute
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--dry-run
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--prepare
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--live
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--dry-run
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--prepare
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--live
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/prepare
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/execute
+    full_run_cli_denial_test.go:118: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+--- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne (2.16s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--dry-run (0.73s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--live (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--dry-run (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--live (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/execute (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--dry-run (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--live (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--dry-run (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--live (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/execute (0.02s)
+=== RUN   TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction
+--- PASS: TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction (0.03s)
+=== RUN   TestKubernetesLifecycleWorkloadAuthorityMaterializerRejectsBeforeAPIContact
+--- PASS: TestKubernetesLifecycleWorkloadAuthorityMaterializerRejectsBeforeAPIContact (0.00s)
+PASS
+ok  	github.com/openkubes/ok-cluster/internal/runner	4.101s
+=== RUN   TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature
+=== RUN   TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v1/full-policy
+    signing_boundary_test.go:83: 16 concurrent/repeated requests: HTTP 403, signatures=0, claims=0
+=== RUN   TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v1/legacy-recovery-policy
+    signing_boundary_test.go:83: 16 concurrent/repeated requests: HTTP 403, signatures=0, claims=0
+=== RUN   TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v2/full-policy
+    signing_boundary_test.go:83: 16 concurrent/repeated requests: HTTP 403, signatures=0, claims=0
+=== RUN   TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v2/legacy-recovery-policy
+    signing_boundary_test.go:83: 16 concurrent/repeated requests: HTTP 403, signatures=0, claims=0
+--- PASS: TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature (0.03s)
+    --- PASS: TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v1/full-policy (0.01s)
+    --- PASS: TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v1/legacy-recovery-policy (0.01s)
+    --- PASS: TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v2/full-policy (0.01s)
+    --- PASS: TestSignerRejectsExternalStageSevenPoliciesBeforeClaimOrSignature/v2/legacy-recovery-policy (0.01s)
+PASS
+ok  	github.com/openkubes/ok-cluster/internal/stageauthority	1.107s
+=== RUN   TestRequirementsVersionCompatibility
+=== RUN   TestRequirementsVersionCompatibility/v1
+=== RUN   TestRequirementsVersionCompatibility/v2
+--- PASS: TestRequirementsVersionCompatibility (0.00s)
+    --- PASS: TestRequirementsVersionCompatibility/v1 (0.00s)
+    --- PASS: TestRequirementsVersionCompatibility/v2 (0.00s)
+=== RUN   TestStageWorkloadCredentialSelection
+=== RUN   TestStageWorkloadCredentialSelection/network
+=== RUN   TestStageWorkloadCredentialSelection/network/token
+=== RUN   TestStageWorkloadCredentialSelection/network/kubeconfig
+=== RUN   TestStageWorkloadCredentialSelection/network/both
+=== RUN   TestStageWorkloadCredentialSelection/network/neither
+=== RUN   TestStageWorkloadCredentialSelection/network/kubeconfig-no-execute
+=== RUN   TestStageWorkloadCredentialSelection/network/kubeconfig-no-ca
+=== RUN   TestStageWorkloadCredentialSelection/binding-local
+=== RUN   TestStageWorkloadCredentialSelection/binding-local/token
+=== RUN   TestStageWorkloadCredentialSelection/binding-local/kubeconfig
+=== RUN   TestStageWorkloadCredentialSelection/binding-local/both
+=== RUN   TestStageWorkloadCredentialSelection/binding-local/neither
+=== RUN   TestStageWorkloadCredentialSelection/binding-local/kubeconfig-no-execute
+=== RUN   TestStageWorkloadCredentialSelection/binding-local/kubeconfig-no-ca
+=== RUN   TestStageWorkloadCredentialSelection/binding-secret
+=== RUN   TestStageWorkloadCredentialSelection/binding-secret/token
+=== RUN   TestStageWorkloadCredentialSelection/binding-secret/kubeconfig
+=== RUN   TestStageWorkloadCredentialSelection/binding-secret/both
+=== RUN   TestStageWorkloadCredentialSelection/binding-secret/neither
+=== RUN   TestStageWorkloadCredentialSelection/binding-secret/kubeconfig-no-execute
+=== RUN   TestStageWorkloadCredentialSelection/binding-secret/kubeconfig-no-ca
+=== RUN   TestStageWorkloadCredentialSelection/target-access
+=== RUN   TestStageWorkloadCredentialSelection/target-access/token
+=== RUN   TestStageWorkloadCredentialSelection/target-access/kubeconfig
+=== RUN   TestStageWorkloadCredentialSelection/target-access/both
+=== RUN   TestStageWorkloadCredentialSelection/target-access/neither
+=== RUN   TestStageWorkloadCredentialSelection/target-access/kubeconfig-no-execute
+=== RUN   TestStageWorkloadCredentialSelection/target-access/kubeconfig-no-ca
+--- PASS: TestStageWorkloadCredentialSelection (0.00s)
+    --- PASS: TestStageWorkloadCredentialSelection/network (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/network/token (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/network/kubeconfig (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/network/both (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/network/neither (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/network/kubeconfig-no-execute (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/network/kubeconfig-no-ca (0.00s)
+    --- PASS: TestStageWorkloadCredentialSelection/binding-local (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-local/token (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-local/kubeconfig (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-local/both (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-local/neither (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-local/kubeconfig-no-execute (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-local/kubeconfig-no-ca (0.00s)
+    --- PASS: TestStageWorkloadCredentialSelection/binding-secret (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-secret/token (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-secret/kubeconfig (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-secret/both (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-secret/neither (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-secret/kubeconfig-no-execute (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/binding-secret/kubeconfig-no-ca (0.00s)
+    --- PASS: TestStageWorkloadCredentialSelection/target-access (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/target-access/token (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/target-access/kubeconfig (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/target-access/both (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/target-access/neither (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/target-access/kubeconfig-no-execute (0.00s)
+        --- PASS: TestStageWorkloadCredentialSelection/target-access/kubeconfig-no-ca (0.00s)
+PASS
+ok  	github.com/openkubes/ok-cluster/cmd/ok	0.638s
+
+--- end complete output ---
+Exit status: 0

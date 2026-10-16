@@ -15,7 +15,7 @@ func TestBuildFullRunExecutionBundleIsDeterministicAndSelfContained(t *testing.T
 	publicKeyPath, keyID := fullRunEvidencePublicKeyFixture(t, filepath.Dir(manifestPath))
 	bindFullRunEvidenceKeyID(t, manifestPath, keyID)
 
-	source, sourceReceipt, err := LoadFullRunExecutionManifest(manifestPath)
+	source, sourceReceipt, err := inspectFullRunExecutionManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}

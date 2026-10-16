@@ -1,9 +1,20 @@
 # OK-147 bounded runner operator runbook
 
-This runbook describes the first live execution of the bounded OK-147 runner.
+This runbook describes the historical execution profile and current security
+gates of the bounded OK-147 runner.
 It is an operational checklist, not standing authorization. Every live run must
 bind one reviewed source revision, one immutable runner image, one activation
 package digest and one separately approved execution window.
+
+## Current execution gate
+
+Private full-run manifest validation, preparation and live execution reject
+unsupported certificate mode before Stage 1, API calls or grants. There is no
+completing Stage 1–7 or Stage 1–12 / PlatformReady live workflow in this release.
+Full-run activation Job launch is denied before API contact as well. Offline
+snapshots/packages establish structural consistency, not execution readiness.
+Bounded workload credential bootstrap, atomic recovery reservation and legacy
+fencing remain open dependencies. ADR-030 item 9 remains OPEN.
 
 ## Scope
 
@@ -51,21 +62,12 @@ is the additive recovery protocol for a previously consumed claim and must
 bind reviewed predecessor or stopped evidence. Never manufacture that lineage
 for a first run.
 
-Both commands are offline: they read and validate the referenced private
-artifacts, including credential and TLS material, but construct no network
-client, contact no API, execute no stage and consume no authorization. They
-accept only the explicit Plan-bound `bare-cluster-mvp/v1` completion mode,
-which terminates after the exact Stage 1-7 prefix. The prepare receipt's
-`manifestDigest` is the identity that must be reviewed and copied into a
-separately approved live invocation. An omitted or different completion mode
-fails closed.
-
-Bare-MVP manifests do not require post-runtime material for Stages 8-12.
-Target-credential, GitOps, Platform application, Observability credential and
-collector activation sections may be omitted; they are not opened or
-validated in this completion mode. Every Stage 1-7 projection, profile,
-credential, authority, output destination and artifact remains mandatory and
-is verified offline.
+The manifest schema describes the seven-stage Bare-MVP boundary, but current
+`--dry-run`, `--prepare` and `--live` reject its unsupported credential mode before
+referenced inputs, stages or APIs are opened. No successful preparation receipt
+is emitted. The twelve-stage workflow is also blocked. Templates and requirement
+outputs remain non-authorizing structural interfaces; their historical stage
+order and liveMutationAllowed fields do not establish runtime availability.
 
 ### Explicit lifecycle access paths
 
@@ -73,9 +75,9 @@ The local runner does not read an implicit management kubeconfig. Management
 access is the exact endpoint, CA digest/CA file, bearer-token file and authority
 identity bound by the private manifest. Provider access and the lifecycle-
 derived guest access use separate absolute private kubeconfig paths. The guest
-kubeconfig path is the same immutable destination across network observation,
-runtime binding and target access; it is populated create-only from the CAPI-
-owned Secret only after the durable lifecycle receipt prefix exists. Templates
+kubeconfig fields retain the historical schema, but the admin-Secret materializer
+is disabled. The executor does not read that Secret or use its authority to
+bootstrap a bounded credential. Templates
 must not contain `~/.kube`, `$HOME` or another ambient fallback.
 
 The repository-owned Talos lifecycle commands use the corresponding explicit
@@ -83,27 +85,15 @@ operator inputs `TALOS_INFRA_KUBECONFIG` and `GUEST_KUBECONFIG_DIR`. The Go
 runner does not invoke those Make targets and must not reimplement their path,
 resume or storage validation logic.
 
-The redaction-safe receipt states `apiContacted: false`,
-`authorizationConsumed: false` and `mutationAllowed: false`. For `--prepare`,
-its `nextAction` requires separate live approval and binds the next command to
-the emitted `manifestDigest`; it is guidance, not authorization.
+An unsupported manifest returns the explicit credential-policy error without a
+successful --prepare receipt or a started executor. Do not interpret this as a
+transient Stage-5 convergence failure. No new terminal marker is written for an
+execution that did not start. Existing terminal evidence remains immutable.
 
-After separate approval, the local live form is:
-
-```bash
-ok cluster create --file /private/bare-run.json \
-  --live --execute \
-  --expected-manifest-digest sha256:<reviewed-digest> \
-  --independent-evidence-public-key /private/evidence.pub \
-  --terminal-marker /private/run-01/executor-terminal
-```
-
-The CLI re-verifies the manifest and exact digest before opening the bounded
-runner. The marker path must be absent and private; it records terminal
-consumption even when execution stops. Never treat `--prepare` output as live
-authorization. This command runs the Stage 1-7 executor directly in the local
-`ok` process. It contacts the APIs bound by the private manifest and does not
-install the four Job-activation wrapper objects described below.
+The signer rejects all Stage-7/target-access issuance, including ordinary legacy
+policies, because the old protocol lacks provenance distinguishing recovery.
+Previously issued grants and old signer/executor deployments still need separately
+authorized retirement/fencing. This fix alone does not revoke their authority.
 
 ## Friendly cluster YAML: offline intent and render only
 
@@ -178,8 +168,9 @@ that Stages 8–12, GitOps registration, Platform applications or full aggregate
 evaluation have run. Those belong to the separately bound full workflow below.
 
 Following the PR #430 review, certificate execution and network-profile recovery
-execution are disabled. The default lifecycle-derived Stage 5–7 path is blocked
-pending bounded credential bootstrap. Offline recovery inspection is still
+execution are disabled. The default lifecycle-derived create path is rejected before Stage 1,
+which also blocks Stages 5–7 and downstream Stages 8–12 / PlatformReady.
+Bounded credential bootstrap remains open. Offline recovery inspection is still
 available, but `NEXT` grants no permission to execute. Do not work around the stop
 with the CAPI admin kubeconfig, a new successor Plan, another grant or a local
 STOP file. No atomic reservation/fencing protocol has been deployed.

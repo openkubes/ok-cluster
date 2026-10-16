@@ -33,11 +33,14 @@ them outside the exact authorized stage operation.
 ADR-030 security acceptance item 9 remains **OPEN** pending independent review and
 credential/negative-RBAC/expiry evidence. The retained local CAPI credential was
 an administrator certificate, not bounded executor authority. Certificate mode
-is denied before constructing clients. The default lifecycle-derived Stage 5–7
-path remains blocked pending a reviewed bounded credential bootstrap.
+is denied before constructing clients. The default lifecycle-derived Stage 1–7 and downstream Stage 8–12
+paths are rejected before Stage 1 pending a reviewed bounded credential bootstrap.
 
 Network-profile recovery execution is disabled at bundle, authorization-request,
-authority-policy and core execution boundaries. Offline artifact verification
+authority-policy derivation and core execution boundaries. The signer separately
+rejects every Stage-7/target-access request, including externally supplied
+policies, before claims/signatures. Old grants/signers require separate retirement
+and fencing; this PR does not deploy revocation. Offline artifact verification
 does not check authoritative source ledger state and does not grant execution
 permission. No atomic gate, legacy migration or executor fencing is implemented
 by this release. An empty-slot read alone would have a concurrency race.

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openkubes/ok-cluster/internal/digest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -76,38 +75,8 @@ func TestFullRunExecutionActivationLauncherPreflightsThenCreates(t *testing.T) {
 	seedFullRunActivationPrerequisites(api)
 	launcher := newFullRunActivationLauncher(t, packaged, api.client())
 	receipt, err := launcher.Launch(context.Background())
-	if err != nil || receipt.State != "ACTIVATED" || receipt.MutationState != "ATTEMPTED" || len(receipt.Results) != 4 {
-		t.Fatalf("full-run activation failed: %#v %v", receipt, err)
-	}
-	plan, _ := PlanFullRunExecutionActivationInstallation(packaged)
-	if receipt.Format != FullRunExecutionActivationLaunchReceiptFormat || receipt.PackageDigest != plan.PackageDigest ||
-		receipt.PlanDigest != plan.PlanDigest || receipt.RunID != plan.RunID || receipt.Authority != "ok-mgmt" {
-		t.Fatalf("activation receipt identity differs: %#v", receipt)
-	}
-	if len(api.requests) != 15 {
-		t.Fatalf("requests=%d, want seven prerequisite GETs, four absence GETs, then four POSTs: %#v", len(api.requests), api.requests)
-	}
-	for index, prerequisite := range plan.Prerequisites {
-		request := api.requests[index]
-		if request.method != prerequisite.Method || request.path != prerequisite.ObjectPath || len(request.body) != 0 {
-			t.Fatalf("prerequisite %d differs: %#v", index, request)
-		}
-	}
-	for index, create := range plan.Creates {
-		preflight, submission := api.requests[index+7], api.requests[index+11]
-		if preflight.method != http.MethodGet || preflight.path != create.ObjectPath || len(preflight.body) != 0 {
-			t.Fatalf("preflight %d differs: %#v", index, preflight)
-		}
-		if submission.method != http.MethodPost || submission.path != create.CollectionPath || digest.SHA256(submission.body) != create.ObjectDigest {
-			t.Fatalf("submission %d differs: %#v", index, submission)
-		}
-	}
-	public, err := json.Marshal(receipt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(public, []byte("short-lived-installer-token")) || bytes.Contains(public, []byte("created-stage-uid")) {
-		t.Fatal("activation receipt disclosed credential or raw runtime identity")
+	if !errors.Is(err, ErrClientCertificateDisabled) || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || len(api.requests) != 0 {
+		t.Fatalf("unsupported activation contacted API: %#v %v", receipt, err)
 	}
 }
 
@@ -119,7 +88,7 @@ func TestFullRunExecutionActivationLauncherStopsZeroWriteOnExistingObject(t *tes
 	api.objects[plan.Creates[3].ObjectPath] = map[string]any{"kind": "Job"}
 	launcher := newFullRunActivationLauncher(t, packaged, api.client())
 	receipt, err := launcher.Launch(context.Background())
-	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 11 {
+	if err == nil || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || api.posts != 0 || len(api.requests) != 0 {
 		t.Fatalf("existing activation object did not stop zero-write: %#v requests=%d posts=%d err=%v", receipt, len(api.requests), api.posts, err)
 	}
 }
@@ -127,18 +96,12 @@ func TestFullRunExecutionActivationLauncherStopsZeroWriteOnExistingObject(t *tes
 func TestFullRunExecutionActivationLauncherPreservesPartialAndCannotRetry(t *testing.T) {
 	packaged := fullRunActivationLauncherPackage(t)
 	api := newSubmissionStageInstallerAPI(t)
-	seedFullRunActivationPrerequisites(api)
-	api.failPost = 3
 	launcher := newFullRunActivationLauncher(t, packaged, api.client())
-	receipt, err := launcher.Launch(context.Background())
-	if err == nil || receipt.State != "STOPPED_PARTIAL_OR_UNKNOWN" || receipt.MutationState != "ATTEMPTED" ||
-		len(receipt.Results) != 2 || receipt.Results[0].Kind != "Secret" || receipt.Results[1].Kind != "Secret" {
-		t.Fatalf("partial activation prefix differs: %#v %v", receipt, err)
-	}
-	requestCount := len(api.requests)
-	retry, retryErr := launcher.Launch(context.Background())
-	if retryErr == nil || retry.State != "STOPPED_ZERO_WRITE" || retry.MutationState != "NOT_ATTEMPTED" || len(api.requests) != requestCount {
-		t.Fatalf("single-use activation boundary failed: %#v requests=%d/%d err=%v", retry, len(api.requests), requestCount, retryErr)
+	for i := 0; i < 2; i++ {
+		receipt, err := launcher.Launch(context.Background())
+		if !errors.Is(err, ErrClientCertificateDisabled) || receipt.State != "STOPPED_ZERO_WRITE" || receipt.MutationState != "NOT_ATTEMPTED" || len(api.requests) != 0 {
+			t.Fatalf("unsupported activation reached a partial write: %#v %v", receipt, err)
+		}
 	}
 }
 

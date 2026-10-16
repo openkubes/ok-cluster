@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"testing"
 
@@ -77,7 +78,10 @@ func TestStageWorkloadCredentialSelection(t *testing.T) {
 					calls = 0
 					var stdout, stderr bytes.Buffer
 					err := run(args, &stdout, &stderr)
-					if mode != "token" && mode != "kubeconfig" {
+					if mode != "token" {
+						if mode == "kubeconfig" && !errors.Is(err, runner.ErrClientCertificateDisabled) {
+							t.Fatalf("wrong certificate denial: %v", err)
+						}
 						if err == nil || calls != 0 || stdout.Len() != 0 {
 							t.Fatalf("unsafe input reached execution: err=%v calls=%d stdout=%s", err, calls, stdout.String())
 						}

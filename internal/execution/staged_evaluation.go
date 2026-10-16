@@ -73,6 +73,9 @@ func (operation EvaluationStageOperation) Retry(ctx context.Context, plan stagep
 
 func (operation EvaluationStageOperation) run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, failedReceiptDigest string) (EvaluationStageRunReceipt, error) {
 	receipt := EvaluationStageRunReceipt{Format: EvaluationStageReceiptFormat, State: "PREEVALUATION"}
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return receipt, err
+	}
 	if operation.Ledger == nil || operation.Evaluator == nil {
 		return receipt, errors.New("evaluation stage ledger and evaluator are required")
 	}

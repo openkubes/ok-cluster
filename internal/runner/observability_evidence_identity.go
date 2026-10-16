@@ -15,6 +15,8 @@ import (
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
 )
 
+const fullRunExecutorTerminalContents = "TERMINAL\n"
+
 const (
 	ObservabilityIndependentEvidenceIdentityFormat        = "ok147-observability-independent-evidence-identity/v1"
 	ObservabilityIndependentEvidenceIdentityReceiptFormat = "ok147-observability-independent-evidence-identity-receipt/v1"
@@ -139,7 +141,7 @@ func MaterializeObservabilityIndependentEvidenceIdentity(config ObservabilityInd
 	if err := validateRuntimeBindingOutputPath(config.OutputPath); err != nil {
 		return receipt, errors.New("observability evidence identity destination is invalid")
 	}
-	manifest, manifestReceipt, err := LoadFullRunExecutionManifest(config.ManifestPath)
+	manifest, manifestReceipt, err := inspectFullRunExecutionManifest(config.ManifestPath)
 	if err != nil || manifestReceipt.ManifestDigest != config.ExpectedManifestDigest {
 		return receipt, errors.New("load exact full-run manifest for evidence identity")
 	}
@@ -271,7 +273,7 @@ func WaitForObservabilityIndependentEvidenceIdentity(ctx context.Context, config
 					return ObservabilityCapabilityObservationIdentity{}, errors.New("full-run executor terminal marker is unsafe")
 				}
 				raw, readErr := readBoundedRegular(config.ExecutorTerminalPath, 32)
-				if readErr != nil || !bytes.Equal(raw, []byte("TERMINAL\n")) {
+				if readErr != nil || !bytes.Equal(raw, []byte(fullRunExecutorTerminalContents)) {
 					return ObservabilityCapabilityObservationIdentity{}, errors.New("full-run executor terminal marker is invalid")
 				}
 				return ObservabilityCapabilityObservationIdentity{}, errFullRunExecutorTerminatedBeforeEvidenceIdentity
@@ -293,7 +295,7 @@ func WriteFullRunExecutorTerminalMarker(path string) error {
 	if err := ValidateFullRunExecutorTerminalMarkerDestination(path); err != nil {
 		return errors.New("full-run executor terminal marker destination is invalid")
 	}
-	if err := writeExclusivePrivateMaterial(path, []byte("TERMINAL\n")); err != nil {
+	if err := writeExclusivePrivateMaterial(path, []byte(fullRunExecutorTerminalContents)); err != nil {
 		return errors.New("persist full-run executor terminal marker")
 	}
 	return nil
