@@ -32,8 +32,7 @@ ok up --file /private/bare-run.json --dry-run
 ok up --file /private/bare-run.json --prepare
 ```
 
-The shorthand only rewrites the command prefix. It does not render a simple YAML
-cluster description, infer a mode, use saved path-config credentials for create,
+The shorthand only rewrites the command prefix. It does not infer a mode, use saved path-config credentials for create,
 renew access, prompt for or implicitly grant live authority. Existing private JSON
 manifest, Plan, digest, evidence and terminal-marker requirements are unchanged.
 Live `ok up` still requires all of the `--live --execute` inputs described below.
@@ -105,6 +104,60 @@ consumption even when execution stops. Never treat `--prepare` output as live
 authorization. This command runs the Stage 1-7 executor directly in the local
 `ok` process. It contacts the APIs bound by the private manifest and does not
 install the four Job-activation wrapper objects described below.
+
+## Friendly cluster YAML: offline intent and render only
+
+This is a deliberately incomplete front end, not full-run preparation. It does
+not replace the technical JSON manifest contract above. Start with:
+
+```sh
+ok up cluster-template > cluster.yaml
+# Edit name and all network addresses; example addresses are not allocations.
+ok up --file cluster.yaml --dry-run
+ok up render --file cluster.yaml --output /private/new-render
+```
+
+The input is `cli.openkubes.io/v1alpha1`, kind `Cluster`, with `metadata.name`,
+`spec.profile: talos-kubevirt-mvp` and explicit `spec.network.endpoint`, `podCIDR`
+and `serviceCIDR`. See `examples/ok-cli-cluster.yaml`. The small profile fixes one
+control plane and one worker, each with 2 cores, 4Gi memory and a 20Gi disk;
+Kubernetes v1.34.1. Sizing overrides, other providers, automatic address allocation
+and additional workers are not accepted in this first slice.
+
+YAML fields are strict: unknown/duplicate keys, aliases/anchors, merge keys,
+multiple documents and non-string values are rejected. The DNS name must be
+non-reserved; explicit IPv4 endpoint and canonical non-overlapping IPv4 CIDRs
+are required. No collision, IP availability or live profile/storage check is
+claimed. Local syntactic validation returns `INTENT_VALIDATED_NO_GO`,
+`runnerReady=false`, `apiContacted=false`, `authorizationConsumed=false`,
+`mutationAllowed=false` and `collisionChecked=false`. It writes no files and
+does not launch a child process.
+
+The explicit `render` subcommand uses only the trusted lifecycle and ok-linux
+paths (`--lifecycle-root` and `--ok-linux-path`, or saved local path configuration).
+It does not read the referenced kubeconfig/credential contents. The small adapter
+calls the existing owning `render.render_cluster` and
+`profile_resolvers.talos.resolve_talos_config`; Go does not duplicate Talos,
+Golden-image or storage validation. The online allocator/resolver, sockets and
+child-process execution are disabled in that adapter. The output root must not
+exist; failed/partial output is retained and never overwritten or retried.
+All generated files, including shell helpers, are mode 0600; directories are
+0700. Generated helpers are not run. The receipt binds rendered-file and owning
+source/profile digests but remains `RENDERED_NO_GO` / `runnerReady=false`.
+
+**Missing next step:** a reusable authoritative binder for Contract identity,
+projection/fixture, seven-stage Plan, reviewed authority policies, private
+credentials and independent evidence. The successful Candidate used one-off
+operator helpers; those must not be replaced by copying old identities or by
+loosening the runner's evidence requirements. Neither syntax validation nor
+rendering supplies these bindings. Therefore friendly YAML `--prepare` and
+`--live` fail closed without touching terminal markers or opening a runner.
+No successful full-run preparation/provisioning is claimed.
+
+Existing technical JSON inputs retain all previous modes and receipts (including
+JSON manifests using a `.yaml`/`.yml` filename). No existing Candidate, receipt,
+authority or terminal is rewritten by this front end. Interactive configuration,
+live creation from friendly YAML and full binding remain separate follow-ups.
 
 ## Bare-MVP closure and ongoing provider access
 

@@ -728,6 +728,15 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 3 && arguments[0] == "evidence" && arguments[1] == "observability" && arguments[2] == "serve" {
 		return runEvidenceObservabilityServe(ctx, arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "cluster-template" {
+		if len(arguments) != 3 {
+			return errors.New("cluster-template accepts no arguments")
+		}
+		return writeClusterIntentTemplate(stdout)
+	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "render" {
+		return runClusterIntentRender(ctx, arguments[3:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" {
 		return runClusterCreateRequirements(arguments[3:], stdout)
 	}

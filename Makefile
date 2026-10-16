@@ -236,6 +236,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 		-run 'TestDestroy|TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestLocalConfig'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
+	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestClusterIntent'
 	@go test -mod=readonly ./internal/runner -count=1 \
 		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix'
 	@$(SCRIPT_DIR)/.tools/bin/ok --help >/dev/null
@@ -244,6 +245,8 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster destroy --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up requirements >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok up cluster-template >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok up render --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config init --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config show --help >/dev/null
@@ -255,6 +258,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster stage run full prepare --help >/dev/null
 	@python3 $(SCRIPT_DIR)/tests/ok147_projection_render_test.py >/dev/null
 	@python3 $(SCRIPT_DIR)/tests/ok147_destroy_cli_test.py
+	@python3 -B $(SCRIPT_DIR)/tests/ok147_cluster_intent_test.py
 	@$(MAKE) --no-print-directory contract-executor-dry-run >/dev/null
 	@echo "Offline ok CLI smoke passed; no cluster was contacted"
 
