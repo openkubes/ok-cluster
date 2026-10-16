@@ -63,6 +63,11 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterCreateRequirementsHelp(stdout)
 		return true
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" &&
+		(arguments[2] == "render" || arguments[2] == "cluster-template") && containsHelpArgument(arguments[3:]) {
+		writeClusterIntentRenderHelp(stdout)
+		return true
+	}
 	if len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "manifest-template" && isHelpArgument(arguments[3]) {
 		writeClusterCreateManifestTemplateHelp(stdout)
 		return true
@@ -241,6 +246,9 @@ func writeClusterCreateHelp(output io.Writer) {
 	fmt.Fprint(output, `Validate, prepare, or execute one bound Bare-MVP cluster run
 
 Usage:
+  ok up cluster-template
+  ok up --file cluster.yaml --dry-run
+  ok up render --file cluster.yaml --output <new-private-directory>
   ok up --file <private-manifest.json> --dry-run
   ok up --file <private-manifest.json> --prepare
   ok cluster create requirements
@@ -256,8 +264,10 @@ Usage:
 
 "ok up" is an exact shorthand for "ok cluster create", including preparation
 subcommands and legacy contract-planning flags. It does not select a mode, infer
-credentials from local config, render YAML, renew access, or bypass live approval.
-All options below work with either spelling; JSON manifest/evidence requirements
+credentials from local config, renew access, or bypass live approval.
+Friendly YAML supports local intent validation/render only; see "ok up render --help".
+It is NOT runner-ready: YAML --prepare/--live fail closed until full binding exists.
+All options below work with either spelling; technical JSON manifest/evidence requirements
 and operation receipts are unchanged. Bare "ok up" only displays this help.
 
 Modes (exactly one is required):

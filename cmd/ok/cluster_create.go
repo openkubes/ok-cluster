@@ -162,6 +162,9 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 	if !*live && (*execute || *expectedManifestDigest != "" || *evidencePublicKey != "" || *terminalMarker != "") {
 		return errors.New("--execute and live-only inputs require --live")
 	}
+	if isClusterYAMLFile(manifestPath) {
+		return validateClusterYAMLWorkflow(manifestPath, *dryRun, stdout)
+	}
 	if *live {
 		if !*execute {
 			return errors.New("live cluster creation requires explicit --live --execute")

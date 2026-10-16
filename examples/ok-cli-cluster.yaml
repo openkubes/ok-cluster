@@ -1,0 +1,11 @@
+# Local intent only. These addresses are examples, not verified allocations.
+apiVersion: cli.openkubes.io/v1alpha1
+kind: Cluster
+metadata:
+  name: my-cluster
+spec:
+  profile: talos-kubevirt-mvp
+  network:
+    endpoint: 192.0.2.10
+    podCIDR: 10.42.0.0/16
+    serviceCIDR: 10.96.0.0/20
