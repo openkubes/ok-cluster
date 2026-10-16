@@ -43,6 +43,8 @@ class IntentRenderTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         receipt = json.loads(result.stdout)
         self.assertEqual(receipt['state'], 'RENDERED_NO_GO')
+        for name in ('execution-fixture.json', 'provider-access-policy.json', 'preparation-receipt.json'):
+            self.assertFalse((self.output / name).exists())
         for field in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'runnerReady', 'collisionChecked', 'generatedHelpersExecuted'):
             self.assertIs(receipt[field], False)
         config = yaml.safe_load((self.output / 'my-cluster/cluster-config.yaml').read_text())
@@ -100,6 +102,13 @@ class IntentRenderTests(unittest.TestCase):
             cwd=self.home, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIs(json.loads(result.stdout)['runnerReady'], False)
+        self.output = self.home / 'saved-path-preparation'
+        prepared = self.bind(self.reviewed_contract(), prepare=True, saved_paths=True)
+        self.assertNotEqual(prepared.returncode, 0)
+        self.assertIn('preparation incomplete (NO-GO)', prepared.stderr)
+        self.assertEqual(json.loads(prepared.stdout)['state'], 'LOCAL_EXECUTION_INPUTS_BOUND_NO_GO')
+        self.assertFalse(management.exists())
+        self.assertFalse(provider.exists())
         self.assertFalse(self.marker.exists())
 
     def reviewed_contract(self):
@@ -116,15 +125,15 @@ class IntentRenderTests(unittest.TestCase):
         spec['connectivity']['serviceCIDR'] = '10.96.0.0/20'
         return contract
 
-    def bind(self, contract, *, prepare=False, canonical=False):
+    def bind(self, contract, *, prepare=False, canonical=False, saved_paths=False):
         source = self.home / 'reviewed-contract.yaml'
         source.write_text(yaml.safe_dump(contract, sort_keys=False))
         self.source_contract_raw = source.read_bytes()
         command = ['cluster', 'create'] if canonical else ['up']
         command += ['--prepare'] if prepare else ['bind']
+        paths = [] if saved_paths else ['--lifecycle-root', str(ROOT), '--ok-linux-path', str(ROOT.parent / 'ok-linux')]
         return subprocess.run([str(BINARY), *command, '--file', str(self.input),
-            '--contract', str(source), '--output', str(self.output), '--lifecycle-root', str(ROOT),
-            '--ok-linux-path', str(ROOT.parent / 'ok-linux')], capture_output=True, text=True,
+            '--contract', str(source), '--output', str(self.output), *paths], capture_output=True, text=True,
             env=self.env, cwd=self.home, timeout=20)
 
     def test_static_binding_uses_owning_contract_and_projection_verifiers(self):
@@ -132,6 +141,8 @@ class IntentRenderTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         receipt = json.loads(result.stdout)
         self.assertEqual(receipt['state'], 'CONTRACT_PROJECTION_BOUND_NO_GO')
+        for name in ('execution-fixture.json', 'provider-access-policy.json', 'preparation-receipt.json'):
+            self.assertFalse((self.output / name).exists())
         self.assertEqual(receipt['canonicalizationProfile'], 'openkubes-contract-c14n/v1')
         self.assertEqual(receipt['contractIdentity'], {'name': 'my-cluster', 'namespace': 'my-cluster'})
         self.assertEqual(receipt['intentRevision'], 'sha256:' + hashlib.sha256((self.output / 'contract.canonical.json').read_bytes()).hexdigest())
@@ -185,8 +196,40 @@ class IntentRenderTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('preparation incomplete (NO-GO)', result.stderr)
                 receipt = json.loads(result.stdout)
-                self.assertEqual(receipt, json.loads((self.output / 'binding-receipt.json').read_text()))
-                self.assertEqual(receipt['state'], 'CONTRACT_PROJECTION_BOUND_NO_GO')
+                self.assertEqual(receipt, json.loads((self.output / 'preparation-receipt.json').read_text()))
+                self.assertEqual(receipt['state'], 'LOCAL_EXECUTION_INPUTS_BOUND_NO_GO')
+                self.assertEqual(receipt['format'], 'ok-cli-cluster-preparation/v1')
+                static = json.loads((self.output / 'binding-receipt.json').read_text())
+                self.assertEqual(receipt['bindingReceiptDigest'], 'sha256:' + hashlib.sha256((self.output / 'binding-receipt.json').read_bytes()).hexdigest())
+                self.assertEqual(receipt['contractIdentity'], static['contractIdentity'])
+                self.assertEqual(receipt['intentRevision'], static['intentRevision'])
+                fixture = json.loads((self.output / 'execution-fixture.json').read_text())
+                self.assertEqual(fixture['format'], 'ok-cli-local-execution-fixture/v1')
+                self.assertEqual(fixture['authorizationState'], 'NO-GO')
+                self.assertEqual(fixture['contractIdentity'], receipt['contractIdentity'])
+                self.assertEqual(fixture['intentRevision'], receipt['intentRevision'])
+                self.assertEqual(fixture['bindingReceiptDigest'], receipt['bindingReceiptDigest'])
+                self.assertEqual(fixture['runner']['executionMode'], 'local-cli')
+                cli_version = subprocess.run([str(BINARY), 'version'], capture_output=True, text=True,
+                    check=True, env=self.env, cwd=self.home, timeout=10).stdout.split()
+                self.assertEqual(fixture['runner']['version'], cli_version[0])
+                self.assertEqual(fixture['runner']['sourceRevision'], cli_version[1])
+                self.assertEqual(fixture['runner']['binaryDigest'], 'sha256:' + hashlib.sha256(BINARY.read_bytes()).hexdigest())
+                self.assertFalse(fixture['runner']['imagePublicationPerformed'])
+                self.assertEqual(receipt['executionFixtureDigest'], 'sha256:' + hashlib.sha256((self.output / 'execution-fixture.json').read_bytes()).hexdigest())
+                policy = json.loads((self.output / 'provider-access-policy.json').read_text())
+                self.assertEqual(policy['format'], 'ok147-provider-access-policy/v1')
+                self.assertEqual(policy['contractIdentity'], receipt['contractIdentity'])
+                self.assertEqual(policy['intentRevision'], receipt['intentRevision'])
+                self.assertEqual(policy['executionFixture'], receipt['executionFixtureDigest'])
+                self.assertEqual(policy['managementAuthority'], 'ok-mgmt')
+                self.assertEqual(policy['providerAuthority'], 'ok-infra')
+                self.assertEqual(policy['secret'], {'apiVersion': 'v1', 'kind': 'Secret', 'namespace': 'my-cluster',
+                    'name': 'external-infra-kubeconfig-my-cluster', 'type': 'Opaque', 'dataKey': 'kubeconfig', 'immutable': True})
+                self.assertEqual(receipt['providerAccessPolicyDigest'], 'sha256:' + hashlib.sha256((self.output / 'provider-access-policy.json').read_bytes()).hexdigest())
+                self.assertNotIn('fresh execution fixture', receipt['missingBindings'])
+                for path in self.output.rglob('*'):
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
                 for field in ('runnerReady', 'mutationAllowed', 'apiContacted', 'authorizationConsumed'):
                     self.assertIs(receipt[field], False)
                 self.assertNotIn('manifestDigest', receipt)
@@ -197,6 +240,27 @@ class IntentRenderTests(unittest.TestCase):
                 self.assertEqual(repeated.stdout, '')
                 self.assertEqual(before, {str(p.relative_to(self.output)): p.read_bytes() for p in self.output.rglob('*') if p.is_file()})
                 self.assertFalse(self.marker.exists())
+
+    def test_local_inputs_change_with_new_cluster_identity(self):
+        first = self.bind(self.reviewed_contract(), prepare=True)
+        self.assertNotEqual(first.returncode, 0)
+        a = json.loads(first.stdout)
+        self.input.write_text(self.input.read_text().replace('my-cluster', 'other-cluster'))
+        contract = self.reviewed_contract()
+        contract['metadata'] = {'name': 'other-cluster', 'namespace': 'other-cluster'}
+        access = contract['spec']['infrastructure']['providerAccess']
+        access['secretRef']['name'] = 'external-infra-kubeconfig-other-cluster'
+        access['secretRef']['namespace'] = access['targetNamespace'] = 'other-cluster'
+        self.output = self.home / 'other-preparation'
+        second = self.bind(contract, prepare=True)
+        self.assertNotEqual(second.returncode, 0)
+        b = json.loads(second.stdout)
+        self.assertNotEqual(a['executionFixtureDigest'], b['executionFixtureDigest'])
+        self.assertNotEqual(a['providerAccessPolicyDigest'], b['providerAccessPolicyDigest'])
+        for path in self.output.rglob('*'):
+            if path.is_file():
+                self.assertNotIn(b'my-cluster', path.read_bytes())
+        self.assertFalse(self.marker.exists())
 
     def test_prepare_rejects_contract_drift_before_output(self):
         contract = self.reviewed_contract()

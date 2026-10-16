@@ -32,6 +32,45 @@ type ProviderAccessExpected struct {
 	ProviderAuthority   string
 }
 
+// ProviderAccessPolicyConfig describes a fresh, credential-free desired Secret
+// policy. Constructing it grants no authority and never materializes a Secret.
+type ProviderAccessPolicyConfig struct {
+	ContractIdentity    contract.Identity
+	IntentRevision      string
+	ExecutionFixture    string
+	ManagementAuthority string
+	ProviderAuthority   string
+}
+
+// BuildProviderAccessPolicy uses the same closed policy shape and verifier as
+// LoadProviderAccessPolicy. There is deliberately no credential or old-policy input.
+func BuildProviderAccessPolicy(config ProviderAccessPolicyConfig) ([]byte, error) {
+	document := providerAccessPolicyDocument{
+		Format: ProviderAccessPolicyFormat, ContractIdentity: config.ContractIdentity,
+		IntentRevision: config.IntentRevision, ExecutionFixture: config.ExecutionFixture,
+		ManagementAuthority: config.ManagementAuthority, ProviderAuthority: config.ProviderAuthority,
+		Secret: providerAccessSecretPolicy{
+			APIVersion: "v1", Kind: "Secret", Namespace: config.ContractIdentity.Namespace,
+			Name: "external-infra-kubeconfig-" + config.ContractIdentity.Name,
+			Type: "Opaque", DataKey: "kubeconfig", Immutable: true,
+		},
+	}
+	raw, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return nil, errors.New("encode provider-access policy")
+	}
+	raw = append(raw, '\n')
+	_, err = verifyProviderAccessPolicy(raw, ProviderAccessExpected{
+		PolicyDigest: digest.SHA256(raw), ContractIdentity: config.ContractIdentity,
+		IntentRevision: config.IntentRevision, ExecutionFixture: config.ExecutionFixture,
+		ManagementAuthority: config.ManagementAuthority, ProviderAuthority: config.ProviderAuthority,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 type providerAccessSecretPolicy struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
@@ -69,6 +108,13 @@ func LoadProviderAccessPolicy(path string, expected ProviderAccessExpected) (Ver
 	raw, err := readBoundedRegularProviderFile(path, maximumProjectionArtifactBytes, false)
 	if err != nil {
 		return VerifiedProviderAccessPolicy{}, errors.New("read provider-access policy")
+	}
+	return verifyProviderAccessPolicy(raw, expected)
+}
+
+func verifyProviderAccessPolicy(raw []byte, expected ProviderAccessExpected) (VerifiedProviderAccessPolicy, error) {
+	if err := validateProviderAccessExpected(expected); err != nil {
+		return VerifiedProviderAccessPolicy{}, err
 	}
 	if digest.SHA256(raw) != expected.PolicyDigest {
 		return VerifiedProviderAccessPolicy{}, errors.New("provider-access policy digest differs from staged input")

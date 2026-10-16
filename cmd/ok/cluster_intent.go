@@ -22,6 +22,24 @@ import (
 
 const clusterIntentAPIVersion = "cli.openkubes.io/v1alpha1"
 
+type clusterIntentBindingReceipt struct {
+	Format                  string             `json:"format"`
+	State                   string             `json:"state"`
+	Identity                contract.Identity  `json:"contractIdentity"`
+	CanonicalizationProfile string             `json:"canonicalizationProfile"`
+	IntentRevision          string             `json:"intentRevision"`
+	NormalizedIntentDigest  string             `json:"normalizedIntentDigest"`
+	RenderReceiptDigest     string             `json:"renderReceiptDigest"`
+	RawContractDigest       string             `json:"rawContractDigest"`
+	SchemaDigest            string             `json:"schemaDigest"`
+	Projection              projection.Binding `json:"projection"`
+	APIContacted            bool               `json:"apiContacted"`
+	AuthorizationConsumed   bool               `json:"authorizationConsumed"`
+	MutationAllowed         bool               `json:"mutationAllowed"`
+	RunnerReady             bool               `json:"runnerReady"`
+	Missing                 []string           `json:"missingBindings"`
+}
+
 // An intent is not a Contract, execution manifest, reservation or authority.
 type clusterIntent struct {
 	APIVersion string `yaml:"apiVersion" json:"apiVersion"`
@@ -357,23 +375,7 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 			return err
 		}
 	}
-	receipt := struct {
-		Format                  string             `json:"format"`
-		State                   string             `json:"state"`
-		Identity                contract.Identity  `json:"contractIdentity"`
-		CanonicalizationProfile string             `json:"canonicalizationProfile"`
-		IntentRevision          string             `json:"intentRevision"`
-		NormalizedIntentDigest  string             `json:"normalizedIntentDigest"`
-		RenderReceiptDigest     string             `json:"renderReceiptDigest"`
-		RawContractDigest       string             `json:"rawContractDigest"`
-		SchemaDigest            string             `json:"schemaDigest"`
-		Projection              projection.Binding `json:"projection"`
-		APIContacted            bool               `json:"apiContacted"`
-		AuthorizationConsumed   bool               `json:"authorizationConsumed"`
-		MutationAllowed         bool               `json:"mutationAllowed"`
-		RunnerReady             bool               `json:"runnerReady"`
-		Missing                 []string           `json:"missingBindings"`
-	}{"ok-cli-cluster-static-binding/v1", "CONTRACT_PROJECTION_BOUND_NO_GO", identity, canonical.CanonicalizationProfile,
+	receipt := clusterIntentBindingReceipt{"ok-cli-cluster-static-binding/v1", "CONTRACT_PROJECTION_BOUND_NO_GO", identity, canonical.CanonicalizationProfile,
 		canonical.NormalizedDigest, normalizedIntentDigest, digest.SHA256(renderRaw), canonical.RawArtifactDigest, canonical.SchemaDigest, projected, false, false, false, false,
 		[]string{"fresh execution fixture", "enablement/network/target-access artifacts", "seven-stage Plan", "reviewed authority policies and existing credentials", "full-run manifest and independent evidence inputs"}}
 	var result bytes.Buffer
@@ -442,9 +444,12 @@ Generated shell helpers are not executable and are never run.
 YAML --prepare computes Contract R through the owning versioned canonicalizer/schema,
 checks YAML/Contract/resolved-profile agreement and verifies the owning projection.
 It does not rename/copy historical Contract metadata or invent enablement/platform intent.
-It remains CONTRACT_PROJECTION_BOUND_NO_GO: full Plan/fixture/authority/credential
-binding is still required. Preparation exits non-zero after writing this partial
-receipt, not PREPARED or a live approval digest. YAML --live remains blocked.
+It also derives a credential-free local execution fixture and provider-access policy.
+The fixture binds this CLI binary digest, embedded version/revision and static inputs;
+it is not image publication proof or a unique execution attempt.
+The preparation receipt remains LOCAL_EXECUTION_INPUTS_BOUND_NO_GO: full Plan,
+stage artifacts, authority, credential and independent evidence bindings are missing.
+Preparation exits non-zero, not PREPARED or a live approval digest. YAML --live remains blocked.
 No API client, credential issuance, authority rebinding or live stage is opened.
 Existing technical JSON manifests keep their original workflow and receipts.
 `)

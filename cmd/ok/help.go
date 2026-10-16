@@ -266,7 +266,8 @@ Usage:
 "ok up" is an exact shorthand for "ok cluster create", including preparation
 subcommands and legacy contract-planning flags. It does not select a mode, infer
 credentials from local config, renew access, or bypass live approval.
-Friendly YAML --prepare currently performs local Contract/projection checks only,
+Friendly YAML --prepare currently checks local Contract/projection inputs and
+generates a credential-free local execution fixture and provider-access policy. It
 requires an explicit reviewed --contract and new --output directory, and exits
 non-zero with a NO-GO receipt because full runner preparation is still incomplete.
 Optional local paths: --lifecycle-root, --ok-linux-path, --config (or saved paths).
