@@ -696,6 +696,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 }
 
 func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	if len(arguments) >= 1 && arguments[0] == "config" {
+		return runConfig(arguments[1:], stdout, stderr)
+	}
 	if len(arguments) >= 2 && arguments[0] == "destroy" && arguments[1] == "cluster" {
 		return runDestroyCluster(ctx, arguments[2:], stdout, stderr)
 	}

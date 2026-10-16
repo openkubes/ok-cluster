@@ -49,19 +49,55 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	}
 	flags := flag.NewFlagSet("ok destroy cluster", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	root := flags.String("lifecycle-root", ".", "Trusted ok-cluster checkout (default: current directory)")
+	root := flags.String("lifecycle-root", "", "Trusted ok-cluster checkout (saved path, otherwise current directory)")
 	clusterDir := flags.String("cluster-dir", "", "Render/evidence directory (default: <lifecycle-root>/<name>)")
 	management := flags.String("management-kubeconfig", "", "Explicit management kubeconfig (required)")
 	provider := flags.String("provider-kubeconfig", "", "Explicit separate provider kubeconfig (required)")
 	okLinux := flags.String("ok-linux-path", "", "ok-linux checkout (default: sibling of lifecycle-root)")
+	configFile := flags.String("config", "", "Local path configuration file (default: user configuration directory/ok/config.json)")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments; use ok destroy cluster <name> [flags]")
 	}
+	explicitEmpty := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Value.String() == "" {
+			explicitEmpty = true
+		}
+	})
+	if explicitEmpty {
+		return errors.New("explicit path flags must not be empty")
+	}
+	configUsed := "none (explicit flags/current directory)"
+	if *configFile != "" || *root == "" || *okLinux == "" || *clusterDir == "" || *management == "" || *provider == "" {
+		path, err := localConfigPath(*configFile)
+		if err != nil {
+			return err
+		}
+		config, err := loadLocalConfig(path)
+		if err != nil && !(os.IsNotExist(err) && *configFile == "") {
+			return fmt.Errorf("cannot load local configuration %s: %w", path, err)
+		}
+		if err == nil {
+			configUsed = path
+			for destination, value := range map[*string]string{root: config.LifecycleRoot, okLinux: config.OKLinuxPath,
+				management: config.ManagementKubeconfig, provider: config.ProviderKubeconfig} {
+				if *destination == "" {
+					*destination = value
+				}
+			}
+			if *clusterDir == "" {
+				*clusterDir = filepath.Join(config.ClustersDir, name)
+			}
+		}
+	}
 	if *management == "" || *provider == "" {
-		return errors.New("destroy requires explicit --management-kubeconfig and --provider-kubeconfig; no default context is used")
+		return errors.New("destroy requires explicit --management-kubeconfig and --provider-kubeconfig, or paths saved by ok config init; no default context is used")
+	}
+	if *root == "" {
+		*root = "."
 	}
 	rootPath, err := filepath.Abs(*root)
 	if err != nil {
@@ -110,8 +146,8 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	if !runtime.interactive {
 		return errors.New("destroy requires interactive terminal input; piped confirmation and --yes/--force are not supported")
 	}
-	_, err = fmt.Fprintf(stdout, "Permanently delete cluster %q and its VM/storage data?\nManagement kubeconfig: %s\nProvider kubeconfig:   %s\nLifecycle checkout:    %s\nPreserve local files:  %s\n\nNo credential renewal, force deletion, rollback or automatic retry.\nSeparately installed runner authorities are not removed.\nType ok to delete, or no to cancel [no]: ",
-		name, managementPath, providerPath, rootPath, directory)
+	_, err = fmt.Fprintf(stdout, "Permanently delete cluster %q and its VM/storage data?\nManagement kubeconfig: %s\nProvider kubeconfig:   %s\nLifecycle checkout:    %s\nProfiles checkout:     %s\nPreserve local files:  %s\nPath configuration:    %s\n\nNo credential renewal, force deletion, rollback or automatic retry.\nSeparately installed runner authorities are not removed.\nType ok to delete, or no to cancel [no]: ",
+		name, managementPath, providerPath, rootPath, okLinuxPath, directory, configUsed)
 	if err != nil {
 		return err
 	}
@@ -211,6 +247,7 @@ func writeDestroyClusterHelp(output io.Writer) {
 	fmt.Fprint(output, `Destroy one split-plane cluster through the existing Python lifecycle
 
 Usage:
+  ok destroy cluster <name>                 # after ok config init
   ok destroy cluster <name> --management-kubeconfig <file> --provider-kubeconfig <file> [flags]
 
 Inputs:
@@ -219,6 +256,14 @@ Inputs:
   --management-kubeconfig   Explicit management kubeconfig; never the default context
   --provider-kubeconfig     Explicit separate provider kubeconfig
   --ok-linux-path           Profile checkout (default: sibling of lifecycle-root)
+  --config                  Local path configuration file (default: OS user config directory/ok/config.json)
+
+Run "ok config init --help" to save all five paths once. Saved paths fill omitted
+flags only; explicit flags override them. Saved clustersDir determines the retained
+<clustersDir>/<name> directory unless --cluster-dir is given. A malformed existing
+configuration fails closed; explicit --config never falls back if missing.
+With all five path flags explicit, no default configuration is read.
+Create/runner commands never use this path configuration.
 
 Confirmation:
   An interactive terminal is required. Type exactly ok to delete, or no to cancel.

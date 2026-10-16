@@ -14,8 +14,15 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeRootHelp(stdout)
 		return true
 	}
-	if arguments[0] == "help" {
+	helpPrefix := arguments[0] == "help"
+	if helpPrefix {
 		arguments = arguments[1:]
+	}
+	if len(arguments) >= 1 && arguments[0] == "config" &&
+		(len(arguments) == 1 || len(arguments) == 2 && isHelpArgument(arguments[1]) ||
+			len(arguments) >= 2 && (arguments[1] == "init" || arguments[1] == "show") && (helpPrefix || containsFlagHelp(arguments[2:]))) {
+		writeConfigHelp(stdout)
+		return true
 	}
 	if len(arguments) == 1 && arguments[0] == "destroy" ||
 		len(arguments) == 2 && arguments[0] == "destroy" && isHelpArgument(arguments[1]) {
@@ -137,6 +144,7 @@ Usage:
 Commands:
   cluster     Validate, prepare, and explicitly run cluster workflows
   destroy     Interactively tear down a cluster through the existing lifecycle
+  config      Save and inspect local CLI paths (no cluster contact)
   version     Print version and source revision
   authority   Expert commands for the bounded stage authority
   evidence    Expert commands for independent evidence collection

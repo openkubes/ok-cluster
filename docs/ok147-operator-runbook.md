@@ -339,6 +339,57 @@ split-plane cleanup path.
 
 #### Interactive CLI entry point
 
+##### Save local paths once
+
+The standalone binary still uses the trusted Python lifecycle and ok-linux
+checkout. To avoid repeating implementation paths, save them once:
+
+```sh
+ok config init \
+  --lifecycle-root <trusted-current-ok-cluster-checkout> \
+  --ok-linux-path <ok-linux-profile-checkout> \
+  --clusters-dir <absolute-render-parent> \
+  --management-kubeconfig <management-kubeconfig> \
+  --provider-kubeconfig <separate-provider-kubeconfig>
+ok config show
+```
+
+Initialization performs local path checks only. It requires all five path flags,
+normalizes them to absolute paths, stores no credential contents and never
+invokes the lifecycle or contacts a cluster. It is create-only: existing files
+are not overwritten, and existing directory permissions are not changed.
+This configuration is a convenience for path selection, not operation approval.
+
+The default file is `<OS user configuration directory>/ok/config.json`:
+`~/Library/Application Support/ok/config.json` on macOS, and
+`$XDG_CONFIG_HOME/ok/config.json` (or `~/.config/ok/config.json`) on Linux.
+The file/directory must be private (0600/0700 or stricter); configuration file
+and immediate parent symlinks are rejected. `ok config init`, `ok config show`
+and `ok destroy cluster` accept `--config <file>` for an explicit location.
+Use a new private location to prepare a replacement configuration; init has no
+overwrite/force switch. The strict `ok-cli-paths/v1` JSON schema rejects unknown,
+duplicate, missing, relative or unsupported-format fields.
+
+After setup, from any directory:
+
+```sh
+ok destroy cluster <approved-old-candidate>
+```
+
+Omitted flags use the saved paths. `clustersDir` is the parent of retained
+cluster directories, not the lifecycle source checkout; the selected target is
+exactly `<clustersDir>/<name>`. Explicit flags override individual saved paths,
+and `--cluster-dir` overrides that target's retained directory. The confirmation
+dialog displays the actual resolved paths and configuration file. A malformed
+existing configuration stops before the dialog; an explicitly selected missing
+file never falls back. With all five original path flags supplied explicitly,
+no default configuration is read. With no saved file, original path defaults
+and explicit kubeconfig requirements remain available.
+
+Create and expert runner commands do **not** read this configuration: their
+manifest-bound credentials, authority boundaries and receipt contracts are
+unchanged. No credentials are renewed or rotated automatically.
+
 Run from a trusted, current ok-cluster checkout, or select one explicitly:
 
 ```sh
@@ -360,14 +411,15 @@ Only an explicit lowercase `ok` followed by Enter launches one lifecycle
 invocation. `no` or an empty answer cancels without starting the lifecycle or
 contacting an API. EOF, invalid answers and Ctrl+C cannot start teardown.
 Interactive terminal input is mandatory: there is no piped confirmation,
-`--yes`, `--force` or credential renewal. Both kubeconfigs are explicit; no
-default kubectl context is selected. This is a separate destroy authorization
+`--yes`, `--force` or credential renewal. Both kubeconfig paths are explicitly
+supplied or explicitly saved by `ok config init`; no default kubectl context is
+selected. This is a separate destroy authorization
 boundary, not a reuse or broadening of create-run authority or old plan approvals.
 Organizational deletion approval is still required before confirming a target.
 
 This first CLI bridge requires Python 3 with PyYAML, kubectl and a trusted,
 current lifecycle checkout. The binary does not bundle that runtime or download
-one. `--lifecycle-root` defaults to the current directory; `--cluster-dir`
+one. Without saved configuration, `--lifecycle-root` defaults to the current directory; `--cluster-dir`
 defaults to `<lifecycle-root>/<name>`. `--ok-linux-path` can select the profile
 checkout, defaulting to the lifecycle checkout's sibling `ok-linux` directory.
 The first CLI surface supports split-plane teardown only. Existing expert
