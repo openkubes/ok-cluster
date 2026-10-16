@@ -472,6 +472,22 @@ func openBoundedKubernetesMaterial(tokenFile, caFile string) (string, []byte, *h
 }
 
 func openBoundedBearerMaterial(tokenFile, caFile string, allowSingleTrailingLF bool) (string, []byte, *http.Client, error) {
+	token, caRaw, roots, err := readBoundedBearerMaterial(tokenFile, caFile, allowSingleTrailingLF)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil, DisableCompression: true, ForceAttemptHTTP2: true,
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
+		},
+	}
+	return token, caRaw, client, nil
+}
+
+// Parsing is shared with offline preparation; this half opens no HTTP client.
+func readBoundedBearerMaterial(tokenFile, caFile string, allowSingleTrailingLF bool) (string, []byte, *x509.CertPool, error) {
 	tokenRaw, err := readBoundedRegular(tokenFile, maximumTokenBytes)
 	if err != nil {
 		return "", nil, nil, errors.New("read projected Kubernetes token")
@@ -491,19 +507,7 @@ func openBoundedBearerMaterial(tokenFile, caFile string, allowSingleTrailingLF b
 	if !roots.AppendCertsFromPEM(caRaw) {
 		return "", nil, nil, errors.New("projected Kubernetes API CA contains no certificate")
 	}
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			Proxy:              nil,
-			DisableCompression: true,
-			ForceAttemptHTTP2:  true,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				RootCAs:    roots,
-			},
-		},
-	}
-	return token, append([]byte(nil), caRaw...), client, nil
+	return token, append([]byte(nil), caRaw...), roots, nil
 }
 
 func readBoundedRegular(path string, maximum int64) ([]byte, error) {

@@ -204,10 +204,11 @@ func runClusterIntentBind(ctx context.Context, arguments []string, stdout, stder
 }
 
 type clusterIntentMaterialized struct {
-	Root, Output string
-	Canonical    contract.Result
-	Binding      clusterIntentBindingReceipt
-	Raw          []byte
+	Root, Output      string
+	RuntimeInputsPath string
+	Canonical         contract.Result
+	Binding           clusterIntentBindingReceipt
+	Raw               []byte
 }
 
 func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout, stderr io.Writer, bind bool, finish func(clusterIntentMaterialized) error) error {
@@ -222,6 +223,10 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 	root := flags.String("lifecycle-root", "", "Trusted lifecycle checkout (or saved local path)")
 	profiles := flags.String("ok-linux-path", "", "Reviewed ok-linux profiles (or saved local path)")
 	configFile := flags.String("config", "", "Explicit local path configuration")
+	var runtimeInputsPath string
+	if finish != nil {
+		flags.StringVar(&runtimeInputsPath, "runtime-inputs", "", "Explicit private references to existing authority/credential inputs")
+	}
 	var contractPath string
 	if bind {
 		flags.StringVar(&contractPath, "contract", "", "Explicit fresh reviewed Contract; not an old Candidate template")
@@ -395,7 +400,7 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 		return err
 	}
 	if finish != nil {
-		return finish(clusterIntentMaterialized{Root: rootPath, Output: outputPath, Canonical: canonical, Binding: receipt, Raw: result.Bytes()})
+		return finish(clusterIntentMaterialized{Root: rootPath, Output: outputPath, RuntimeInputsPath: runtimeInputsPath, Canonical: canonical, Binding: receipt, Raw: result.Bytes()})
 	}
 	_, err = stdout.Write(result.Bytes())
 	return err
@@ -439,10 +444,12 @@ Usage:
   ok up --file cluster.yaml --dry-run
   ok up render --file cluster.yaml --output <new-private-directory> [paths]
   ok up --file cluster.yaml --prepare --contract <fresh-reviewed-contract.yaml> --output <new-private-directory> [paths]
+  # Optional explicit existing private inputs: --runtime-inputs <private-references.json>
 
 Paths: --lifecycle-root <trusted-checkout> --ok-linux-path <profile-checkout>
 or saved local paths from ok config init; --config selects an explicit file.
-Only those two saved paths are used: kubeconfigs and credential contents are not read.
+Only those two saved paths are used; credentials are never inferred from config.
+Credential contents are read only when --prepare explicitly selects --runtime-inputs.
 
 Profile talos-kubevirt-mvp fixes one control plane and one worker, each with
 2 cores / 4Gi memory / 20Gi disk and Kubernetes v1.34.1. Talos, Golden image,
@@ -462,7 +469,10 @@ it is not image publication proof or a unique execution attempt.
 The preparation receipt remains STATIC_PLAN_BOUND_NO_GO: authority, credential,
 full-run manifest and independent evidence bindings are still missing.
 Flatcar and Ubuntu do not yet have bounded runner recipes; no Talos fallback.
-Preparation exits non-zero, not PREPARED or a live approval digest. YAML --live remains blocked.
+Without --runtime-inputs preparation exits non-zero. With explicit private inputs,
+only the existing full-run verifier can produce PREPARED_NOT_AUTHORIZED and the
+technical JSON manifest digest. It proves local preparation, not deployed authority,
+authenticated access or cluster convergence. YAML --live remains blocked.
 No API client, credential issuance, authority rebinding or live stage is opened.
 Existing technical JSON manifests keep their original workflow and receipts.
 `)

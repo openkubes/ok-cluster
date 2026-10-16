@@ -250,6 +250,7 @@ Usage:
   ok up --file cluster.yaml --dry-run
   ok up render --file cluster.yaml --output <new-private-directory>
   ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>
+  ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory> --runtime-inputs <private-references.json>
   ok up --file <private-manifest.json> --dry-run
   ok up --file <private-manifest.json> --prepare
   ok cluster create requirements
@@ -269,9 +270,15 @@ credentials from local config, renew access, or bypass live approval.
 Friendly YAML --prepare checks local Contract/projection inputs and generates
 credential-free stage artifacts and a verified seven-stage NO-GO plan from the
 versioned talos-kubevirt-mvp recipe (only its reviewed E/P revisions). It
-requires an explicit reviewed --contract and new --output directory, and exits
-non-zero with a NO-GO receipt: authority/credential and full manifest/evidence bindings
-are still incomplete. Flatcar and Ubuntu templates exist, but their bounded runner
+requires an explicit reviewed --contract and new --output directory.
+Without --runtime-inputs, YAML --prepare exits
+non-zero with a static NO-GO receipt. Explicit private 0600 --runtime-inputs may
+reference existing credentials and distinct Stage Authority/evidence trust keys;
+these files are locally parsed without opening a network client. Only the existing
+full-run verifier can complete the handoff as PREPARED_NOT_AUTHORIZED (exit zero).
+It does not verify installed RBAC/authority policies, network access or convergence.
+Live still requires separate approval for the generated technical JSON manifest.
+Flatcar and Ubuntu templates exist, but their bounded runner
 integration is not enabled; these profiles do not fall back to Talos.
 Optional local paths: --lifecycle-root, --ok-linux-path, --config (or saved paths).
 YAML --live remains blocked. No separate binding command is needed.

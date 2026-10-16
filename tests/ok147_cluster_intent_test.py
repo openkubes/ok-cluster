@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Actual CLI -> owning local renderer; no cluster/API/credential operations."""
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 import yaml
@@ -126,16 +128,118 @@ class IntentRenderTests(unittest.TestCase):
         spec['platform']['revision'] = 'sha256:2956184005f4860607e91672fce82164095dee6ebcbe57e5af883951a199c427'
         return contract
 
-    def bind(self, contract, *, prepare=False, canonical=False, saved_paths=False):
+    def bind(self, contract, *, prepare=False, canonical=False, saved_paths=False, runtime_inputs=None):
         source = self.home / 'reviewed-contract.yaml'
         source.write_text(yaml.safe_dump(contract, sort_keys=False))
         self.source_contract_raw = source.read_bytes()
         command = ['cluster', 'create'] if canonical else ['up']
         command += ['--prepare'] if prepare else ['bind']
         paths = [] if saved_paths else ['--lifecycle-root', str(ROOT), '--ok-linux-path', str(ROOT.parent / 'ok-linux')]
+        if runtime_inputs is not None:
+            paths += ['--runtime-inputs', str(runtime_inputs)]
         return subprocess.run([str(BINARY), *command, '--file', str(self.input),
             '--contract', str(source), '--output', str(self.output), *paths], capture_output=True, text=True,
             env=self.env, cwd=self.home, timeout=20)
+
+    def synthetic_runtime_inputs(self):
+        openssl = shutil.which('openssl')
+        if not openssl:
+            self.skipTest('local OpenSSL required for synthetic offline TLS trust')
+        cert, key = self.home / 'authority.crt', self.home / 'authority-test.key'
+        hostname = 'ok147-stage-authority.openkubes-execution-system.svc'
+        subprocess.run([openssl, 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+            '-subj', '/CN=' + hostname, '-addext', 'subjectAltName=DNS:' + hostname,
+            '-addext', 'extendedKeyUsage=serverAuth', '-keyout', str(key), '-out', str(cert)],
+            capture_output=True, check=True, timeout=20, env=self.env)
+        ca_digest = 'sha256:' + hashlib.sha256(cert.read_bytes()).hexdigest()
+        def private(name, raw):
+            path = self.home / name
+            path.write_bytes(raw)
+            path.chmod(0o600)
+            return str(path)
+        def authority(identity, host, token):
+            return {'endpoint': 'https://' + host + ':6443', 'authorityIdentity': identity,
+                'tokenFile': private(identity + '.token', token), 'caFile': str(cert), 'caBundleDigest': ca_digest}
+        stage_key = private('stage.pub', base64.b64encode(bytes(range(32))) + b'\n')
+        evidence_key = private('evidence.pub', base64.b64encode(bytes(range(32, 64))) + b'\n')
+        kubeconfig = {'apiVersion': 'v1', 'kind': 'Config', 'current-context': 'default',
+            'clusters': [{'name': 'provider', 'cluster': {'server': 'https://192.0.2.13:6443',
+                'certificate-authority-data': base64.b64encode(cert.read_bytes()).decode()}}],
+            'contexts': [{'name': 'default', 'context': {'cluster': 'provider', 'user': 'default', 'namespace': 'provider'}}],
+            'users': [{'name': 'default', 'user': {'token': 'p' * 48}}]}
+        inputs = {'format': 'ok-cli-cluster-runtime-inputs/v1',
+            'infrastructure': authority('ok-infra', '192.0.2.13', b'i' * 48),
+            'management': authority('ok-mgmt', '192.0.2.14', b'm' * 48),
+            'ledger': {'endpoint': 'https://192.0.2.15:6443', 'namespace': 'openkubes-execution-system',
+                'tokenFile': private('ledger.token', b'l' * 48), 'caFile': str(cert)},
+            'authorization': {'endpoint': 'https://' + hostname + ':8443/v1/stage-authorizations',
+                'tokenFile': private('authorization.token', b'a' * 48 + b'\n'), 'caFile': str(cert), 'publicKeyPath': stage_key},
+            'providerAccessKubeconfigFile': private('provider.kubeconfig', yaml.safe_dump(kubeconfig).encode()),
+            'independentEvidencePublicKeyPath': evidence_key}
+        path = self.home / 'runtime-inputs.json'
+        private(path.name, json.dumps(inputs).encode())
+        return path, inputs
+
+    def test_prepare_with_explicit_runtime_inputs_reaches_existing_manifest_verifier(self):
+        runtime_path, inputs = self.synthetic_runtime_inputs()
+        before = {str(p): p.read_bytes() for p in self.home.iterdir() if p.is_file()}
+        result = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt['state'], 'PREPARED_NOT_AUTHORIZED')
+        self.assertTrue(receipt['runnerReady'])
+        for name in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'authorityDeploymentVerified', 'liveAuthorized'):
+            self.assertIs(receipt[name], False)
+        self.assertEqual(receipt, json.loads((self.output / 'runner-handoff-receipt.json').read_text()))
+        self.assertEqual(json.loads((self.output / 'preparation-receipt.json').read_text())['state'], 'STATIC_PLAN_BOUND_NO_GO')
+        self.assertEqual(receipt['manifest']['state'], 'VERIFIED')
+        self.assertEqual(receipt['runtimeInputsDigest'], 'sha256:' + hashlib.sha256(runtime_path.read_bytes()).hexdigest())
+        self.assertEqual(receipt['independentEvidenceKeyId'], 'sha256:' + hashlib.sha256(bytes(range(32, 64))).hexdigest())
+        manifest_path = self.output / 'full-run-manifest.json'
+        self.assertEqual(receipt['manifestPath'], str(manifest_path))
+        manifest = json.loads(manifest_path.read_text())
+        self.assertEqual(manifest['providerAccess']['kubeconfigFile'], inputs['providerAccessKubeconfigFile'])
+        self.assertEqual(manifest['providerPrerequisites']['authority'], inputs['infrastructure'])
+        self.assertEqual(manifest['clusterLifecycle']['authority'], inputs['management'])
+        verified = subprocess.run([str(BINARY), 'up', '--file', str(manifest_path), '--prepare'],
+            capture_output=True, text=True, env=self.env, cwd=self.home, timeout=20)
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertEqual(json.loads(verified.stdout)['manifestDigest'], receipt['manifestDigest'])
+        for name in ('runtime', 'receipts', 'authorizations'):
+            self.assertEqual(list((self.output / name).iterdir()), [])
+        for path in self.output.rglob('*'):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
+            if path.is_file():
+                self.assertNotIn(b'p' * 48, path.read_bytes())
+                self.assertNotIn(b'i' * 48, path.read_bytes())
+        for path, raw in before.items():
+            self.assertEqual(Path(path).read_bytes(), raw)
+        self.assertFalse(self.marker.exists())
+
+    def test_runtime_handoff_fails_without_success_receipt_on_missing_or_foreign_inputs(self):
+        runtime_path, inputs = self.synthetic_runtime_inputs()
+        for case in ('missing-token', 'foreign-authority', 'shared-key', 'unsafe-file-mode', 'unknown-field'):
+            with self.subTest(case=case):
+                data = json.loads(json.dumps(inputs))
+                if case == 'missing-token':
+                    data['infrastructure']['tokenFile'] = str(self.home / 'not-present')
+                elif case == 'foreign-authority':
+                    data['management']['authorityIdentity'] = 'foreign-management'
+                elif case == 'shared-key':
+                    data['independentEvidencePublicKeyPath'] = data['authorization']['publicKeyPath']
+                elif case == 'unknown-field':
+                    data['plan'] = {'path': '/historical/not-read'}
+                runtime_path.write_text(json.dumps(data))
+                runtime_path.chmod(0o644 if case == 'unsafe-file-mode' else 0o600)
+                self.output = self.home / case
+                result = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('handoff', result.stderr)
+                self.assertFalse((self.output / 'runner-handoff-receipt.json').exists())
+                self.assertEqual(json.loads((self.output / 'preparation-receipt.json').read_text())['state'], 'STATIC_PLAN_BOUND_NO_GO')
+                self.assertNotIn('p' * 48, result.stderr)
+                self.assertFalse(self.marker.exists())
 
     def test_static_binding_uses_owning_contract_and_projection_verifiers(self):
         result = self.bind(self.reviewed_contract())

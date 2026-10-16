@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/projection"
 	"github.com/openkubes/ok-cluster/internal/runner"
 	"github.com/openkubes/ok-cluster/internal/runnerprofile"
 	"github.com/openkubes/ok-cluster/internal/stageplan"
@@ -16,6 +17,10 @@ import (
 type clusterIntentPlanArtifacts struct {
 	SemanticDigest, RawDigest string
 	Files                     map[string]string
+	Expected                  stageplan.Expected
+	EnablementObject          projection.ResourceIdentity
+	TargetAccessObjects       []projection.ResourceIdentity
+	NetworkProfileDigest      string
 }
 
 func bindClusterIntentStages(material clusterIntentMaterialized, recipe runnerprofile.Recipe, fixture, policyDigest, e, p string) (clusterIntentPlanArtifacts, error) {
@@ -108,5 +113,6 @@ func bindClusterIntentStages(material clusterIntentMaterialized, recipe runnerpr
 	if err != nil || loaded.PlanDigest != plan.PlanDigest {
 		return clusterIntentPlanArtifacts{}, errors.New("persisted plan verification failed; partial output retained")
 	}
-	return clusterIntentPlanArtifacts{SemanticDigest: plan.PlanDigest, RawDigest: digest.SHA256(planRaw), Files: fileDigests}, nil
+	return clusterIntentPlanArtifacts{SemanticDigest: plan.PlanDigest, RawDigest: digest.SHA256(planRaw), Files: fileDigests,
+		Expected: expected, EnablementObject: rendered.EnablementObject, TargetAccessObjects: rendered.TargetAccessObjects, NetworkProfileDigest: rendered.NetworkProfileDigest}, nil
 }
