@@ -48,6 +48,7 @@ jobs:
           "$RUNNER_TEMP/ok" up requirements
           "$RUNNER_TEMP/ok" up cluster-template
           "$RUNNER_TEMP/ok" up render --help
+          "$RUNNER_TEMP/ok" up bind --help
           "$RUNNER_TEMP/ok" config --help
           "$RUNNER_TEMP/ok" config init --help
           "$RUNNER_TEMP/ok" config show --help

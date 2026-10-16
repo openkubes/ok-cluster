@@ -737,6 +737,9 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "render" {
 		return runClusterIntentRender(ctx, arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "bind" {
+		return runClusterIntentBind(ctx, arguments[3:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" {
 		return runClusterCreateRequirements(arguments[3:], stdout)
 	}

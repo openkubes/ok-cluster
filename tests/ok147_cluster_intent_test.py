@@ -102,6 +102,79 @@ class IntentRenderTests(unittest.TestCase):
         self.assertIs(json.loads(result.stdout)['runnerReady'], False)
         self.assertFalse(self.marker.exists())
 
+    def reviewed_contract(self):
+        # Static test input, never a live/historical Candidate or stage outcome.
+        contract = yaml.safe_load((ROOT / 'internal/contract/testdata/ok141-contract-v5.yaml').read_text())
+        contract['metadata'] = {'name': 'my-cluster', 'namespace': 'my-cluster'}
+        spec = contract['spec']
+        spec['kubernetesVersion'] = 'v1.34.1'
+        access = spec['infrastructure']['providerAccess']
+        access['secretRef']['name'] = 'external-infra-kubeconfig-my-cluster'
+        access['secretRef']['namespace'] = access['targetNamespace'] = 'my-cluster'
+        spec['topology']['workers']['machine']['disk'] = '20Gi'
+        spec['connectivity']['podCIDR'] = '10.42.0.0/16'
+        spec['connectivity']['serviceCIDR'] = '10.96.0.0/20'
+        return contract
+
+    def bind(self, contract):
+        source = self.home / 'reviewed-contract.yaml'
+        source.write_text(yaml.safe_dump(contract, sort_keys=False))
+        self.source_contract_raw = source.read_bytes()
+        return subprocess.run([str(BINARY), 'up', 'bind', '--file', str(self.input),
+            '--contract', str(source), '--output', str(self.output), '--lifecycle-root', str(ROOT),
+            '--ok-linux-path', str(ROOT.parent / 'ok-linux')], capture_output=True, text=True,
+            env=self.env, cwd=self.home, timeout=20)
+
+    def test_static_binding_uses_owning_contract_and_projection_verifiers(self):
+        result = self.bind(self.reviewed_contract())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt['state'], 'CONTRACT_PROJECTION_BOUND_NO_GO')
+        self.assertEqual(receipt['canonicalizationProfile'], 'openkubes-contract-c14n/v1')
+        self.assertEqual(receipt['contractIdentity'], {'name': 'my-cluster', 'namespace': 'my-cluster'})
+        self.assertEqual(receipt['intentRevision'], 'sha256:' + hashlib.sha256((self.output / 'contract.canonical.json').read_bytes()).hexdigest())
+        self.assertEqual(receipt['rawContractDigest'], 'sha256:' + hashlib.sha256(self.source_contract_raw).hexdigest())
+        self.assertEqual(receipt['projection']['intentRevision'], receipt['intentRevision'])
+        self.assertEqual(receipt['projection']['infrastructurePlane']['resourceCount'], 5)
+        self.assertEqual(receipt['projection']['managementPlane']['resourceCount'], 8)
+        self.assertEqual((self.output / 'contract.yaml').read_bytes(), self.source_contract_raw)
+        self.assertEqual((self.home / 'reviewed-contract.yaml').read_bytes(), self.source_contract_raw)
+        for field in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'runnerReady'):
+            self.assertIs(receipt[field], False)
+        self.assertIn('seven-stage Plan', receipt['missingBindings'])
+        self.assertFalse((self.output / 'full-run-manifest.json').exists())
+        for path in self.output.rglob('*'):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
+        manifest = json.loads((self.output / 'projection/manifest.json').read_text())
+        self.assertEqual(manifest['authorizationState'], 'NO-GO')
+        self.assertEqual(manifest['R'], receipt['intentRevision'])
+        self.assertFalse(self.marker.exists())
+        before = {str(p.relative_to(self.output)): p.read_bytes() for p in self.output.rglob('*') if p.is_file()}
+        repeated = self.bind(self.reviewed_contract())
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertEqual(before, {str(p.relative_to(self.output)): p.read_bytes() for p in self.output.rglob('*') if p.is_file()})
+
+    def test_static_binding_refuses_contract_identity_or_semantics_drift(self):
+        for field in ('name', 'uid', 'network', 'machine', 'kubernetes', 'operatingSystem'):
+            with self.subTest(field=field):
+                contract = self.reviewed_contract()
+                if field == 'name':
+                    contract['metadata']['name'] = contract['metadata']['namespace'] = 'historical-cluster'
+                elif field == 'uid':
+                    contract['metadata']['uid'] = 'historical-object-uid'
+                elif field == 'network':
+                    contract['spec']['connectivity']['podCIDR'] = '10.43.0.0/16'
+                elif field == 'machine':
+                    contract['spec']['topology']['workers']['machine']['disk'] = '30Gi'
+                elif field == 'kubernetes':
+                    contract['spec']['kubernetesVersion'] = 'v1.36.2'
+                else:
+                    contract['spec']['operatingSystem']['identity'] = 'sha256:' + 'f' * 64
+                result = self.bind(contract)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.output.exists())
+                self.assertFalse(self.marker.exists())
+
     def test_dry_run_writes_nothing_and_claims_no_preparation(self):
         before = sorted(str(p.relative_to(self.home)) for p in self.home.rglob('*'))
         result = subprocess.run([str(BINARY), 'up', '--file', str(self.input), '--dry-run'],
