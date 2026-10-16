@@ -29,6 +29,7 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
             '--provider-kubeconfig', str(self.fixture.provider),
             '--ok-linux-path', str(ROOT.parent / 'ok-linux')]
         self.env = {**os.environ, 'HOME': str(box.home),
+            'XDG_CONFIG_HOME': str(box.home / '.config'),
             'PATH': str(box.bin) + os.pathsep + os.environ['PATH'],
             'FAKE_LOG': str(box.log), 'FAKE_STATE': str(box.state_path),
             'FAKE_STATE_MAP': self.fixture.map, 'PYTHONDONTWRITEBYTECODE': '1'}
@@ -40,7 +41,7 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
     def invoke(self, answer):
         master, slave = pty.openpty()
         process = subprocess.Popen(self.arguments, stdin=slave, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, env=self.env)
+            stderr=subprocess.PIPE, env=self.env, cwd=self.fixture.box.home)
         os.close(slave)
         output = b''
         try:
@@ -65,6 +66,59 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
                 process.kill()
                 process.communicate(timeout=5)
             os.close(master)
+
+    def use_saved_paths(self):
+        box = self.fixture.box
+        arguments = [str(BINARY), 'config', 'init', '--lifecycle-root', str(ROOT),
+            '--ok-linux-path', str(ROOT.parent / 'ok-linux'),
+            '--clusters-dir', str(box.rendered.parent),
+            '--management-kubeconfig', str(box.infra),
+            '--provider-kubeconfig', str(self.fixture.provider)]
+        result = subprocess.run(arguments, capture_output=True, text=True,
+                                env=self.env, cwd=box.home, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_no_owner_calls()
+        shown = subprocess.run([str(BINARY), 'config', 'show'], capture_output=True,
+            text=True, env=self.env, cwd=box.home, timeout=10)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        config = json.loads(shown.stdout)
+        self.assertEqual(config['config']['clustersDir'], str(box.rendered.parent))
+        path = Path(config['path'])
+        raw = path.read_bytes()
+        repeated = subprocess.run(arguments, capture_output=True, text=True,
+                                   env=self.env, cwd=box.home, timeout=10)
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assert_no_owner_calls()
+        self.arguments = [str(BINARY), 'destroy', 'cluster', fixtures.CLUSTER]
+        return path
+
+    def test_configured_no_from_unrelated_directory_never_contacts_owner(self):
+        self.use_saved_paths()
+        code, stdout, stderr = self.invoke('no\n')
+        self.assertEqual(code, 0, stderr)
+        self.assertIn('Path configuration:', stdout)
+        self.assertIn(str(self.fixture.provider), stdout)
+        self.assert_no_owner_calls()
+        self.fixture.assert_preserved()
+
+    def test_configured_ok_keeps_owner_durable_convergence_and_evidence(self):
+        self.use_saved_paths()
+        self.test_ok_delegates_to_real_lifecycle_and_keeps_evidence()
+
+    def test_configured_failure_remains_nonzero_without_retry(self):
+        self.use_saved_paths()
+        self.test_owner_failure_stays_nonzero_and_is_not_retried()
+
+    def test_malformed_saved_config_fails_before_confirmation(self):
+        path = self.use_saved_paths()
+        path.write_text('{"format":"future/v2"}')
+        result = subprocess.run(self.arguments, input='ok\n', capture_output=True,
+            text=True, env=self.env, cwd=self.fixture.box.home, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('Type ok', result.stdout)
+        self.assertIn('configuration', result.stderr)
+        self.assert_no_owner_calls()
 
     def test_no_cancels_without_starting_lifecycle(self):
         code, stdout, stderr = self.invoke('no\n')

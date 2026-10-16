@@ -18,6 +18,7 @@ import (
 
 func destroyFixture(t *testing.T) (string, []string) {
 	t.Helper()
+	isolatedConfigHome(t)
 	root := filepath.Join(t.TempDir(), "trusted checkout with spaces")
 	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o700); err != nil {
 		t.Fatal(err)

@@ -43,6 +43,9 @@ jobs:
           "$RUNNER_TEMP/ok" --help
           "$RUNNER_TEMP/ok" destroy --help
           "$RUNNER_TEMP/ok" destroy cluster --help
+          "$RUNNER_TEMP/ok" config --help
+          "$RUNNER_TEMP/ok" config init --help
+          "$RUNNER_TEMP/ok" config show --help
           "$RUNNER_TEMP/ok" cluster --help
           "$RUNNER_TEMP/ok" cluster create --help
           "$RUNNER_TEMP/ok" cluster create requirements
