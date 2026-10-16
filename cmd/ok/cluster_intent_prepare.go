@@ -137,6 +137,9 @@ func finishClusterIntentPrepare(material clusterIntentMaterialized, binaryDigest
 	if err := writeStaticBindingFile(filepath.Join(root, "preparation-receipt.json"), raw); err != nil {
 		return err
 	}
+	if material.RuntimeInputsPath != "" {
+		return finishClusterIntentRunnerHandoff(material, plan, digest.SHA256(raw), stdout)
+	}
 	if _, err := stdout.Write(raw); err != nil {
 		return err
 	}

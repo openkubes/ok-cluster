@@ -167,7 +167,7 @@ func TestClusterIntentPreparationInputsAreModeSpecific(t *testing.T) {
 			if path == yamlPath && mode == "--prepare" {
 				continue
 			}
-			for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config"} {
+			for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config", "runtime-inputs"} {
 				var stdout bytes.Buffer
 				err := run([]string{"up", "--file", path, mode, "--" + name, "/must-not-read"}, &stdout, &bytes.Buffer{})
 				if err == nil || !strings.Contains(err.Error(), "only accepted with YAML --prepare") || stdout.Len() != 0 {

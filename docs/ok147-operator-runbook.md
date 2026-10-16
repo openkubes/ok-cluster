@@ -107,8 +107,8 @@ install the four Job-activation wrapper objects described below.
 
 ## Friendly cluster YAML: offline intent and render only
 
-This is a deliberately incomplete front end, not full-run preparation. It does
-not replace the technical JSON manifest contract above. Start with:
+Without explicit private runtime inputs, this front end produces only static
+preparation. It does not replace the technical JSON manifest contract above. Start with:
 
 ```sh
 ok up cluster-template > cluster.yaml
@@ -155,7 +155,7 @@ ok up --file cluster.yaml --prepare \
   --output /private/new-binding
 ```
 
-Preparation currently performs static binding and derives fresh credential-free
+By default, preparation performs static binding and derives fresh credential-free
 stage artifacts and a verified seven-stage plan, not full-run prepare. It exits non-zero even
 after writing valid partial artifacts.
 No separate binding command is required. The previous `ok up bind` spelling is
@@ -218,7 +218,7 @@ step and is never rewritten when preparation advances.
   This JSON is also emitted on stdout. Network stage input uses the owning
   semantic profile digest, not the raw JSON file digest.
 
-The preparation state is `STATIC_PLAN_BOUND_NO_GO`, not `PREPARED` or
+Without explicit runtime inputs, the preparation state is `STATIC_PLAN_BOUND_NO_GO`, not `PREPARED` or
 provisioning success. `runnerReady=false`, `apiContacted=false`,
 `authorizationConsumed=false` and `mutationAllowed=false`. There is no
 `manifestDigest`; neither fixture nor preparation receipt is accepted as a
@@ -227,13 +227,71 @@ error (non-zero) and never emits `PREPARED` or a live approval digest. The new
 preparation inputs are rejected for JSON, dry-run and live modes. YAML `--live`
 remains blocked. Existing technical JSON execution is unchanged.
 
-**Missing next step:** a reusable authoritative binder for reviewed authority policies, private
-credentials and independent evidence. The successful Candidate used one-off
-operator helpers; those must not be replaced by copying old identities or by
-loosening the runner's evidence requirements. Neither syntax validation nor
-rendering supplies these bindings. Therefore friendly YAML `--prepare` and
-`--live` fail closed without touching terminal markers or opening a runner.
-No successful full-run preparation/provisioning is claimed.
+These static artifacts alone cannot prove private runtime bindings. They must not
+be completed by copying historical Candidate identities/outcomes or loosening the
+runner's evidence requirements. YAML `--live` stays blocked without touching a
+terminal marker or opening an executor.
+
+### Explicit local handoff to the existing runner
+
+To complete local preparation, an operator may explicitly provide references to
+already existing, separately provisioned credentials and trust files:
+
+```sh
+ok up --file cluster.yaml --prepare \
+  --contract /private/reviewed-contract.yaml \
+  --output /private/new-preparation \
+  --runtime-inputs /private/approved-runtime-inputs.json
+```
+
+Use `examples/ok-cli-runtime-inputs.json` as the shape reference, not a runnable
+configuration. The selected JSON must be a regular non-symlink file, exactly 0600,
+at most 64 KiB. All references are explicit absolute paths. Unknown/duplicate
+fields, historical manifests/plans/grants, output overrides and runtime target
+identities are not accepted. This flag is only accepted for YAML `--prepare`, not
+JSON, dry-run, live, render or the compatibility binding subcommand.
+
+The document supplies:
+
+- Separate infrastructure, management, ledger and Stage Authority connection/trust
+  references. No credential is inferred from saved config, issued, rotated or copied.
+- The existing provider-access kubeconfig path. It is verified/materialized only
+  in memory by the existing owner; no Secret is written or submitted.
+- A distinct independent evidence public key. Both evidence and Stage Authority
+  Ed25519 public keys are locally parsed. The evidence key ID is recorded as a
+  preflight pin, not an extension of the existing technical manifest's live gates;
+  the operator must still explicitly select the independently reviewed key at live time.
+
+The shared token/CA parser validates local file material without constructing an
+HTTP client. Four bearer identities must be distinct and private; authority CA
+digests must match the supplied references. This is **not** online authentication,
+token lifetime/RBAC validation, or proof that a matching Stage Authority policy is
+installed. Existing runtime verification still runs again at execution time.
+
+Only the runner-owned manifest builder creates the fresh v3 technical manifest,
+with fixed private runtime/receipt/authorization destinations under this output
+directory. The CLI then calls the existing full-run manifest verifier. Failure
+retains partial output and returns non-zero, never a successful handoff receipt.
+There is no overwrite, automatic replay, grant request or network client.
+
+On successful local verification:
+
+- `full-run-manifest.json` is the normal technical input accepted by the existing
+  runner; no alternate lifecycle execution path is introduced.
+- `runner-handoff-receipt.json` (`ok-cli-cluster-runner-handoff/v1`) and stdout
+  report `PREPARED_NOT_AUTHORIZED`, the existing verifier's manifest digest,
+  static-preparation/runtime-reference digests and independent evidence key ID.
+- `runnerReady=true` means **locally verified input handoff only**. `apiContacted`,
+  `authorizationConsumed`, `mutationAllowed`, `authorityDeploymentVerified` and
+  `liveAuthorized` remain false. Exit zero is not provisioning success.
+- The earlier `preparation-receipt.json` remains its immutable static-only v2
+  snapshot; it is not rewritten to change the result of that earlier phase.
+
+Review authority deployment separately and obtain explicit live approval for the
+generated technical manifest digest. YAML `--live` is still blocked; the existing
+technical JSON live workflow, independent evidence argument, terminal marker,
+immutable outcomes and convergence gates remain unchanged. No live cluster test
+or successful provisioning claim is implied by this handoff.
 
 OS selection remains `spec.profile`. Only the Talos/KubeVirt recipe is currently
 enabled for this bounded preparation path. Flatcar resolver/templates and Ubuntu
