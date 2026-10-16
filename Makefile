@@ -247,6 +247,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@$(SCRIPT_DIR)/.tools/bin/ok up requirements >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up cluster-template >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up render --help >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok up bind --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config init --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config show --help >/dev/null

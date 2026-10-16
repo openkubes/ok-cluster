@@ -64,7 +64,7 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		return true
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" &&
-		(arguments[2] == "render" || arguments[2] == "cluster-template") && containsHelpArgument(arguments[3:]) {
+		(arguments[2] == "render" || arguments[2] == "bind" || arguments[2] == "cluster-template") && containsHelpArgument(arguments[3:]) {
 		writeClusterIntentRenderHelp(stdout)
 		return true
 	}
@@ -249,6 +249,7 @@ Usage:
   ok up cluster-template
   ok up --file cluster.yaml --dry-run
   ok up render --file cluster.yaml --output <new-private-directory>
+  ok up bind --file cluster.yaml --contract <reviewed-contract.yaml> --output <new-private-directory>
   ok up --file <private-manifest.json> --dry-run
   ok up --file <private-manifest.json> --prepare
   ok cluster create requirements

@@ -145,8 +145,49 @@ All generated files, including shell helpers, are mode 0600; directories are
 0700. Generated helpers are not run. The receipt binds rendered-file and owning
 source/profile digests but remains `RENDERED_NO_GO` / `runnerReady=false`.
 
-**Missing next step:** a reusable authoritative binder for Contract identity,
-projection/fixture, seven-stage Plan, reviewed authority policies, private
+### Static Contract/projection binding (still NO-GO)
+
+An operator can now provide an explicit fresh reviewed Contract:
+
+```sh
+ok up bind --file cluster.yaml \
+  --contract /private/reviewed-contract.yaml \
+  --output /private/new-binding
+```
+
+This is the first static binding stage, not full-run prepare. No old Candidate,
+Contract identity, UID, resourceVersion or operation outcome is renamed/copied.
+The supplied Contract must already have exactly the YAML name/namespace, and
+its metadata must contain only those two fields. The operator, not this command,
+supplies enablement/platform intent and authority-domain semantics absent from
+the friendly YAML; no reviewed or live authorization is inferred from the file.
+
+The existing Go Contract canonicalizer uses the owning checkout's versioned
+`internal/contract/testdata/ok141-contract-v3.schema.json` (the existing bounded
+MVP schema, not a new general production API) to compute `R`. There is no
+arbitrary-schema override. The local adapter checks the normalized Contract
+against the resolved recipe: Kubernetes version, infrastructure/provider profile,
+Secret references, topology/sizing, pod/service CIDRs and OS/Golden-image identity.
+Only then does the existing renderer produce its Contract projection. The Go
+`projection.Verify` owner independently verifies its `R`, identity, authority map
+and artifacts. Storage logic is not reimplemented in Go.
+
+Output adds `contract.yaml`, `contract.schema.json`, `contract.canonical.json`,
+the `projection/` artifacts and `binding-receipt.json`. The receipt binds normalized
+YAML intent digest, Contract/schema/R and verified projection. Explicit endpoint
+selection is carried by the normalized YAML and rendered projection, not invented
+as a new Contract field. Original files remain unchanged; output is create-only,
+private and failures retain partial output without replay. No kubeconfig contents,
+tokens, grants, client certificates or existing stage receipts are imported.
+
+The result is `CONTRACT_PROJECTION_BOUND_NO_GO`, not `PREPARED` or provisioning
+success. `runnerReady=false`, `apiContacted=false`, `authorizationConsumed=false`
+and `mutationAllowed=false`. The receipt enumerates missing bindings; it is not
+accepted as a full-run manifest. Friendly YAML `--prepare` and `--live` remain
+blocked. Existing technical JSON execution is unchanged.
+
+**Missing next step:** a reusable authoritative binder for execution fixture,
+seven-stage Plan, reviewed authority policies, private
 credentials and independent evidence. The successful Candidate used one-off
 operator helpers; those must not be replaced by copying old identities or by
 loosening the runner's evidence requirements. Neither syntax validation nor
