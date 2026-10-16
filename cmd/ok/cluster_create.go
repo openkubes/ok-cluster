@@ -192,10 +192,7 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 				}
 			})
 		}
-		if err := runClusterIntentBind(ctx, material, stdout, stderr); err != nil {
-			return err
-		}
-		return errors.New("YAML preparation incomplete (NO-GO): static Contract/projection receipt written; full Plan, fixture, authority, credential and independent evidence bindings are still required; no live approval digest was produced")
+		return runClusterIntentPrepare(ctx, material, *yamlInputs["output"], stdout, stderr)
 	}
 	if isYAML {
 		return validateClusterYAMLWorkflow(manifestPath, *dryRun, stdout)

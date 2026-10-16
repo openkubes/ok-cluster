@@ -155,8 +155,9 @@ ok up --file cluster.yaml --prepare \
   --output /private/new-binding
 ```
 
-Preparation currently performs only the first static binding stage, not full-run
-prepare, and therefore exits non-zero even after writing valid partial artifacts.
+Preparation currently performs static binding and derives fresh credential-free
+local execution inputs, not full-run prepare. It therefore exits non-zero even
+after writing valid partial artifacts.
 No separate binding command is required. The previous `ok up bind` spelling is
 retained only for compatibility with its existing static-only receipt/exit behavior;
 it is not an additional operator step. No old Candidate,
@@ -184,16 +185,36 @@ as a new Contract field. Original files remain unchanged; output is create-only,
 private and failures retain partial output without replay. No kubeconfig contents,
 tokens, grants, client certificates or existing stage receipts are imported.
 
-The result is `CONTRACT_PROJECTION_BOUND_NO_GO`, not `PREPARED` or provisioning
-success. `runnerReady=false`, `apiContacted=false`, `authorizationConsumed=false`
-and `mutationAllowed=false`. The receipt enumerates missing bindings; it is not
-accepted as a full-run manifest. YAML `--prepare` returns an explicit incomplete
+The static snapshot in `binding-receipt.json` remains
+`CONTRACT_PROJECTION_BOUND_NO_GO`; its missing-bindings list describes that earlier
+step and is never rewritten when preparation advances.
+
+`--prepare` additionally writes, internally and create-only:
+
+- `execution-fixture.json` (`ok-cli-local-execution-fixture/v1`): binds the verified
+  static receipt, Contract identity/R and actual running local CLI binary digest.
+  Embedded version/revision are build metadata, not source attestation or proof of
+  a published image. `unknown`/development metadata is recorded honestly. This is
+  a content identity, not a unique attempt ID or authorization.
+- `provider-access-policy.json`: produced and validated by the existing submission
+  policy owner, bound to this fixture digest, Contract/R and verified projection's
+  management/provider authorities. It describes only the exact immutable Secret
+  shape; it contains no credential data and neither materializes nor creates a Secret.
+- `preparation-receipt.json` (`ok-cli-cluster-preparation/v1`): the current partial
+  preparation snapshot, with the static receipt, fixture and policy digests and
+  the remaining missing bindings. This JSON is also emitted on stdout.
+
+The preparation state is `LOCAL_EXECUTION_INPUTS_BOUND_NO_GO`, not `PREPARED` or
+provisioning success. `runnerReady=false`, `apiContacted=false`,
+`authorizationConsumed=false` and `mutationAllowed=false`. There is no
+`manifestDigest`; neither fixture nor preparation receipt is accepted as a
+full-run manifest. YAML `--prepare` returns an explicit incomplete
 error (non-zero) and never emits `PREPARED` or a live approval digest. The new
 preparation inputs are rejected for JSON, dry-run and live modes. YAML `--live`
 remains blocked. Existing technical JSON execution is unchanged.
 
-**Missing next step:** a reusable authoritative binder for execution fixture,
-seven-stage Plan, reviewed authority policies, private
+**Missing next step:** a reusable authoritative binder for enablement/network/target-access
+artifacts, seven-stage Plan, reviewed authority policies, private
 credentials and independent evidence. The successful Candidate used one-off
 operator helpers; those must not be replaced by copying old identities or by
 loosening the runner's evidence requirements. Neither syntax validation nor
