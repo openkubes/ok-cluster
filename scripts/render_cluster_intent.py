@@ -127,7 +127,7 @@ def main():
         'apiContacted': False, 'authorizationConsumed': False, 'mutationAllowed': False,
         'runnerReady': False, 'collisionChecked': False, 'generatedHelpersExecuted': False,
         'nextAction': ('Static Contract/projection generated; full Plan/fixture/authority/credential binding is still missing.' if options.bind else
-                       'Use ok up bind with an explicit reviewed Contract for static R/projection binding; full Plan/fixture/authority/credential binding is still missing.') +
+                       'Use ok up --file <cluster.yaml> --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>; preparation remains incomplete until full Plan/fixture/authority/credential binding exists.') +
                       ' Do not execute generated helpers or apply these files; this is not full-run prepare or live approval.'}
     path = output / 'render-receipt.json'
     with path.open('x') as stream:

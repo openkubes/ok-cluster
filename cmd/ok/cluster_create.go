@@ -141,6 +141,11 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact digest emitted by --prepare")
 	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent evidence public key")
 	terminalMarker := flags.String("terminal-marker", "", "new create-only private terminal marker")
+	// YAML preparation inputs are local-only; never passed to the JSON runner.
+	yamlInputs := map[string]*string{}
+	for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config"} {
+		yamlInputs[name] = flags.String(name, "", "local YAML preparation input")
+	}
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -162,7 +167,37 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 	if !*live && (*execute || *expectedManifestDigest != "" || *evidencePublicKey != "" || *terminalMarker != "") {
 		return errors.New("--execute and live-only inputs require --live")
 	}
-	if isClusterYAMLFile(manifestPath) {
+	yamlInputSelected := false
+	flags.Visit(func(f *flag.Flag) {
+		if _, ok := yamlInputs[f.Name]; ok {
+			yamlInputSelected = true
+		}
+	})
+	isYAML := isClusterYAMLFile(manifestPath)
+	if yamlInputSelected && (!isYAML || !*prepare) {
+		return errors.New("--contract, --output and local source paths are only accepted with YAML --prepare")
+	}
+	if isYAML && *prepare {
+		if _, err := readClusterIntent(manifestPath); err != nil {
+			return err
+		}
+		if *yamlInputs["contract"] == "" || *yamlInputs["output"] == "" {
+			return errors.New("YAML preparation is NO-GO: currently requires an explicit reviewed --contract and new --output directory; full runner preparation is not yet implemented")
+		}
+		material := []string{"--file", manifestPath}
+		for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config"} {
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name == name {
+					material = append(material, "--"+name, *yamlInputs[name])
+				}
+			})
+		}
+		if err := runClusterIntentBind(ctx, material, stdout, stderr); err != nil {
+			return err
+		}
+		return errors.New("YAML preparation incomplete (NO-GO): static Contract/projection receipt written; full Plan, fixture, authority, credential and independent evidence bindings are still required; no live approval digest was produced")
+	}
+	if isYAML {
 		return validateClusterYAMLWorkflow(manifestPath, *dryRun, stdout)
 	}
 	if *live {

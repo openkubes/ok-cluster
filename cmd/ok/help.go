@@ -249,7 +249,7 @@ Usage:
   ok up cluster-template
   ok up --file cluster.yaml --dry-run
   ok up render --file cluster.yaml --output <new-private-directory>
-  ok up bind --file cluster.yaml --contract <reviewed-contract.yaml> --output <new-private-directory>
+  ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>
   ok up --file <private-manifest.json> --dry-run
   ok up --file <private-manifest.json> --prepare
   ok cluster create requirements
@@ -266,8 +266,11 @@ Usage:
 "ok up" is an exact shorthand for "ok cluster create", including preparation
 subcommands and legacy contract-planning flags. It does not select a mode, infer
 credentials from local config, renew access, or bypass live approval.
-Friendly YAML supports local intent validation/render only; see "ok up render --help".
-It is NOT runner-ready: YAML --prepare/--live fail closed until full binding exists.
+Friendly YAML --prepare currently performs local Contract/projection checks only,
+requires an explicit reviewed --contract and new --output directory, and exits
+non-zero with a NO-GO receipt because full runner preparation is still incomplete.
+Optional local paths: --lifecycle-root, --ok-linux-path, --config (or saved paths).
+YAML --live remains blocked. No separate binding command is needed.
 All options below work with either spelling; technical JSON manifest/evidence requirements
 and operation receipts are unchanged. Bare "ok up" only displays this help.
 

@@ -174,7 +174,7 @@ func validateClusterYAMLWorkflow(path string, dryRun bool, stdout io.Writer) err
 		CollisionChecked      bool   `json:"collisionChecked"`
 		NextAction            string `json:"nextAction"`
 	}{"ok-cli-cluster-intent-validation/v1", "INTENT_VALIDATED_NO_GO", intent.Metadata.Name, false, false, false, false, false,
-		"ok up render --file <cluster.yaml> --output <new-private-directory>; local validation is not full-run preparation, a reservation or live approval"})
+		"ok up --file <cluster.yaml> --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>; currently produces partial local artifacts and exits incomplete, not a reservation or live approval"})
 }
 
 func runClusterIntentRender(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -426,7 +426,7 @@ Usage:
   ok up cluster-template
   ok up --file cluster.yaml --dry-run
   ok up render --file cluster.yaml --output <new-private-directory> [paths]
-  ok up bind --file cluster.yaml --contract <fresh-reviewed-contract.yaml> --output <new-private-directory> [paths]
+  ok up --file cluster.yaml --prepare --contract <fresh-reviewed-contract.yaml> --output <new-private-directory> [paths]
 
 Paths: --lifecycle-root <trusted-checkout> --ok-linux-path <profile-checkout>
 or saved local paths from ok config init; --config selects an explicit file.
@@ -439,11 +439,12 @@ Explicit endpoint/podCIDR/serviceCIDR are required; no auto allocation or collis
 check is performed. The output is create-only, private and remains RENDERED_NO_GO.
 Generated shell helpers are not executable and are never run.
 
-Bind computes Contract R through the owning versioned canonicalizer/schema,
+YAML --prepare computes Contract R through the owning versioned canonicalizer/schema,
 checks YAML/Contract/resolved-profile agreement and verifies the owning projection.
 It does not rename/copy historical Contract metadata or invent enablement/platform intent.
 It remains CONTRACT_PROJECTION_BOUND_NO_GO: full Plan/fixture/authority/credential
-binding is still required. YAML --prepare and --live continue to fail closed.
+binding is still required. Preparation exits non-zero after writing this partial
+receipt, not PREPARED or a live approval digest. YAML --live remains blocked.
 No API client, credential issuance, authority rebinding or live stage is opened.
 Existing technical JSON manifests keep their original workflow and receipts.
 `)

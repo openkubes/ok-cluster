@@ -754,7 +754,10 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
 		productFlags := hasClusterCreateProductFlag(arguments[2:])
-		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:])
+		// --contract also supplies reviewed YAML intent to product preparation.
+		// All other legacy flags remain forbidden with the product workflow.
+		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:]) ||
+			(!productFlags && hasAnyCommandFlag(arguments[2:], "--contract"))
 		if productFlags && legacyFlags {
 			return errors.New("product --file workflow flags cannot be combined with legacy --contract workflow flags")
 		}
@@ -934,7 +937,7 @@ func hasClusterCreateProductFlag(arguments []string) bool {
 
 func hasLegacyClusterCreateFlag(arguments []string) bool {
 	return hasAnyCommandFlag(arguments,
-		"--contract", "--schema", "--projection-manifest", "--projection-root", "--authorization",
+		"--schema", "--projection-manifest", "--projection-root", "--authorization",
 		"--authorization-key", "--evaluation-time", "--ledger-inspect", "--ledger-api-endpoint",
 		"--ledger-token-file", "--ledger-ca-file",
 	)
