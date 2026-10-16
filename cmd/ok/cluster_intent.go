@@ -196,14 +196,21 @@ func validateClusterYAMLWorkflow(path string, dryRun bool, stdout io.Writer) err
 }
 
 func runClusterIntentRender(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
-	return runClusterIntentMaterialize(ctx, arguments, stdout, stderr, false)
+	return runClusterIntentMaterialize(ctx, arguments, stdout, stderr, false, nil)
 }
 
 func runClusterIntentBind(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
-	return runClusterIntentMaterialize(ctx, arguments, stdout, stderr, true)
+	return runClusterIntentMaterialize(ctx, arguments, stdout, stderr, true, nil)
 }
 
-func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout, stderr io.Writer, bind bool) error {
+type clusterIntentMaterialized struct {
+	Root, Output string
+	Canonical    contract.Result
+	Binding      clusterIntentBindingReceipt
+	Raw          []byte
+}
+
+func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout, stderr io.Writer, bind bool, finish func(clusterIntentMaterialized) error) error {
 	action := "render"
 	if bind {
 		action = "bind"
@@ -387,6 +394,9 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 	if err := writeStaticBindingFile(filepath.Join(outputPath, "binding-receipt.json"), result.Bytes()); err != nil {
 		return err
 	}
+	if finish != nil {
+		return finish(clusterIntentMaterialized{Root: rootPath, Output: outputPath, Canonical: canonical, Binding: receipt, Raw: result.Bytes()})
+	}
 	_, err = stdout.Write(result.Bytes())
 	return err
 }
@@ -444,11 +454,14 @@ Generated shell helpers are not executable and are never run.
 YAML --prepare computes Contract R through the owning versioned canonicalizer/schema,
 checks YAML/Contract/resolved-profile agreement and verifies the owning projection.
 It does not rename/copy historical Contract metadata or invent enablement/platform intent.
-It also derives a credential-free local execution fixture and provider-access policy.
-The fixture binds this CLI binary digest, embedded version/revision and static inputs;
+It also derives credential-free stage artifacts and a verified seven-stage plan
+from profiles/cli/talos-kubevirt-mvp-v1.json in the trusted lifecycle checkout.
+The reviewed Contract E/P revisions must match the recipe; no revision is invented.
+The fixture binds the recipe, this CLI binary digest, build metadata and static inputs;
 it is not image publication proof or a unique execution attempt.
-The preparation receipt remains LOCAL_EXECUTION_INPUTS_BOUND_NO_GO: full Plan,
-stage artifacts, authority, credential and independent evidence bindings are missing.
+The preparation receipt remains STATIC_PLAN_BOUND_NO_GO: authority, credential,
+full-run manifest and independent evidence bindings are still missing.
+Flatcar and Ubuntu do not yet have bounded runner recipes; no Talos fallback.
 Preparation exits non-zero, not PREPARED or a live approval digest. YAML --live remains blocked.
 No API client, credential issuance, authority rebinding or live stage is opened.
 Existing technical JSON manifests keep their original workflow and receipts.

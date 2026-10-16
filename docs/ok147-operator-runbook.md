@@ -156,7 +156,7 @@ ok up --file cluster.yaml --prepare \
 ```
 
 Preparation currently performs static binding and derives fresh credential-free
-local execution inputs, not full-run prepare. It therefore exits non-zero even
+stage artifacts and a verified seven-stage plan, not full-run prepare. It exits non-zero even
 after writing valid partial artifacts.
 No separate binding command is required. The previous `ok up bind` spelling is
 retained only for compatibility with its existing static-only receipt/exit behavior;
@@ -191,8 +191,10 @@ step and is never rewritten when preparation advances.
 
 `--prepare` additionally writes, internally and create-only:
 
-- `execution-fixture.json` (`ok-cli-local-execution-fixture/v1`): binds the verified
-  static receipt, Contract identity/R and actual running local CLI binary digest.
+- `runner-recipe.json`: a private copy of the versioned Talos/KubeVirt recipe from
+  the trusted lifecycle checkout. Contract E/P revisions must match this recipe.
+- `execution-fixture.json` (`ok-cli-local-execution-fixture/v2`): binds the verified
+  static receipt, recipe digest, Contract identity/R and local CLI binary digest.
   Embedded version/revision are build metadata, not source attestation or proof of
   a published image. `unknown`/development metadata is recorded honestly. This is
   a content identity, not a unique attempt ID or authorization.
@@ -200,11 +202,23 @@ step and is never rewritten when preparation advances.
   policy owner, bound to this fixture digest, Contract/R and verified projection's
   management/provider authorities. It describes only the exact immutable Secret
   shape; it contains no credential data and neither materializes nor creates a Secret.
-- `preparation-receipt.json` (`ok-cli-cluster-preparation/v1`): the current partial
+- `enablement.yaml`, `network-profile.json`, `target-access.yaml`: fresh artifacts
+  from the reviewed recipe. Existing submission/network owners verify the emitted
+  files. Cilium semantics and all 16 target-access objects retain the happy-run
+  rules/scopes; no RBAC is installed. HRP identity is derived for the new Cluster.
+- `lifecycle-observation.json`, `runtime-binding-requirements.json`: fresh static
+  requirements, not runtime evidence, successful convergence or a fabricated UID.
+- `staged-plan.json`, `verified-staged-plan.json`: ordinary seven-stage NO-GO plan
+  and its verified binding. The existing stageplan owner constructs and re-loads
+  it with all eight input digests. No retry/attempt/recovery identity or deferred
+  network mode is inferred. Worker-readiness contracts are not expanded.
+- `preparation-receipt.json` (`ok-cli-cluster-preparation/v2`): the current partial
   preparation snapshot, with the static receipt, fixture and policy digests and
-  the remaining missing bindings. This JSON is also emitted on stdout.
+  plan semantic/raw digests, raw artifact digests and remaining missing bindings.
+  This JSON is also emitted on stdout. Network stage input uses the owning
+  semantic profile digest, not the raw JSON file digest.
 
-The preparation state is `LOCAL_EXECUTION_INPUTS_BOUND_NO_GO`, not `PREPARED` or
+The preparation state is `STATIC_PLAN_BOUND_NO_GO`, not `PREPARED` or
 provisioning success. `runnerReady=false`, `apiContacted=false`,
 `authorizationConsumed=false` and `mutationAllowed=false`. There is no
 `manifestDigest`; neither fixture nor preparation receipt is accepted as a
@@ -213,14 +227,19 @@ error (non-zero) and never emits `PREPARED` or a live approval digest. The new
 preparation inputs are rejected for JSON, dry-run and live modes. YAML `--live`
 remains blocked. Existing technical JSON execution is unchanged.
 
-**Missing next step:** a reusable authoritative binder for enablement/network/target-access
-artifacts, seven-stage Plan, reviewed authority policies, private
+**Missing next step:** a reusable authoritative binder for reviewed authority policies, private
 credentials and independent evidence. The successful Candidate used one-off
 operator helpers; those must not be replaced by copying old identities or by
 loosening the runner's evidence requirements. Neither syntax validation nor
 rendering supplies these bindings. Therefore friendly YAML `--prepare` and
 `--live` fail closed without touching terminal markers or opening a runner.
 No successful full-run preparation/provisioning is claimed.
+
+OS selection remains `spec.profile`. Only the Talos/KubeVirt recipe is currently
+enabled for this bounded preparation path. Flatcar resolver/templates and Ubuntu
+templates exist but do not yet supply a full runner projection/bootstrap/convergence
+contract; those profiles fail closed, never fall back to Talos. See
+`profiles/cli/README.md` for the scope and baseline provenance.
 
 Existing technical JSON inputs retain all previous modes and receipts (including
 JSON manifests using a `.yaml`/`.yml` filename). No existing Candidate, receipt,
