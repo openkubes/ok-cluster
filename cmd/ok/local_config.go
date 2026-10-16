@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,12 +13,14 @@ import (
 	"runtime"
 
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
+	"golang.org/x/term"
 )
 
 const localConfigFormat = "ok-cli-paths/v1"
 
 // Local configuration selects paths, never credentials, cluster names or authority.
-// Only destroy consumes it; create remains bound to its reviewed manifest.
+// Destroy and offline YAML consume only their relevant paths. Runtime create
+// credential references are never inferred from this general configuration.
 type localCLIConfig struct {
 	Format               string `json:"format"`
 	LifecycleRoot        string `json:"lifecycleRoot"`
@@ -97,7 +101,16 @@ func loadLocalConfig(path string) (localCLIConfig, error) {
 	return config, nil
 }
 
-func runConfig(arguments []string, stdout, stderr io.Writer) error {
+type configInitRuntime struct {
+	input       io.Reader
+	interactive bool
+}
+
+func runConfig(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	return runConfigWithRuntime(ctx, arguments, stdout, stderr, configInitRuntime{input: os.Stdin, interactive: term.IsTerminal(int(os.Stdin.Fd()))})
+}
+
+func runConfigWithRuntime(ctx context.Context, arguments []string, stdout, stderr io.Writer, runtime configInitRuntime) error {
 	if len(arguments) == 0 || (arguments[0] != "init" && arguments[0] != "show") {
 		return errors.New("use ok config init or ok config show; see ok config --help")
 	}
@@ -105,7 +118,9 @@ func runConfig(arguments []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	path := flags.String("config", "", "Local path configuration file (default: user configuration directory/ok/config.json)")
 	config := localCLIConfig{Format: localConfigFormat}
+	interactive := false
 	if arguments[0] == "init" {
+		flags.BoolVar(&interactive, "interactive", false, "Prompt for missing paths and require confirmation on a terminal")
 		flags.StringVar(&config.LifecycleRoot, "lifecycle-root", "", "Trusted ok-cluster checkout")
 		flags.StringVar(&config.OKLinuxPath, "ok-linux-path", "", "ok-linux profile checkout")
 		flags.StringVar(&config.ClustersDir, "clusters-dir", "", "Parent of rendered cluster/evidence directories")
@@ -141,6 +156,39 @@ func runConfig(arguments []string, stdout, stderr io.Writer) error {
 			Config localCLIConfig `json:"config"`
 		}{resolved, config})
 	}
+	if _, err := os.Lstat(resolved); err == nil {
+		return errors.New("configuration is create-only; existing files are never overwritten")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	pathFlags := 0
+	interactiveSelected := false
+	explicitEmptyPath := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "interactive" {
+			interactiveSelected = true
+		}
+		if f.Name != "config" && f.Name != "interactive" {
+			pathFlags++
+			if f.Value.String() == "" {
+				explicitEmptyPath = true
+			}
+		}
+	})
+	if explicitEmptyPath {
+		return errors.New("explicit path flags must not be empty")
+	}
+	prompt := interactive || (runtime.interactive && pathFlags == 0 && !interactiveSelected)
+	var reader *bufio.Reader
+	if prompt {
+		if !runtime.interactive || runtime.input == nil {
+			return errors.New("interactive config init requires a terminal; scripts must supply all five path flags")
+		}
+		reader = bufio.NewReaderSize(runtime.input, 4096)
+		if err := promptConfigPaths(ctx, &config, reader, stderr); err != nil {
+			return err
+		}
+	}
 	for _, value := range []*string{&config.LifecycleRoot, &config.OKLinuxPath, &config.ClustersDir, &config.ManagementKubeconfig, &config.ProviderKubeconfig} {
 		if *value == "" {
 			return errors.New("config init requires all five path flags; see ok config init --help")
@@ -175,6 +223,14 @@ func runConfig(arguments []string, stdout, stderr io.Writer) error {
 	if os.SameFile(management, provider) {
 		return errors.New("management and provider must be separate kubeconfigs")
 	}
+	if prompt {
+		if err := confirmConfigPaths(ctx, config, resolved, reader, stderr); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(resolved), 0o700); err != nil {
 		return err
 	}
@@ -203,6 +259,8 @@ func writeConfigHelp(output io.Writer) {
 	fmt.Fprint(output, `Save local paths once; never stores credentials or authorizes an operation
 
 Usage:
+  ok config init
+  ok config init --interactive [path flags]
   ok config init --lifecycle-root <trusted-checkout> --ok-linux-path <profiles> \
     --clusters-dir <render-parent> --management-kubeconfig <file> --provider-kubeconfig <file>
   ok config show
@@ -210,12 +268,17 @@ Usage:
 Both accept --config <file>. The default is <OS user configuration directory>/ok/config.json
 (macOS: ~/Library/Application Support/ok/config.json;
 Linux: $XDG_CONFIG_HOME/ok/config.json or ~/.config/ok/config.json).
-Init is local, create-only, and requires all five paths. It never overwrites an
+Bare init on a terminal prompts for all five paths. --interactive prompts only
+for missing paths, then displays all paths for an explicit ok/no confirmation
+(empty/no cancels). Enter literal paths; ~/ expands only in prompted answers.
+Without a terminal, supply all five path flags; --interactive rejects piped input.
+Init is local and create-only. It never overwrites an
 existing file, copies credential contents, invokes the lifecycle or contacts an API.
 Config file/directory must be private (0600/0700); symlinks are not accepted.
 
 Destroy uses these explicitly saved paths when flags are omitted. Command flags
 override saved paths; --cluster-dir overrides clustersDir for one invocation.
-Create and expert runner commands do not read this configuration.
+YAML uses only saved lifecycle/ok-linux source paths. Runtime credentials are
+never inferred from config; the explicit --runtime-inputs boundary is unchanged.
 `)
 }
