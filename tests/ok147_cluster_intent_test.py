@@ -106,7 +106,7 @@ class IntentRenderTests(unittest.TestCase):
         prepared = self.bind(self.reviewed_contract(), prepare=True, saved_paths=True)
         self.assertNotEqual(prepared.returncode, 0)
         self.assertIn('preparation incomplete (NO-GO)', prepared.stderr)
-        self.assertEqual(json.loads(prepared.stdout)['state'], 'LOCAL_EXECUTION_INPUTS_BOUND_NO_GO')
+        self.assertEqual(json.loads(prepared.stdout)['state'], 'STATIC_PLAN_BOUND_NO_GO')
         self.assertFalse(management.exists())
         self.assertFalse(provider.exists())
         self.assertFalse(self.marker.exists())
@@ -123,6 +123,7 @@ class IntentRenderTests(unittest.TestCase):
         spec['topology']['workers']['machine']['disk'] = '20Gi'
         spec['connectivity']['podCIDR'] = '10.42.0.0/16'
         spec['connectivity']['serviceCIDR'] = '10.96.0.0/20'
+        spec['platform']['revision'] = 'sha256:2956184005f4860607e91672fce82164095dee6ebcbe57e5af883951a199c427'
         return contract
 
     def bind(self, contract, *, prepare=False, canonical=False, saved_paths=False):
@@ -197,18 +198,20 @@ class IntentRenderTests(unittest.TestCase):
                 self.assertIn('preparation incomplete (NO-GO)', result.stderr)
                 receipt = json.loads(result.stdout)
                 self.assertEqual(receipt, json.loads((self.output / 'preparation-receipt.json').read_text()))
-                self.assertEqual(receipt['state'], 'LOCAL_EXECUTION_INPUTS_BOUND_NO_GO')
-                self.assertEqual(receipt['format'], 'ok-cli-cluster-preparation/v1')
+                self.assertEqual(receipt['state'], 'STATIC_PLAN_BOUND_NO_GO')
+                self.assertEqual(receipt['format'], 'ok-cli-cluster-preparation/v2')
                 static = json.loads((self.output / 'binding-receipt.json').read_text())
                 self.assertEqual(receipt['bindingReceiptDigest'], 'sha256:' + hashlib.sha256((self.output / 'binding-receipt.json').read_bytes()).hexdigest())
                 self.assertEqual(receipt['contractIdentity'], static['contractIdentity'])
                 self.assertEqual(receipt['intentRevision'], static['intentRevision'])
                 fixture = json.loads((self.output / 'execution-fixture.json').read_text())
-                self.assertEqual(fixture['format'], 'ok-cli-local-execution-fixture/v1')
+                self.assertEqual(fixture['format'], 'ok-cli-local-execution-fixture/v2')
                 self.assertEqual(fixture['authorizationState'], 'NO-GO')
                 self.assertEqual(fixture['contractIdentity'], receipt['contractIdentity'])
                 self.assertEqual(fixture['intentRevision'], receipt['intentRevision'])
                 self.assertEqual(fixture['bindingReceiptDigest'], receipt['bindingReceiptDigest'])
+                self.assertEqual(fixture['runnerRecipeDigest'], receipt['runnerRecipeDigest'])
+                self.assertEqual(receipt['runnerRecipeDigest'], 'sha256:' + hashlib.sha256((ROOT / 'profiles/cli/talos-kubevirt-mvp-v1.json').read_bytes()).hexdigest())
                 self.assertEqual(fixture['runner']['executionMode'], 'local-cli')
                 cli_version = subprocess.run([str(BINARY), 'version'], capture_output=True, text=True,
                     check=True, env=self.env, cwd=self.home, timeout=10).stdout.split()
@@ -228,6 +231,40 @@ class IntentRenderTests(unittest.TestCase):
                     'name': 'external-infra-kubeconfig-my-cluster', 'type': 'Opaque', 'dataKey': 'kubeconfig', 'immutable': True})
                 self.assertEqual(receipt['providerAccessPolicyDigest'], 'sha256:' + hashlib.sha256((self.output / 'provider-access-policy.json').read_bytes()).hexdigest())
                 self.assertNotIn('fresh execution fixture', receipt['missingBindings'])
+                self.assertNotIn('seven-stage Plan', receipt['missingBindings'])
+                plan = json.loads((self.output / 'staged-plan.json').read_text())
+                verified = json.loads((self.output / 'verified-staged-plan.json').read_text())
+                self.assertEqual(plan['format'], 'ok147-staged-execution-plan/v1')
+                self.assertEqual(plan['authorizationState'], 'NO-GO')
+                self.assertEqual(plan['completionMode'], 'bare-cluster-mvp/v1')
+                self.assertEqual(plan['contractIdentity'], receipt['contractIdentity'])
+                self.assertEqual(plan['executionFixture'], receipt['executionFixtureDigest'])
+                network_profile = json.loads((self.output / 'network-profile.json').read_text())
+                semantic_network_digest = 'sha256:' + hashlib.sha256(json.dumps(network_profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                projection_inputs = {('projection.provider-prerequisites' if a['name'] == 'ok-infra-prerequisites.yaml' else 'projection.cluster-lifecycle'): a['digest']
+                    for a in static['projection']['artifacts'] if a['name'] in ('ok-infra-prerequisites.yaml', 'ok-mgmt-lifecycle.yaml')}
+                raw_inputs = {'stage.provider-access': 'provider-access-policy.json', 'stage.lifecycle-observation': 'lifecycle-observation.json',
+                    'stage.enablement': 'enablement.yaml', 'stage.runtime-binding': 'runtime-binding-requirements.json', 'stage.target-access': 'target-access.yaml'}
+                for stage in plan['stages']:
+                    for item in stage['inputs']:
+                        if item['name'] in raw_inputs:
+                            self.assertEqual(item['digest'], 'sha256:' + hashlib.sha256((self.output / raw_inputs[item['name']]).read_bytes()).hexdigest())
+                        elif item['name'] == 'stage.network-observation':
+                            self.assertEqual(item['digest'], semantic_network_digest)
+                        else:
+                            self.assertEqual(item['digest'], projection_inputs[item['name']])
+                self.assertEqual(receipt['planDigest'], verified['planDigest'])
+                self.assertEqual(receipt['planRawDigest'], 'sha256:' + hashlib.sha256((self.output / 'staged-plan.json').read_bytes()).hexdigest())
+                self.assertEqual([s['id'] for s in plan['stages']], ['provider-prerequisites', 'cluster-lifecycle', 'lifecycle-observation', 'enablement', 'network-observation', 'runtime-binding', 'target-access'])
+                self.assertNotIn('networkObservationMode', plan)
+                self.assertNotIn('executionAttemptDigest', plan)
+                for name, digest in receipt['stageArtifacts'].items():
+                    self.assertEqual(digest, 'sha256:' + hashlib.sha256((self.output / name).read_bytes()).hexdigest())
+                enablement = yaml.safe_load((self.output / 'enablement.yaml').read_text())
+                target_access = list(yaml.safe_load_all((self.output / 'target-access.yaml').read_text()))
+                self.assertEqual(len(target_access), 16)
+                self.assertEqual(enablement['metadata']['annotations']['openkubes.io/execution-fixture'], receipt['executionFixtureDigest'])
+                self.assertFalse((self.output / 'runtime-binding.json').exists())
                 for path in self.output.rglob('*'):
                     self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
                 for field in ('runnerReady', 'mutationAllowed', 'apiContacted', 'authorizationConsumed'):
@@ -260,6 +297,35 @@ class IntentRenderTests(unittest.TestCase):
         for path in self.output.rglob('*'):
             if path.is_file():
                 self.assertNotIn(b'my-cluster', path.read_bytes())
+        self.assertFalse(self.marker.exists())
+
+    def test_unsupported_os_profiles_never_fall_back_to_talos(self):
+        original = self.input.read_text()
+        for profile in ('flatcar-kubevirt-mvp', 'ubuntu-kubevirt-mvp'):
+            self.input.write_text(original.replace('talos-kubevirt-mvp', profile))
+            for mode in ('--dry-run', '--prepare', '--live'):
+                result = subprocess.run([str(BINARY), 'up', '--file', str(self.input), mode],
+                    capture_output=True, text=True, env=self.env, cwd=self.home, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+            self.assertFalse(self.output.exists())
+        self.assertFalse(self.marker.exists())
+
+    def test_recipe_revision_mismatch_keeps_partial_static_output_without_replay(self):
+        contract = self.reviewed_contract()
+        contract['spec']['platform']['revision'] = 'sha256:' + 'e' * 64
+        result = self.bind(contract, prepare=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('runner recipe differs', result.stderr)
+        self.assertTrue((self.output / 'binding-receipt.json').is_file())
+        self.assertFalse((self.output / 'execution-fixture.json').exists())
+        self.assertFalse((self.output / 'preparation-receipt.json').exists())
+        before = {str(p.relative_to(self.output)): p.read_bytes() for p in self.output.rglob('*') if p.is_file()}
+        retry = self.bind(self.reviewed_contract(), prepare=True)
+        self.assertNotEqual(retry.returncode, 0)
+        self.assertEqual(retry.stdout, '')
+        self.assertEqual(before, {str(p.relative_to(self.output)): p.read_bytes() for p in self.output.rglob('*') if p.is_file()})
         self.assertFalse(self.marker.exists())
 
     def test_prepare_rejects_contract_drift_before_output(self):

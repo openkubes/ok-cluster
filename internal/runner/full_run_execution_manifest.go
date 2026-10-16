@@ -31,6 +31,12 @@ const (
 	maximumFullRunExecutionManifestBytes    = 1024 * 1024
 )
 
+// FullRunStaticTargetIdentityDigest is only a preflight placeholder. The live
+// runner still requires a target identity bound to durable lifecycle evidence.
+func FullRunStaticTargetIdentityDigest() string {
+	return digest.SHA256([]byte("ok147-full-run-lifecycle-derived-target"))
+}
+
 type fullRunPlanDocument struct {
 	Path     string                          `json:"path"`
 	Expected postRuntimePlanExpectedDocument `json:"expected"`
@@ -699,7 +705,7 @@ func verifyFullRunStaticArtifacts(document fullRunExecutionManifestDocument, pla
 	}); err != nil {
 		return errors.New("verify full-run enablement artifact")
 	}
-	targetIdentity := digest.SHA256([]byte("ok147-full-run-lifecycle-derived-target"))
+	targetIdentity := FullRunStaticTargetIdentityDigest()
 	targetAccessStage, _, err := plan.Stage("target-access")
 	if err != nil || len(targetAccessStage.Inputs) != 1 || targetAccessStage.Inputs[0].Name != "stage.target-access" {
 		return errors.New("full-run target-access input is invalid")

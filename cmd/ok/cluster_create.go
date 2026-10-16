@@ -192,7 +192,7 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 				}
 			})
 		}
-		return runClusterIntentPrepare(ctx, material, *yamlInputs["output"], stdout, stderr)
+		return runClusterIntentPrepare(ctx, material, stdout, stderr)
 	}
 	if isYAML {
 		return validateClusterYAMLWorkflow(manifestPath, *dryRun, stdout)

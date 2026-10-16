@@ -266,10 +266,13 @@ Usage:
 "ok up" is an exact shorthand for "ok cluster create", including preparation
 subcommands and legacy contract-planning flags. It does not select a mode, infer
 credentials from local config, renew access, or bypass live approval.
-Friendly YAML --prepare currently checks local Contract/projection inputs and
-generates a credential-free local execution fixture and provider-access policy. It
+Friendly YAML --prepare checks local Contract/projection inputs and generates
+credential-free stage artifacts and a verified seven-stage NO-GO plan from the
+versioned talos-kubevirt-mvp recipe (only its reviewed E/P revisions). It
 requires an explicit reviewed --contract and new --output directory, and exits
-non-zero with a NO-GO receipt because full runner preparation is still incomplete.
+non-zero with a NO-GO receipt: authority/credential and full manifest/evidence bindings
+are still incomplete. Flatcar and Ubuntu templates exist, but their bounded runner
+integration is not enabled; these profiles do not fall back to Talos.
 Optional local paths: --lifecycle-root, --ok-linux-path, --config (or saved paths).
 YAML --live remains blocked. No separate binding command is needed.
 All options below work with either spelling; technical JSON manifest/evidence requirements

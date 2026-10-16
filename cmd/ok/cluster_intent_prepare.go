@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/openkubes/ok-cluster/internal/contract"
 	"github.com/openkubes/ok-cluster/internal/digest"
+	"github.com/openkubes/ok-cluster/internal/runnerprofile"
 	"github.com/openkubes/ok-cluster/internal/submission"
 )
 
@@ -32,6 +32,7 @@ type clusterIntentExecutionFixture struct {
 	ContractIdentity     contract.Identity     `json:"contractIdentity"`
 	IntentRevision       string                `json:"intentRevision"`
 	BindingReceiptDigest string                `json:"bindingReceiptDigest"`
+	RunnerRecipeDigest   string                `json:"runnerRecipeDigest"`
 	Runner               localCLIFixtureRunner `json:"runner"`
 }
 
@@ -43,6 +44,10 @@ type clusterIntentPreparationReceipt struct {
 	BindingReceiptDigest       string            `json:"bindingReceiptDigest"`
 	ExecutionFixtureDigest     string            `json:"executionFixtureDigest"`
 	ProviderAccessPolicyDigest string            `json:"providerAccessPolicyDigest"`
+	RunnerRecipeDigest         string            `json:"runnerRecipeDigest"`
+	PlanDigest                 string            `json:"planDigest"`
+	PlanRawDigest              string            `json:"planRawDigest"`
+	StageArtifacts             map[string]string `json:"stageArtifacts"`
 	APIContacted               bool              `json:"apiContacted"`
 	AuthorizationConsumed      bool              `json:"authorizationConsumed"`
 	MutationAllowed            bool              `json:"mutationAllowed"`
@@ -50,7 +55,7 @@ type clusterIntentPreparationReceipt struct {
 	Missing                    []string          `json:"missingBindings"`
 }
 
-func runClusterIntentPrepare(ctx context.Context, arguments []string, output string, stdout, stderr io.Writer) error {
+func runClusterIntentPrepare(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	// Hash only this running executable, not a configured external runner or a
 	// previous Candidate binary. No source checkout or image identity is guessed.
 	executable, err := os.Executable()
@@ -61,23 +66,32 @@ func runClusterIntentPrepare(ctx context.Context, arguments []string, output str
 	if err != nil {
 		return err
 	}
-	var bound bytes.Buffer
-	if err := runClusterIntentBind(ctx, arguments, &bound, stderr); err != nil {
-		return err
+	return runClusterIntentMaterialize(ctx, arguments, stdout, stderr, true, func(material clusterIntentMaterialized) error {
+		return finishClusterIntentPrepare(material, binaryDigest, stdout)
+	})
+}
+
+func finishClusterIntentPrepare(material clusterIntentMaterialized, binaryDigest string, stdout io.Writer) error {
+	binding, root := material.Binding, material.Output
+	recipeRaw, err := readIntentBindingFile(filepath.Join(material.Root, "profiles", "cli", "talos-kubevirt-mvp-v1.json"))
+	if err != nil {
+		return errors.New("reviewed runner recipe unavailable; partial output retained")
 	}
-	var binding clusterIntentBindingReceipt
-	if err := json.Unmarshal(bound.Bytes(), &binding); err != nil {
-		return errors.New("decode internally verified static binding; partial output retained")
-	}
-	root, err := filepath.Abs(output)
+	spec := material.Canonical.Normalized.(map[string]any)["spec"].(map[string]any)
+	e := spec["enablement"].(map[string]any)["revision"].(string)
+	p := spec["platform"].(map[string]any)["revision"].(string)
+	recipe, err := runnerprofile.Load(recipeRaw, runnerprofile.TalosMVP, e, p)
 	if err != nil {
 		return err
 	}
+	if err := writeStaticBindingFile(filepath.Join(root, "runner-recipe.json"), recipeRaw); err != nil {
+		return err
+	}
 	fixture := clusterIntentExecutionFixture{
-		Format: "ok-cli-local-execution-fixture/v1", AuthorizationState: "NO-GO",
+		Format: "ok-cli-local-execution-fixture/v2", AuthorizationState: "NO-GO",
 		ContractIdentity: binding.Identity, IntentRevision: binding.IntentRevision,
-		BindingReceiptDigest: digest.SHA256(bound.Bytes()),
-		Runner:               localCLIFixtureRunner{ExecutionMode: "local-cli", Version: version, SourceRevision: revision, BinaryDigest: binaryDigest},
+		BindingReceiptDigest: digest.SHA256(material.Raw), RunnerRecipeDigest: recipe.Digest(),
+		Runner: localCLIFixtureRunner{ExecutionMode: "local-cli", Version: version, SourceRevision: revision, BinaryDigest: binaryDigest},
 	}
 	fixtureRaw, err := json.MarshalIndent(fixture, "", "  ")
 	if err != nil {
@@ -103,11 +117,17 @@ func runClusterIntentPrepare(ctx context.Context, arguments []string, output str
 			return err
 		}
 	}
+	plan, err := bindClusterIntentStages(material, recipe, fixtureDigest, digest.SHA256(policyRaw), e, p)
+	if err != nil {
+		return err
+	}
+	plan.Files["runner-recipe.json"] = recipe.Digest()
 	receipt := clusterIntentPreparationReceipt{
-		Format: "ok-cli-cluster-preparation/v1", State: "LOCAL_EXECUTION_INPUTS_BOUND_NO_GO",
+		Format: "ok-cli-cluster-preparation/v2", State: "STATIC_PLAN_BOUND_NO_GO",
 		ContractIdentity: binding.Identity, IntentRevision: binding.IntentRevision, BindingReceiptDigest: fixture.BindingReceiptDigest,
 		ExecutionFixtureDigest: fixtureDigest, ProviderAccessPolicyDigest: digest.SHA256(policyRaw),
-		Missing: []string{"enablement/network/target-access artifacts", "seven-stage Plan", "reviewed authority policies and existing credentials", "full-run manifest and independent evidence inputs"},
+		RunnerRecipeDigest: recipe.Digest(), PlanDigest: plan.SemanticDigest, PlanRawDigest: plan.RawDigest, StageArtifacts: plan.Files,
+		Missing: []string{"reviewed authority policies and existing credentials", "full-run manifest and independent evidence inputs"},
 	}
 	raw, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
@@ -120,7 +140,7 @@ func runClusterIntentPrepare(ctx context.Context, arguments []string, output str
 	if _, err := stdout.Write(raw); err != nil {
 		return err
 	}
-	return errors.New("YAML preparation incomplete (NO-GO): local fixture and provider-access policy bound; full Plan, stage artifacts, authority, credential and independent evidence bindings are still required; no live approval digest was produced")
+	return errors.New("YAML preparation incomplete (NO-GO): static seven-stage Plan verified; authority, credential, full-run manifest and independent evidence bindings are still required; no live approval manifest digest was produced")
 }
 
 func localCLIExecutableDigest(path string) (string, error) {
