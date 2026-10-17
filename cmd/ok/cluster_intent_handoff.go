@@ -60,7 +60,7 @@ func finishClusterIntentRunnerHandoff(material clusterIntentMaterialized, plan c
 	}{Format: "ok-cli-cluster-runner-handoff/v1", State: "PREPARED_NOT_AUTHORIZED", ManifestPath: manifestPath, ManifestDigest: verified.ManifestDigest,
 		PreparationReceiptDigest: preparationDigest, RuntimeInputsDigest: draft.RuntimeInputsDigest, IndependentEvidenceKeyID: draft.IndependentEvidenceKeyID, Manifest: verified, RunnerReady: true,
 		NextCommands: preparedClusterIntentCommands(manifestPath, verified.ManifestDigest, draft.IndependentEvidencePublicKeyPath),
-		NextAction:   "review generated plan and authority deployment separately; obtain explicit live approval for the technical JSON manifest digest; use the same independently reviewed evidence key; YAML --live remains blocked"}
+		NextAction:   "review generated plan and authority deployment separately; obtain explicit live approval for the technical JSON manifest digest; use the same independently reviewed evidence key; YAML --live requires this existing --prepared-dir and all original live gates"}
 	raw, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		return err

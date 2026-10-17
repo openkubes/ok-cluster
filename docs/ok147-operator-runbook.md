@@ -225,12 +225,13 @@ provisioning success. `runnerReady=false`, `apiContacted=false`,
 full-run manifest. YAML `--prepare` returns an explicit incomplete
 error (non-zero) and never emits `PREPARED` or a live approval digest. The new
 preparation inputs are rejected for JSON, dry-run and live modes. YAML `--live`
-remains blocked. Existing technical JSON execution is unchanged.
+without an existing `--prepared-dir` remains blocked. Existing technical JSON
+execution is unchanged.
 
 These static artifacts alone cannot prove private runtime bindings. They must not
 be completed by copying historical Candidate identities/outcomes or loosening the
-runner's evidence requirements. YAML `--live` stays blocked without touching a
-terminal marker or opening an executor.
+runner's evidence requirements. Static-only preparation cannot satisfy
+`--prepared-dir`: a verified full-run manifest/fixture binding is required.
 
 ### Explicit local handoff to the existing runner
 
@@ -301,10 +302,57 @@ On successful local verification:
   future contents or prove credential validity or convergence.
 
 Review authority deployment separately and obtain explicit live approval for the
-generated technical manifest digest. YAML `--live` is still blocked; the existing
-technical JSON live workflow, independent evidence argument, terminal marker,
-immutable outcomes and convergence gates remain unchanged. No live cluster test
+generated technical manifest digest. The existing technical JSON live workflow,
+independent evidence argument, terminal marker, immutable outcomes and convergence
+gates remain unchanged. No live cluster test
 or successful provisioning claim is implied by this handoff.
+
+### Reuse a preparation with friendly YAML
+
+The friendly YAML may now select its existing preparation explicitly, without
+another render or Contract/profile lookup:
+
+```sh
+ok up --file cluster.yaml --prepared-dir /private/preparation --dry-run
+```
+
+This is full local runner-input verification, not just YAML syntax validation.
+It reads referenced local credential/trust material but opens no network client,
+requests no grant and writes no output. Omit `--prepared-dir` to retain the original
+intent-only dry-run. No saved config or runtime-input defaults are consulted here.
+
+Only after separate review and explicit live approval for the generated digest:
+
+```sh
+ok up --file cluster.yaml --prepared-dir /private/preparation --live --execute \
+  --expected-manifest-digest sha256:<approved-manifest-digest> \
+  --independent-evidence-public-key /private/reviewed-evidence.pub \
+  --terminal-marker /absolute/private-dir/executor-terminal
+```
+
+Use the independently reviewed evidence key selected for preparation. The marker
+must be absent in an existing private directory; all original technical JSON live
+gates remain mandatory. This command can mutate the cluster; **preparation and this
+documentation are not authorization to run it**. `ok cluster create` is equivalent.
+
+The selected directory and fixed local files must be private and non-symlink.
+The owning manifest verifier checks the full-run inputs, and its verified plan
+must anchor the exact `execution-fixture.json` bytes. The fixture in turn binds
+`binding-receipt.json`, whose normalized intent digest must equal the current YAML.
+Changes to name, endpoint, CIDRs or profile fail closed. Comment/format changes
+are allowed when normalized intent is identical. Missing/static-only/foreign or
+modified fixtures do not become runnable merely by editing an output receipt.
+The CLI never executes command hints from receipts or trusts them as authority.
+
+This only resolves the existing technical manifest, then delegates to the same
+runner with the caller's explicit digest, evidence key and marker. It adds no
+lifecycle implementation, credential renewal, rebinding, automatic retry, rollback,
+bootstrap-resume or bypass of receipt/convergence checks. A non-zero/incomplete/STOP
+result is preserved; do not repeat with a new marker to replay a mutating stage.
+Recovery still needs its separate evidence and authorization. Recovery-attempt
+manifests are not accepted by this first-run YAML path. `--prepared-dir` is rejected
+for `--prepare`, technical JSON and mixed preparation flags (`--output`, `--contract`,
+`--runtime-inputs`, source/config paths). Original technical JSON modes remain valid.
 
 OS selection remains `spec.profile`. Only the Talos/KubeVirt recipe is currently
 enabled for this bounded preparation path. Flatcar resolver/templates and Ubuntu
@@ -315,8 +363,8 @@ contract; those profiles fail closed, never fall back to Talos. See
 Existing technical JSON inputs retain all previous modes and receipts (including
 JSON manifests using a `.yaml`/`.yml` filename). No existing Candidate, receipt,
 authority or terminal is rewritten by this front end. Interactive configuration
-is available through `ok config init`. Direct live creation from friendly YAML
-and deployed-authority verification remain separate follow-ups.
+is available through `ok config init`. Deployed-authority verification remains an
+operator responsibility; the CLI does not infer it from local preparation.
 
 ## Bare-MVP closure and ongoing provider access
 

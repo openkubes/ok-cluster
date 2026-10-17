@@ -251,6 +251,10 @@ Usage:
   ok up render --file cluster.yaml --output <new-private-directory>
   ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>
   ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory> --runtime-inputs <private-references.json>
+  ok up --file cluster.yaml --prepared-dir <existing-preparation> --dry-run
+  ok up --file cluster.yaml --prepared-dir <existing-preparation> --live --execute \
+    --expected-manifest-digest sha256:<digest> --independent-evidence-public-key <file> \
+    --terminal-marker /absolute/private-dir/executor-terminal
   ok up --file <private-manifest.json> --dry-run
   ok up --file <private-manifest.json> --prepare
   ok cluster create requirements
@@ -281,7 +285,11 @@ Live still requires separate approval for the generated technical JSON manifest.
 Flatcar and Ubuntu templates exist, but their bounded runner
 integration is not enabled; these profiles do not fall back to Talos.
 Optional local paths: --lifecycle-root, --ok-linux-path, --config (or saved paths).
-YAML --live remains blocked. No separate binding command is needed.
+YAML --live requires an existing private --prepared-dir. Its fixture binds the
+original normalized YAML to the verified technical manifest. No re-rendering,
+implicit preparation, automatic retry or extra executor. --prepared-dir also
+supports --dry-run (local credential reads, no API contact), never --prepare or JSON.
+All original live gates remain mandatory. No separate binding command is needed.
 All options below work with either spelling; technical JSON manifest/evidence requirements
 and operation receipts are unchanged. Bare "ok up" only displays this help.
 

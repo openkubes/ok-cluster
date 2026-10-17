@@ -232,6 +232,61 @@ class IntentRenderTests(unittest.TestCase):
             self.assertEqual(Path(path).read_bytes(), raw)
         self.assertFalse(self.marker.exists())
 
+    def test_prepared_yaml_uses_existing_runner_and_rejects_drift_without_execution(self):
+        runtime_path, inputs = self.synthetic_runtime_inputs()
+        prepared = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        receipt = json.loads(prepared.stdout)
+        original = self.input.read_bytes()
+        base = [str(BINARY), 'up', '--file', str(self.input), '--prepared-dir', str(self.output)]
+
+        def invoke(suffix=('--dry-run',)):
+            return subprocess.run([*base, *suffix], capture_output=True, text=True,
+                                  env=self.env, cwd=self.home, timeout=20)
+
+        # Changes to comments are not semantic drift.
+        self.input.write_bytes(b'# same reviewed intent\n' + original)
+        checked = invoke()
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        summary = json.loads(checked.stdout)
+        self.assertEqual(summary['manifestDigest'], receipt['manifestDigest'])
+        self.assertEqual(summary['state'], 'VALIDATED')
+        for name in ('apiContacted', 'authorizationConsumed', 'mutationAllowed'):
+            self.assertIs(summary[name], False)
+
+        live = ['--live', '--execute', '--expected-manifest-digest', receipt['manifestDigest'],
+                '--independent-evidence-public-key', inputs['independentEvidencePublicKeyPath'],
+                '--terminal-marker', str(self.output / 'executor-terminal')]
+        # Never invoke valid live arguments. Missing gate, wrong digest or
+        # semantic/fixture drift must reject before any executor can be opened.
+        missing_gate = [arg for arg in live if arg != '--execute']
+        self.assertNotEqual(invoke(missing_gate).returncode, 0)
+        wrong_digest = list(live)
+        wrong_digest[3] = 'sha256:' + '0' * 64
+        self.assertNotEqual(invoke(wrong_digest).returncode, 0)
+        self.input.write_bytes(original.replace(b'192.0.2.10', b'192.0.2.11'))
+        for suffix in (('--dry-run',), live):
+            rejected = invoke(suffix)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn('differs from the prepared intent', rejected.stderr)
+        self.input.write_bytes(original)
+
+        for name in ('execution-fixture.json', 'binding-receipt.json'):
+            path = self.output / name
+            raw = path.read_bytes()
+            path.write_bytes(raw + b'\n')  # Hash-bound bytes, not JSON semantics.
+            rejected = invoke()
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            path.write_bytes(raw)
+        fixture_path = self.output / 'execution-fixture.json'
+        fixture_path.chmod(0o644)
+        self.assertNotEqual(invoke().returncode, 0)
+        fixture_path.chmod(0o600)
+        self.assertFalse((self.output / 'executor-terminal').exists())
+        for name in ('runtime', 'receipts', 'authorizations'):
+            self.assertEqual(list((self.output / name).iterdir()), [])
+        self.assertFalse(self.marker.exists())
+
     def test_runtime_handoff_fails_without_success_receipt_on_missing_or_foreign_inputs(self):
         runtime_path, inputs = self.synthetic_runtime_inputs()
         for case in ('missing-token', 'foreign-authority', 'shared-key', 'unsafe-file-mode', 'unknown-field'):

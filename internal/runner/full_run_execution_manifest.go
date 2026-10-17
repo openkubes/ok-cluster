@@ -285,6 +285,16 @@ func (manifest VerifiedFullRunExecutionManifest) Receipt() (FullRunExecutionMani
 	return manifest.receipt, nil
 }
 
+// VerifyExecutionFixture checks a caller's local fixture bytes against the
+// verified plan identity without exposing private activation inputs or opening
+// an executor. It does not interpret the caller-owned fixture schema.
+func (manifest VerifiedFullRunExecutionManifest) VerifyExecutionFixture(raw []byte) error {
+	if !manifest.verified || manifest.receipt.State != "VERIFIED" || digest.SHA256(raw) != manifest.plan.ExecutionFixture {
+		return errors.New("local execution fixture differs from the verified plan")
+	}
+	return nil
+}
+
 // ExecutionConfig converts one already verified private manifest into the
 // concrete Stage 1-12 configuration. It performs bounded local credential
 // reads while opening the authorization and lifecycle-authority adapters, but
