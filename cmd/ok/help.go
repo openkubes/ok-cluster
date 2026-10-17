@@ -284,6 +284,13 @@ partial preparation stop; an execution start fence blocks automatic replay even
 after failure/interruption. Local preparation is not deployed-authority approval.
 
 Expert workflow:
+Optional YAML spec.management/spec.infrastructure may each select kubeconfig
+and optional context. Supply both references or neither. A single context is
+unambiguous; multiple contexts require an explicit context (never implicit
+current-context). ~/ expands in these paths; relative paths use the YAML directory.
+Explicit references are inspected locally, including dry-run; no credentials are
+imported and no auth plugin/global context is run/changed. API/CA targets must
+match the existing bounded runtime authorities/provider access before execution.
 Friendly YAML --prepare checks local Contract/projection inputs and generates
 credential-free stage artifacts and a verified seven-stage NO-GO plan from the
 versioned talos-kubevirt-mvp recipe (only its reviewed E/P revisions). It

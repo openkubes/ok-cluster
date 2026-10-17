@@ -238,6 +238,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestGuidedUp'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestClusterIntent'
+	@go test -mod=readonly ./internal/kubeconfigtarget ./internal/runner -count=1 -run 'TestTarget|TestFullRunPlaneTargets'
 	@go test -mod=readonly ./internal/runner -count=1 \
 		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix'
 	@$(SCRIPT_DIR)/.tools/bin/ok --help >/dev/null
