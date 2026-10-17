@@ -473,6 +473,8 @@ Without --runtime-inputs preparation exits non-zero. With explicit private input
 only the existing full-run verifier can produce PREPARED_NOT_AUTHORIZED and the
 technical JSON manifest digest. It proves local preparation, not deployed authority,
 authenticated access or cluster convergence. YAML --live remains blocked.
+The handoff receipt includes nextCommands argument arrays for a technical JSON
+dry-run and live-after-separate-approval invocation; neither is executed for you.
 No API client, credential issuance, authority rebinding or live stage is opened.
 Existing technical JSON manifests keep their original workflow and receipts.
 `)

@@ -47,6 +47,10 @@ func TestBuildBareClusterManifestLoadsThroughExistingOwnerWithoutRuntimeExecutio
 	if err != nil {
 		t.Fatal(err)
 	}
+	var runtimeInputs bareClusterRuntimeInputs
+	if err := json.Unmarshal(before, &runtimeInputs); err != nil || draft.IndependentEvidencePublicKeyPath != runtimeInputs.IndependentEvidencePublicKeyPath {
+		t.Fatal("draft did not preserve the explicitly verified evidence key path")
+	}
 	if draft.RuntimeInputsDigest != digest.SHA256(before) || draft.IndependentEvidenceKeyID == "" {
 		t.Fatal("missing explicit input/trust bindings")
 	}
