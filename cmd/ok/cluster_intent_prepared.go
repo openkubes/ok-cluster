@@ -62,6 +62,9 @@ func resolvePreparedClusterIntent(intentPath, directory, expectedDigest string) 
 		return result, errors.New("prepared YAML binding differs from its immutable fixture")
 	}
 	intentRaw, err := json.Marshal(intent)
+	if (intent.Spec.Management == nil) != (binding.Targets == nil) {
+		return result, errors.New("prepared binding must retain exactly the selected YAML target references")
+	}
 	if err != nil || digest.SHA256(intentRaw) != binding.NormalizedIntentDigest || binding.Identity.Name != intent.Metadata.Name || binding.Identity.Namespace != intent.Metadata.Name {
 		return result, errors.New("cluster YAML differs from the prepared intent; no rendering, replay or execution performed")
 	}
@@ -74,6 +77,9 @@ func resolvePreparedClusterIntent(intentPath, directory, expectedDigest string) 
 		receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP || receipt.ExecutionAttemptDigest != "" ||
 		!sha256DigestPattern.MatchString(receipt.ManifestDigest) || (expectedDigest != "" && expectedDigest != receipt.ManifestDigest) {
 		return result, errors.New("prepared YAML manifest/fixture verification failed or differs from the approved digest")
+	}
+	if err := verifyClusterIntentTargets(intentPath, binding, path, receipt.ManifestDigest); err != nil {
+		return result, err
 	}
 	return preparedClusterIntent{ManifestPath: path, Receipt: receipt, Binding: binding}, nil
 }

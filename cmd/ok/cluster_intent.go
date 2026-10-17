@@ -23,21 +23,22 @@ import (
 const clusterIntentAPIVersion = "cli.openkubes.io/v1alpha1"
 
 type clusterIntentBindingReceipt struct {
-	Format                  string             `json:"format"`
-	State                   string             `json:"state"`
-	Identity                contract.Identity  `json:"contractIdentity"`
-	CanonicalizationProfile string             `json:"canonicalizationProfile"`
-	IntentRevision          string             `json:"intentRevision"`
-	NormalizedIntentDigest  string             `json:"normalizedIntentDigest"`
-	RenderReceiptDigest     string             `json:"renderReceiptDigest"`
-	RawContractDigest       string             `json:"rawContractDigest"`
-	SchemaDigest            string             `json:"schemaDigest"`
-	Projection              projection.Binding `json:"projection"`
-	APIContacted            bool               `json:"apiContacted"`
-	AuthorizationConsumed   bool               `json:"authorizationConsumed"`
-	MutationAllowed         bool               `json:"mutationAllowed"`
-	RunnerReady             bool               `json:"runnerReady"`
-	Missing                 []string           `json:"missingBindings"`
+	Format                  string                `json:"format"`
+	State                   string                `json:"state"`
+	Identity                contract.Identity     `json:"contractIdentity"`
+	CanonicalizationProfile string                `json:"canonicalizationProfile"`
+	IntentRevision          string                `json:"intentRevision"`
+	NormalizedIntentDigest  string                `json:"normalizedIntentDigest"`
+	RenderReceiptDigest     string                `json:"renderReceiptDigest"`
+	RawContractDigest       string                `json:"rawContractDigest"`
+	SchemaDigest            string                `json:"schemaDigest"`
+	Projection              projection.Binding    `json:"projection"`
+	APIContacted            bool                  `json:"apiContacted"`
+	AuthorizationConsumed   bool                  `json:"authorizationConsumed"`
+	MutationAllowed         bool                  `json:"mutationAllowed"`
+	RunnerReady             bool                  `json:"runnerReady"`
+	Missing                 []string              `json:"missingBindings"`
+	Targets                 *clusterIntentTargets `json:"targets,omitempty"`
 }
 
 // An intent is not a Contract, execution manifest, reservation or authority.
@@ -48,8 +49,10 @@ type clusterIntent struct {
 		Name string `yaml:"name" json:"name"`
 	} `yaml:"metadata" json:"metadata"`
 	Spec struct {
-		Profile string `yaml:"profile" json:"profile"`
-		Network struct {
+		Profile        string                      `yaml:"profile" json:"profile"`
+		Management     *clusterKubeconfigReference `yaml:"management,omitempty" json:"management,omitempty"`
+		Infrastructure *clusterKubeconfigReference `yaml:"infrastructure,omitempty" json:"infrastructure,omitempty"`
+		Network        struct {
 			Endpoint    string `yaml:"endpoint" json:"endpoint"`
 			PodCIDR     string `yaml:"podCIDR" json:"podCIDR"`
 			ServiceCIDR string `yaml:"serviceCIDR" json:"serviceCIDR"`
@@ -119,6 +122,9 @@ func readClusterIntent(path string) (clusterIntent, error) {
 		return intent, errors.New("exactly one cluster YAML document is required")
 	}
 	name := intent.Metadata.Name
+	if err := validateClusterKubeconfigReferences(intent); err != nil {
+		return intent, err
+	}
 	if intent.APIVersion != clusterIntentAPIVersion || intent.Kind != "Cluster" || intent.Spec.Profile != "talos-kubevirt-mvp" {
 		return intent, errors.New("expected cli.openkubes.io/v1alpha1 Cluster with profile talos-kubevirt-mvp")
 	}
@@ -164,6 +170,12 @@ kind: Cluster
 metadata:
   name: my-cluster
 spec:
+  # Optional: supply both target references, never credential contents.
+  # management:
+  #   kubeconfig: ~/.kube/ok-mgmt.yaml
+  # infrastructure:
+  #   kubeconfig: ~/.kube/ok-infra.yaml
+  # Add context: <name> within a reference only if the file has multiple contexts.
   profile: talos-kubevirt-mvp
   network:
     endpoint: 192.0.2.10
@@ -181,18 +193,23 @@ func validateClusterYAMLWorkflow(path string, dryRun bool, stdout io.Writer) err
 	if !dryRun {
 		return errors.New("cluster YAML is NO-GO: --live requires an existing --prepared-dir and separate approval for its technical manifest digest; no implicit preparation or rendering")
 	}
+	targets, err := readClusterIntentTargets(path, intent)
+	if err != nil {
+		return err
+	}
 	return json.NewEncoder(stdout).Encode(struct {
-		Format                string `json:"format"`
-		State                 string `json:"state"`
-		Name                  string `json:"name"`
-		APIContacted          bool   `json:"apiContacted"`
-		AuthorizationConsumed bool   `json:"authorizationConsumed"`
-		MutationAllowed       bool   `json:"mutationAllowed"`
-		RunnerReady           bool   `json:"runnerReady"`
-		CollisionChecked      bool   `json:"collisionChecked"`
-		NextAction            string `json:"nextAction"`
+		Format                string                `json:"format"`
+		State                 string                `json:"state"`
+		Name                  string                `json:"name"`
+		APIContacted          bool                  `json:"apiContacted"`
+		AuthorizationConsumed bool                  `json:"authorizationConsumed"`
+		MutationAllowed       bool                  `json:"mutationAllowed"`
+		RunnerReady           bool                  `json:"runnerReady"`
+		CollisionChecked      bool                  `json:"collisionChecked"`
+		NextAction            string                `json:"nextAction"`
+		Targets               *clusterIntentTargets `json:"targets,omitempty"`
 	}{"ok-cli-cluster-intent-validation/v1", "INTENT_VALIDATED_NO_GO", intent.Metadata.Name, false, false, false, false, false,
-		"run ok up --file <cluster.yaml> on a terminal for guided preparation and explicit approval; reviewed Contract and existing private runtime references are still required; not a reservation or live approval"})
+		"run ok up --file <cluster.yaml> on a terminal for guided preparation and explicit approval; reviewed Contract and existing private runtime references are still required; not a reservation or live approval", targets})
 }
 
 func runClusterIntentRender(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -205,6 +222,7 @@ func runClusterIntentBind(ctx context.Context, arguments []string, stdout, stder
 
 type clusterIntentMaterialized struct {
 	Root, Output      string
+	IntentPath        string
 	RuntimeInputsPath string
 	Canonical         contract.Result
 	Binding           clusterIntentBindingReceipt
@@ -250,6 +268,10 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 		return errors.New("explicit render path flags must not be empty")
 	}
 	intent, err := readClusterIntent(*input)
+	if err != nil {
+		return err
+	}
+	targets, err := readClusterIntentTargets(*input, intent)
 	if err != nil {
 		return err
 	}
@@ -389,7 +411,7 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 	}
 	receipt := clusterIntentBindingReceipt{"ok-cli-cluster-static-binding/v1", "CONTRACT_PROJECTION_BOUND_NO_GO", identity, canonical.CanonicalizationProfile,
 		canonical.NormalizedDigest, normalizedIntentDigest, digest.SHA256(renderRaw), canonical.RawArtifactDigest, canonical.SchemaDigest, projected, false, false, false, false,
-		[]string{"fresh execution fixture", "enablement/network/target-access artifacts", "seven-stage Plan", "reviewed authority policies and existing credentials", "full-run manifest and independent evidence inputs"}}
+		[]string{"fresh execution fixture", "enablement/network/target-access artifacts", "seven-stage Plan", "reviewed authority policies and existing credentials", "full-run manifest and independent evidence inputs"}, targets}
 	var result bytes.Buffer
 	encoder := json.NewEncoder(&result)
 	encoder.SetIndent("", "  ")
@@ -400,7 +422,7 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 		return err
 	}
 	if finish != nil {
-		return finish(clusterIntentMaterialized{Root: rootPath, Output: outputPath, RuntimeInputsPath: runtimeInputsPath, Canonical: canonical, Binding: receipt, Raw: result.Bytes()})
+		return finish(clusterIntentMaterialized{Root: rootPath, Output: outputPath, IntentPath: *input, RuntimeInputsPath: runtimeInputsPath, Canonical: canonical, Binding: receipt, Raw: result.Bytes()})
 	}
 	_, err = stdout.Write(result.Bytes())
 	return err
@@ -453,8 +475,15 @@ Usage:
 Paths: --lifecycle-root <trusted-checkout> --ok-linux-path <profile-checkout>
 or saved local paths from ok config init; --config selects an explicit file.
 Only those two saved paths are used; credentials are never inferred from config.
-Credential contents are read only for explicit --runtime-inputs preparation or
-verification/execution of an existing --prepared-dir (never from saved config).
+Without target references, credential contents are read only for explicit
+--runtime-inputs preparation or an existing --prepared-dir. Optional paired
+spec.management/spec.infrastructure kubeconfig references are inspected locally
+in every YAML mode, including dry-run. One context is selected automatically;
+multiple require context: <name>, never implicit current-context. ~/ expands;
+relative paths use the YAML directory. References select target API/CA identity,
+not authentication: no credential import, auth plugin, global context change,
+implicit config credential or network client. Existing execution credentials
+and Stage Authority/evidence inputs stay explicit and separately bounded.
 
 Profile talos-kubevirt-mvp fixes one control plane and one worker, each with
 2 cores / 4Gi memory / 20Gi disk and Kubernetes v1.34.1. Talos, Golden image,

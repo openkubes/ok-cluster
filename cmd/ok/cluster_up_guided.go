@@ -84,6 +84,9 @@ func runGuidedClusterUpWithRuntime(ctx context.Context, path string, stdout, std
 	} else if !os.IsNotExist(err) {
 		return err
 	} else {
+		if _, err := readClusterIntentTargets(path, intent); err != nil {
+			return err
+		}
 		configPath, err := localConfigPath("")
 		if err != nil {
 			return err
@@ -171,6 +174,11 @@ func runGuidedClusterUpWithRuntime(ctx context.Context, path string, stdout, std
 	marker := filepath.Join(root, "executor-terminal")
 	if err := validateClusterCreateTerminalMarker(marker); err != nil {
 		return err
+	}
+	if targets := prepared.Binding.Targets; targets != nil {
+		if _, err := fmt.Fprintf(stderr, "\nSelected management context %q -> %q\nSelected infrastructure context %q -> %q\n", targets.Management.Context, targets.Management.Endpoint, targets.Infrastructure.Context, targets.Infrastructure.Endpoint); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintf(stderr, "\nCreate cluster %q\n  Profile: %s (1 control plane, 1 worker; each 2 CPU / 4Gi RAM / 20Gi disk)\n  Endpoint: %s\n  Pod CIDR: %s; service CIDR: %s\n  Infrastructure authority: %q; management authority: %q\n  Preparation: %q\n  Manifest: %s\n  Independent evidence key: %s (%q)\n\nThis may install shared provider prerequisites/RBAC access and create infrastructure, VMs and workload/network resources.\nLocal verification does NOT prove name/IP availability, deployed authority, valid access or convergence.\nConfirm you have separately reviewed name/IP absence and authority deployment and approve this exact plan.\nNo automatic retry, rollback or credential renewal.\nType ok to create, or no [no]: ", intent.Metadata.Name, intent.Spec.Profile, intent.Spec.Network.Endpoint, intent.Spec.Network.PodCIDR, intent.Spec.Network.ServiceCIDR, prepared.Binding.Projection.InfrastructurePlane.Identity, prepared.Binding.Projection.ManagementPlane.Identity, root, setup.ManifestDigest, setup.EvidenceKeyID, keyPath); err != nil {
 		return err

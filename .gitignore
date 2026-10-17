@@ -24,6 +24,10 @@ docs/adoption/OK-125/.evidence/
 # Kubeconfigs — never commit
 *.yaml.bak
 kubeconfig*
+# Pure target-inspection source, not kubeconfig credential files.
+!internal/kubeconfigtarget/
+!internal/kubeconfigtarget/target.go
+!internal/kubeconfigtarget/target_test.go
 *.kubeconfig
 *.kubeconfig.yaml
 .kube/

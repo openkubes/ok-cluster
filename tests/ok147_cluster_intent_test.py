@@ -236,6 +236,105 @@ class IntentRenderTests(unittest.TestCase):
             self.assertEqual(Path(path).read_bytes(), raw)
         self.assertFalse(self.marker.exists())
 
+    def yaml_target_references(self, inputs, *, multiple=False, explicit=False):
+        provider = yaml.safe_load(Path(inputs['providerAccessKubeconfigFile']).read_text())
+        intent = yaml.safe_load(self.input.read_text())
+        for role in ('management', 'infrastructure'):
+            document = json.loads(json.dumps(provider))
+            document['clusters'][0]['cluster']['server'] = inputs[role]['endpoint']
+            document['contexts'][0]['name'] = role
+            document['current-context'] = 'ignored-single-context'
+            # These references are target identity only; plugin execution or
+            # administrator credential import is forbidden.
+            document['users'][0]['user'] = {'exec': {'command': 'touch',
+                'args': [str(self.marker)], 'apiVersion': 'client.authentication.k8s.io/v1'}}
+            if multiple:
+                extra = json.loads(json.dumps(document['contexts'][0]))
+                extra['name'] = 'other'
+                document['contexts'].append(extra)
+                document['current-context'] = 'other'
+            path = self.home / (role + '-target.yaml')
+            path.write_text(yaml.safe_dump(document))
+            path.chmod(0o600)
+            intent['spec'][role] = {'kubeconfig': './' + path.name}
+            if explicit:
+                intent['spec'][role]['context'] = role
+        self.input.write_text(yaml.safe_dump(intent, sort_keys=False))
+
+    def test_yaml_kubeconfig_targets_are_unique_readonly_and_bound_to_runner(self):
+        runtime_path, inputs = self.synthetic_runtime_inputs()
+        self.yaml_target_references(inputs)
+        before = {str(p): p.read_bytes() for p in self.home.glob('*-target.yaml')}
+        elsewhere = self.home / 'other-working-directory'
+        elsewhere.mkdir()
+        checked = subprocess.run([str(BINARY), 'up', '--file', str(self.input), '--dry-run'],
+            capture_output=True, text=True, env=self.env, cwd=elsewhere, timeout=20)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        summary = json.loads(checked.stdout)
+        self.assertEqual(summary['targets']['management']['context'], 'management')
+        self.assertEqual(summary['targets']['infrastructure']['endpoint'], inputs['infrastructure']['endpoint'])
+        self.assertIs(summary['apiContacted'], False)
+        self.assertNotIn('exec', checked.stdout)
+        prepared = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        binding = json.loads((self.output / 'binding-receipt.json').read_text())
+        self.assertEqual(binding['targets'], summary['targets'])
+        command = [str(BINARY), 'up', '--file', str(self.input), '--prepared-dir', str(self.output), '--dry-run']
+        verified = subprocess.run(command, capture_output=True, text=True, env=self.env, timeout=20)
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        for path, raw in before.items():
+            self.assertEqual(Path(path).read_bytes(), raw)
+        # Context-label drift is rejected even when endpoint/trust stay equal.
+        path = self.home / 'management-target.yaml'
+        data = yaml.safe_load(path.read_text())
+        data['contexts'][0]['name'] = 'different-label'
+        path.write_text(yaml.safe_dump(data))
+        rejected = subprocess.run(command, capture_output=True, text=True, env=self.env, timeout=20)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn('target changed since preparation', rejected.stderr)
+        self.assertFalse(self.marker.exists())
+        self.assertFalse((self.output / 'executor-terminal').exists())
+        for name in ('runtime', 'receipts', 'authorizations'):
+            self.assertEqual(list((self.output / name).iterdir()), [])
+
+    def test_yaml_kubeconfig_multiple_contexts_require_explicit_choice(self):
+        runtime_path, inputs = self.synthetic_runtime_inputs()
+        self.yaml_target_references(inputs, multiple=True)
+        rejected = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn('specify context explicitly', rejected.stderr)
+        self.assertFalse(self.output.exists())
+        self.yaml_target_references(inputs, multiple=True, explicit=True)
+        prepared = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        targets = json.loads((self.output / 'binding-receipt.json').read_text())['targets']
+        self.assertEqual(targets['management']['context'], 'management')
+        self.assertFalse(self.marker.exists())
+
+    def test_yaml_kubeconfig_transport_and_provider_mismatch_fail_without_handoff(self):
+        runtime_path, inputs = self.synthetic_runtime_inputs()
+        self.yaml_target_references(inputs)
+        mgmt = self.home / 'management-target.yaml'
+        original_mgmt = mgmt.read_bytes()
+        provider = Path(inputs['providerAccessKubeconfigFile'])
+        original_provider = provider.read_bytes()
+        for case in ('endpoint', 'trust', 'provider-access'):
+            with self.subTest(case=case):
+                mgmt.write_bytes(original_mgmt)
+                provider.write_bytes(original_provider)
+                path = provider if case == 'provider-access' else mgmt
+                data = yaml.safe_load(path.read_text())
+                if case == 'trust':
+                    data['clusters'][0]['cluster']['certificate-authority-data'] = base64.b64encode(b'not a certificate').decode()
+                else:
+                    data['clusters'][0]['cluster']['server'] = 'https://foreign.example:6443'
+                path.write_text(yaml.safe_dump(data))
+                self.output = self.home / ('mismatch-' + case)
+                result = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.output / 'runner-handoff-receipt.json').exists())
+                self.assertFalse(self.marker.exists())
+
     def test_prepared_yaml_uses_existing_runner_and_rejects_drift_without_execution(self):
         runtime_path, inputs = self.synthetic_runtime_inputs()
         prepared = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)

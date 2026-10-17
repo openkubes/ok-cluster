@@ -43,7 +43,15 @@ def main():
         intent = payload
     assert set(intent) == {'apiVersion', 'kind', 'metadata', 'spec'}
     assert intent['apiVersion'] == 'cli.openkubes.io/v1alpha1' and intent['kind'] == 'Cluster'
-    assert set(intent['metadata']) == {'name'} and set(intent['spec']) == {'profile', 'network'}
+    assert set(intent['metadata']) == {'name'}
+    assert set(intent['spec']) in ({'profile', 'network'}, {'profile', 'network', 'management', 'infrastructure'})
+    # Local target references were inspected by Go. Never open these private
+    # files or transport their credential contents into the renderer.
+    for plane in ('management', 'infrastructure'):
+        if plane in intent['spec']:
+            reference = intent['spec'][plane]
+            assert set(reference) in ({'kubeconfig'}, {'kubeconfig', 'context'})
+            assert all(isinstance(value, str) and value for value in reference.values())
     name = intent['metadata']['name']
     assert isinstance(name, str) and re.fullmatch(r'[a-z0-9](?:[-a-z0-9]*[a-z0-9])?', name) and len(name) <= 63
     assert name != 'default' and not name.startswith('kube-')

@@ -40,6 +40,9 @@ func finishClusterIntentRunnerHandoff(material clusterIntentMaterialized, plan c
 		verified.ProjectionAuthorityDigest != material.Binding.Projection.AuthorityMapDigest || !sha256DigestPattern.MatchString(verified.ManifestDigest) {
 		return errors.New("YAML runner handoff did not verify the exact generated Bare-MVP plan")
 	}
+	if err := verifyClusterIntentTargets(material.IntentPath, material.Binding, manifestPath, verified.ManifestDigest); err != nil {
+		return err
+	}
 	receipt := struct {
 		Format                      string                                 `json:"format"`
 		State                       string                                 `json:"state"`

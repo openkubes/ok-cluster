@@ -115,7 +115,8 @@ ok up --file cluster.yaml
 ```
 
 The first command retains the existing offline intent-only check: no credential
-reads, state files or reservation. The second requires a terminal and manages
+reads without explicit YAML target references, no state files or reservation.
+Explicit references are locally inspected as described below. The second requires a terminal and manages
 local preparation for you. Select the existing reviewed Contract file and private
 runtime-reference JSON when prompted. These are operator/platform inputs that
 the small YAML cannot supply; the CLI never invents authority or issues credentials.
@@ -161,6 +162,71 @@ can select the retained render at `<managed-run>/preparation/<name>` through
 `--cluster-dir`. This change does not register new destroy defaults, authorize
 cleanup or remove managed evidence/start fences.
 
+### Optional explicit management/infra kubeconfig references
+
+The friendly YAML may identify the target APIs using local files:
+
+```yaml
+apiVersion: cli.openkubes.io/v1alpha1
+kind: Cluster
+metadata:
+  name: my-cluster
+spec:
+  management:
+    kubeconfig: ~/.kube/ok-mgmt.yaml
+  infrastructure:
+    kubeconfig: ~/.kube/ok-infra.yaml
+  profile: talos-kubevirt-mvp
+  network:
+    endpoint: 192.0.2.10
+    podCIDR: 10.42.0.0/16
+    serviceCIDR: 10.96.0.0/20
+```
+
+Addresses are examples, not allocations. Both target references are optional for
+compatibility, but must be supplied together. A file with exactly one context is
+unambiguous even without `current-context`; with multiple contexts add
+`context: <explicit-name>` inside that reference. The CLI does not silently use
+the current context in a multi-context file. It never switches/writes any context,
+merges `$KUBECONFIG`, runs exec/auth-provider plugins or invokes kubectl to select
+a target. Cluster/user references and unique context/cluster/user names must be
+valid. Authentication contents are not returned, imported, copied or logged.
+These are **target references**, not administrator credentials for the runner.
+
+`~/` expands only for the outer reference path. Other relative reference paths
+are relative to the YAML file, not the shell working directory. Kubeconfig files
+must be private regular non-symlink files, at most 1 MiB. The selected cluster must
+use direct HTTPS, exactly one embedded CA bundle or CA file, and no insecure TLS,
+proxy or TLS-server-name override. Relative CA file paths resolve against the
+kubeconfig directory; CA files are bounded regular non-symlink files. This reader
+inspects identity only; it proves neither authentication/RBAC nor live availability.
+
+`--dry-run` reports selected context/cluster, endpoint and semantic CA trust digest
+under optional `targets`, keeping all mutation/contact/authorization flags false.
+With references it does read the explicit private files in memory, but opens no
+network client. The same target inspection occurs before render/preparation;
+ambiguity rejects before output creation. Old YAML without references retains its
+normalized digest and no-credential-read intent-only dry-run behavior.
+
+The static binding receipt additionally records the selected non-secret targets.
+Its raw digest is bound by the local fixture and existing manifest/plan chain.
+Full handoff and YAML execution require endpoint/complete CA trust-set equality
+with the existing management/infrastructure writer and observer runtime bindings.
+The existing provider-access credential's effective current-context must also
+target the selected infra API and trust set. Explicit YAML contexts do not rewrite
+or override that credential file. Disagreements stop without a successful handoff
+or executor. A changed selected context/cluster/endpoint/trust set after preparation
+fails closed, including rechecks after guided approval. PEM formatting/order or
+duplicate certificates do not change the trust set; adding a different trusted
+certificate does. The Contract/projection still owns logical authority roles;
+context labels are not authority and do not override those roles.
+
+Existing restricted runtime-reference, Stage Authority, ledger and independent
+evidence inputs remain required. No admin credential conversion, credential
+renewal, RBAC expansion, publication or lifecycle duplication is introduced.
+The guided confirmation displays the selected contexts and API endpoints. Stored
+general-config management/provider paths are still not implicit access sources.
+
 ### Expert offline intent/render workflow
 
 Without explicit private runtime inputs, this front end produces only static
@@ -191,7 +257,8 @@ does not launch a child process.
 
 The explicit `render` subcommand uses only the trusted lifecycle and ok-linux
 paths (`--lifecycle-root` and `--ok-linux-path`, or saved local path configuration).
-It does not read the referenced kubeconfig/credential contents. The small adapter
+The Python renderer does not read kubeconfig/credential contents; Go inspects only
+explicit YAML target references before delegation. The small adapter
 calls the existing owning `render.render_cluster` and
 `profile_resolvers.talos.resolve_talos_config`; Go does not duplicate Talos,
 Golden-image or storage validation. The online allocator/resolver, sockets and
