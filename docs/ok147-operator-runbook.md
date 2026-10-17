@@ -227,6 +227,78 @@ renewal, RBAC expansion, publication or lifecycle duplication is introduced.
 The guided confirmation displays the selected contexts and API endpoints. Stored
 general-config management/provider paths are still not implicit access sources.
 
+### Propose endpoint and CIDRs before preparation
+
+The `cluster-template` addresses are examples, **not allocations**. Change the
+name first (for example `ok-cli-arash-test-1`). For a read-only observed proposal,
+include both YAML kubeconfig references above and explicitly opt into API reads:
+
+```sh
+ok up network-suggest --file cluster.yaml --online --output cluster.proposed.yaml
+```
+
+This separate command lists Services and CAPI Clusters in both selected planes
+and MetalLB IPAddressPools in the infra plane. The sole applicable IPv4 pool is
+used; if ambiguous, select `--pool metallb-system/<pool-name>`. Pools with
+service/namespace allocation selectors are rejected until consumer-aware
+selection is supported. Pools with `autoAssign: false` require explicit selection;
+`avoidBuggyIPs` is respected. Existing static credentials are required: selected
+exec/auth-provider plugins are rejected **before either API is contacted**, and
+no TokenRequest or renewal is performed. Authorization/RBAC, timeout, missing
+CRD and malformed inventory failures stop; there is no local-only fallback.
+
+Local `clustersDir/<name>/cluster-config.yaml` files and retained managed
+`<user-config>/ok/runs/<name>/preparation/<name>/cluster-config.yaml` files are
+also considered. Deleted clusters' retained files conservatively keep their
+values excluded. Known endpoints, LoadBalancer addresses, Service cluster IPs
+and CAPI `clusterNetwork` CIDRs are combined. CIDR selection belongs to the
+existing renderer, not a new Go allocator: `/16` Pod networks from `10.32.0.0/11`
+and `/20` Service networks from `10.96.0.0/12`. The proposal checks subnet,
+supernet and cross-role overlaps, including known addresses and the endpoint
+pool itself. These are current recipe policies, not universal networking defaults.
+
+For a strictly offline, local-inventory-only proposal, supply an explicitly
+approved endpoint range (example below is site-specific, not a default):
+
+```sh
+ok up network-suggest --file cluster.yaml \
+  --endpoint-pool 192.168.100.200-192.168.100.254 --output cluster.proposed.yaml
+```
+
+Offline never reads kubeconfigs, runs auth plugins or contacts an API. Saved
+configuration supplies **only** lifecycleRoot/clustersDir; explicit
+`--lifecycle-root` and `--clusters-dir` may replace them. It never silently uses
+saved management/provider credential paths. Neither mode invokes renderer
+online-resolve, applies resources, reserves an address, prepares a runner or
+changes the source YAML. The optional output is a new private 0600 YAML file;
+existing files, including the input, are never overwritten. Target references
+are made absolute so moving the proposed YAML cannot change their meaning.
+Without `--output`, only the JSON proposal is printed.
+
+JSON `ok-cli-network-proposal/v1` records exact before/proposed network values,
+source paths/API-list digests, selected targets, pools, observation time and
+limitations. `apiContacted`/`observedCollisionCheckCompleted` reflect online mode;
+`globalAvailabilityProven`, `reservationCreated`, `authorizationConsumed`,
+`mutationAllowed` and `runnerReady` remain false. **This is a snapshot, not a
+reservation or global proof of availability.** DHCP, external hosts, untracked
+preparations, DNS endpoints and other management planes need separate inventory;
+DNS-based CAPI endpoints currently stop online proposals rather than being
+treated as absent. Concurrent creators can still race. Review source coverage
+and recheck allocations before separately authorized live execution.
+
+Review `cluster.proposed.yaml`, then run:
+
+```sh
+ok up --file cluster.proposed.yaml --dry-run
+ok up --file cluster.proposed.yaml
+```
+
+The latter still requires the existing reviewed Contract/private runtime inputs
+for the **new exact values**, installed bounded authorities and explicit `ok`.
+No evidence or authority from a previous Candidate is reused automatically;
+proposal success is never provisioning success. Normal offline `--dry-run` and
+all existing live/teardown contracts remain unchanged.
+
 ### Expert offline intent/render workflow
 
 Without explicit private runtime inputs, this front end produces only static

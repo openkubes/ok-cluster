@@ -25,6 +25,8 @@ TEMPLATES_DIR = SCRIPT_DIR / "templates"
 
 METALLB_POOL_START = ipaddress.IPv4Address("192.168.100.200")
 METALLB_POOL_END   = ipaddress.IPv4Address("192.168.100.254")
+POD_CIDR_POOL = ipaddress.IPv4Network("10.32.0.0/11")
+SERVICE_CIDR_POOL = ipaddress.IPv4Network("10.96.0.0/12")
 
 # Management cluster kubeconfig — source of truth for live MetalLB allocations (OK-83)
 OKB_KUBECONFIG = os.environ.get(
@@ -136,16 +138,52 @@ def next_free_ip(used, start_ip=None):
     raise RuntimeError("MetalLB pool exhausted")
 
 def next_free_pod_cidr(used):
-    for net in ipaddress.IPv4Network("10.32.0.0/11").subnets(new_prefix=16):
+    for net in POD_CIDR_POOL.subnets(new_prefix=16):
         if str(net) not in used:
             return str(net)
     raise RuntimeError("Pod CIDR space exhausted")
 
 def next_free_svc_cidr(used):
-    for net in ipaddress.IPv4Network("10.96.0.0/12").subnets(new_prefix=20):
+    for net in SERVICE_CIDR_POOL.subnets(new_prefix=20):
         if str(net) not in used:
             return str(net)
     raise RuntimeError("Service CIDR space exhausted")
+
+
+def suggest_network(endpoint_ranges, occupied_addresses, occupied_networks):
+    """Proposal only; shared renderer owns allocation policy, never reservation.
+
+    Unlike legacy exact-string CIDR selection, proposals reject every overlap,
+    including cross-role and containing/subnet allocations.
+    """
+    blocked = [ipaddress.IPv4Network(value) for value in occupied_networks]
+    addresses = {ipaddress.IPv4Address(value) for value in occupied_addresses}
+    if not endpoint_ranges or sum(int(last) - int(first) + 1 for first, last in endpoint_ranges) > 65536:
+        raise ValueError('missing or oversized endpoint pool')
+    endpoint_networks = []
+    for first, last in endpoint_ranges:
+        if last < first:
+            raise ValueError('reversed endpoint range')
+        endpoint_networks.extend(ipaddress.summarize_address_range(first, last))
+    def subnet(pool, prefix):
+        for candidate in pool.subnets(new_prefix=prefix):
+            if not any(candidate.overlaps(other) for other in blocked + endpoint_networks) and not any(
+                    address in candidate for address in addresses):
+                blocked.append(candidate)
+                return str(candidate)
+        raise ValueError('CIDR pool exhausted')
+    pod = subnet(POD_CIDR_POOL, 16)
+    service = subnet(SERVICE_CIDR_POOL, 20)
+    for first, last in sorted(endpoint_ranges):
+        if int(last) - int(first) > 65535:
+            raise ValueError('endpoint range exceeds proposal bound')
+        for number in range(int(first), int(last) + 1):
+            address = ipaddress.IPv4Address(number)
+            if (address not in addresses and not any(address in net for net in blocked)
+                    and not (address.is_loopback or address.is_multicast or address.is_unspecified
+                             or address.is_link_local or str(address) == '255.255.255.255')):
+                return {'endpoint': str(address), 'podCIDR': pod, 'serviceCIDR': service}
+    raise ValueError('endpoint pool exhausted')
 
 
 def validate_registry_trust(cfg: dict) -> None:

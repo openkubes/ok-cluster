@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 )
@@ -61,6 +62,10 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 	}
 	if len(arguments) == 4 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" && isHelpArgument(arguments[3]) {
 		writeClusterCreateRequirementsHelp(stdout)
+		return true
+	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "network-suggest" && (helpPrefix || containsHelpArgument(arguments[3:])) {
+		_ = runNetworkSuggest(context.Background(), []string{"--help"}, stdout, stdout)
 		return true
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" &&
@@ -247,6 +252,7 @@ func writeClusterCreateHelp(output io.Writer) {
 
 Usage:
   ok up cluster-template
+  ok up network-suggest --file cluster.yaml --online --output cluster.proposed.yaml
   ok up --file cluster.yaml --dry-run
   ok up --file cluster.yaml                 # guided preparation and ok/no approval
 
