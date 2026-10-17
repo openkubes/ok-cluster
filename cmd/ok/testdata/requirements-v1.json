@@ -1,0 +1,72 @@
+{
+  "format": "ok-cli-cluster-create-requirements/v1",
+  "operation": "CreateCluster",
+  "acceptedManifestFormats": [
+    "ok147-full-run-execution-manifest/v3",
+    "ok147-full-run-execution-manifest/v4"
+  ],
+  "requiredCompletionMode": "bare-cluster-mvp/v1",
+  "manifestPathRules": [
+    "absolute path",
+    "regular non-symlink file",
+    "owner-only permissions (0600 or stricter)",
+    "all referenced private inputs present and digest-bound"
+  ],
+  "requiredManifestSections": [
+    "format",
+    "plan",
+    "projection",
+    "authorization",
+    "profiles.network",
+    "providerPrerequisites",
+    "providerAccess",
+    "clusterLifecycle",
+    "lifecycleObservation",
+    "enablement",
+    "networkObservation",
+    "runtimeBinding",
+    "targetAccess",
+    "receiptDirectory"
+  ],
+  "unusedPostRuntimeSections": [
+    "profiles.platform",
+    "profiles.aggregate",
+    "targetCredential",
+    "targetRegistration",
+    "platformApplications",
+    "observabilityCredentials",
+    "platformObservation",
+    "aggregateEvidence",
+    "observabilityCollector"
+  ],
+  "offlineModes": [
+    "--dry-run",
+    "--prepare"
+  ],
+  "offlineApiContacted": false,
+  "offlineMutationAllowed": false,
+  "liveRequiredFlags": [
+    "--live",
+    "--execute",
+    "--expected-manifest-digest",
+    "--independent-evidence-public-key",
+    "--terminal-marker"
+  ],
+  "terminalMarkerName": "executor-terminal",
+  "liveStageOrder": [
+    "provider-prerequisites",
+    "cluster-lifecycle",
+    "lifecycle-observation",
+    "enablement",
+    "network-observation",
+    "runtime-binding",
+    "target-access"
+  ],
+  "acceptedPlanStageCounts": [
+    7,
+    12
+  ],
+  "preferredPlanStageCount": 7,
+  "postRuntimeMaterialRequired": false,
+  "liveMutationAllowed": true
+}

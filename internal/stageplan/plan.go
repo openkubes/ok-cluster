@@ -439,3 +439,17 @@ func (binding Binding) RequireInput(stageID, name, expectedDigest string) error 
 	}
 	return errors.New("staged execution plan does not bind the required artifact")
 }
+
+// ErrRecoveryExecutionDisabled prevents artifact consistency from being promoted
+// into execution authority. Legacy executions have no atomic source-suffix gate.
+var ErrRecoveryExecutionDisabled = errors.New("recovery execution is disabled pending an authoritative atomic reservation and legacy-executor fencing")
+
+// RequireExecutionEnabled is a deny gate, not an authorization check. Offline
+// inspection may still describe a recovery plan. No execution path may use it
+// until both the shared atomic gate and safe legacy fencing are implemented.
+func (binding Binding) RequireExecutionEnabled() error {
+	if binding.RecoverySourcePlanDigest != "" || binding.verifiedRecoverySource != "" {
+		return ErrRecoveryExecutionDisabled
+	}
+	return nil
+}

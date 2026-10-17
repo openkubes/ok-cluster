@@ -36,7 +36,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"authority stage":        {[]string{"authority", "stage", "--help"}, []string{"launch execute", "separate approval"}},
 		"evidence":               {[]string{"evidence", "--help"}, []string{"ok evidence observability", "independent evidence"}},
 		"evidence observability": {[]string{"evidence", "observability", "--help"}, []string{"observability serve", "configured listener"}},
-		"cluster create":         {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "may create cluster resources", "lifecycle operator owns", "does not renew provider credentials"}},
+		"cluster create":         {[]string{"cluster", "create", "--help"}, []string{"--file", "--dry-run", "--prepare", "--live --execute", "before stages, API calls or grant issuance", "lifecycle operator owns", "does not renew provider credentials"}},
 		"create requirements":    {[]string{"cluster", "create", "requirements", "--help"}, []string{"machine-readable", "reads no file", "does not prepare"}},
 		"create template":        {[]string{"cluster", "create", "manifest-template", "--help"}, []string{"manifest skeleton", "invalid placeholder", "authoritative renderer"}},
 		"create plan template":   {[]string{"cluster", "create", "plan-template", "--help"}, []string{"seven-stage", "NO-GO", "authoritative renderer"}},
@@ -45,7 +45,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"cluster dry-run":        {[]string{"cluster", "dry-run", "--help"}, []string{"dry-run serve", "legacy HTTP validation"}},
 		"cluster stage":          {[]string{"cluster", "stage", "--help"}, []string{"Expert stage-level", "observe", "launch"}},
 		"cluster stage run":      {[]string{"cluster", "stage", "run", "--help"}, []string{"Manual Bare-MVP order", "provider-prerequisites", "separate approval"}},
-		"stage run full":         {[]string{"cluster", "stage", "run", "full", "--help"}, []string{"in-process executor", "four-object installation plan", "different live boundaries"}},
+		"stage run full":         {[]string{"cluster", "stage", "run", "full", "--help"}, []string{"Offline bundle inspection", "four-object installation plan", "rejected before Stage 1"}},
 		"stage observe":          {[]string{"cluster", "stage", "observe", "--help"}, []string{"lifecycle", "network", "do not repair"}},
 		"stage bind":             {[]string{"cluster", "stage", "bind", "--help"}, []string{"runtime identity", "Bare-MVP Stage 6", "--execute"}},
 	} {
@@ -287,7 +287,7 @@ func TestClusterCreateRequirementsAreMachineReadableAndNonMutating(t *testing.T)
 
 func TestClusterCreateProviderOwnershipIsDescriptiveAndDoesNotChangeManifest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{"cluster", "create", "requirements"}, &stdout, &stderr); err != nil {
+	if err := run([]string{"cluster", "create", "requirements", "--format", clusterCreateRequirementsFormatV2}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	var requirements clusterCreateRequirements
@@ -295,10 +295,13 @@ func TestClusterCreateProviderOwnershipIsDescriptiveAndDoesNotChangeManifest(t *
 		t.Fatal(err)
 	}
 	ownership := requirements.ProviderAccessOwnership
+	if ownership == nil {
+		t.Fatal("v2 omitted ownership metadata")
+	}
 	if ownership.LifecycleOwner != "lifecycle-operator" || !ownership.RequiredAfterExecution || ownership.AutomaticRenewalByCLI || ownership.OfflineValidationProvesOngoingAccess || len(ownership.OperatorHandoff) != 3 {
 		t.Fatalf("provider lifecycle responsibility differs: %#v", ownership)
 	}
-	if stderr.Len() != 0 || requirements.Format != clusterCreateRequirementsFormat {
+	if stderr.Len() != 0 || requirements.Format != clusterCreateRequirementsFormatV2 {
 		t.Fatal("requirements routing or format changed")
 	}
 	for _, section := range requirements.RequiredManifestSections {
@@ -426,7 +429,7 @@ func testClusterCreateFileDryRunAndPrepareAreNonMutating(t *testing.T, prefix []
 		flag, state, next string
 	}{
 		{"--dry-run", "VALIDATED", "review the validated identities, then run --prepare with the same file"},
-		{"--prepare", "PREPARED", "obtain separate live approval; pass manifestDigest as --expected-manifest-digest"},
+		{"--prepare", "PREPARED", "execution blocked pending bounded workload credential bootstrap; no live run is supported"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if err := run(append(append([]string{}, prefix...), "--file", "/private/bare-run.json", mode.flag), &stdout, &stderr); err != nil {
@@ -441,7 +444,7 @@ func testClusterCreateFileDryRunAndPrepareAreNonMutating(t *testing.T, prefix []
 			receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP || receipt.ManifestDigest != testSHA("1") {
 			t.Fatalf("unsafe or incomplete receipt: %#v", receipt)
 		}
-		for _, forbidden := range []string{"/private/", "bare-run.json", "credential", "kubeconfig", "token"} {
+		for _, forbidden := range []string{"/private/", "bare-run.json", "kubeconfig", "token"} {
 			if strings.Contains(strings.ToLower(stdout.String()), forbidden) {
 				t.Fatalf("offline receipt disclosed %q: %s", forbidden, stdout.String())
 			}

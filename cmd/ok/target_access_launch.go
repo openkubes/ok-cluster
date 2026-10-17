@@ -149,6 +149,7 @@ func runClusterStageRunTargetAccessPackage(arguments []string, stdout, stderr io
 	raw, receipt, err := materializeTargetAccessStagePackage(runner.TargetAccessStagePackageConfig{
 		Bundle: runner.TargetAccessStageBundleConfig{
 			PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
+			RecoveryBindingPath: resume.RecoveryBindingPath, RecoveryBindingDigest: resume.RecoveryBindingDigest,
 			GrantPath: *grantPath, GrantPublicKeyPath: *grantKeyPath, EvaluationTime: evaluatedAt,
 			ArtifactPath: *artifactPath, ExpectedObjects: expectedObjects,
 		},
@@ -292,6 +293,7 @@ func (values *targetAccessLaunchMaterialFlags) config() (runner.TargetAccessStag
 		Package: runner.TargetAccessStagePackageConfig{
 			Bundle: runner.TargetAccessStageBundleConfig{
 				PlanPath: resume.PlanPath, PlanExpected: resume.PlanExpected, Receipts: resume.Receipts,
+				RecoveryBindingPath: resume.RecoveryBindingPath, RecoveryBindingDigest: resume.RecoveryBindingDigest,
 				GrantPath: *values.grantPath, GrantPublicKeyPath: *values.grantKeyPath, EvaluationTime: evaluatedAt,
 				ArtifactPath: *values.artifactPath, ExpectedObjects: expectedObjects,
 			},

@@ -15,7 +15,7 @@ import (
 func TestDeriveObservabilityIndependentEvidenceIdentityUsesVerifiedRuntimeTruth(t *testing.T) {
 	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
-	manifest, _, err := LoadFullRunExecutionManifest(manifestPath)
+	manifest, _, err := inspectFullRunExecutionManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
@@ -30,7 +31,7 @@ func OpenKubernetesObservabilityFullRunActivation(path string, runtime Kubernete
 	manifest, manifestReceipt, err := LoadFullRunExecutionManifest(path)
 	receipt.Manifest = manifestReceipt
 	if err != nil {
-		return nil, receipt, errors.New("load Kubernetes observability full-run manifest")
+		return nil, receipt, fmt.Errorf("load Kubernetes observability full-run manifest: %w", err)
 	}
 	document := manifest.document
 	workload := NewDeferredFullRunWorkloadAuthorityResolver()

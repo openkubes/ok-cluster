@@ -1,0 +1,56 @@
+OK-147 / PR #437 re-review evidence
+Started (UTC): 2026-10-16T19:52:56.722007+00:00
+Effective UID: 501
+Go: go version go1.26.7 darwin/amd64
+Go/Makefile source SHA-256: 9d21657d578ef21ecae3826bddf4d3241a95318cc41e2e9d4ae408cf5717fde1
+Command: make ok-cli-offline-smoke
+--- complete combined stdout/stderr ---
+Built <worktree>/.tools/bin/ok
+ok  	github.com/openkubes/ok-cluster/cmd/ok	3.102s
+ok  	github.com/openkubes/ok-cluster/cmd/ok	5.343s
+ok  	github.com/openkubes/ok-cluster/cmd/ok	0.701s
+ok  	github.com/openkubes/ok-cluster/cmd/ok	3.884s
+ok  	github.com/openkubes/ok-cluster/internal/runner	2.952s
+test_configured_failure_remains_nonzero_without_retry (__main__.CanonicalDestroyCLIIntegrationTests.test_configured_failure_remains_nonzero_without_retry) ... ok
+test_configured_no_from_unrelated_directory_never_contacts_owner (__main__.CanonicalDestroyCLIIntegrationTests.test_configured_no_from_unrelated_directory_never_contacts_owner) ... ok
+test_configured_ok_keeps_owner_durable_convergence_and_evidence (__main__.CanonicalDestroyCLIIntegrationTests.test_configured_ok_keeps_owner_durable_convergence_and_evidence) ... ok
+test_ctrl_c_during_prompt_cannot_delete (__main__.CanonicalDestroyCLIIntegrationTests.test_ctrl_c_during_prompt_cannot_delete) ... ok
+test_empty_answer_defaults_to_no (__main__.CanonicalDestroyCLIIntegrationTests.test_empty_answer_defaults_to_no) ... ok
+test_eof_during_prompt_cannot_delete (__main__.CanonicalDestroyCLIIntegrationTests.test_eof_during_prompt_cannot_delete) ... ok
+test_invalid_answer_cannot_delete (__main__.CanonicalDestroyCLIIntegrationTests.test_invalid_answer_cannot_delete) ... ok
+test_malformed_saved_config_fails_before_confirmation (__main__.CanonicalDestroyCLIIntegrationTests.test_malformed_saved_config_fails_before_confirmation) ... ok
+test_no_cancels_without_starting_lifecycle (__main__.CanonicalDestroyCLIIntegrationTests.test_no_cancels_without_starting_lifecycle) ... ok
+test_ok_delegates_to_real_lifecycle_and_keeps_evidence (__main__.CanonicalDestroyCLIIntegrationTests.test_ok_delegates_to_real_lifecycle_and_keeps_evidence) ... ok
+test_owner_failure_stays_nonzero_and_is_not_retried (__main__.CanonicalDestroyCLIIntegrationTests.test_owner_failure_stays_nonzero_and_is_not_retried) ... ok
+test_piped_ok_is_rejected (__main__.CanonicalDestroyCLIIntegrationTests.test_piped_ok_is_rejected) ... ok
+test_configured_failure_remains_nonzero_without_retry (__main__.DestroyCLIIntegrationTests.test_configured_failure_remains_nonzero_without_retry) ... ok
+test_configured_no_from_unrelated_directory_never_contacts_owner (__main__.DestroyCLIIntegrationTests.test_configured_no_from_unrelated_directory_never_contacts_owner) ... ok
+test_configured_ok_keeps_owner_durable_convergence_and_evidence (__main__.DestroyCLIIntegrationTests.test_configured_ok_keeps_owner_durable_convergence_and_evidence) ... ok
+test_ctrl_c_during_prompt_cannot_delete (__main__.DestroyCLIIntegrationTests.test_ctrl_c_during_prompt_cannot_delete) ... ok
+test_empty_answer_defaults_to_no (__main__.DestroyCLIIntegrationTests.test_empty_answer_defaults_to_no) ... ok
+test_eof_during_prompt_cannot_delete (__main__.DestroyCLIIntegrationTests.test_eof_during_prompt_cannot_delete) ... ok
+test_invalid_answer_cannot_delete (__main__.DestroyCLIIntegrationTests.test_invalid_answer_cannot_delete) ... ok
+test_malformed_saved_config_fails_before_confirmation (__main__.DestroyCLIIntegrationTests.test_malformed_saved_config_fails_before_confirmation) ... ok
+test_no_cancels_without_starting_lifecycle (__main__.DestroyCLIIntegrationTests.test_no_cancels_without_starting_lifecycle) ... ok
+test_ok_delegates_to_real_lifecycle_and_keeps_evidence (__main__.DestroyCLIIntegrationTests.test_ok_delegates_to_real_lifecycle_and_keeps_evidence) ... ok
+test_owner_failure_stays_nonzero_and_is_not_retried (__main__.DestroyCLIIntegrationTests.test_owner_failure_stays_nonzero_and_is_not_retried) ... ok
+test_piped_ok_is_rejected (__main__.DestroyCLIIntegrationTests.test_piped_ok_is_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 24 tests in 43.546s
+
+OK
+test_actual_owner_render_is_private_no_go_and_create_only (__main__.IntentRenderTests.test_actual_owner_render_is_private_no_go_and_create_only) ... ok
+test_dry_run_writes_nothing_and_claims_no_preparation (__main__.IntentRenderTests.test_dry_run_writes_nothing_and_claims_no_preparation) ... ok
+test_invalid_profile_does_not_reserve_output (__main__.IntentRenderTests.test_invalid_profile_does_not_reserve_output) ... ok
+test_saved_paths_render_without_reading_any_kubeconfig (__main__.IntentRenderTests.test_saved_paths_render_without_reading_any_kubeconfig) ... ok
+test_yaml_prepare_and_live_cannot_open_owner_or_marker (__main__.IntentRenderTests.test_yaml_prepare_and_live_cannot_open_owner_or_marker) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.619s
+
+OK
+Offline ok CLI smoke passed; no cluster was contacted
+
+--- end complete output ---
+Exit status: 0

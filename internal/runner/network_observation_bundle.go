@@ -47,6 +47,9 @@ func LoadNetworkObservationStageBundle(config StageResumeConfig) (VerifiedNetwor
 	if err != nil {
 		return VerifiedNetworkObservationStageBundle{}, err
 	}
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return VerifiedNetworkObservationStageBundle{}, err
+	}
 	decision, err := cursor.Decision()
 	if err != nil || decision.State != "NEXT" || decision.StageID != "network-observation" || decision.Kind != "Observation" || decision.Authority != "workload" || decision.RequiresAuthorization || decision.Operation != "" {
 		return VerifiedNetworkObservationStageBundle{}, errors.New("verified prefix does not select network observation")

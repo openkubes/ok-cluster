@@ -200,7 +200,7 @@ Commands:
   materialize      Write verified private activation material locally
   launch prepare   Build and review an installation plan offline
   launch execute   Install the exact authority objects; requires --execute
-  serve            Run the bounded authority service
+  serve            Run the bounded authority service (Stage-7 signing disabled)
 
 Preparing, packaging, or materializing is not live authorization. Launch
 execute is a separate mutation boundary and requires separate approval.
@@ -243,7 +243,7 @@ use "ok cluster create --file ... --dry-run".
 }
 
 func writeClusterCreateHelp(output io.Writer) {
-	fmt.Fprint(output, `Validate, prepare, or execute one bound Bare-MVP cluster run
+	fmt.Fprint(output, `Validate cluster intent; manifest execution is currently blocked
 
 Usage:
   ok up cluster-template
@@ -295,9 +295,9 @@ and operation receipts are unchanged. Bare "ok up" only displays this help.
 
 Modes (exactly one is required):
   --dry-run    Verify all bound local inputs and print a non-mutating summary
-  --prepare    Verify the manifest and print the identity required for live mode
-  --live       Contact bound APIs and permit the exact workflow mutations;
-               also requires --execute and the prepared identity
+  --prepare    Validate locally; certificate-bound manifests currently fail closed
+  --live       Currently blocked before Stage 1 pending bounded credential bootstrap;
+               --execute does not bypass this restriction
 
 Input:
   -f, --file   Private full-run manifest bound to completionMode bare-cluster-mvp/v1
@@ -313,8 +313,10 @@ Safety:
   do not contact a cluster, open a network client, or execute a stage.
   Their JSON receipts report apiContacted=false, authorizationConsumed=false,
   mutationAllowed=false, and the next required operator action.
-  Live mode runs the Stage 1-7 executor locally, may create cluster resources,
-  is single-use and bounded, and has no retry, rollback, or cleanup.
+  Current private-manifest --dry-run, --prepare and --live requests reject
+  unsupported certificate mode before stages, API calls or grant issuance.
+  The same credential dependency blocks downstream Stages 8-12 / PlatformReady.
+  No completing Stage 1-7 or Stage 1-12 live workflow is supported yet.
 
 Provider access:
   The lifecycle operator owns provider credential validity and rotation after
@@ -330,15 +332,18 @@ func writeClusterCreateRequirementsHelp(output io.Writer) {
 	fmt.Fprint(output, `Print the machine-readable Bare-MVP input contract
 
 Usage:
-  ok cluster create requirements
+  ok cluster create requirements [--format ok-cli-cluster-create-requirements/v1|ok-cli-cluster-create-requirements/v2]
 
 The command reads no file, opens no network client, and emits static JSON for
 renderer and packaging integrations. The contract reports that Stage 8-12
 post-runtime material is not required for Bare-MVP. It does not prepare or
 authorize a run.
 
-providerAccessOwnership is descriptive handoff metadata: the lifecycle operator
+The default v1 omits providerAccessOwnership. Explicit v2 includes that
+descriptive handoff metadata: the lifecycle operator
 owns ongoing provider access; it adds no manifest fields or renewal authority.
+Both versions retain the historical workflow schema, including liveMutationAllowed.
+That field is not runtime readiness: certificate-bound live execution is blocked.
 `)
 }
 
@@ -428,13 +433,14 @@ Mutation-capable execute or launch commands require their own explicit
 --execute gate and separate approval. Never replay a stopped or uncertain
 mutation; preserve its receipt and inspect the durable state first.
 
-The product path "ok cluster create --file ..." is preferred for a complete
-Bare-MVP run. The commands above are an expert diagnostic and recovery surface.
+The product private-manifest path is blocked pending bounded credential
+bootstrap. Recovery execution is disabled; these flags grant no continuation.
+The commands above retain diagnostic and separately supported expert surfaces.
 `)
 }
 
 func writeClusterStageRunFullHelp(output io.Writer) {
-	fmt.Fprint(output, `Prepare or execute a complete manifest-bound runner
+	fmt.Fprint(output, `Inspect or package a manifest-bound runner (live execution currently blocked)
 
 Usage:
   ok cluster stage run full prepare [flags]
@@ -445,16 +451,17 @@ Usage:
   ok cluster stage run full launch execute [flags] --execute
 
 Commands:
-  prepare          Verify the complete private manifest offline
-  execute          Run the single-use in-process executor against bound APIs
+  prepare          Reject unsupported manifests locally before execution
+  execute          Currently rejected before Stage 1
   package          Build the immutable Job-activation package offline
   materialize      Write a verified private execution bundle
   launch prepare   Build and review the four-object installation plan offline
-  launch execute   Install the exact activation objects on ok-mgmt
+  launch execute   Currently rejected before any activation API request
 
-The execute and launch-execute paths are different live boundaries. Both
-require separate approval and an explicit --execute gate. Most operators
-should use "ok cluster create --file ..." instead of this expert surface.
+Current certificate-bound manifests are rejected before Stage 1, APIs or grants.
+Prepare/execute and Job launch cannot enable the Stage 1-7 or Stage 1-12 path.
+Offline bundle inspection/packaging is not execution readiness. Bounded credential
+bootstrap remains an open dependency. Recovery execution is disabled.
 `)
 }
 

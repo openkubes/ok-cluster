@@ -238,7 +238,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestClusterIntent'
 	@go test -mod=readonly ./internal/runner -count=1 \
-		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix'
+		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix|TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne|TestKubernetesLifecycleWorkloadAuthorityMaterializerRejectsBeforeAPIContact'
 	@$(SCRIPT_DIR)/.tools/bin/ok --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok destroy --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok destroy cluster --help >/dev/null
