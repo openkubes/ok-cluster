@@ -55,10 +55,12 @@ func finishClusterIntentRunnerHandoff(material clusterIntentMaterialized, plan c
 		MutationAllowed             bool                                   `json:"mutationAllowed"`
 		AuthorityDeploymentVerified bool                                   `json:"authorityDeploymentVerified"`
 		LiveAuthorized              bool                                   `json:"liveAuthorized"`
+		NextCommands                clusterIntentNextCommands              `json:"nextCommands"`
 		NextAction                  string                                 `json:"nextAction"`
 	}{Format: "ok-cli-cluster-runner-handoff/v1", State: "PREPARED_NOT_AUTHORIZED", ManifestPath: manifestPath, ManifestDigest: verified.ManifestDigest,
 		PreparationReceiptDigest: preparationDigest, RuntimeInputsDigest: draft.RuntimeInputsDigest, IndependentEvidenceKeyID: draft.IndependentEvidenceKeyID, Manifest: verified, RunnerReady: true,
-		NextAction: "review generated plan and authority deployment separately; obtain explicit live approval for the technical JSON manifest digest; use the same independently reviewed evidence key; YAML --live remains blocked"}
+		NextCommands: preparedClusterIntentCommands(manifestPath, verified.ManifestDigest, draft.IndependentEvidencePublicKeyPath),
+		NextAction:   "review generated plan and authority deployment separately; obtain explicit live approval for the technical JSON manifest digest; use the same independently reviewed evidence key; YAML --live remains blocked"}
 	raw, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		return err
@@ -69,4 +71,20 @@ func finishClusterIntentRunnerHandoff(material clusterIntentMaterialized, plan c
 	}
 	_, err = stdout.Write(raw)
 	return err
+}
+
+// Argument arrays are review hints, never executed or interpreted by a shell.
+// Neither their presence nor the preparation receipt authorizes live execution.
+type clusterIntentNextCommands struct {
+	DryRun            []string `json:"dryRun"`
+	LiveAfterApproval []string `json:"liveAfterApproval"`
+}
+
+func preparedClusterIntentCommands(manifestPath, manifestDigest, evidenceKeyPath string) clusterIntentNextCommands {
+	return clusterIntentNextCommands{
+		DryRun: []string{"ok", "up", "--file", manifestPath, "--dry-run"},
+		LiveAfterApproval: []string{"ok", "up", "--file", manifestPath, "--live", "--execute",
+			"--expected-manifest-digest", manifestDigest, "--independent-evidence-public-key", evidenceKeyPath,
+			"--terminal-marker", filepath.Join(filepath.Dir(manifestPath), "executor-terminal")},
+	}
 }

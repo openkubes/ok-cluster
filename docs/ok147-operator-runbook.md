@@ -286,6 +286,19 @@ On successful local verification:
   `liveAuthorized` remain false. Exit zero is not provisioning success.
 - The earlier `preparation-receipt.json` remains its immutable static-only v2
   snapshot; it is not rewritten to change the result of that earlier phase.
+- The handoff receipt additionally supplies `nextCommands.dryRun` and
+  `nextCommands.liveAfterApproval` as argument arrays, not shell strings. Both
+  select the generated technical JSON manifest through the existing `ok up`
+  runner path. The live hint includes the verified manifest digest, explicitly
+  selected independent evidence key path and absolute `executor-terminal` path
+  under this private preparation directory. Spaces and shell metacharacters
+  remain literal argument data; never join these arrays into `eval` or a shell
+  command. The CLI does not execute either hint. Their presence is not approval.
+  Only run the live hint after separately reviewing authority deployment and
+  granting approval for this exact digest. Do not repeat it after STOP; no
+  automatic retry/resume or new terminal marker is implied. If inputs change,
+  the normal runner verification still applies; these hints do not pin a file's
+  future contents or prove credential validity or convergence.
 
 Review authority deployment separately and obtain explicit live approval for the
 generated technical manifest digest. YAML `--live` is still blocked; the existing
@@ -301,8 +314,9 @@ contract; those profiles fail closed, never fall back to Talos. See
 
 Existing technical JSON inputs retain all previous modes and receipts (including
 JSON manifests using a `.yaml`/`.yml` filename). No existing Candidate, receipt,
-authority or terminal is rewritten by this front end. Interactive configuration,
-live creation from friendly YAML and full binding remain separate follow-ups.
+authority or terminal is rewritten by this front end. Interactive configuration
+is available through `ok config init`. Direct live creation from friendly YAML
+and deployed-authority verification remain separate follow-ups.
 
 ## Bare-MVP closure and ongoing provider access
 

@@ -42,9 +42,10 @@ type BareClusterManifestConfig struct {
 }
 
 type BareClusterManifestDraft struct {
-	Raw                      []byte
-	RuntimeInputsDigest      string
-	IndependentEvidenceKeyID string
+	Raw                              []byte
+	RuntimeInputsDigest              string
+	IndependentEvidenceKeyID         string
+	IndependentEvidencePublicKeyPath string
 }
 
 // BuildBareClusterManifest creates private manifest bytes, not a verified
@@ -118,7 +119,8 @@ func BuildBareClusterManifest(runtimeInputsPath string, config BareClusterManife
 	if err != nil {
 		return BareClusterManifestDraft{}, errors.New("encode fresh full-run manifest")
 	}
-	return BareClusterManifestDraft{Raw: append(manifest, '\n'), RuntimeInputsDigest: digest.SHA256(raw), IndependentEvidenceKeyID: keyID}, nil
+	return BareClusterManifestDraft{Raw: append(manifest, '\n'), RuntimeInputsDigest: digest.SHA256(raw), IndependentEvidenceKeyID: keyID,
+		IndependentEvidencePublicKeyPath: inputs.IndependentEvidencePublicKeyPath}, nil
 }
 
 func verifyBareClusterCredentialReferences(inputs bareClusterRuntimeInputs) error {

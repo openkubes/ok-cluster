@@ -197,6 +197,22 @@ class IntentRenderTests(unittest.TestCase):
         self.assertEqual(receipt['independentEvidenceKeyId'], 'sha256:' + hashlib.sha256(bytes(range(32, 64))).hexdigest())
         manifest_path = self.output / 'full-run-manifest.json'
         self.assertEqual(receipt['manifestPath'], str(manifest_path))
+        commands = receipt['nextCommands']
+        self.assertEqual(commands['dryRun'], ['ok', 'up', '--file', str(manifest_path), '--dry-run'])
+        self.assertEqual(commands['liveAfterApproval'], ['ok', 'up', '--file', str(manifest_path),
+            '--live', '--execute', '--expected-manifest-digest', receipt['manifestDigest'],
+            '--independent-evidence-public-key', inputs['independentEvidencePublicKeyPath'],
+            '--terminal-marker', str(self.output / 'executor-terminal')])
+        # Exercise only the non-mutating suggestion, never the live hint.
+        dry_run = subprocess.run([str(BINARY), *commands['dryRun'][1:]],
+            capture_output=True, text=True, env=self.env, cwd=self.home, timeout=20)
+        self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+        summary = json.loads(dry_run.stdout)
+        self.assertEqual(summary['manifestDigest'], receipt['manifestDigest'])
+        self.assertEqual(summary['state'], 'VALIDATED')
+        for name in ('apiContacted', 'authorizationConsumed', 'mutationAllowed'):
+            self.assertIs(summary[name], False)
+        self.assertFalse((self.output / 'executor-terminal').exists())
         manifest = json.loads(manifest_path.read_text())
         self.assertEqual(manifest['providerAccess']['kubeconfigFile'], inputs['providerAccessKubeconfigFile'])
         self.assertEqual(manifest['providerPrerequisites']['authority'], inputs['infrastructure'])
