@@ -72,3 +72,18 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/network-tests"
           "$RUNNER_TEMP/network-tests/bin/pip" install PyYAML==6.0.3
           PATH="$RUNNER_TEMP/network-tests/bin:$PATH" OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" python3 -B tests/ok_cli_network_suggest_test.py
+
+      - name: Check out reviewed profile owner for offline preparation tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: openkubes/ok-linux
+          ref: a1687263d46c48e47c14f5bf202c9a652d7c1a71
+          path: .ci/ok-linux
+          persist-credentials: false
+
+      - name: Test automatic preparation and runner handoff without cluster access
+        run: |
+          PATH="$RUNNER_TEMP/network-tests/bin:$PATH" \
+          OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" \
+          OK_CLI_TEST_OK_LINUX_PATH="$GITHUB_WORKSPACE/.ci/ok-linux" \
+          python3 -B tests/ok147_cluster_intent_test.py

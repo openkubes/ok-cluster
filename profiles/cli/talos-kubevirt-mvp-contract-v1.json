@@ -1,0 +1,19 @@
+{
+  "format": "ok-cli-contract-recipe/v1",
+  "profile": "talos-kubevirt-mvp",
+  "apiVersion": "test.openkubes.io/v1alpha3",
+  "kind": "ClusterIntentFixture",
+  "connectivity": {
+    "profile": "datacenter-isolated-v1",
+    "forbiddenCIDRs": ["192.168.100.0/24"]
+  },
+  "controlPlaneEndpoint": {
+    "mode": "provider-allocated",
+    "serviceType": "LoadBalancer",
+    "addressFamily": "IPv4",
+    "allocationAuthority": "CAPK+MetalLB"
+  },
+  "enablementProfile": "cilium-fixture-v2",
+  "platformProfile": "minimal-observability-v4",
+  "requiredConditions": ["InfrastructureReady", "ControlPlaneAvailable", "NetworkReady", "PlatformReady"]
+}

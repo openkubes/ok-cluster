@@ -111,18 +111,61 @@ After `ok config init` has saved trusted lifecycle/profile source paths:
 
 ```sh
 ok up --file cluster.yaml --dry-run
+ok up --file cluster.yaml --prepare
 ok up --file cluster.yaml
 ```
 
 The first command retains the existing offline intent-only check: no credential
 reads without explicit YAML target references, no state files or reservation.
-Explicit references are locally inspected as described below. The second requires a terminal and manages
-local preparation for you. Select the existing reviewed Contract file and private
-runtime-reference JSON when prompted. These are operator/platform inputs that
-the small YAML cannot supply; the CLI never invents authority or issues credentials.
+Explicit references are locally inspected as described below. `--prepare` manages
+local preparation without requiring a terminal and never offers live confirmation.
+The normal command requires a terminal, but no longer asks for Contract/runtime
+paths. It compiles a fresh Contract using the versioned Contract recipe and the
+existing owning profile resolver, canonicalizer and projection verifier, then
+builds the existing seven-stage plan. `stageauthority.FromPlan` derives the exact
+bounded **policy request**, not a grant, installed policy, RBAC or signed outcome.
+No historical Candidate is renamed and no authority/credential is invented.
 Saved config supplies only the two source paths, not management/provider access.
 
-The CLI displays cluster name, profile/sizing, endpoint/CIDRs, authority identities,
+Without platform inputs the result is `AWAITING_PLATFORM_AUTHORITY`, nonzero
+NO-GO with `runnerReady=false`. The Contract, stage artifacts and policy request
+are complete locally, not authorized for execution. Repeating the command checks
+the same immutable artifacts and reports the same request digest; it does not
+rerender. The CLI currently has **no platform issuer/broker integration**. This
+change automates preparation, not the external decision to grant new authority.
+
+The platform operator separately reviews/deploys the exact bounded policy and
+provides existing private runtime references through this private create-only
+handoff at `<managed-run>/platform-handoff.json` (paths/digests are examples):
+
+```json
+{
+  "format": "ok-cli-platform-handoff/v1",
+  "requestDigest": "sha256:<exact-platform-preparation-request-bytes>",
+  "runtimeInputsPath": "/private/platform/candidate-runtime-inputs.json",
+  "runtimeInputsDigest": "sha256:<exact-private-runtime-input-bytes>"
+}
+```
+
+This local descriptor is **not an authorization grant or deployment attestation**.
+It must bind `<managed-run>/platform-preparation-request.json` exactly and cannot
+select a different YAML, plan or implicit administrator kubeconfig. Authority and
+independent evidence keys remain distinct; the existing full-run verifier and
+target/CA checks must accept the supplied references. No secret/key/token content
+is copied into request metadata. Do not use a previous Candidate's manifest or
+outcome as the handoff. No broker command, TokenRequest, refresh, port-forward or
+policy installation is executed by preparation.
+
+After the separate handoff, the same short command completes only the local
+runner manifest through the existing owner and reports `PREPARED_NOT_AUTHORIZED`.
+`--prepare` still never executes. An unflagged terminal invocation delegates to
+the existing explicit `ok/no` confirmation and single-use executor below. The
+handoff-start fence prevents retry of an incomplete manifest materialization;
+the existing execution-start fence prevents automatic replay of cluster actions.
+Binary/YAML/static input drift and partial preparation stop without overwrite or
+repair. All prior evidence remains retained. A request is not readiness evidence.
+
+Once a verified platform handoff exists, the CLI displays cluster name, profile/sizing, endpoint/CIDRs, authority identities,
 private evidence location, manifest digest and independent evidence key identity.
 It describes the prerequisite/RBAC and resource mutations and asks you to confirm
 separately reviewed name/IP absence, authority deployment and approval of that

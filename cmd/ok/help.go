@@ -254,6 +254,7 @@ Usage:
   ok up cluster-template
   ok up network-suggest --file cluster.yaml --online --output cluster.proposed.yaml
   ok up --file cluster.yaml --dry-run
+  ok up --file cluster.yaml --prepare       # automatic local preparation only
   ok up --file cluster.yaml                 # guided preparation and ok/no approval
 
 Expert workflows (scripts must select an explicit mode):
@@ -279,8 +280,10 @@ Expert workflows (scripts must select an explicit mode):
 
 "ok up" is an exact shorthand for "ok cluster create", including preparation
 subcommands and legacy contract-planning flags. A friendly YAML without a mode
-starts the guided terminal workflow: select existing reviewed Contract/private
-runtime reference files, prepare locally, review the exact plan, then type ok/no.
+starts automatic local Contract/plan/policy-request preparation without technical
+file prompts. Without a separately provided request-bound platform handoff it
+stops AWAITING_PLATFORM_AUTHORITY (NO-GO). No platform credential issuer is added.
+With verified platform inputs, review the exact plan, then type ok/no.
 Trusted source paths come from ok config init; credentials are never inferred
 from general config, issued or renewed. No terminal or no explicit ok: no runner.
 Preparation is managed privately in <OS user config directory>/ok/runs/<name>.
@@ -300,7 +303,9 @@ match the existing bounded runtime authorities/provider access before execution.
 Friendly YAML --prepare checks local Contract/projection inputs and generates
 credential-free stage artifacts and a verified seven-stage NO-GO plan from the
 versioned talos-kubevirt-mvp recipe (only its reviewed E/P revisions). It
-requires an explicit reviewed --contract and new --output directory.
+uses the reviewed Contract recipe when --contract is omitted. An expert --output
+selects a new directory; with no expert input flags, --prepare manages the local
+preparation and platform request, never a live confirmation.
 Without --runtime-inputs, YAML --prepare exits
 non-zero with a static NO-GO receipt. Explicit private 0600 --runtime-inputs may
 reference existing credentials and distinct Stage Authority/evidence trust keys;

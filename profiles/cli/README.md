@@ -58,3 +58,22 @@ Review recipe changes together with the pinned baseline digest in the recipe
 tests. A passing static plan does not make `--prepare` successful or YAML live
 available: authority policies, existing private access, full-run manifest and
 independent evidence still require their own verified bindings.
+
+## Automatic Contract compilation
+
+`talos-kubevirt-mvp-contract-v1.json` declares the existing internal Contract
+schema/kind and fixed connectivity/endpoint/condition and E/P profile policies.
+It is a reviewed recipe, not a historical Contract or runtime resource. The
+existing resolver supplies OS/image/provider/sizing values; the runner recipe
+supplies the reviewed E/P revisions. The compiler accepts only the friendly
+intent and trusted profile path, with network/process calls blocked. The same
+canonicalizer and projection verifier still validate the complete result.
+Source digests are included in the generated binding/fixture identity.
+
+Normal `ok up` and bare YAML `--prepare` now generate this Contract, the static
+seven-stage plan and a bounded Stage Authority policy request automatically.
+Platform authority/credential issuance is NOT implemented or implicitly granted;
+without a separately supplied request-bound platform handoff the result remains
+`AWAITING_PLATFORM_AUTHORITY`. Existing expert `--contract` inputs are preserved,
+never silently replaced. Full preparation still requires independent evidence,
+the existing manifest verifier and later separate live confirmation/convergence.

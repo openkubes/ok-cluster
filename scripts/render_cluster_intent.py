@@ -23,6 +23,21 @@ def digest(path):
     return 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def resolve_intent_config(intent, ok_linux_path):
+    """Owning static profile resolution shared with the Contract compiler."""
+    import render
+    from profile_resolvers.talos import resolve_talos_config
+    name = intent['metadata']['name']
+    config = {'name': name, 'type': 'talos', 'provider': 'kubevirt',
+        'controlPlane': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
+        'workers': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
+        'versions': {'kubernetes': 'v1.34.1'}, 'network': intent['spec']['network'],
+        'infraClusterSecretRef': {'name': 'external-infra-kubeconfig-' + name, 'namespace': name}}
+    render.validate_registry_trust(config)
+    render.validate_workload_user_namespaces(config)
+    return resolve_talos_config(config, Path(ok_linux_path))
+
+
 def main():
     os.umask(0o077)
     args = argparse.ArgumentParser()
@@ -74,17 +89,9 @@ def main():
     subprocess.Popen = denied
     sys.path.insert(0, str(root))
     import render
-    from profile_resolvers.talos import resolve_talos_config
     render.live_metallb_allocations = denied
     render.resolve_config = denied
-    config = {'name': name, 'type': 'talos', 'provider': 'kubevirt',
-        'controlPlane': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
-        'workers': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
-        'versions': {'kubernetes': 'v1.34.1'}, 'network': network,
-        'infraClusterSecretRef': {'name': 'external-infra-kubeconfig-' + name, 'namespace': name}}
-    render.validate_registry_trust(config)
-    render.validate_workload_user_namespaces(config)
-    config = resolve_talos_config(config, Path(options.ok_linux_path))
+    config = resolve_intent_config(intent, options.ok_linux_path)
     if options.bind:
         # The Go entry point already canonicalized this normalized Contract with
         # the owning versioned schema. Compare it against the actual resolved

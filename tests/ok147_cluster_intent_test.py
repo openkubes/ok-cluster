@@ -2,6 +2,7 @@
 """Actual CLI -> owning local renderer; no cluster/API/credential operations."""
 import hashlib
 import base64
+import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,8 @@ import unittest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / '.tools/bin/ok'
+BINARY = Path(os.environ.get('OK_CLI_TEST_BINARY', ROOT / '.tools/bin/ok'))
+PROFILES = Path(os.environ.get('OK_CLI_TEST_OK_LINUX_PATH', ROOT.parent / 'ok-linux'))
 
 
 class IntentRenderTests(unittest.TestCase):
@@ -41,7 +43,7 @@ class IntentRenderTests(unittest.TestCase):
     def render(self, extra=()):
         return subprocess.run([str(BINARY), 'up', 'render', '--file', str(self.input),
             '--output', str(self.output), '--lifecycle-root', str(ROOT),
-            '--ok-linux-path', str(ROOT.parent / 'ok-linux'), *extra],
+            '--ok-linux-path', str(PROFILES), *extra],
             capture_output=True, text=True, env=self.env, cwd=self.home, timeout=20)
 
     def test_actual_owner_render_is_private_no_go_and_create_only(self):
@@ -96,7 +98,7 @@ class IntentRenderTests(unittest.TestCase):
         management.write_text('not a kubeconfig; must never be decoded')
         provider.write_text('not a kubeconfig; must never be decoded')
         initialized = subprocess.run([str(BINARY), 'config', 'init',
-            '--lifecycle-root', str(ROOT), '--ok-linux-path', str(ROOT.parent / 'ok-linux'),
+            '--lifecycle-root', str(ROOT), '--ok-linux-path', str(PROFILES),
             '--clusters-dir', str(self.home), '--management-kubeconfig', str(management),
             '--provider-kubeconfig', str(provider)], capture_output=True, text=True,
             env=self.env, cwd=self.home, timeout=10)
@@ -138,7 +140,7 @@ class IntentRenderTests(unittest.TestCase):
         self.source_contract_raw = source.read_bytes()
         command = ['cluster', 'create'] if canonical else ['up']
         command += ['--prepare'] if prepare else ['bind']
-        paths = [] if saved_paths else ['--lifecycle-root', str(ROOT), '--ok-linux-path', str(ROOT.parent / 'ok-linux')]
+        paths = [] if saved_paths else ['--lifecycle-root', str(ROOT), '--ok-linux-path', str(PROFILES)]
         if runtime_inputs is not None:
             paths += ['--runtime-inputs', str(runtime_inputs)]
         return subprocess.run([str(BINARY), *command, '--file', str(self.input),
@@ -392,18 +394,20 @@ class IntentRenderTests(unittest.TestCase):
 
     def test_guided_up_prepares_without_expert_flags_and_cancel_never_executes(self):
         runtime_path, _ = self.synthetic_runtime_inputs()
-        contract_path = self.home / 'reviewed contract.yaml'
-        contract_path.write_text(yaml.safe_dump(self.reviewed_contract(), sort_keys=False))
         management, provider = self.home / 'management-path-only', self.home / 'provider-path-only'
         for path in (management, provider):
             path.write_text('opaque; only saved source paths may be used')
         config = subprocess.run([str(BINARY), 'config', 'init', '--lifecycle-root', str(ROOT),
-            '--ok-linux-path', str(ROOT.parent / 'ok-linux'), '--clusters-dir', str(self.home),
+            '--ok-linux-path', str(PROFILES), '--clusters-dir', str(self.home),
             '--management-kubeconfig', str(management), '--provider-kubeconfig', str(provider)],
             capture_output=True, text=True, env=self.env, timeout=10)
         self.assertEqual(config.returncode, 0, config.stderr)
         management.unlink()
         provider.unlink()  # Guided up must not infer credentials from general config.
+
+        pending = self.automatic_prepare()
+        self.assertNotEqual(pending.returncode, 0, pending.stderr)
+        self.install_platform_handoff(json.loads(pending.stdout), runtime_path)
 
         def terminal_run(answer, initial=False):
             master, slave = pty.openpty()
@@ -423,9 +427,6 @@ class IntentRenderTests(unittest.TestCase):
                         self.assertTrue(chunk, repr(output))
                         output += chunk
             try:
-                if initial:
-                    wait_for(b'Reviewed Contract file: ')
-                    os.write(master, (str(contract_path) + '\n' + str(runtime_path) + '\n').encode())
                 wait_for(b'Type ok to create, or no [no]: ')
                 if answer is None:
                     process.send_signal(signal.SIGINT)
@@ -460,6 +461,161 @@ class IntentRenderTests(unittest.TestCase):
         self.assertFalse((root / 'executor-terminal').exists())
         for name in ('runtime', 'receipts', 'authorizations'):
             self.assertEqual(list((root / 'preparation' / name).iterdir()), [])
+        self.assertFalse(self.marker.exists())
+
+    def automatic_config(self):
+        management, provider = self.home / 'configured-management', self.home / 'configured-provider'
+        for path in (management, provider):
+            path.write_text('path-only config fixture; not credentials')
+        result = subprocess.run([str(BINARY), 'config', 'init', '--lifecycle-root', str(ROOT),
+            '--ok-linux-path', str(PROFILES), '--clusters-dir', str(self.home),
+            '--management-kubeconfig', str(management), '--provider-kubeconfig', str(provider)],
+            capture_output=True, text=True, env=self.env, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        management.unlink()
+        provider.unlink()
+
+    def automatic_prepare(self):
+        return subprocess.run([str(BINARY), 'up', '--file', str(self.input), '--prepare'],
+            capture_output=True, text=True, env=self.env, cwd=self.home, timeout=25)
+
+    def install_platform_handoff(self, request, runtime_path):
+        path = Path(request['requestPath']).parent / 'platform-handoff.json'
+        path.write_text(json.dumps({'format': 'ok-cli-platform-handoff/v1',
+            'requestDigest': request['requestDigest'], 'runtimeInputsPath': str(runtime_path),
+            'runtimeInputsDigest': 'sha256:' + hashlib.sha256(runtime_path.read_bytes()).hexdigest()}))
+        path.chmod(0o600)
+        return path
+
+    def test_automatic_preparation_compiles_contract_and_exact_policy_without_credentials(self):
+        self.automatic_config()
+        result = self.automatic_prepare()
+        self.assertNotEqual(result.returncode, 0)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt['state'], 'AWAITING_PLATFORM_AUTHORITY')
+        for field in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'runnerReady'):
+            self.assertIs(receipt[field], False)
+        root = Path(receipt['requestPath']).parent
+        request = json.loads(Path(receipt['requestPath']).read_text())
+        prepared = root / 'preparation'
+        self.assertEqual(yaml.safe_load((prepared / 'contract.yaml').read_text()), self.reviewed_contract())
+        self.assertTrue(json.loads((prepared / 'binding-receipt.json').read_text())['contractSourceDigests'])
+        plan = json.loads((prepared / 'staged-plan.json').read_text())
+        policy = json.loads((prepared / 'stage-authority-policy.json').read_text())
+        self.assertEqual(policy['planDigest'], request['plan']['SemanticDigest'])
+        self.assertEqual(policy['contractIdentity'], {'namespace': 'my-cluster', 'name': 'my-cluster'})
+        self.assertEqual(policy['executionFixture'], plan['executionFixture'])
+        self.assertNotIn('signature', policy)
+        self.assertFalse((prepared / 'full-run-manifest.json').exists())
+        before = {str(path): path.read_bytes() for path in root.rglob('*') if path.is_file()}
+        repeated = self.automatic_prepare()
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertEqual(json.loads(repeated.stdout)['requestDigest'], receipt['requestDigest'])
+        self.assertEqual(before, {str(path): path.read_bytes() for path in root.rglob('*') if path.is_file()})
+        self.assertNotIn('Reviewed Contract file:', repeated.stderr)
+        self.assertFalse(self.marker.exists())
+
+    def test_automatic_handoff_is_exact_non_authorizing_and_does_not_rerender(self):
+        self.automatic_config()
+        pending = json.loads(self.automatic_prepare().stdout)
+        root = Path(pending['requestPath']).parent
+        before = {str(path): path.read_bytes() for path in (root / 'preparation').rglob('*') if path.is_file()}
+        runtime_path, _ = self.synthetic_runtime_inputs()
+        self.install_platform_handoff(pending, runtime_path)
+        result = self.automatic_prepare()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ready = json.loads(result.stdout)
+        self.assertEqual(ready['state'], 'PREPARED_NOT_AUTHORIZED')
+        for field in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'liveAuthorized', 'authorityDeploymentVerified'):
+            self.assertFalse(ready[field])
+        for path, raw in before.items():
+            self.assertEqual(Path(path).read_bytes(), raw)
+        self.assertFalse((root / 'execution-started.json').exists())
+        self.assertFalse((root / 'executor-terminal').exists())
+        repeated = self.automatic_prepare()
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        self.assertEqual(json.loads(repeated.stdout)['manifestDigest'], ready['manifestDigest'])
+        request_path = Path(pending['requestPath'])
+        request = json.loads(request_path.read_text())
+        request['binaryDigest'] = 'sha256:' + '0' * 64
+        request_path.write_text(json.dumps(request))
+        self.assertNotEqual(self.automatic_prepare().returncode, 0)
+        self.assertFalse((root / 'execution-started.json').exists())
+        self.assertFalse(self.marker.exists())
+
+    def test_automatic_handoff_rejects_wrong_binding_and_retains_failure_without_retry(self):
+        self.automatic_config()
+        pending = json.loads(self.automatic_prepare().stdout)
+        root = Path(pending['requestPath']).parent
+        runtime_path, inputs = self.synthetic_runtime_inputs()
+        path = self.install_platform_handoff(pending, runtime_path)
+        original = json.loads(path.read_text())
+        for field in ('requestDigest', 'runtimeInputsDigest'):
+            changed = dict(original)
+            changed[field] = 'sha256:' + '0' * 64
+            path.write_text(json.dumps(changed))
+            self.assertNotEqual(self.automatic_prepare().returncode, 0)
+            self.assertFalse((root / 'handoff-started.json').exists())
+        for changed in ({**original, 'format': 'unknown'}, {**original, 'runtimeInputsPath': 'relative.json'},
+                        {**original, 'execute': True}):
+            path.write_text(json.dumps(changed))
+            self.assertNotEqual(self.automatic_prepare().returncode, 0)
+            self.assertFalse((root / 'handoff-started.json').exists())
+        path.write_text(json.dumps(original))
+        Path(inputs['management']['tokenFile']).chmod(0o644)
+        self.assertNotEqual(self.automatic_prepare().returncode, 0)
+        self.assertTrue((root / 'handoff-started.json').exists())
+        before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+        Path(inputs['management']['tokenFile']).chmod(0o600)
+        self.assertNotEqual(self.automatic_prepare().returncode, 0)
+        self.assertEqual(before, {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()})
+        self.assertFalse((root / 'execution-started.json').exists())
+        self.assertFalse(self.marker.exists())
+
+    def test_automatic_parallel_preparation_and_handoff_are_create_only(self):
+        self.automatic_config()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.automatic_prepare(), range(2)))
+        receipts = [json.loads(result.stdout) for result in results if result.stdout]
+        self.assertTrue(receipts)
+        self.assertTrue(all(receipt['state'] == 'AWAITING_PLATFORM_AUTHORITY' for receipt in receipts))
+        self.assertEqual(len(list(self.home.rglob('platform-preparation-request.json'))), 1)
+        root = Path(receipts[0]['requestPath']).parent
+        runtime_path, _ = self.synthetic_runtime_inputs()
+        self.install_platform_handoff(receipts[0], runtime_path)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.automatic_prepare(), range(2)))
+        self.assertTrue(any(result.returncode == 0 for result in results), [result.stderr for result in results])
+        self.assertEqual(len(list(root.rglob('full-run-manifest.json'))), 1)
+        self.assertFalse((root / 'execution-started.json').exists())
+        self.assertFalse(self.marker.exists())
+
+    def test_automatic_preparation_rejects_changed_binary_identity(self):
+        self.automatic_config()
+        pending = json.loads(self.automatic_prepare().stdout)
+        path = Path(pending['requestPath'])
+        request = json.loads(path.read_text())
+        request['binaryDigest'] = 'sha256:' + '0' * 64
+        path.write_text(json.dumps(request))
+        result = self.automatic_prepare()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('binary changed', result.stderr)
+        self.assertFalse((path.parent / 'handoff-started.json').exists())
+        self.assertFalse(self.marker.exists())
+
+    def test_automatic_preparation_rejects_yaml_and_static_drift_without_repair(self):
+        self.automatic_config()
+        pending = json.loads(self.automatic_prepare().stdout)
+        root = Path(pending['requestPath']).parent
+        original = self.input.read_bytes()
+        self.input.write_bytes(original.replace(b'192.0.2.10', b'192.0.2.11'))
+        self.assertNotEqual(self.automatic_prepare().returncode, 0)
+        self.input.write_bytes(original)
+        contract = root / 'preparation/contract.yaml'
+        contract.write_bytes(contract.read_bytes() + b'\n')
+        changed = contract.read_bytes()
+        self.assertNotEqual(self.automatic_prepare().returncode, 0)
+        self.assertEqual(contract.read_bytes(), changed)
         self.assertFalse(self.marker.exists())
 
     def test_guided_up_rejects_piped_confirmation_before_any_state(self):
