@@ -38,7 +38,7 @@ type guidedUpPreparation struct {
 }
 
 func runGuidedClusterUp(ctx context.Context, path string, stdout, stderr io.Writer) error {
-	return runGuidedClusterUpWithRuntime(ctx, path, stdout, stderr, guidedUpRuntime{os.Stdin, term.IsTerminal(int(os.Stdin.Fd()))})
+	return runAutomaticClusterUp(ctx, path, stdout, stderr, guidedUpRuntime{os.Stdin, term.IsTerminal(int(os.Stdin.Fd()))}, false)
 }
 
 func runGuidedClusterUpWithRuntime(ctx context.Context, path string, stdout, stderr io.Writer, runtime guidedUpRuntime) error {

@@ -39,6 +39,7 @@ type clusterIntentBindingReceipt struct {
 	RunnerReady             bool                  `json:"runnerReady"`
 	Missing                 []string              `json:"missingBindings"`
 	Targets                 *clusterIntentTargets `json:"targets,omitempty"`
+	ContractSourceDigests   map[string]string     `json:"contractSourceDigests,omitempty"`
 }
 
 // An intent is not a Contract, execution manifest, reservation or authority.
@@ -213,7 +214,7 @@ func validateClusterYAMLWorkflow(path string, dryRun bool, stdout io.Writer) err
 		NextAction            string                `json:"nextAction"`
 		Targets               *clusterIntentTargets `json:"targets,omitempty"`
 	}{"ok-cli-cluster-intent-validation/v1", "INTENT_VALIDATED_NO_GO", intent.Metadata.Name, false, false, false, false, false,
-		"run ok up --file <cluster.yaml> on a terminal for guided preparation and explicit approval; reviewed Contract and existing private runtime references are still required; not a reservation or live approval", targets})
+		"run ok up --file <cluster.yaml> --prepare for automatic local Contract/plan/policy-request generation; separately provided platform authority remains required; not a reservation or live approval", targets})
 }
 
 func runClusterIntentRender(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -259,7 +260,7 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 	if flags.NArg() != 0 || *input == "" || *output == "" {
 		return fmt.Errorf("%s requires --file and a new --output directory; see ok up %s --help", action, action)
 	}
-	if bind && contractPath == "" {
+	if bind && contractPath == "" && finish == nil {
 		return errors.New("static binding requires an explicit --contract; authority/enablement/platform semantics are not inferred from friendly YAML")
 	}
 	explicitEmpty := false
@@ -313,8 +314,13 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 	var sourceContract, schemaRaw []byte
 	var canonical contract.Result
 	var identity contract.Identity
+	var contractSources map[string]string
 	if bind {
-		sourceContract, err = readIntentBindingFile(contractPath)
+		if contractPath == "" {
+			sourceContract, contractSources, err = compileClusterIntentContract(ctx, intent, rootPath, profilePath, stderr)
+		} else {
+			sourceContract, err = readIntentBindingFile(contractPath)
+		}
 		if err != nil {
 			return err
 		}
@@ -415,7 +421,7 @@ func runClusterIntentMaterialize(ctx context.Context, arguments []string, stdout
 	}
 	receipt := clusterIntentBindingReceipt{"ok-cli-cluster-static-binding/v1", "CONTRACT_PROJECTION_BOUND_NO_GO", identity, canonical.CanonicalizationProfile,
 		canonical.NormalizedDigest, normalizedIntentDigest, digest.SHA256(renderRaw), canonical.RawArtifactDigest, canonical.SchemaDigest, projected, false, false, false, false,
-		[]string{"fresh execution fixture", "enablement/network/target-access artifacts", "seven-stage Plan", "reviewed authority policies and existing credentials", "full-run manifest and independent evidence inputs"}, targets}
+		[]string{"fresh execution fixture", "enablement/network/target-access artifacts", "seven-stage Plan", "reviewed authority policies and existing credentials", "full-run manifest and independent evidence inputs"}, targets, contractSources}
 	var result bytes.Buffer
 	encoder := json.NewEncoder(&result)
 	encoder.SetIndent("", "  ")
@@ -468,6 +474,7 @@ func writeClusterIntentRenderHelp(stdout io.Writer) {
 Usage:
   ok up cluster-template
   ok up --file cluster.yaml --dry-run
+  ok up --file cluster.yaml --prepare
   ok up render --file cluster.yaml --output <new-private-directory> [paths]
   ok up --file cluster.yaml --prepare --contract <fresh-reviewed-contract.yaml> --output <new-private-directory> [paths]
   # Optional explicit existing private inputs: --runtime-inputs <private-references.json>
@@ -496,6 +503,11 @@ Explicit endpoint/podCIDR/serviceCIDR are required; no auto allocation or collis
 check is performed. The output is create-only, private and remains RENDERED_NO_GO.
 Generated shell helpers are not executable and are never run.
 
+YAML --prepare without --contract compiles a fresh Contract from the reviewed
+versioned profile, not a historical Candidate. Without expert flags it manages
+an immutable local request and waits for separately supplied platform authority.
+No credential issuance or policy deployment is performed. An explicit --contract
+remains available with expert --output and is never silently replaced.
 YAML --prepare computes Contract R through the owning versioned canonicalizer/schema,
 checks YAML/Contract/resolved-profile agreement and verifies the owning projection.
 It does not rename/copy historical Contract metadata or invent enablement/platform intent.

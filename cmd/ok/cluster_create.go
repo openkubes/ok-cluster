@@ -202,8 +202,14 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 		if _, err := readClusterIntent(manifestPath); err != nil {
 			return err
 		}
-		if *yamlInputs["contract"] == "" || *yamlInputs["output"] == "" {
-			return errors.New("YAML preparation is NO-GO: requires an explicit reviewed --contract and new --output directory; existing runtime inputs must be selected separately")
+		if !yamlInputSelected {
+			if err := runAutomaticClusterUp(ctx, manifestPath, stdout, stderr, guidedUpRuntime{}, true); err != nil {
+				return fmt.Errorf("automatic preparation NO-GO: %w", err)
+			}
+			return nil
+		}
+		if *yamlInputs["output"] == "" {
+			return errors.New("expert YAML preparation is NO-GO: requires new --output; omit expert input flags for automatic managed preparation")
 		}
 		material := []string{"--file", manifestPath}
 		for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config", "runtime-inputs"} {

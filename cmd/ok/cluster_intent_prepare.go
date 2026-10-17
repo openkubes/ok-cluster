@@ -72,6 +72,10 @@ func runClusterIntentPrepare(ctx context.Context, arguments []string, stdout, st
 }
 
 func finishClusterIntentPrepare(material clusterIntentMaterialized, binaryDigest string, stdout io.Writer) error {
+	return finishClusterIntentPrepareStatic(material, binaryDigest, stdout, nil)
+}
+
+func finishClusterIntentPrepareStatic(material clusterIntentMaterialized, binaryDigest string, stdout io.Writer, complete func(clusterIntentMaterialized, clusterIntentPlanArtifacts, []byte) error) error {
 	binding, root := material.Binding, material.Output
 	recipeRaw, err := readIntentBindingFile(filepath.Join(material.Root, "profiles", "cli", "talos-kubevirt-mvp-v1.json"))
 	if err != nil {
@@ -136,6 +140,9 @@ func finishClusterIntentPrepare(material clusterIntentMaterialized, binaryDigest
 	raw = append(raw, '\n')
 	if err := writeStaticBindingFile(filepath.Join(root, "preparation-receipt.json"), raw); err != nil {
 		return err
+	}
+	if complete != nil {
+		return complete(material, plan, raw)
 	}
 	if material.RuntimeInputsPath != "" {
 		return finishClusterIntentRunnerHandoff(material, plan, digest.SHA256(raw), stdout)

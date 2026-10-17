@@ -31,6 +31,8 @@ func intentFixture(t *testing.T, transform func(string) string) string {
 }
 
 func TestClusterIntentDryRunIsDistinctAndNeverRunnerReady(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	path := intentFixture(t, nil)
 	previousPrepare, previousExecute, previousMarker := prepareFullRunExecutionManifest, executeClusterCreateLive, validateClusterCreateTerminalMarker
 	defer func() {
@@ -160,6 +162,8 @@ func TestClusterIntentBindingRequiresExplicitContractAndBoundedFiles(t *testing.
 }
 
 func TestClusterIntentPreparationInputsAreModeSpecific(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	yamlPath := intentFixture(t, nil)
 	jsonPath := intentFixture(t, func(string) string { return `{ "format": "technical-json-fixture" }` })
 	for _, path := range []string{yamlPath, jsonPath} {
@@ -178,8 +182,8 @@ func TestClusterIntentPreparationInputsAreModeSpecific(t *testing.T) {
 	}
 	output := filepath.Join(t.TempDir(), "new-prepare")
 	err := run([]string{"up", "--file", yamlPath, "--prepare", "--output", output}, &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "NO-GO") {
-		t.Fatalf("missing Contract accepted: %v", err)
+	if err == nil {
+		t.Fatalf("missing trusted source/profile paths accepted: %v", err)
 	}
 	if _, err := os.Lstat(output); !os.IsNotExist(err) {
 		t.Fatal("incomplete inputs reserved output")
