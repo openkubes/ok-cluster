@@ -192,7 +192,7 @@ func validateClusterYAMLWorkflow(path string, dryRun bool, stdout io.Writer) err
 		CollisionChecked      bool   `json:"collisionChecked"`
 		NextAction            string `json:"nextAction"`
 	}{"ok-cli-cluster-intent-validation/v1", "INTENT_VALIDATED_NO_GO", intent.Metadata.Name, false, false, false, false, false,
-		"ok up --file <cluster.yaml> --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>; explicit existing --runtime-inputs are required for a full local handoff; not a reservation or live approval"})
+		"run ok up --file <cluster.yaml> on a terminal for guided preparation and explicit approval; reviewed Contract and existing private runtime references are still required; not a reservation or live approval"})
 }
 
 func runClusterIntentRender(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {

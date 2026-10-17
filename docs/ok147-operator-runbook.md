@@ -105,7 +105,63 @@ authorization. This command runs the Stage 1-7 executor directly in the local
 `ok` process. It contacts the APIs bound by the private manifest and does not
 install the four Job-activation wrapper objects described below.
 
-## Friendly cluster YAML: offline intent and render only
+## Friendly cluster YAML: normal guided workflow
+
+After `ok config init` has saved trusted lifecycle/profile source paths:
+
+```sh
+ok up --file cluster.yaml --dry-run
+ok up --file cluster.yaml
+```
+
+The first command retains the existing offline intent-only check: no credential
+reads, state files or reservation. The second requires a terminal and manages
+local preparation for you. Select the existing reviewed Contract file and private
+runtime-reference JSON when prompted. These are operator/platform inputs that
+the small YAML cannot supply; the CLI never invents authority or issues credentials.
+Saved config supplies only the two source paths, not management/provider access.
+
+The CLI displays cluster name, profile/sizing, endpoint/CIDRs, authority identities,
+private evidence location, manifest digest and independent evidence key identity.
+It describes the prerequisite/RBAC and resource mutations and asks you to confirm
+separately reviewed name/IP absence, authority deployment and approval of that
+exact plan. It does not perform an online collision check or reservation. Only
+`ok` followed by Enter starts the **existing** runner. Empty/no/invalid answers,
+EOF, interruption or piped input cannot start it. You do not need `--prepared-dir`,
+`--execute`, digest or marker flags for this guided form. Scripts keep the expert
+workflow below; there is deliberately no non-interactive auto-yes option.
+
+Preparation and evidence are retained privately under
+`<OS user configuration directory>/ok/runs/<cluster-name>` (macOS:
+`~/Library/Application Support/ok/runs/<name>`; Linux:
+`$XDG_CONFIG_HOME/ok/runs/<name>` or `~/.config/ok/runs/<name>`). This is persistent
+application state, **not a disposable cache**. Existing files/permissions are
+never overwritten, cleaned or loosened. The normal `config.json` schema and
+contents are unchanged. No credential contents are copied into managed metadata.
+
+If you cancel before starting, an existing complete preparation may be reverified
+and shown for a fresh confirmation by the same short command; it is not rendered
+again. Semantic YAML drift, changed private references or a changed evidence key
+fail closed. Incomplete preparation is retained for expert review, not retried.
+The inputs are rechecked after confirmation before any executor is opened.
+
+Immediately before delegating, the CLI create-only records and syncs
+`execution-started.json` and its directory ancestry. This local fence permits at
+most one guided start, including simultaneous confirmations. It is not a success
+receipt. Once it exists, later short invocations stop before credential reads or
+prompts, even if execution failed/interrupted before a terminal marker appeared.
+Do not remove this state to bypass STOP; recovery requires separate evidence and
+authorization through the existing expert boundary. No automatic retry, rollback,
+resume, credential renewal or policy installation is introduced. The normal
+runner owns the terminal marker, immutable outcomes and convergence evidence.
+Only its existing durable success contract determines success, not confirmation,
+local preparation or a command invocation. No separate guided success is fabricated.
+Managed storage does not change teardown discovery: the existing expert teardown
+can select the retained render at `<managed-run>/preparation/<name>` through
+`--cluster-dir`. This change does not register new destroy defaults, authorize
+cleanup or remove managed evidence/start fences.
+
+### Expert offline intent/render workflow
 
 Without explicit private runtime inputs, this front end produces only static
 preparation. It does not replace the technical JSON manifest contract above. Start with:

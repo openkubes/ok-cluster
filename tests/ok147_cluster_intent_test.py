@@ -5,9 +5,13 @@ import base64
 import json
 import os
 from pathlib import Path
+import pty
+import select
+import signal
 import subprocess
 import shutil
 import tempfile
+import time
 import unittest
 import yaml
 
@@ -285,6 +289,86 @@ class IntentRenderTests(unittest.TestCase):
         self.assertFalse((self.output / 'executor-terminal').exists())
         for name in ('runtime', 'receipts', 'authorizations'):
             self.assertEqual(list((self.output / name).iterdir()), [])
+        self.assertFalse(self.marker.exists())
+
+    def test_guided_up_prepares_without_expert_flags_and_cancel_never_executes(self):
+        runtime_path, _ = self.synthetic_runtime_inputs()
+        contract_path = self.home / 'reviewed contract.yaml'
+        contract_path.write_text(yaml.safe_dump(self.reviewed_contract(), sort_keys=False))
+        management, provider = self.home / 'management-path-only', self.home / 'provider-path-only'
+        for path in (management, provider):
+            path.write_text('opaque; only saved source paths may be used')
+        config = subprocess.run([str(BINARY), 'config', 'init', '--lifecycle-root', str(ROOT),
+            '--ok-linux-path', str(ROOT.parent / 'ok-linux'), '--clusters-dir', str(self.home),
+            '--management-kubeconfig', str(management), '--provider-kubeconfig', str(provider)],
+            capture_output=True, text=True, env=self.env, timeout=10)
+        self.assertEqual(config.returncode, 0, config.stderr)
+        management.unlink()
+        provider.unlink()  # Guided up must not infer credentials from general config.
+
+        def terminal_run(answer, initial=False):
+            master, slave = pty.openpty()
+            process = subprocess.Popen([str(BINARY), 'up', '--file', str(self.input)],
+                stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env, cwd=self.home)
+            os.close(slave)
+            output = b''
+
+            def wait_for(prompt):
+                nonlocal output
+                deadline = time.monotonic() + 20
+                while prompt not in output:
+                    self.assertLess(time.monotonic(), deadline, repr(output))
+                    ready, _, _ = select.select([process.stderr], [], [], 0.2)
+                    if ready:
+                        chunk = os.read(process.stderr.fileno(), 4096)
+                        self.assertTrue(chunk, repr(output))
+                        output += chunk
+            try:
+                if initial:
+                    wait_for(b'Reviewed Contract file: ')
+                    os.write(master, (str(contract_path) + '\n' + str(runtime_path) + '\n').encode())
+                wait_for(b'Type ok to create, or no [no]: ')
+                if answer is None:
+                    process.send_signal(signal.SIGINT)
+                else:
+                    os.write(master, answer)
+                stdout, stderr = process.communicate(timeout=15)
+                return process.returncode, stdout, output + stderr
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+                os.close(master)
+
+        # Never send ok to the real binary in this test.
+        code, stdout, prompts = terminal_run(b'no\n', initial=True)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(stdout, b'')
+        self.assertIn(b'1 control plane, 1 worker', prompts)
+        metadata_paths = list(self.home.rglob('managed-preparation.json'))
+        self.assertEqual(len(metadata_paths), 1)
+        root = metadata_paths[0].parent
+        handoff = json.loads((root / 'preparation/runner-handoff-receipt.json').read_text())
+        self.assertIn(handoff['manifestDigest'].encode(), prompts)
+        before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+        for answer in (b'\n', b'yes\n', b'\x04', None):
+            code, stdout, prompts = terminal_run(answer)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(stdout, b'')
+            self.assertNotIn(b'Reviewed Contract file: ', prompts)
+        self.assertEqual(before, {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()})
+        self.assertFalse((root / 'execution-started.json').exists())
+        self.assertFalse((root / 'executor-terminal').exists())
+        for name in ('runtime', 'receipts', 'authorizations'):
+            self.assertEqual(list((root / 'preparation' / name).iterdir()), [])
+        self.assertFalse(self.marker.exists())
+
+    def test_guided_up_rejects_piped_confirmation_before_any_state(self):
+        result = subprocess.run([str(BINARY), 'up', '--file', str(self.input)], input='ok\n',
+            capture_output=True, text=True, env=self.env, cwd=self.home, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('requires a terminal', result.stderr)
+        self.assertEqual(list(self.home.rglob('managed-preparation.json')), [])
         self.assertFalse(self.marker.exists())
 
     def test_runtime_handoff_fails_without_success_receipt_on_missing_or_foreign_inputs(self):

@@ -26,6 +26,7 @@ var verifyPreparedManifestFixture = func(path string, fixture []byte) (runner.Fu
 type preparedClusterIntent struct {
 	ManifestPath string
 	Receipt      runner.FullRunExecutionManifestReceipt
+	Binding      clusterIntentBindingReceipt
 }
 
 func resolvePreparedClusterIntent(intentPath, directory, expectedDigest string) (preparedClusterIntent, error) {
@@ -74,7 +75,7 @@ func resolvePreparedClusterIntent(intentPath, directory, expectedDigest string) 
 		!sha256DigestPattern.MatchString(receipt.ManifestDigest) || (expectedDigest != "" && expectedDigest != receipt.ManifestDigest) {
 		return result, errors.New("prepared YAML manifest/fixture verification failed or differs from the approved digest")
 	}
-	return preparedClusterIntent{ManifestPath: path, Receipt: receipt}, nil
+	return preparedClusterIntent{ManifestPath: path, Receipt: receipt, Binding: binding}, nil
 }
 
 func readPrivatePreparationFile(path string) ([]byte, error) {
