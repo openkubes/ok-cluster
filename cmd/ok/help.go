@@ -248,6 +248,9 @@ func writeClusterCreateHelp(output io.Writer) {
 Usage:
   ok up cluster-template
   ok up --file cluster.yaml --dry-run
+  ok up --file cluster.yaml                 # guided preparation and ok/no approval
+
+Expert workflows (scripts must select an explicit mode):
   ok up render --file cluster.yaml --output <new-private-directory>
   ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>
   ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory> --runtime-inputs <private-references.json>
@@ -269,8 +272,18 @@ Usage:
     --terminal-marker /absolute/private-dir/executor-terminal
 
 "ok up" is an exact shorthand for "ok cluster create", including preparation
-subcommands and legacy contract-planning flags. It does not select a mode, infer
-credentials from local config, renew access, or bypass live approval.
+subcommands and legacy contract-planning flags. A friendly YAML without a mode
+starts the guided terminal workflow: select existing reviewed Contract/private
+runtime reference files, prepare locally, review the exact plan, then type ok/no.
+Trusted source paths come from ok config init; credentials are never inferred
+from general config, issued or renewed. No terminal or no explicit ok: no runner.
+Preparation is managed privately in <OS user config directory>/ok/runs/<name>.
+No --prepared-dir, digest or marker flags are needed for the guided command.
+Existing unstarted preparation is reverified, not rerendered. Changed inputs or
+partial preparation stop; an execution start fence blocks automatic replay even
+after failure/interruption. Local preparation is not deployed-authority approval.
+
+Expert workflow:
 Friendly YAML --prepare checks local Contract/projection inputs and generates
 credential-free stage artifacts and a verified seven-stage NO-GO plan from the
 versioned talos-kubevirt-mvp recipe (only its reviewed E/P revisions). It
@@ -293,14 +306,14 @@ All original live gates remain mandatory. No separate binding command is needed.
 All options below work with either spelling; technical JSON manifest/evidence requirements
 and operation receipts are unchanged. Bare "ok up" only displays this help.
 
-Modes (exactly one is required):
+Expert modes (exactly one is required outside guided YAML):
   --dry-run    Verify all bound local inputs and print a non-mutating summary
   --prepare    Verify the manifest and print the identity required for live mode
   --live       Contact bound APIs and permit the exact workflow mutations;
                also requires --execute and the prepared identity
 
 Input:
-  -f, --file   Private full-run manifest bound to completionMode bare-cluster-mvp/v1
+  -f, --file   Friendly cluster YAML or private Bare-MVP full-run manifest
 
 Live inputs:
   --terminal-marker must be an absolute path naming an absent executor-terminal

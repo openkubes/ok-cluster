@@ -196,6 +196,20 @@ func validPackagedFullRunRuntimePaths(document fullRunExecutionManifestDocument)
 		document.PlatformObservation.Capability.IndependentEvidencePath == fullRunExecutionHandoffRoot+"/observability-evidence.json"
 }
 
+// VerifyIndependentEvidencePublicKey checks a selected local public key against
+// an already reviewed identity. It issues no authority and opens no executor.
+func VerifyIndependentEvidencePublicKey(path, expectedKeyID string) error {
+	raw, err := readBoundedRegular(path, 1024)
+	if err != nil {
+		return errors.New("read selected independent evidence public key")
+	}
+	id, err := fullRunBundleEvidenceKeyID(raw)
+	if err != nil || id != expectedKeyID {
+		return errors.New("independent evidence public key differs from preparation")
+	}
+	return nil
+}
+
 func fullRunBundleEvidenceKeyID(raw []byte) (string, error) {
 	encoded := strings.TrimSuffix(string(raw), "\n")
 	key, err := base64.StdEncoding.Strict().DecodeString(encoded)

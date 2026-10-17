@@ -235,6 +235,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@go test -mod=readonly ./cmd/ok -count=1 \
 		-run 'TestDestroy|TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestLocalConfig'
+	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestGuidedUp'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestClusterIntent'
 	@go test -mod=readonly ./internal/runner -count=1 \

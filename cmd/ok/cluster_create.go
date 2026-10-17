@@ -163,6 +163,17 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 		}
 	}
 	if modeCount != 1 {
+		if modeCount == 0 && isClusterYAMLFile(manifestPath) {
+			onlyFile := true
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name != "file" && f.Name != "f" {
+					onlyFile = false
+				}
+			})
+			if onlyFile {
+				return runGuidedClusterUp(ctx, manifestPath, stdout, stderr)
+			}
+		}
 		return errors.New("exactly one of --dry-run, --prepare, or --live is required")
 	}
 	if !*live && (*execute || *expectedManifestDigest != "" || *evidencePublicKey != "" || *terminalMarker != "") {
