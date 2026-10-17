@@ -47,6 +47,7 @@ jobs:
           "$RUNNER_TEMP/ok" up --help
           "$RUNNER_TEMP/ok" up requirements
           "$RUNNER_TEMP/ok" up cluster-template
+          "$RUNNER_TEMP/ok" up network-suggest --help
           "$RUNNER_TEMP/ok" up render --help
           "$RUNNER_TEMP/ok" up bind --help
           "$RUNNER_TEMP/ok" config --help
@@ -65,3 +66,9 @@ jobs:
 
       - name: Test interactive path setup on a real terminal
         run: OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" python3 -B tests/ok_cli_config_interactive_test.py
+
+      - name: Test network proposals with synthetic inventories and fake APIs
+        run: |
+          python3 -m venv "$RUNNER_TEMP/network-tests"
+          "$RUNNER_TEMP/network-tests/bin/pip" install PyYAML==6.0.3
+          PATH="$RUNNER_TEMP/network-tests/bin:$PATH" OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" python3 -B tests/ok_cli_network_suggest_test.py

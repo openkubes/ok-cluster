@@ -238,6 +238,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestGuidedUp'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestClusterIntent'
+	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestNetworkSuggest'
 	@go test -mod=readonly ./internal/kubeconfigtarget ./internal/runner -count=1 -run 'TestTarget|TestFullRunPlaneTargets'
 	@go test -mod=readonly ./internal/runner -count=1 \
 		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix'
@@ -248,6 +249,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@$(SCRIPT_DIR)/.tools/bin/ok up --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up requirements >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up cluster-template >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok up network-suggest --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up render --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok up bind --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok config --help >/dev/null
@@ -262,6 +264,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@python3 $(SCRIPT_DIR)/tests/ok147_projection_render_test.py >/dev/null
 	@python3 $(SCRIPT_DIR)/tests/ok147_destroy_cli_test.py
 	@python3 -B $(SCRIPT_DIR)/tests/ok147_cluster_intent_test.py
+	@python3 -B $(SCRIPT_DIR)/tests/ok_cli_network_suggest_test.py
 	@python3 -B $(SCRIPT_DIR)/tests/ok_cli_config_interactive_test.py
 	@$(MAKE) --no-print-directory contract-executor-dry-run >/dev/null
 	@echo "Offline ok CLI smoke passed; no cluster was contacted"

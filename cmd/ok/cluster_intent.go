@@ -131,17 +131,21 @@ func readClusterIntent(path string) (clusterIntent, error) {
 	if !clusterCreateNamePattern.MatchString(name) || len(name) > 63 || name == "default" || strings.HasPrefix(name, "kube-") {
 		return intent, errors.New("cluster YAML name must be a non-reserved DNS label of at most 63 characters")
 	}
+	return intent, validateClusterIntentNetwork(intent)
+}
+
+func validateClusterIntentNetwork(intent clusterIntent) error {
 	network := intent.Spec.Network
 	ip, err := netip.ParseAddr(network.Endpoint)
 	if err != nil || !ip.Is4() || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-		return intent, errors.New("network.endpoint must be an explicit unicast IPv4 address, not auto")
+		return errors.New("network.endpoint must be an explicit unicast IPv4 address, not auto")
 	}
 	pod, podErr := netip.ParsePrefix(network.PodCIDR)
 	service, serviceErr := netip.ParsePrefix(network.ServiceCIDR)
 	if podErr != nil || serviceErr != nil || !pod.Addr().Is4() || !service.Addr().Is4() || pod != pod.Masked() || service != service.Masked() || pod.Overlaps(service) || pod.Contains(ip) || service.Contains(ip) {
-		return intent, errors.New("podCIDR and serviceCIDR must be canonical, disjoint IPv4 networks excluding the endpoint")
+		return errors.New("podCIDR and serviceCIDR must be canonical, disjoint IPv4 networks excluding the endpoint")
 	}
-	return intent, nil
+	return nil
 }
 
 func isClusterYAMLFile(path string) bool {
