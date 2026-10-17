@@ -100,6 +100,7 @@ def propose(payload):
     import render
 
     addresses, networks, sources = set(), set(), []
+    unresolved, observed_clusters = [], []
     name = payload['intent']['metadata']['name']
 
     def add_address(value):
@@ -121,17 +122,35 @@ def propose(payload):
         raw = path.read_bytes()
         config = yaml.load(raw, Loader=UniqueLoader)
         if not isinstance(config, dict) or not isinstance(config.get('network'), dict):
-            raise ValueError('incomplete local network inventory')
-        if config.get('name', path.parent.name) == name:
-            raise ValueError('cluster name already present in retained local inventory')
+            raise ValueError(f'incomplete local network inventory: {path} (network)')
+        local_name = config.get('name', path.parent.name)
+        if not isinstance(local_name, str) or not local_name:
+            raise ValueError(f'invalid local cluster identity: {path}')
+        if local_name == name:
+            raise ValueError(f'cluster name already present in retained local inventory: {path}')
         network = config['network']
-        if not all(network.get(field) and network[field] != 'auto'
-                   for field in ('endpoint', 'podCIDR', 'serviceCIDR')):
-            raise ValueError('unresolved local network inventory')
-        add_address(network['endpoint'])
-        add_network(network['podCIDR'])
-        add_network(network['serviceCIDR'])
-        sources.append({'kind': 'local-cluster-config', 'path': str(path), 'digest': digest(raw)})
+        unknown = []
+        for field in ('endpoint', 'podCIDR', 'serviceCIDR'):
+            value = network.get(field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f'incomplete local network inventory: {path} ({field})')
+            if value == 'auto':
+                unknown.append(field)
+                continue
+            try:
+                (add_address if field == 'endpoint' else add_network)(value)
+            except ValueError:
+                raise ValueError(f'invalid local network inventory: {path} ({field})') from None
+        source = {'kind': 'local-cluster-config', 'path': str(path), 'digest': digest(raw)}
+        sources.append(source)
+        if unknown:
+            if not online:
+                raise ValueError(f'unresolved local network inventory: {path} ({", ".join(unknown)}); '
+                                 'auto requires --online and a matching observed CAPI Cluster')
+            # Existing renderer/lifecycle convention: Cluster name and namespace
+            # both equal config.name. Never match an unrelated namespace, a
+            # Service alone or an absent object as proof of unused addresses.
+            unresolved.append((local_name, unknown, source))
 
     def query(plane, resource):
         reference = payload['intent']['spec'][plane]
@@ -182,6 +201,7 @@ def propose(payload):
                     if address != 'None':
                         add_address(address)
             for item in query(plane, 'clusters.cluster.x-k8s.io'):
+                observed_clusters.append((plane, item))
                 if item.get('metadata', {}).get('name') == name:
                     raise ValueError('cluster name already present in API snapshot')
                 spec = item.get('spec', {})
@@ -196,6 +216,45 @@ def propose(payload):
                 for role in ('pods', 'services'):
                     for network in (cluster_network.get(role, {}) or {}).get('cidrBlocks', []) or []:
                         add_network(network)
+        for local_name, fields, source in unresolved:
+            matches = [(plane, item) for plane, item in observed_clusters
+                       if item.get('metadata', {}).get('name') == local_name
+                       and item.get('metadata', {}).get('namespace') == local_name]
+            reason = f'{source["path"]} ({", ".join(fields)})'
+            if not matches:
+                raise ValueError('unresolved local network inventory: ' + reason +
+                                 '; no matching observed CAPI Cluster name/namespace')
+            identities, signatures, evidence = set(), set(), []
+            for plane, item in matches:
+                metadata = item['metadata']
+                if not metadata.get('uid') or not metadata.get('resourceVersion'):
+                    raise ValueError('unresolved local network inventory: ' + reason + '; missing observed UID/resourceVersion')
+                target = payload['targets'][plane]
+                identities.add((target['endpoint'], target['caTrustDigest'], metadata['uid']))
+                spec = item.get('spec', {})
+                cluster_network = spec.get('clusterNetwork', {}) or {}
+                values = {}
+                for field in fields:
+                    if field == 'endpoint':
+                        host = spec.get('controlPlaneEndpoint', {}).get('host')
+                        values[field] = [str(ipaddress.IPv4Address(host))] if host else []
+                    else:
+                        role = 'pods' if field == 'podCIDR' else 'services'
+                        values[field] = sorted(str(ipaddress.ip_network(value))
+                            for value in (cluster_network.get(role, {}) or {}).get('cidrBlocks', []) or []
+                            if ipaddress.ip_network(value).version == 4)
+                    if not values[field]:
+                        raise ValueError('unresolved local network inventory: ' + reason +
+                                         f'; matching observed Cluster lacks IPv4 {field}')
+                signatures.add(json.dumps(values, sort_keys=True))
+                evidence.append({'plane': plane, 'namespace': local_name, 'name': local_name,
+                                 'uid': metadata['uid'], 'resourceVersion': metadata['resourceVersion']})
+            # The same API/UID may be visible through both selected contexts.
+            # Different planes/UIDs or changing values are not a unique binding.
+            if len(identities) != 1 or len(signatures) != 1:
+                raise ValueError('ambiguous observed CAPI binding for local auto fields: ' + reason)
+            source['autoResolution'] = {'fields': fields, 'observedValues': values,
+                                        'clusters': evidence}
         pools = query('infrastructure', 'ipaddresspools.metallb.io')
         eligible = []
         for pool in pools:
