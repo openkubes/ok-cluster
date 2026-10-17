@@ -154,8 +154,13 @@ if verb == "get":
     if "--no-headers" in args and resource == "datavolumes":
         print("cp-0 Succeeded\nworker-0 Succeeded")
         sys.exit(0)
+    if resource == "machines.cluster.x-k8s.io":
+        print(json.dumps({"items": state.get("machines", [])}))
+        sys.exit(0)
     if resource == "node":
-        if any("osImage" in value for value in args):
+        if "-o" in args and args[args.index("-o") + 1] == "json":
+            print(json.dumps({"items": state.get("nodes", [])}))
+        elif any("osImage" in value for value in args):
             print("Talos (v1.9.6)")
         else:
             print("cp-0 Ready control-plane")
@@ -420,6 +425,21 @@ class Sandbox:
                     "spec": {"source": {"persistentVolumeClaimName": golden_claim}},
                 },
             ],
+            "machines": [
+                {"metadata": {"name": "cp-0", "namespace": CLUSTER, "labels": {
+                    "cluster.x-k8s.io/cluster-name": CLUSTER,
+                    "cluster.x-k8s.io/control-plane": "",
+                }}, "status": {"nodeRef": {"name": "cp-0"}}},
+                {"metadata": {"name": "worker-0", "namespace": CLUSTER, "labels": {
+                    "cluster.x-k8s.io/cluster-name": CLUSTER,
+                    "cluster.x-k8s.io/deployment-name": f"{CLUSTER}-workers",
+                }}, "status": {"nodeRef": {"name": "worker-0"}}},
+            ],
+            "nodes": [
+                {"metadata": {"name": name}, "status": {"conditions": [
+                    {"type": "Ready", "status": "True"}
+                ]}} for name in ("cp-0", "worker-0")
+            ],
             "configmaps": {}, "faults": {},
         }
         for key in ("role", "rolebinding"):
@@ -551,7 +571,7 @@ def make_tests(box: Sandbox) -> None:
         and "annotate pvc" in resume_plan
         and "get kubeconfig" in resume_plan
         and "helm upgrade --install cilium" in resume_plan
-        and "wait --for=condition=Ready nodes" in resume_plan,
+        and "--wait-expected-nodes" in resume_plan,
         "bootstrap-resume plan: annotate, kubeconfig, Cilium, wait; no apply, no preflight",
     )
 
