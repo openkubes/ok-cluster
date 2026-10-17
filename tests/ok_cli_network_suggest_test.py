@@ -94,6 +94,13 @@ print(json.dumps({'items': data.get(plane + '/' + args[5], [])}))
         return {'metadata': {'namespace': 'metallb-system', 'name': name},
                 'spec': {'addresses': addresses or ['192.168.100.200-192.168.100.210'], **options}}
 
+    def observed_cluster(self, name='existing', namespace=None):
+        return {'metadata': {'name': name, 'namespace': namespace or name,
+                             'uid': 'observed-uid', 'resourceVersion': '42'},
+                'spec': {'controlPlaneEndpoint': {'host': '192.168.100.200'},
+                         'clusterNetwork': {'pods': {'cidrBlocks': ['10.32.0.0/16']},
+                                            'services': {'cidrBlocks': ['10.96.0.0/20']}}}}
+
     def assert_no_go(self, result, online=False):
         self.assertEqual(result.returncode, 0, result.stderr)
         receipt = json.loads(result.stdout)
@@ -191,6 +198,95 @@ print(json.dumps({'items': data.get(plane + '/' + args[5], [])}))
             plane = Path(args[1]).stem
             self.assertEqual(args[3], plane + '-selected')
         self.assertEqual(len([source for source in receipt['sources'] if source['kind'] == 'api-list']), 5)
+
+    def test_online_auto_inventory_is_resolved_without_writing_source(self):
+        self.online_inputs()
+        path = self.config(name='ok-kagent', endpoint='auto', pod='auto', service='auto')
+        before = path.read_bytes()
+        self.data['management/clusters.cluster.x-k8s.io'] = [self.observed_cluster(name='ok-kagent')]
+        receipt = self.assert_no_go(self.run_proposal(online=True), online=True)
+        self.assertEqual(receipt['proposedNetwork'], {'endpoint': '192.168.100.201',
+                         'podCIDR': '10.33.0.0/16', 'serviceCIDR': '10.96.16.0/20'})
+        self.assertEqual(path.read_bytes(), before)
+        source = next(item for item in receipt['sources'] if item['kind'] == 'local-cluster-config')
+        resolution = source['autoResolution']
+        self.assertEqual(resolution['fields'], ['endpoint', 'podCIDR', 'serviceCIDR'])
+        self.assertEqual(resolution['observedValues']['podCIDR'], ['10.32.0.0/16'])
+        self.assertEqual(resolution['clusters'], [{'plane': 'management', 'name': 'ok-kagent',
+            'namespace': 'ok-kagent', 'uid': 'observed-uid', 'resourceVersion': '42'}])
+
+    def test_partial_auto_preserves_concrete_local_and_observed_allocations(self):
+        self.online_inputs()
+        self.config(endpoint='192.168.100.201', pod='auto', service='10.96.16.0/20')
+        self.data['infrastructure/clusters.cluster.x-k8s.io'] = [self.observed_cluster()]
+        receipt = self.assert_no_go(self.run_proposal(online=True), online=True)
+        self.assertEqual(receipt['proposedNetwork'], {'endpoint': '192.168.100.202',
+                         'podCIDR': '10.33.0.0/16', 'serviceCIDR': '10.96.32.0/20'})
+        source = next(item for item in receipt['sources'] if item['kind'] == 'local-cluster-config')
+        self.assertEqual(source['autoResolution']['fields'], ['podCIDR'])
+
+    def test_offline_auto_error_identifies_file_and_fields_without_api(self):
+        path = self.config(endpoint='auto', pod='auto')
+        result = self.run_proposal()
+        self.assertNotEqual(result.returncode, 0)
+        for detail in (str(path), 'endpoint', 'podCIDR', '--online'):
+            self.assertIn(detail, result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertFalse(self.output.exists())
+
+    def test_online_auto_missing_wrong_namespace_or_incomplete_cluster_stops(self):
+        self.online_inputs()
+        path = self.config(endpoint='auto', pod='auto', service='auto')
+        incomplete = self.observed_cluster()
+        del incomplete['spec']['clusterNetwork']['services']
+        missing_uid = self.observed_cluster()
+        del missing_uid['metadata']['uid']
+        missing_version = self.observed_cluster()
+        del missing_version['metadata']['resourceVersion']
+        for items in ([], [self.observed_cluster(namespace='unrelated')], [incomplete],
+                      [missing_uid], [missing_version]):
+            with self.subTest(items=items):
+                self.data['management/clusters.cluster.x-k8s.io'] = items
+                result = self.run_proposal(online=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(str(path), result.stderr)
+                self.assertIn('serviceCIDR', result.stderr)
+                self.assertFalse(self.output.exists())
+
+    def test_online_auto_different_planes_are_not_a_unique_identity(self):
+        self.online_inputs()
+        path = self.config(pod='auto')
+        for plane in ('management', 'infrastructure'):
+            self.data[plane + '/clusters.cluster.x-k8s.io'] = [self.observed_cluster()]
+        result = self.run_proposal(online=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ambiguous', result.stderr)
+        self.assertIn(str(path), result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_online_auto_same_api_uid_and_values_can_be_observed_twice(self):
+        self.online_inputs()
+        self.config(endpoint='auto', pod='auto', service='auto')
+        # Both contexts intentionally refer to exactly the same API + CA.
+        mgmt = yaml.safe_load((self.home / 'management.yaml').read_text())
+        infra_path = self.home / 'infrastructure.yaml'
+        infra = yaml.safe_load(infra_path.read_text())
+        infra['clusters'][0]['cluster'] = mgmt['clusters'][0]['cluster']
+        infra_path.write_text(yaml.safe_dump(infra))
+        for plane in ('management', 'infrastructure'):
+            self.data[plane + '/clusters.cluster.x-k8s.io'] = [self.observed_cluster()]
+        self.assert_no_go(self.run_proposal(online=True), online=True)
+        self.output.unlink()
+        # A UID replacement or an allocation changing between snapshots is not
+        # the same stable binding, even when both contexts select the same API.
+        observed = self.data['infrastructure/clusters.cluster.x-k8s.io'][0]
+        observed['metadata']['uid'] = 'replacement'
+        self.assertNotEqual(self.run_proposal(online=True).returncode, 0)
+        self.assertFalse(self.output.exists())
+        observed['metadata']['uid'] = 'observed-uid'
+        observed['spec']['clusterNetwork']['pods']['cidrBlocks'] = ['10.33.0.0/16']
+        self.assertNotEqual(self.run_proposal(online=True).returncode, 0)
+        self.assertFalse(self.output.exists())
 
     def test_online_failure_never_falls_back_or_leaks_stderr(self):
         self.online_inputs()

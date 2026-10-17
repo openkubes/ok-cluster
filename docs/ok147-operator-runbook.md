@@ -257,6 +257,21 @@ and `/20` Service networks from `10.96.0.0/12`. The proposal checks subnet,
 supernet and cross-role overlaps, including known addresses and the endpoint
 pool itself. These are current recipe policies, not universal networking defaults.
 
+Legacy local `auto` fields are not allocations and are never silently ignored.
+Offline mode stops and names the source file and unresolved fields. Online mode
+retains every concrete local value and resolves only `auto` fields from an
+observed CAPI Cluster whose **name and namespace both equal the local config's
+name**, following the existing renderer/lifecycle convention. Required IPv4
+endpoint/Pod/Service values must be present. UID/resourceVersion and source-plane
+evidence are recorded in `sources[].autoResolution`; no local file is rewritten.
+Missing, malformed, wrong-namespace or ambiguous observations stop without an
+output YAML. A resource absent from both APIs is **not** evidence of unused
+addresses. Duplicate observations through two contexts selecting the same API/CA
+and UID are accepted only when the resolved values agree. Different APIs/UIDs or
+changing resolved values stop. Concrete local and observed allocations both
+remain excluded even if they differ. This does not adopt a cluster or transfer
+authority; all proposal/no-reservation limitations below still apply.
+
 For a strictly offline, local-inventory-only proposal, supply an explicitly
 approved endpoint range (example below is site-specific, not a default):
 
