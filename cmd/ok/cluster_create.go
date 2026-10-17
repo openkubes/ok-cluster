@@ -141,6 +141,7 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact digest emitted by --prepare")
 	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent evidence public key")
 	terminalMarker := flags.String("terminal-marker", "", "new create-only private terminal marker")
+	preparedDirectory := flags.String("prepared-dir", "", "Existing private YAML preparation; no rendering or replay")
 	// YAML preparation inputs are local-only; never passed to the JSON runner.
 	yamlInputs := map[string]*string{}
 	for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config", "runtime-inputs"} {
@@ -174,6 +175,15 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 		}
 	})
 	isYAML := isClusterYAMLFile(manifestPath)
+	preparedSelected := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "prepared-dir" {
+			preparedSelected = true
+		}
+	})
+	if preparedSelected && (*preparedDirectory == "" || !isYAML || *prepare) {
+		return errors.New("--prepared-dir requires a non-empty path and YAML --dry-run or --live")
+	}
 	if yamlInputSelected && (!isYAML || !*prepare) {
 		return errors.New("YAML preparation inputs (--contract, --output, --runtime-inputs and local source paths) are only accepted with YAML --prepare")
 	}
@@ -182,7 +192,7 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 			return err
 		}
 		if *yamlInputs["contract"] == "" || *yamlInputs["output"] == "" {
-			return errors.New("YAML preparation is NO-GO: currently requires an explicit reviewed --contract and new --output directory; full runner preparation is not yet implemented")
+			return errors.New("YAML preparation is NO-GO: requires an explicit reviewed --contract and new --output directory; existing runtime inputs must be selected separately")
 		}
 		material := []string{"--file", manifestPath}
 		for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config", "runtime-inputs"} {
@@ -194,7 +204,7 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 		}
 		return runClusterIntentPrepare(ctx, material, stdout, stderr)
 	}
-	if isYAML {
+	if isYAML && !preparedSelected {
 		return validateClusterYAMLWorkflow(manifestPath, *dryRun, stdout)
 	}
 	if *live {
@@ -208,10 +218,19 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 			return errors.New("--terminal-marker must be an absent executor-terminal file in an existing private directory")
 		}
 	}
-
-	manifest, err := prepareFullRunExecutionManifest(manifestPath)
-	if err != nil {
-		return fmt.Errorf("verify Bare-MVP manifest: %w", err)
+	var manifest runner.FullRunExecutionManifestReceipt
+	if isYAML {
+		resolved, err := resolvePreparedClusterIntent(manifestPath, *preparedDirectory, *expectedManifestDigest)
+		if err != nil {
+			return err
+		}
+		manifestPath, manifest = resolved.ManifestPath, resolved.Receipt
+	} else {
+		var err error
+		manifest, err = prepareFullRunExecutionManifest(manifestPath)
+		if err != nil {
+			return fmt.Errorf("verify Bare-MVP manifest: %w", err)
+		}
 	}
 	if !validFullRunManifestReceiptFormat(manifest.Format) || manifest.State != "VERIFIED" || manifest.MutationAllowed {
 		return errors.New("Bare-MVP manifest preparation did not verify")

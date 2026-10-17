@@ -179,7 +179,7 @@ func validateClusterYAMLWorkflow(path string, dryRun bool, stdout io.Writer) err
 		return err
 	}
 	if !dryRun {
-		return errors.New("cluster YAML is NO-GO: full runner binding is not implemented; use ok up render for local artifacts only; --prepare/--live require a separately bound technical JSON manifest")
+		return errors.New("cluster YAML is NO-GO: --live requires an existing --prepared-dir and separate approval for its technical manifest digest; no implicit preparation or rendering")
 	}
 	return json.NewEncoder(stdout).Encode(struct {
 		Format                string `json:"format"`
@@ -192,7 +192,7 @@ func validateClusterYAMLWorkflow(path string, dryRun bool, stdout io.Writer) err
 		CollisionChecked      bool   `json:"collisionChecked"`
 		NextAction            string `json:"nextAction"`
 	}{"ok-cli-cluster-intent-validation/v1", "INTENT_VALIDATED_NO_GO", intent.Metadata.Name, false, false, false, false, false,
-		"ok up --file <cluster.yaml> --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>; currently produces partial local artifacts and exits incomplete, not a reservation or live approval"})
+		"ok up --file <cluster.yaml> --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>; explicit existing --runtime-inputs are required for a full local handoff; not a reservation or live approval"})
 }
 
 func runClusterIntentRender(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -445,11 +445,16 @@ Usage:
   ok up render --file cluster.yaml --output <new-private-directory> [paths]
   ok up --file cluster.yaml --prepare --contract <fresh-reviewed-contract.yaml> --output <new-private-directory> [paths]
   # Optional explicit existing private inputs: --runtime-inputs <private-references.json>
+  ok up --file cluster.yaml --prepared-dir <existing-preparation> --dry-run
+  ok up --file cluster.yaml --prepared-dir <existing-preparation> --live --execute \
+    --expected-manifest-digest sha256:<digest> --independent-evidence-public-key <file> \
+    --terminal-marker /absolute/private-dir/executor-terminal
 
 Paths: --lifecycle-root <trusted-checkout> --ok-linux-path <profile-checkout>
 or saved local paths from ok config init; --config selects an explicit file.
 Only those two saved paths are used; credentials are never inferred from config.
-Credential contents are read only when --prepare explicitly selects --runtime-inputs.
+Credential contents are read only for explicit --runtime-inputs preparation or
+verification/execution of an existing --prepared-dir (never from saved config).
 
 Profile talos-kubevirt-mvp fixes one control plane and one worker, each with
 2 cores / 4Gi memory / 20Gi disk and Kubernetes v1.34.1. Talos, Golden image,
@@ -472,10 +477,13 @@ Flatcar and Ubuntu do not yet have bounded runner recipes; no Talos fallback.
 Without --runtime-inputs preparation exits non-zero. With explicit private inputs,
 only the existing full-run verifier can produce PREPARED_NOT_AUTHORIZED and the
 technical JSON manifest digest. It proves local preparation, not deployed authority,
-authenticated access or cluster convergence. YAML --live remains blocked.
+authenticated access or cluster convergence. YAML --live requires --prepared-dir.
+The runner verifies the prepared fixture and original normalized YAML binding
+without re-rendering. All original live gates and evidence requirements remain.
 The handoff receipt includes nextCommands argument arrays for a technical JSON
 dry-run and live-after-separate-approval invocation; neither is executed for you.
-No API client, credential issuance, authority rebinding or live stage is opened.
+Preparation opens no API client, issues no credentials, rebinds no authority and
+executes no stage. Live execution requires separate explicit approval.
 Existing technical JSON manifests keep their original workflow and receipts.
 `)
 }

@@ -931,7 +931,7 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 func hasClusterCreateProductFlag(arguments []string) bool {
 	return hasAnyCommandFlag(arguments,
 		"--file", "-f", "--prepare", "--live", "--execute", "--expected-manifest-digest",
-		"--independent-evidence-public-key", "--terminal-marker",
+		"--independent-evidence-public-key", "--terminal-marker", "--prepared-dir",
 	)
 }
 
