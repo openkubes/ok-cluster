@@ -78,50 +78,84 @@ security requirement is changed here. Even matching platform inputs cannot make
 the current v3/v4 YAML runner handoff executable. Do not implement preparation
 automation that works around that gate.
 
-#### MVP simplification checkpoint: issuer deferred, authority decision open
+#### MVP decision: one runner path for CLI and future Console self-service
 
-The operator requested postponing the automatic issuer for the MVP. Issuer
-activation, record-protection installation and further issuer-specific rollout
-work are therefore deferred. The isolated #455–#457 packages remain inactive;
-their merge is not permission to deploy them. The installation plan below is
-retained for a future delegated-runner profile, not the next MVP task.
+The operator confirmed retaining the bounded runner as the shared execution
+path, with `ok-console` self-service in view. This supersedes the earlier idea of
+deferring bootstrap by introducing a local trusted-operator mode. **Do not build
+that second mode or silently wrap Make after a runner denial.** Make remains
+development/operator tooling, not an alternate production authority contract.
+Its lifecycle-generated workload admin access must not enter the bounded runner.
 
-Source inspection establishes a meaningful distinction:
+The simplification target is the user workflow, not removing authority checks:
+one separately authorized platform setup, then understandable create/destroy
+requests under that delegation. Users must not have recurring CSR, token,
+digest, port-forward or handoff-file chores. A user confirmation submits a
+reviewed operation; it does not grant the platform new rights or authorize an
+arbitrary issuer request. CLI and Console may differ in authentication and
+presentation, not runner grants, stage order or success evidence.
 
-- `Makefile` target `kubeconfig` retrieves the lifecycle-generated workload
-  kubeconfig through `clusterctl get kubeconfig`; `install-cni` then uses it for
-  installation. This is trusted operator tooling, not bounded delegation.
-- `KubernetesLifecycleWorkloadAuthorityMaterializer` expressly forbids importing
-  the CAPI admin Secret. Current manifest and constructor gates reject that
-  certificate path before stages or grant resolution. Parking the issuer does
-  not make those gates optional.
-- `bootstrap-post-apply` waits for Nodes Ready; the separate lifecycle runtime
-  evidence verifies node count/identity, CAPI state and Cilium chart/readiness.
-  Neither shell exit zero nor this evidence alone replaces the runner's full
-  required receipt/probe/target-access contract.
-- Make bootstrap currently routes both Golden/infrastructure checks and CAPI
-  operations through `TALOS_INFRA_KUBECONFIG`. It cannot simply be wrapped and
-  advertised as supporting independently selected management/infrastructure
-  targets. Existing split-plane selection must remain explicit and fail closed.
+Local Console source inspection at
+[`72a816e3e0bb9ca1eb9d67e0432b7e6e27da2e5b`](https://github.com/openkubes/ok-console/tree/72a816e3e0bb9ca1eb9d67e0432b7e6e27da2e5b)
+confirmed that its BFF exposes read-only platform resources; authentication
+session mutations are not cluster create/destroy endpoints. The inspected
+`bff/README.md` and `contracts/security/v0alpha1/README.md` describe point-of-use
+environment/tenant/permission checks and a browser-safe session projection.
+This is source evidence, not a deployed-state observation. Console mutation
+integration is future work, not enabled by this decision or a login session.
 
-The recommended alternative for **explicit authority review**, not yet selected
-or implemented, is a local trusted-operator execution profile. The CLI would
-invoke existing lifecycle owners with the operator's explicitly selected target
-access; any lifecycle-generated workload admin credential would stay in the
-trusted local operator boundary. It must never be supplied to the existing
-bounded runner, uploaded to an execution Job or represented as a least-privilege
-observer credential. Privilege and local credential persistence must be visible
-in the reviewed plan/confirmation, not hidden behind a generic create approval.
+Before self-service integration, a reviewed server-side operation boundary must
+authenticate the caller, verify scope at the point of use and submit only typed,
+bound operations under explicit platform delegation. The browser receives
+redacted status/evidence, never Kubernetes credentials, signing keys, reusable
+stage grants or an arbitrary shell/Kubernetes proxy. CLI possession of a local
+kubeconfig must not become a second authorization policy. No new Console route,
+permission name or public operation schema is defined here. Existing managed
+CLI teardown remains unchanged; its future Console integration must preserve
+its separate plan, ownership and recovery contract rather than use create stages.
 
-This changes the execution trust model and may not silently become the default
-or a fallback after #437 rejection. Before implementation, approve that boundary
-and specify the minimal completion/evidence contract. Reuse existing lifecycle
-logic, pin target contexts/API trust, preserve non-zero/STOP outcomes and durable
-local start/result records, prohibit automatic mutation replay, and retain
-existing destroy safeguards. Missing required convergence evidence is incomplete,
-not success. Do not reuse `bare-cluster-mvp/v1` success or historical receipts for
-a weaker set of checks. No new operator profile, public schema or supported OS is
-enabled by this proposal; existing happy-run outcomes and Candidates stay intact.
+**Minimum for a safe runner MVP** (requirements, not implemented deployment):
+
+| Required boundary | Existing evidence | Work still needed before activation |
+| --- | --- | --- |
+| Authenticated operation/plan and platform delegation | Existing stage plans/grants; #437 denies unsupported provenance | Bind verified caller scope, exact plan/attempt/target and authoritative predecessor outcomes. A supplied matching digest or frontend permission is not proof of authority. Resolve Stage-7 plan provenance separately. |
+| Bounded workload access | #455 offline checks; #456 request/result authentication | Establish the reviewed platform issuer task, real source UID/RV/owner/CA checks and in-task CA/key correspondence. Per-role rights, lifetime and stage budget must match the accepted profile. No CAPI-admin fallback or CA key in CLI/runner. |
+| Durable one-use issuance | #456 claims/results; #457 create-only adapter with fake TLS tests | Prove the selected store domain, writer isolation and enforced protection against deletion/replacement before signing. A claim with no authenticated result stays STOP. Fake API success is not deployment proof. |
+| Required network observation and fixed probe | Existing collector/probe adapters; offline observer profile | Establish bounded Pod discovery and mediated fixed-probe authority, including Pod replacement races. A fixed command in Go alone does not restrict a stolen exec credential. Do not drop the probe. |
+| Exact target-access installation | Existing renderer/plan checks for the fixed Stage-7 object set | Enforce the reviewed bodies and privilege boundary at the platform/API boundary, not merely in CLI validation. No blanket bind/escalate or reduced object set under the existing completion label. |
+| Explicit integration and evidence-driven completion | Seven-stage runner orchestration, durable receipts, explicit management/infra targets | Review the next manifest/adapter revision, role-specific access wiring and end-to-end negative tests before changing any gate. All required convergence/probe/receipt evidence remains necessary. |
+
+These are not six new services. Request authentication, bounded issuance and
+fixed tasks may be implemented by one narrowly reviewed platform integration;
+separate capabilities and trust boundaries must still be enforced. A bootstrap
+access result is not a stage grant; a successful stage invocation is not cluster
+success. Merely implementing both observer credentials cannot complete Stage 7.
+
+**Defer without weakening that minimum:** a new Installer Operator/controller,
+new CRDs, a generic multi-provider issuer, Ubuntu/Flatcar execution, Console
+mutation UI/endpoints in this slice, automatic issuance renewal, automatic
+recovery/takeover/replay, generic retention/garbage-collection machinery and
+OK-197/OK-198. Keep the existing narrow Talos/KubeVirt MVP profile and exact
+completion contract. The Console-compatible operation seam is a design
+constraint now, not permission to implement its full service here.
+
+For the initial no-recovery profile, retain issuance records instead of adding a
+cleanup controller. Do not build automatic disaster recovery as a prerequisite
+to a first run, but do not declare datastore rollback/fork risks solved: the
+trusted administration/storage boundary and enforced stop after continuity loss
+still require independent acceptance. No silent empty-store adoption, namespace
+recreation or domain rebinding. Full recovery can wait; fail-closed behavior
+and the accepted threat boundary cannot.
+
+Implementation order: (1) review concrete platform task/delegation, authoritative
+evidence and store-enforcement contracts together; (2) offline negative proofs
+for their adapters, including probe/installer boundaries; (3) separately approved
+installation and bounded enforcement validation; (4) explicit runner revision
+and end-to-end offline proof, then separate live approval for one Candidate;
+(5) future Console submission/status integration through the same operation
+boundary. Do not activate a partially supported profile or re-enable a gate on
+the strength of this design decision. Existing historical happy-run evidence,
+Candidate files and immutable terminal outcomes remain unchanged.
 
 #### Confirmed source boundaries
 
@@ -361,29 +395,29 @@ timeout and the existing one-hour TokenRequest limit are not certificate-policy
 approval. Renewal after expiry is a new authorized issuance decision, not an
 implicit replay or automatic extension of a previous outcome.
 
-The first implementation checkpoint, **after agreement on these contracts**,
-should be pure offline request/result validation plus negative fixtures, with no
-signing method, CA-key reader, Job launcher, enabled certificate profile or live
-entry point. Then implement the separately authorized platform task and adapters
-under the reviewed next revision. Do not mix this into the accepted #437
-mitigation or silently expand a public CLI/runtime schema.
+The first local checkpoint is now present in #455: offline request/result
+validation and negative fixtures, without a signing method, CA-key reader,
+Job launcher, enabled certificate profile or live entry point. #456 and #457
+add candidate authority/storage boundaries without activation. The next platform
+task and adapters still require the concrete contracts above and a reviewed next
+revision. Do not mix them into the accepted #437 mitigation or silently expand
+a public CLI/runtime schema.
 
 #### First observer profile: concrete decisions for review
 
-**PROPOSED ONLY; no accepted issuer profile or live authorization.** Operator
-approval of the bounded-bootstrap direction allowed the offline checkpoint in
-[PR #455](https://github.com/openkubes/ok-cluster/pull/455). That PR checks local
-request/result and source-metadata consistency only. It does not authenticate an
-issuer, persist claims or enable the runner. Its CI passed at `949a16a`; this is
-not independent security acceptance of Candidate A.
-
-The next implementation needs explicit profile agreement, rather than treating
-the synthetic ten-minute test cap as policy. Proposed first decisions:
+**LOCALLY APPROVED CHECKS; no production issuer activation or live authority.**
+The observer constraints below are implemented in the isolated #455 package;
+#456 authenticates candidate request/result messages and #457 adds a fake-API-
+tested storage adapter. None establishes deployed issuer/source/RBAC enforcement
+or independent security acceptance of Candidate A. Production policy and
+integration still need the reviewed platform contract. The synthetic ten-minute
+test cap is not policy. The following table describes the local profile and
+remaining production proposal, not enabled runtime defaults:
 
 | Decision | Review proposal, not an active default |
 | --- | --- |
 | Identities | Separate exact CNs `ok147:<operation-nonce>:network-observer` and `ok147:<operation-nonce>:runtime-observer`; nonce is 32 lowercase hexadecimal characters generated before rendering/plan hashing. Empty certificate O/group set; no SANs; digitalSignature and clientAuth only. |
-| Lifetime | Maximum total certificate validity 45 minutes, including at most 60 seconds of backdating. No acceptance before NotBefore or after NotAfter, and no automatic renewal. These numbers require profile approval. |
+| Lifetime | Locally approved maximum total certificate validity 45 minutes, including at most 60 seconds of backdating. No acceptance before NotBefore or after NotAfter, and no automatic renewal. Production issuer activation remains subject to review. |
 | Issuance timing | One distinct role slot per plan/attempt/target UID, issued just before the relevant stage after its authoritative predecessor prefix. Do not issue both roles before infrastructure convergence, share one credential between stages, or reinterpret the current v3/v4 shared credential fields. |
 | Budget | The selected observation window must be at most 30 minutes. Initial issuer-result handoff plus scheduling must consume at most five minutes; check actual remaining certificate lifetime before stage entry. A missed budget stops without shortening observation, extending the certificate, reissuing or replaying. |
 | Runtime observer | Only GET the `kube-system` Namespace and `local-path` StorageClass in the bound workload cluster. No workload writes, Secret access, TokenRequest, RBAC modification or exec. Management receipt persistence uses a distinct authority. |
