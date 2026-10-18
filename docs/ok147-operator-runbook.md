@@ -71,9 +71,10 @@ contract implemented here.
 
 Status: **DESIGN ONLY / NO-GO**. This section does not approve an issuer,
 certificate identity, lifetime, RBAC installation or execution. The security
-contract and review of [PR #437](https://github.com/openkubes/ok-cluster/pull/437)
-remain authoritative; no accepted security requirement is changed here.
-After its credential gate is merged, even matching platform inputs cannot make
+contract from [PR #437](https://github.com/openkubes/ok-cluster/pull/437), merged at
+`main@b1ecf24`, remains authoritative; its post-merge independent review and
+ADR-030 security acceptance are not implied complete by the merge. No accepted
+security requirement is changed here. Even matching platform inputs cannot make
 the current v3/v4 YAML runner handoff executable. Do not implement preparation
 automation that works around that gate.
 
@@ -106,12 +107,14 @@ Stage-5–7 proposal.
 
 #### Recommended integration sequence
 
-1. Finish independent review of #437; retain its certificate/recovery gates.
+1. Retain the merged #437 certificate/recovery gates and its independent-review
+   follow-up; merging a mitigation does not approve a new issuance profile.
 2. Agree the initial workload issuance profile and the existing platform owner
    that can enforce it. A narrowly scoped certificate issuer outside the runner
    is a candidate because the current manifest is certificate-shaped; an approved
    token bootstrap is an alternative, not already proven by TokenRequest support.
-   Neither option is selected or implemented by this proposal. A CSR or
+   The candidate below recommends an architecture for review, not an approved
+   or implemented issuance option. A CSR or
    TokenRequest alone does not solve authenticated first access to the new API.
 3. For certificate mode, review exact per-role CN, complete O/group set, trust
    root, clientAuth usage, target binding and maximum total validity, together
@@ -140,6 +143,105 @@ Stage-5–7 proposal.
    reviewed supported profiles may be enabled; unsupported modes keep failing
    before Stage 1. Recovery/fencing and old-grant retirement remain separate.
 
+#### Candidate A: platform-owned one-shot certificate issuer
+
+**Recommended for feasibility/security review, not selected for execution.** A
+fixed, digest-pinned, short-lived issuance Job on management workers would sign
+one approved request per role. It would not be another cluster controller or a
+long-running Installer Operator. The runner would retain its existing ephemeral
+execution model and CAPI would retain lifecycle ownership.
+
+Why investigate this first: a management-side signer could issue the first
+bounded workload credential without authenticating to that workload API using
+the prohibited CAPI admin kubeconfig. Upstream CABPT documents a Kubernetes CA
+Secret separately from the Talos secret bundle and Talos API configuration.
+That establishes a possible source seam, **not** that its deployed version,
+actual owner, Secret identity/key layout or access permissions are verified.
+The exact provider release and source must be pinned before implementation;
+do not infer ownership from a `<cluster>-ca` name alone. Upstream maintenance
+status is an integration risk to review, not authority to migrate providers.
+
+The proposed trust boundaries are:
+
+- The runner generates its own client private key and CSR locally/in its private
+  execution volume. It never reads the CA private key, CAPI admin kubeconfig or
+  Talos admin configuration; private keys never enter Contract/plan, public
+  requests, receipts, Job arguments or logs.
+- A separately authorized platform installer owns the exact Job spec, pinned
+  image, ServiceAccount, key-source access and admission policy. Runner users do
+  not receive arbitrary Job-create or Secret-read rights to invoke the signer.
+  RBAC alone cannot constrain a Job-create body or which Secret it mounts.
+- The signer's reviewed request surface must limit it to its target CA source
+  and issuance coordination/result records. It must not mint stage grants,
+  update desired state, rotate CAs or issue for another target.
+  Possession of a CA key is nevertheless a high-privilege compromise boundary:
+  a compromised signer could impersonate privileged users. The proposal does
+  not claim RBAC can restrict what a process can sign with a key it possesses.
+- The source must bind namespace/name, observed Secret UID, owner references,
+  CA fingerprint and target Cluster UID to the verified lifecycle receipt
+  prefix. Source identity/RV drift stops before signing. Result verification
+  rejects wrong CA, subject/groups, EKU, validity or CSR public key before use.
+  No CA key or another user's client private key is returned to the runner.
+
+The future flow would be: verify issuer/profile/delegation wiring before Stage 1;
+let the existing owners create/converge infrastructure; verify the authoritative
+Stage-4 prefix and target UID; claim issuance, run the exact platform task once,
+verify its result, then continue the existing required observations. An unknown
+source contract or missing accepted profile still denies before Stage 1. This is a future
+explicit manifest/profile revision, not a reinterpretation of current v3/v4.
+
+Proposed identity separation for review (not an accepted CN allowlist):
+
+| Capability | Proposed boundary |
+| --- | --- |
+| Network observation | Read-only workload identity; no exec, RBAC write, Secret read or token minting. |
+| Fixed Cilium probe | Separate platform-mediated fixed-probe capability; no arbitrary command argument or raw exec credential returned to the user-facing CLI. Pod-name/UID replacement races require an accepted guard/protocol before enabling it; ordinary exec has no atomic target-UID precondition. |
+| Runtime binding | Separate observer limited to the required Namespace/StorageClass reads; management persistence remains separate. |
+| Target-access installation | Separate exact-body submission capability; RBAC/admission and privilege-escalation negatives must be proven before issuing usable installer access. No blanket `escalate`, `bind`, impersonation or wildcard alternative. |
+
+For X.509 role identities, propose explicit User subjects with an exact empty
+certificate O/group set (not a new shared group). Kubernetes' automatically
+assigned authenticated group is distinct from certificate O. Subject templates
+must be operation-specific and reject `system:` identities; exact templates
+remain unapproved. If a fresh operation nonce is used, generate and bind it
+**before** rendering/hashing: embedding a final plan digest in a subject already
+inside the plan would create a circular identity. Target UID binding belongs in
+the verified issuance request/result after lifecycle convergence, not guessed
+inside a pre-rendered object.
+
+An issuance slot must be keyed by accepted plan/attempt, target UID and role;
+its immutable claim binds the exact CSR and policy revision. Do not put only the
+CSR digest into the slot key: changing a CSR must not create another issuance
+opportunity for the same operation/role. Concurrent tasks have one winner. An
+issued result may be retrieved idempotently; claim-without-result remains
+indeterminate with no automatic issuance retry, timeout takeover or runner
+replay. The issuer's coordination backend needs its own reviewed narrow write
+policy; existing immutable stage outcome records must not become mutable slots.
+
+**Still blocking activation:** exact deployed CA ownership/key-source contract;
+approved per-role subjects and RBAC/admission/probe restrictions; a justified
+certificate lifetime and clock-skew policy; issuance-request authentication and
+durable coordination; authenticated plan provenance before any Stage-7 signing
+can return. Numeric TTL remains UNSET/NO-GO: the CLI's three-hour execution
+timeout and the existing one-hour TokenRequest limit are not certificate-policy
+approval. Renewal after expiry is a new authorized issuance decision, not an
+implicit replay or automatic extension of a previous outcome.
+
+The first implementation checkpoint, **after agreement on these contracts**,
+should be pure offline request/result validation plus negative fixtures, with no
+signing method, CA-key reader, Job launcher, enabled certificate profile or live
+entry point. Then implement the separately authorized platform task and adapters
+under the reviewed next revision. Do not mix this into the accepted #437
+mitigation or silently expand a public CLI/runtime schema.
+
+Next bounded diagnostic, requiring separate operator approval: read management
+plane CAPI/Talos provider Deployment image references and their running Pod image
+IDs in the provider namespaces. Do not read any Secret, issue/renew credentials,
+change resources or contact a workload API for this inventory. If existing access
+does not suffice, stop rather than refreshing it. Use the resulting version/digest
+to inspect the matching upstream implementation; runtime CA ownership remains
+unverified until its own separately scoped evidence is available.
+
 #### User experience after that contract is implemented
 
 One explicit platform setup delegates the reviewed scope. Normal users still
@@ -153,6 +255,10 @@ retry or privileged bootstrap fallback is introduced by this design proposal.
 Primary references: [Talos v1.9 machine configuration / inline manifests](https://docs.siderolabs.com/talos/v1.9/reference/configuration/v1alpha1/config),
 [Kubernetes RBAC restrictions and escalation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/),
 and [Kubernetes certificate requests and signers](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/).
+For Candidate A: [CABPT CA/secret ownership documentation](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos#operation)
+and [Kubernetes X.509 user/group authentication](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#x509-client-certs).
+These upstream references must be matched to the deployed/pinned provider
+release before being treated as implementation evidence.
 
 For the Bare-MVP completion mode, operators use the product CLI facade rather
 than assembling stage commands manually:
