@@ -49,8 +49,9 @@ The request digest is a consistency binding, **not request authentication or a
 signed issuer receipt**. The caller must supply trusted expectations; deriving
 them from the request defeats the check. Exact subject selection is not proof
 that the subject is operation-specific or that its live RBAC is least-privilege.
-No accepted subject template, issuer profile, numeric production TTL or protocol
-has been introduced.
+The later operator-approved observer profile below supplies fixed local
+subject/lifetime checks. No deployed issuer policy or accepted public wire
+protocol has been introduced.
 
 There is no CA-key reader, private-key generator, signer, Job launcher, file or
 network I/O, credential renewal, live source inspection, RBAC/admission installer,
@@ -108,3 +109,41 @@ diff check and CLI dependency isolation were rerun and passed. The earlier
 CLI smoke/lifecycle results above are from the initial checkpoint; those suites
 were not rerun for this isolated follow-up, which changes no existing runtime,
 CLI, lifecycle, renderer or tests outside `bootstrapcheck`.
+
+## Operator-approved local observer profile checkpoint
+
+Following explicit approval of the observer proposal in draft #452, the isolated
+checker now also enforces, without runtime activation:
+
+- Exact CN `ok147:<nonce>:<role>` for network-observer or runtime-observer; the
+  independently expected nonce is 32 lowercase hexadecimal characters generated
+  before rendering/plan hashing. No groups, SANs, CA capability or extra EKU.
+- A 45-minute total validity cap and at most 60 seconds backdating, measured
+  against independently authenticated issuance time, not stage-entry time.
+- At most five minutes from issuance to stage entry; a positive observation
+  window of at most 30 minutes and an explicit positive wrapper-overhead budget.
+- At entry, remaining certificate validity must strictly exceed polling plus
+  wrapper overhead. No arithmetic overflow, expiry-at-completion equality,
+  observation shortening, renewal or replay fallback is accepted.
+- Explicit role-specific predecessor expectations: Stage 4 for network
+  observation and Stage 5 for runtime binding. The caller must verify those
+  outcomes independently; digest syntax is not authoritative receipt verification.
+
+The generic initial-result freshness check remains unchanged. The observer entry
+check verifies at both issuance and stage-entry time, so legitimate scheduling
+delay is not incorrectly counted as extra certificate backdating. Issuance time
+is NOT extracted from a certificate or inferred from a local response timestamp;
+authenticated issuer-result provenance remains required before integration.
+
+This implements the certificate/budget portion only. It does not implement or
+approve the platform-mediated Pod-discovery/probe protocol, raw Pod LIST/exec,
+RBAC/admission, a signing task, key-source access, request authentication, durable
+claims/results, or the explicit next manifest/adapter revision. In particular,
+passing local checks cannot authorize Stage 1 or reopen #437 gates. The issuer
+image/spec and coordination backend still require review; no platform was changed.
+
+Profile follow-up local verification: PASS all Go tests, checker race tests
+(98.5% statement coverage), `go vet ./...`, diff check and CLI dependency
+isolation. Existing CLI smoke/lifecycle tests are not rerun for this unlinked
+package-only change. Earlier OK-178 environment failures remain as recorded;
+live issuance, installation and runner execution remain NOT RUN.

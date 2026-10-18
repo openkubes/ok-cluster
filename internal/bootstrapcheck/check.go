@@ -168,6 +168,10 @@ func ValidateRequest(r Request, c Constraints) error {
 // initial result handoff; ClockSkew bounds initial certificate backdating, not a
 // renewable lifetime. This is not a general reusable-certificate verifier.
 func ValidateResult(r Request, result Result, c Constraints, now time.Time) error {
+	return validateResultAt(r, result, c, now, true)
+}
+
+func validateResultAt(r Request, result Result, c Constraints, now time.Time, initial bool) error {
 	if err := ValidateRequest(r, c); err != nil {
 		return err
 	}
@@ -186,7 +190,7 @@ func ValidateResult(r Request, result Result, c Constraints, now time.Time) erro
 	if cert.IsCA || cert.KeyUsage != x509.KeyUsageDigitalSignature || len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth || len(cert.UnknownExtKeyUsage) != 0 || len(cert.DNSNames)+len(cert.IPAddresses)+len(cert.EmailAddresses)+len(cert.URIs) != 0 {
 		return errors.New("bootstrap certificate capabilities rejected")
 	}
-	if !cert.NotAfter.After(cert.NotBefore) || cert.NotAfter.Sub(cert.NotBefore) > c.MaxValidity || cert.NotBefore.After(now) || now.Sub(cert.NotBefore) > c.ClockSkew || !cert.NotAfter.After(now) {
+	if !cert.NotAfter.After(cert.NotBefore) || cert.NotAfter.Sub(cert.NotBefore) > c.MaxValidity || cert.NotBefore.After(now) || (initial && now.Sub(cert.NotBefore) > c.ClockSkew) || !cert.NotAfter.After(now) {
 		return errors.New("bootstrap certificate validity rejected")
 	}
 	ca, _ := x509.ParseCertificate(c.CADER)
