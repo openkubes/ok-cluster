@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,28 +38,31 @@ func TestFullRunPlaneTargetsMustMatchAuthoritiesAndProviderAccess(t *testing.T) 
 	}
 	mgmt := selectTarget("mgmt", doc.ClusterLifecycle.Authority)
 	infra := selectTarget("infra", doc.ProviderPrerequisites.Authority)
-	_, receipt, err := LoadFullRunExecutionManifest(path)
+	manifest, receipt, err := inspectFullRunExecutionManifest(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyFullRunManifestPlaneTargets(path, receipt.ManifestDigest, mgmt, infra); err != nil {
+	if err := VerifyFullRunManifestPlaneTargets(path, receipt.ManifestDigest, mgmt, infra); !errors.Is(err, ErrClientCertificateDisabled) {
+		t.Fatalf("public target verification bypassed credential policy: %v", err)
+	}
+	if err := verifyFullRunManifestPlaneTargets(manifest, receipt.ManifestDigest, mgmt, infra); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyFullRunManifestPlaneTargets(path, receipt.ManifestDigest, infra, mgmt); err == nil {
+	if err := verifyFullRunManifestPlaneTargets(manifest, receipt.ManifestDigest, infra, mgmt); err == nil {
 		t.Fatal("swapped planes accepted")
 	}
-	if err := VerifyFullRunManifestPlaneTargets(path, "wrong digest", mgmt, infra); err == nil {
+	if err := verifyFullRunManifestPlaneTargets(manifest, "wrong digest", mgmt, infra); err == nil {
 		t.Fatal("unbound manifest accepted")
 	}
 	foreign := mgmt
 	foreign.CATrustDigest = "different-trust"
-	if err := VerifyFullRunManifestPlaneTargets(path, receipt.ManifestDigest, foreign, infra); err == nil {
+	if err := verifyFullRunManifestPlaneTargets(manifest, receipt.ManifestDigest, foreign, infra); err == nil {
 		t.Fatal("foreign CA accepted")
 	}
 	if err := os.WriteFile(doc.ProviderAccess.KubeconfigFile, config(doc.ClusterLifecycle.Authority), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyFullRunManifestPlaneTargets(path, receipt.ManifestDigest, mgmt, infra); err == nil {
+	if err := verifyFullRunManifestPlaneTargets(manifest, receipt.ManifestDigest, mgmt, infra); err == nil {
 		t.Fatal("provider-access pointed at management")
 	}
 }

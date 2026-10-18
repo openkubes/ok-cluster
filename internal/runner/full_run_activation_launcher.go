@@ -58,6 +58,9 @@ func OpenKubernetesFullRunExecutionActivationLauncher(config FullRunExecutionAct
 	if err != nil || config.ExpectedPackageDigest != receipt.PackageDigest {
 		return nil, errors.New("full-run activation package differs from expected identity")
 	}
+	if packaged.verified {
+		return nil, ErrClientCertificateDisabled
+	}
 	if config.Authority.AuthorityIdentity == "" || config.Authority.AuthorityIdentity != packaged.managementAuthority ||
 		!stageReceiptPrefixDigestPattern.MatchString(config.Authority.CABundleDigest) {
 		return nil, errors.New("full-run activation authority differs from verified management authority")
@@ -117,6 +120,9 @@ func (launcher *KubernetesFullRunExecutionActivationLauncher) Launch(ctx context
 	receipt := launcher.newReceipt()
 	if launcher == nil || launcher.client == nil {
 		return receipt, errors.New("full-run activation launcher is required")
+	}
+	if launcher.plan.Format != "" {
+		return stopFullRunExecutionActivation(receipt, "STOPPED_ZERO_WRITE", ErrClientCertificateDisabled)
 	}
 	launcher.mu.Lock()
 	if launcher.used {

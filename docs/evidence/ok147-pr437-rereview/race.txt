@@ -1,0 +1,28 @@
+OK-147 / PR #437 re-review evidence
+Started (UTC): 2026-10-16T19:52:53.919367+00:00
+Effective UID: 501
+Go: go version go1.26.7 darwin/amd64
+Go/Makefile source SHA-256: 9d21657d578ef21ecae3826bddf4d3241a95318cc41e2e9d4ae408cf5717fde1
+Command: go test -race -count=1 ./...
+--- complete combined stdout/stderr ---
+ok  	github.com/openkubes/ok-cluster/cmd/ok	8.794s
+ok  	github.com/openkubes/ok-cluster/internal/authorization	2.624s
+ok  	github.com/openkubes/ok-cluster/internal/contract	3.201s
+?   	github.com/openkubes/ok-cluster/internal/digest	[no test files]
+ok  	github.com/openkubes/ok-cluster/internal/dryrun	2.677s
+ok  	github.com/openkubes/ok-cluster/internal/execution	8.869s
+ok  	github.com/openkubes/ok-cluster/internal/executor	4.149s
+ok  	github.com/openkubes/ok-cluster/internal/jsonstrict	6.853s
+ok  	github.com/openkubes/ok-cluster/internal/ledger	4.967s
+ok  	github.com/openkubes/ok-cluster/internal/observation	6.779s
+ok  	github.com/openkubes/ok-cluster/internal/projection	1.710s
+ok  	github.com/openkubes/ok-cluster/internal/runner	116.966s
+ok  	github.com/openkubes/ok-cluster/internal/stageattempt	1.510s
+ok  	github.com/openkubes/ok-cluster/internal/stageauthority	2.957s
+ok  	github.com/openkubes/ok-cluster/internal/stagecursor	3.772s
+ok  	github.com/openkubes/ok-cluster/internal/stageplan	4.166s
+ok  	github.com/openkubes/ok-cluster/internal/stagereceipt	5.116s
+ok  	github.com/openkubes/ok-cluster/internal/submission	5.015s
+
+--- end complete output ---
+Exit status: 0

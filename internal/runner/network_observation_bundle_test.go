@@ -93,6 +93,12 @@ func TestNetworkObservationRejectsForeignProfileBeforeCredentialReads(t *testing
 				config = networkRecoveryFixture(t)
 			}
 			bundle, err := LoadNetworkObservationStageBundle(config)
+			if recovery {
+				if err == nil || !strings.Contains(err.Error(), "recovery execution is disabled") {
+					t.Fatalf("recovery opened capabilities: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -7,12 +7,9 @@ import json
 import os
 from pathlib import Path
 import pty
-import select
-import signal
 import subprocess
 import shutil
 import tempfile
-import time
 import unittest
 import yaml
 
@@ -190,34 +187,13 @@ class IntentRenderTests(unittest.TestCase):
         runtime_path, inputs = self.synthetic_runtime_inputs()
         before = {str(p): p.read_bytes() for p in self.home.iterdir() if p.is_file()}
         result = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        receipt = json.loads(result.stdout)
-        self.assertEqual(receipt['state'], 'PREPARED_NOT_AUTHORIZED')
-        self.assertTrue(receipt['runnerReady'])
-        for name in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'authorityDeploymentVerified', 'liveAuthorized'):
-            self.assertIs(receipt[name], False)
-        self.assertEqual(receipt, json.loads((self.output / 'runner-handoff-receipt.json').read_text()))
+        self.assert_policy_denial(result)
+        self.assertFalse((self.output / 'runner-handoff-receipt.json').exists())
         self.assertEqual(json.loads((self.output / 'preparation-receipt.json').read_text())['state'], 'STATIC_PLAN_BOUND_NO_GO')
-        self.assertEqual(receipt['manifest']['state'], 'VERIFIED')
-        self.assertEqual(receipt['runtimeInputsDigest'], 'sha256:' + hashlib.sha256(runtime_path.read_bytes()).hexdigest())
-        self.assertEqual(receipt['independentEvidenceKeyId'], 'sha256:' + hashlib.sha256(bytes(range(32, 64))).hexdigest())
         manifest_path = self.output / 'full-run-manifest.json'
-        self.assertEqual(receipt['manifestPath'], str(manifest_path))
-        commands = receipt['nextCommands']
-        self.assertEqual(commands['dryRun'], ['ok', 'up', '--file', str(manifest_path), '--dry-run'])
-        self.assertEqual(commands['liveAfterApproval'], ['ok', 'up', '--file', str(manifest_path),
-            '--live', '--execute', '--expected-manifest-digest', receipt['manifestDigest'],
-            '--independent-evidence-public-key', inputs['independentEvidencePublicKeyPath'],
-            '--terminal-marker', str(self.output / 'executor-terminal')])
-        # Exercise only the non-mutating suggestion, never the live hint.
-        dry_run = subprocess.run([str(BINARY), *commands['dryRun'][1:]],
+        dry_run = subprocess.run([str(BINARY), 'up', '--file', str(manifest_path), '--dry-run'],
             capture_output=True, text=True, env=self.env, cwd=self.home, timeout=20)
-        self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
-        summary = json.loads(dry_run.stdout)
-        self.assertEqual(summary['manifestDigest'], receipt['manifestDigest'])
-        self.assertEqual(summary['state'], 'VALIDATED')
-        for name in ('apiContacted', 'authorizationConsumed', 'mutationAllowed'):
-            self.assertIs(summary[name], False)
+        self.assert_policy_denial(dry_run)
         self.assertFalse((self.output / 'executor-terminal').exists())
         manifest = json.loads(manifest_path.read_text())
         self.assertEqual(manifest['providerAccess']['kubeconfigFile'], inputs['providerAccessKubeconfigFile'])
@@ -225,8 +201,7 @@ class IntentRenderTests(unittest.TestCase):
         self.assertEqual(manifest['clusterLifecycle']['authority'], inputs['management'])
         verified = subprocess.run([str(BINARY), 'up', '--file', str(manifest_path), '--prepare'],
             capture_output=True, text=True, env=self.env, cwd=self.home, timeout=20)
-        self.assertEqual(verified.returncode, 0, verified.stderr)
-        self.assertEqual(json.loads(verified.stdout)['manifestDigest'], receipt['manifestDigest'])
+        self.assert_policy_denial(verified)
         for name in ('runtime', 'receipts', 'authorizations'):
             self.assertEqual(list((self.output / name).iterdir()), [])
         for path in self.output.rglob('*'):
@@ -236,6 +211,12 @@ class IntentRenderTests(unittest.TestCase):
                 self.assertNotIn(b'i' * 48, path.read_bytes())
         for path, raw in before.items():
             self.assertEqual(Path(path).read_bytes(), raw)
+        self.assertFalse(self.marker.exists())
+
+    def assert_policy_denial(self, result):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('client-certificate execution is disabled', result.stderr)
         self.assertFalse(self.marker.exists())
 
     def yaml_target_references(self, inputs, *, multiple=False, explicit=False):
@@ -278,12 +259,12 @@ class IntentRenderTests(unittest.TestCase):
         self.assertIs(summary['apiContacted'], False)
         self.assertNotIn('exec', checked.stdout)
         prepared = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
-        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        self.assert_policy_denial(prepared)
         binding = json.loads((self.output / 'binding-receipt.json').read_text())
         self.assertEqual(binding['targets'], summary['targets'])
         command = [str(BINARY), 'up', '--file', str(self.input), '--prepared-dir', str(self.output), '--dry-run']
         verified = subprocess.run(command, capture_output=True, text=True, env=self.env, timeout=20)
-        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assert_policy_denial(verified)
         for path, raw in before.items():
             self.assertEqual(Path(path).read_bytes(), raw)
         # Context-label drift is rejected even when endpoint/trust stay equal.
@@ -293,7 +274,7 @@ class IntentRenderTests(unittest.TestCase):
         path.write_text(yaml.safe_dump(data))
         rejected = subprocess.run(command, capture_output=True, text=True, env=self.env, timeout=20)
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn('target changed since preparation', rejected.stderr)
+        self.assert_policy_denial(rejected)  # Policy denial precedes target comparison.
         self.assertFalse(self.marker.exists())
         self.assertFalse((self.output / 'executor-terminal').exists())
         for name in ('runtime', 'receipts', 'authorizations'):
@@ -308,7 +289,7 @@ class IntentRenderTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.yaml_target_references(inputs, multiple=True, explicit=True)
         prepared = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
-        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        self.assert_policy_denial(prepared)
         targets = json.loads((self.output / 'binding-receipt.json').read_text())['targets']
         self.assertEqual(targets['management']['context'], 'management')
         self.assertFalse(self.marker.exists())
@@ -340,8 +321,8 @@ class IntentRenderTests(unittest.TestCase):
     def test_prepared_yaml_uses_existing_runner_and_rejects_drift_without_execution(self):
         runtime_path, inputs = self.synthetic_runtime_inputs()
         prepared = self.bind(self.reviewed_contract(), prepare=True, runtime_inputs=runtime_path)
-        self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        receipt = json.loads(prepared.stdout)
+        self.assert_policy_denial(prepared)
+        manifest_digest = 'sha256:' + hashlib.sha256((self.output / 'full-run-manifest.json').read_bytes()).hexdigest()
         original = self.input.read_bytes()
         base = [str(BINARY), 'up', '--file', str(self.input), '--prepared-dir', str(self.output)]
 
@@ -352,14 +333,9 @@ class IntentRenderTests(unittest.TestCase):
         # Changes to comments are not semantic drift.
         self.input.write_bytes(b'# same reviewed intent\n' + original)
         checked = invoke()
-        self.assertEqual(checked.returncode, 0, checked.stderr)
-        summary = json.loads(checked.stdout)
-        self.assertEqual(summary['manifestDigest'], receipt['manifestDigest'])
-        self.assertEqual(summary['state'], 'VALIDATED')
-        for name in ('apiContacted', 'authorizationConsumed', 'mutationAllowed'):
-            self.assertIs(summary[name], False)
+        self.assert_policy_denial(checked)
 
-        live = ['--live', '--execute', '--expected-manifest-digest', receipt['manifestDigest'],
+        live = ['--live', '--execute', '--expected-manifest-digest', manifest_digest,
                 '--independent-evidence-public-key', inputs['independentEvidencePublicKeyPath'],
                 '--terminal-marker', str(self.output / 'executor-terminal')]
         # Never invoke valid live arguments. Missing gate, wrong digest or
@@ -392,7 +368,7 @@ class IntentRenderTests(unittest.TestCase):
             self.assertEqual(list((self.output / name).iterdir()), [])
         self.assertFalse(self.marker.exists())
 
-    def test_guided_up_prepares_without_expert_flags_and_cancel_never_executes(self):
+    def test_guided_up_denies_policy_before_confirmation_without_expert_flags(self):
         runtime_path, _ = self.synthetic_runtime_inputs()
         management, provider = self.home / 'management-path-only', self.home / 'provider-path-only'
         for path in (management, provider):
@@ -409,53 +385,35 @@ class IntentRenderTests(unittest.TestCase):
         self.assertNotEqual(pending.returncode, 0, pending.stderr)
         self.install_platform_handoff(json.loads(pending.stdout), runtime_path)
 
-        def terminal_run(answer, initial=False):
+        def terminal_run():
             master, slave = pty.openpty()
             process = subprocess.Popen([str(BINARY), 'up', '--file', str(self.input)],
                 stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env, cwd=self.home)
             os.close(slave)
-            output = b''
-
-            def wait_for(prompt):
-                nonlocal output
-                deadline = time.monotonic() + 20
-                while prompt not in output:
-                    self.assertLess(time.monotonic(), deadline, repr(output))
-                    ready, _, _ = select.select([process.stderr], [], [], 0.2)
-                    if ready:
-                        chunk = os.read(process.stderr.fileno(), 4096)
-                        self.assertTrue(chunk, repr(output))
-                        output += chunk
             try:
-                wait_for(b'Type ok to create, or no [no]: ')
-                if answer is None:
-                    process.send_signal(signal.SIGINT)
-                else:
-                    os.write(master, answer)
-                stdout, stderr = process.communicate(timeout=15)
-                return process.returncode, stdout, output + stderr
+                stdout, stderr = process.communicate(timeout=25)
+                return process.returncode, stdout, stderr
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.communicate(timeout=5)
                 os.close(master)
 
-        # Never send ok to the real binary in this test.
-        code, stdout, prompts = terminal_run(b'no\n', initial=True)
+        # Unsupported credentials must exit before even offering confirmation.
+        code, stdout, prompts = terminal_run()
         self.assertNotEqual(code, 0)
         self.assertEqual(stdout, b'')
-        self.assertIn(b'1 control plane, 1 worker', prompts)
-        metadata_paths = list(self.home.rglob('managed-preparation.json'))
-        self.assertEqual(len(metadata_paths), 1)
-        root = metadata_paths[0].parent
-        handoff = json.loads((root / 'preparation/runner-handoff-receipt.json').read_text())
-        self.assertIn(handoff['manifestDigest'].encode(), prompts)
+        self.assertIn(b'client-certificate execution is disabled', prompts)
+        self.assertNotIn(b'Type ok to create', prompts)
+        self.assertEqual(list(self.home.rglob('managed-preparation.json')), [])
+        root = Path(json.loads(pending.stdout)['requestPath']).parent
+        self.assertFalse((root / 'preparation/runner-handoff-receipt.json').exists())
         before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
-        for answer in (b'\n', b'yes\n', b'\x04', None):
-            code, stdout, prompts = terminal_run(answer)
-            self.assertNotEqual(code, 0)
-            self.assertEqual(stdout, b'')
-            self.assertNotIn(b'Reviewed Contract file: ', prompts)
+        code, stdout, prompts = terminal_run()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(stdout, b'')
+        self.assertNotIn(b'Type ok to create', prompts)
+        self.assertIn(b'already attempted', prompts)
         self.assertEqual(before, {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()})
         self.assertFalse((root / 'execution-started.json').exists())
         self.assertFalse((root / 'executor-terminal').exists())
@@ -478,6 +436,45 @@ class IntentRenderTests(unittest.TestCase):
     def automatic_prepare(self):
         return subprocess.run([str(BINARY), 'up', '--file', str(self.input), '--prepare'],
             capture_output=True, text=True, env=self.env, cwd=self.home, timeout=25)
+
+    def test_interactive_missing_platform_access_is_readable_and_retains_json_mode(self):
+        self.automatic_config()
+        before = None
+        for command in (['up'], ['cluster', 'create']):
+            master, slave = pty.openpty()
+            process = subprocess.Popen([str(BINARY), *command, '--file', str(self.input)],
+                stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=self.env, cwd=self.home)
+            os.close(slave)
+            try:
+                stdout, stderr = process.communicate(timeout=25)
+                self.assertNotEqual(process.returncode, 0)
+                text = stdout.decode()
+                self.assertIn('Cluster "my-cluster"', text)
+                self.assertIn('Local preparation: complete', text)
+                self.assertIn('Cluster creation:  not started', text)
+                self.assertIn('No cluster API was contacted', text)
+                self.assertIn('No credentials were issued or renewed', text)
+                self.assertNotIn('requestDigest', text)
+                self.assertNotIn('sha256:', text)
+                self.assertNotIn('Type ok', text + stderr.decode())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+                os.close(master)
+            if before is None:
+                pending = json.loads(self.automatic_prepare().stdout)
+                root = Path(pending['requestPath']).parent
+                before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+        self.assertEqual(before, {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()})
+        repeated = self.automatic_prepare()
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertEqual(json.loads(repeated.stdout), pending)
+        self.assertFalse((root / 'execution-started.json').exists())
+        self.assertFalse((root / 'handoff-started.json').exists())
+        self.assertFalse((root / 'executor-terminal').exists())
+        self.assertFalse(self.marker.exists())
 
     def install_platform_handoff(self, request, runtime_path):
         path = Path(request['requestPath']).parent / 'platform-handoff.json'
@@ -523,18 +520,16 @@ class IntentRenderTests(unittest.TestCase):
         runtime_path, _ = self.synthetic_runtime_inputs()
         self.install_platform_handoff(pending, runtime_path)
         result = self.automatic_prepare()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        ready = json.loads(result.stdout)
-        self.assertEqual(ready['state'], 'PREPARED_NOT_AUTHORIZED')
-        for field in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'liveAuthorized', 'authorityDeploymentVerified'):
-            self.assertFalse(ready[field])
+        self.assert_policy_denial(result)
+        self.assertFalse((root / 'managed-preparation.json').exists())
+        self.assertFalse((root / 'preparation/runner-handoff-receipt.json').exists())
         for path, raw in before.items():
             self.assertEqual(Path(path).read_bytes(), raw)
         self.assertFalse((root / 'execution-started.json').exists())
         self.assertFalse((root / 'executor-terminal').exists())
         repeated = self.automatic_prepare()
-        self.assertEqual(repeated.returncode, 0, repeated.stderr)
-        self.assertEqual(json.loads(repeated.stdout)['manifestDigest'], ready['manifestDigest'])
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertIn('already attempted', repeated.stderr)
         request_path = Path(pending['requestPath'])
         request = json.loads(request_path.read_text())
         request['binaryDigest'] = 'sha256:' + '0' * 64
@@ -585,7 +580,11 @@ class IntentRenderTests(unittest.TestCase):
         self.install_platform_handoff(receipts[0], runtime_path)
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: self.automatic_prepare(), range(2)))
-        self.assertTrue(any(result.returncode == 0 for result in results), [result.stderr for result in results])
+        self.assertTrue(all(result.returncode != 0 for result in results))
+        self.assertTrue(any('client-certificate execution is disabled' in result.stderr for result in results), [result.stderr for result in results])
+        self.assertTrue(all(not result.stdout for result in results))
+        self.assertFalse((root / 'managed-preparation.json').exists())
+        self.assertFalse((root / 'preparation/runner-handoff-receipt.json').exists())
         self.assertEqual(len(list(root.rglob('full-run-manifest.json'))), 1)
         self.assertFalse((root / 'execution-started.json').exists())
         self.assertFalse(self.marker.exists())

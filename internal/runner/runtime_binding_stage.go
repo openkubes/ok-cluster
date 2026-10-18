@@ -75,6 +75,9 @@ func LoadRuntimeBindingStageBundle(config StageResumeConfig) (VerifiedRuntimeBin
 	if err != nil {
 		return VerifiedRuntimeBindingStageBundle{}, err
 	}
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return VerifiedRuntimeBindingStageBundle{}, err
+	}
 	decision, err := cursor.Decision()
 	if err != nil || decision.State != "NEXT" || decision.StageID != "runtime-binding" || decision.Kind != "Binding" || decision.Authority != "runner" || decision.RequiresAuthorization || decision.Operation != "" {
 		return VerifiedRuntimeBindingStageBundle{}, errors.New("verified prefix does not select runtime binding")

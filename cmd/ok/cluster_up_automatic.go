@@ -104,7 +104,11 @@ func runAutomaticClusterUp(ctx context.Context, path string, stdout, stderr io.W
 		if err := os.Mkdir(root, 0o700); err != nil {
 			return errors.New("preparation already claimed; no automatic retry")
 		}
-		fmt.Fprintln(stderr, "Preparing Contract, seven-stage plan and bounded authority request locally. No API contact, credential renewal or grant issuance.")
+		if prepareOnly {
+			fmt.Fprintln(stderr, "Preparing Contract, seven-stage plan and bounded authority request locally. No API contact, credential renewal or grant issuance.")
+		} else {
+			fmt.Fprintln(stderr, "Preparing cluster locally. No cluster contact or credential changes.")
+		}
 		err = runClusterIntentMaterialize(ctx, []string{"--file", path, "--output", filepath.Join(root, "preparation"),
 			"--lifecycle-root", sources.LifecycleRoot, "--ok-linux-path", sources.OKLinuxPath}, io.Discard, stderr, true,
 			func(material clusterIntentMaterialized) error {
@@ -227,6 +231,12 @@ func runAutomaticClusterUp(ctx context.Context, path string, stdout, stderr io.W
 	}
 	handoffPath := filepath.Join(root, "platform-handoff.json")
 	if _, err := os.Lstat(handoffPath); os.IsNotExist(err) {
+		if !prepareOnly {
+			if err := writeAwaitingPlatformAccess(stdout, intent.Metadata.Name); err != nil {
+				return err
+			}
+			return errors.New("cluster not started: platform access setup is incomplete; local preparation retained")
+		}
 		summary := map[string]any{"format": "ok-cli-automatic-preparation/v1", "state": "AWAITING_PLATFORM_AUTHORITY", "name": intent.Metadata.Name,
 			"requestPath": filepath.Join(root, "platform-preparation-request.json"), "requestDigest": requestDigest, "stageAuthorityPolicyDigest": request.StageAuthorityPolicyDigest,
 			"apiContacted": false, "mutationAllowed": false, "authorizationConsumed": false, "runnerReady": false,
@@ -283,6 +293,13 @@ func runAutomaticClusterUp(ctx context.Context, path string, stdout, stderr io.W
 	return completeAutomaticUp(ctx, path, root, stdout, stderr, runtime, prepareOnly)
 }
 
+// Presentation only: never turn retained local artifacts into execution
+// readiness, prompt for approval, issue access, or consume a stage grant.
+func writeAwaitingPlatformAccess(output io.Writer, name string) error {
+	_, err := fmt.Fprintf(output, "Cluster %q\n  Local preparation: complete\n  Cluster creation:  not started\n\nPlatform access has not been provided for this run.\nA platform operator must finish the bounded access setup, including a reviewed\nworkload credential profile. Local preparation alone cannot authorize a run.\n\nNo cluster API was contacted. No credentials were issued or renewed.\nYour preparation is saved. Re-running does not grant access or start a cluster.\n", name)
+	return err
+}
+
 func completeAutomaticUp(ctx context.Context, path, root string, stdout, stderr io.Writer, runtime guidedUpRuntime, prepareOnly bool) error {
 	if !prepareOnly {
 		return runGuidedClusterUpWithRuntime(ctx, path, stdout, stderr, runtime)
@@ -298,7 +315,10 @@ func completeAutomaticUp(ctx context.Context, path, root string, stdout, stderr 
 		return errors.New("invalid managed preparation")
 	}
 	prepared, err := resolvePreparedClusterIntent(path, filepath.Join(root, "preparation"), setup.ManifestDigest)
-	if err != nil || prepared.Binding.NormalizedIntentDigest != setup.IntentDigest {
+	if err != nil {
+		return fmt.Errorf("managed preparation verification failed: %w", err)
+	}
+	if prepared.Binding.NormalizedIntentDigest != setup.IntentDigest {
 		return errors.New("managed preparation differs from verified YAML/manifest")
 	}
 	if _, err := guidedUpEvidencePath(setup); err != nil {

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,7 +19,7 @@ func TestLoadFullRunExecutionManifestBindsFreshPrivateContract(t *testing.T) {
 	manifest, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
 
-	verified, receipt, err := LoadFullRunExecutionManifest(manifest)
+	verified, receipt, err := inspectFullRunExecutionManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestLoadFullRunExecutionManifestV4BindsExecutionAttempt(t *testing.T) {
 	attempt := runnerStageSHA("5")
 	upgradeFullRunExecutionManifestToV4(t, manifest, attempt, attempt)
 
-	verified, receipt, err := LoadFullRunExecutionManifest(manifest)
+	verified, receipt, err := inspectFullRunExecutionManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +97,7 @@ func TestLoadFullRunExecutionManifestBindsDeferredMVPNetworkObservation(t *testi
 	manifestPath, cleanup := fullRunExecutionManifestFixtureWithNetworkMode(t, "deferred-mvp/v1")
 	defer cleanup()
 
-	manifest, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	manifest, receipt, err := inspectFullRunExecutionManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, planDocument))
 	writeBundleFile(t, filepath.Dir(manifestPath), filepath.Base(manifestPath), mustJSON(t, document))
 
-	manifest, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	manifest, receipt, err := inspectFullRunExecutionManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,12 +137,10 @@ func TestLoadFullRunExecutionManifestBindsBareClusterCompletion(t *testing.T) {
 		t.Fatalf("bare-cluster completion was not bound at the manifest edge: %#v", receipt)
 	}
 	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrClientCertificateDisabled) || config.PreRuntime.PlanPath != "" {
+		t.Fatalf("unsupported manifest built an executor: %v", err)
 	}
-	if config.PreRuntime.PlanExpected.CompletionMode != stageplan.CompletionModeBareClusterMVP || config.PostRuntime.TargetCredential.PlanPath != "" || config.PostPrefixActivator != nil {
-		t.Fatalf("bare-cluster manifest opened post-runtime configuration: %#v", config)
-	}
+
 	manifest.plan.CompletionMode = ""
 	if _, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer}); err == nil || !strings.Contains(err.Error(), "plan changed after loading") {
 		t.Fatalf("in-memory completion mode mutation was accepted: %v", err)
@@ -168,7 +167,7 @@ func TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial(t *testing.T) 
 	writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, planDocument))
 	writeBundleFile(t, filepath.Dir(manifestPath), filepath.Base(manifestPath), mustJSON(t, document))
 
-	manifest, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	manifest, receipt, err := inspectFullRunExecutionManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,13 +176,10 @@ func TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial(t *testing.T) 
 		t.Fatalf("unexpected trimmed Bare-MVP manifest receipt: %#v", receipt)
 	}
 	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrClientCertificateDisabled) || config.PreRuntime.PlanPath != "" {
+		t.Fatalf("unsupported manifest built an executor: %v", err)
 	}
-	if config.PreRuntime.PlanExpected.CompletionMode != stageplan.CompletionModeBareClusterMVP ||
-		config.PostRuntime.TargetCredential.PlanPath != "" || config.PostPrefixActivator != nil {
-		t.Fatalf("trimmed Bare-MVP manifest opened post-runtime configuration: %#v", config)
-	}
+
 }
 
 func TestFullRunExecutionManifestAttemptFormatFailsClosed(t *testing.T) {
@@ -210,62 +206,28 @@ func TestFullRunExecutionManifestAttemptFormatFailsClosed(t *testing.T) {
 			mutate(&document, plan)
 			writeBundleFile(t, filepath.Dir(document.Plan.Path), filepath.Base(document.Plan.Path), mustJSON(t, plan))
 			writeBundleFile(t, filepath.Dir(manifest), filepath.Base(manifest), mustJSON(t, document))
-			if _, _, err := LoadFullRunExecutionManifest(manifest); err == nil {
+			if _, _, err := inspectFullRunExecutionManifest(manifest); err == nil {
 				t.Fatal("attempt/format mismatch was accepted")
 			}
 		})
 	}
 }
 
-func TestVerifiedFullRunExecutionManifestBuildsConcreteConfiguration(t *testing.T) {
-	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
+func TestVerifiedFullRunExecutionManifestRejectsConcreteConfiguration(t *testing.T) {
+	path, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
-	manifest, _, err := LoadFullRunExecutionManifest(manifestPath)
+	manifest, _, err := inspectFullRunExecutionManifest(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := func() time.Time { return time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC) }
-	probe := &recordingPlatformCapabilityProbe{result: PlatformCapabilityProbeResult{Passed: true}}
-	capability, err := NewFirstRunPlatformCapabilityResolver(probe, clock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var capabilityBinding FullRunPlatformCapabilityBinding
-	postPrefix := &recordingFullRunPostPrefixActivator{}
 	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
-		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(binding FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
-			capabilityBinding = binding
-			return capability, nil
+		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
+			panic("unsupported manifest opened capability factory")
 		}),
-		PostPrefixActivator: postPrefix, Clock: clock, Wait: WaitWithTimer,
+		Clock: time.Now, Wait: WaitWithTimer,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := config.PreRuntime.WorkloadAuthority.(*KubernetesLifecycleWorkloadAuthorityMaterializer); !ok {
-		t.Fatalf("manifest did not select lifecycle workload materialization: %T", config.PreRuntime.WorkloadAuthority)
-	}
-	if config.PreRuntime.NetworkObservation.Workload.KubeconfigFile == "" || config.PreRuntime.NetworkObservation.Workload.TokenFile != "" ||
-		config.PostRuntime.TargetCredentialRun.Workload != config.PreRuntime.NetworkObservation.Workload ||
-		config.EvidenceIdentityBinder == nil || config.PostPrefixActivator != postPrefix ||
-		config.PostRuntime.PlatformObservation.Capability == nil || config.PostRuntime.AggregateEvidence.Capability == nil ||
-		config.PostRuntime.TargetRegistration.Expected.TargetIdentityDigest != "" ||
-		!config.PostRuntime.TargetRegistration.Runtime.MaterializationTime.IsZero() {
-		t.Fatalf("concrete full-run configuration widened a dynamic boundary: %#v", config)
-	}
-	if _, err := OpenFullRunExecution(config); err != nil {
-		t.Fatalf("verified manifest did not open concrete full-run execution: %v", err)
-	}
-	if probe.calls != 0 {
-		t.Fatal("opening the full-run manifest executed the Platform capability probe")
-	}
-	if capabilityBinding.Namespace != "ok-observability" || capabilityBinding.Timeout != 10*time.Minute ||
-		capabilityBinding.CleanupTimeout != time.Minute || capabilityBinding.PollInterval != time.Second ||
-		capabilityBinding.PushgatewayImage == "" || capabilityBinding.LogEmitterImage == "" ||
-		capabilityBinding.IndependentEvidencePath == "" || capabilityBinding.IndependentEvidenceKeyID == "" || capabilityBinding.IntentRevision == "" ||
-		capabilityBinding.PlatformRevision == "" || capabilityBinding.ExecutionFixture == "" ||
-		capabilityBinding.ContractDigest == "" || capabilityBinding.ExecutableDigest == "" {
-		t.Fatalf("capability factory did not receive the exact manifest binding: %#v", capabilityBinding)
+	if !errors.Is(err, ErrClientCertificateDisabled) || config.PreRuntime.PlanPath != "" {
+		t.Fatalf("unsupported manifest built execution config: %v", err)
 	}
 }
 
@@ -281,7 +243,7 @@ func TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction(t *testing.T) {
 		}),
 		Clock: clock, Wait: WaitWithTimer,
 	})
-	if err != nil || execution == nil || receipt.State != "VERIFIED" {
+	if !errors.Is(err, ErrClientCertificateDisabled) || execution != nil || receipt.State != "STOPPED" {
 		t.Fatalf("direct full-run manifest activation failed: receipt=%#v execution=%#v err=%v", receipt, execution, err)
 	}
 	if probe.calls != 0 {
@@ -289,7 +251,7 @@ func TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction(t *testing.T) {
 	}
 }
 
-func TestFullRunExecutionManifestRejectsNetworkWindowShorterThanLifecycle(t *testing.T) {
+func TestFullRunPollingWindowGuardIndependentOfCredentialPolicy(t *testing.T) {
 	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
 	raw, err := os.ReadFile(manifestPath)
@@ -303,21 +265,23 @@ func TestFullRunExecutionManifestRejectsNetworkWindowShorterThanLifecycle(t *tes
 	document["lifecycleObservation"].(map[string]any)["pollTimeout"] = "2m"
 	document["networkObservation"].(map[string]any)["pollTimeout"] = "1m"
 	path := writeBundleFile(t, filepath.Dir(manifestPath), "short-network-window.json", mustJSON(t, document))
-	manifest, _, err := LoadFullRunExecutionManifest(path)
+	manifest, _, err := inspectFullRunExecutionManifest(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := func() time.Time { return time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC) }
-	probe := &recordingPlatformCapabilityProbe{result: PlatformCapabilityProbeResult{Passed: true}}
-	capability, _ := NewFirstRunPlatformCapabilityResolver(probe, clock)
-	_, err = manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
-		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
-			return capability, nil
-		}),
-		Clock: clock, Wait: WaitWithTimer,
-	})
-	if err == nil || !strings.Contains(err.Error(), "network polling timeout is shorter") {
+	_, lifecycleTimeout, err := parsePostRuntimePolling(manifest.document.LifecycleObservation.PollInterval, manifest.document.LifecycleObservation.PollTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, networkTimeout, err := parsePostRuntimePolling(manifest.document.NetworkObservation.PollInterval, manifest.document.NetworkObservation.PollTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateFullRunPollingWindow(lifecycleTimeout, networkTimeout); err == nil || !strings.Contains(err.Error(), "shorter than lifecycle") {
 		t.Fatalf("shorter network convergence window was accepted: %v", err)
+	}
+	if err := validateFullRunPollingWindow(lifecycleTimeout, lifecycleTimeout); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -399,7 +363,7 @@ func TestFullRunExecutionManifestFailsClosed(t *testing.T) {
 			}
 			mutate(value)
 			path := writeBundleFile(t, root, "unsafe-"+strings.ReplaceAll(name, " ", "-")+".json", mustJSON(t, value))
-			if _, _, err := LoadFullRunExecutionManifest(path); err == nil {
+			if _, _, err := inspectFullRunExecutionManifest(path); err == nil {
 				t.Fatal("unsafe full-run execution manifest was accepted")
 			}
 		})
@@ -409,7 +373,7 @@ func TestFullRunExecutionManifestFailsClosed(t *testing.T) {
 	if err := os.WriteFile(existingOutput, []byte("occupied"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadFullRunExecutionManifest(manifest); err == nil {
+	if _, _, err := inspectFullRunExecutionManifest(manifest); err == nil {
 		t.Fatal("full-run manifest accepted an occupied future output")
 	}
 }
@@ -420,10 +384,10 @@ func TestFullRunExecutionManifestRejectsBroadModeAndRelativePath(t *testing.T) {
 	if err := os.Chmod(manifest, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadFullRunExecutionManifest(manifest); err == nil {
+	if _, _, err := inspectFullRunExecutionManifest(manifest); err == nil {
 		t.Fatal("broad full-run manifest was accepted")
 	}
-	if _, _, err := LoadFullRunExecutionManifest("full-run.json"); err == nil {
+	if _, _, err := inspectFullRunExecutionManifest("full-run.json"); err == nil {
 		t.Fatal("relative full-run manifest was accepted")
 	}
 }
@@ -469,7 +433,7 @@ func TestFullRunExecutionManifestRejectsTargetIdentityInRendererArtifacts(t *tes
 			inputs[0].(map[string]any)["digest"] = digest.SHA256(concrete)
 			document.Plan.Path = writeBundleFile(t, filepath.Dir(manifest), "unsafe-"+strings.ReplaceAll(test.name, " ", "-")+"-plan.json", mustJSON(t, plan))
 			unsafeManifest := writeBundleFile(t, filepath.Dir(manifest), "unsafe-"+strings.ReplaceAll(test.name, " ", "-")+"-manifest.json", mustJSON(t, document))
-			if _, _, err := LoadFullRunExecutionManifest(unsafeManifest); err == nil {
+			if _, _, err := inspectFullRunExecutionManifest(unsafeManifest); err == nil {
 				t.Fatal("renderer artifact carrying a caller-selected target identity was accepted")
 			}
 		})

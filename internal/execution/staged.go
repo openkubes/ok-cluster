@@ -104,6 +104,9 @@ func (err *StageResultError) RedactedMismatchEvidence() *SubmissionMismatchEvide
 // indeterminate terminal stop; a durable outcome is finalized without replay.
 func (operation StagedOperation) Run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, grant authorization.VerifiedStageGrant) (StagedOperationReceipt, error) {
 	receipt := StagedOperationReceipt{Format: StagedReceiptFormat, State: "PRECLAIM"}
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return receipt, err
+	}
 	if operation.Ledger == nil || operation.Mutator == nil || operation.Clock == nil {
 		return receipt, errors.New("staged operation ledger, mutator, and clock are required")
 	}

@@ -2,12 +2,13 @@ package stageauthority
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/openkubes/ok-cluster/internal/stageplan"
 )
 
-func TestRecoveryPolicyCanOnlyAuthorizeTargetAccess(t *testing.T) {
+func TestRecoveryPolicyDisabledWithoutAtomicSourceReservation(t *testing.T) {
 	base := verifiedPlan(t)
 	doc := map[string]any{
 		"format": stageplan.FormatRecovery, "recoverySourcePlanDigest": base.PlanDigest,
@@ -28,14 +29,7 @@ func TestRecoveryPolicyCanOnlyAuthorizeTargetAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, receipt, err := FromPlan(plan)
-	if err != nil || receipt.StageCount != 1 || receipt.MutationAllowed {
-		t.Fatalf("unsafe recovery policy: %#v %v", receipt, err)
-	}
-	var policy Policy
-	if err := json.Unmarshal(raw, &policy); err != nil {
-		t.Fatal(err)
-	}
-	if len(policy.Stages) != 1 || policy.Stages[0].StageID != "target-access" || policy.Stages[0].StageOrder != 7 || policy.Stages[0].Operation != "CreateTargetAccess" {
-		t.Fatalf("recovery authorizes replay: %#v", policy)
+	if !errors.Is(err, stageplan.ErrRecoveryExecutionDisabled) || raw != nil || receipt.StageCount != 0 {
+		t.Fatalf("recovery policy enabled without atomic reservation: %#v %v", receipt, err)
 	}
 }
