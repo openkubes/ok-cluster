@@ -234,13 +234,39 @@ entry point. Then implement the separately authorized platform task and adapters
 under the reviewed next revision. Do not mix this into the accepted #437
 mitigation or silently expand a public CLI/runtime schema.
 
-Next bounded diagnostic, requiring separate operator approval: read management
-plane CAPI/Talos provider Deployment image references and their running Pod image
-IDs in the provider namespaces. Do not read any Secret, issue/renew credentials,
-change resources or contact a workload API for this inventory. If existing access
-does not suffice, stop rather than refreshing it. Use the resulting version/digest
-to inspect the matching upstream implementation; runtime CA ownership remains
-unverified until its own separately scoped evidence is available.
+#### Deployed provider inventory and release-specific source check
+
+The separately authorized read-only inventory completed on 2026-10-18 after
+management API recovery. Each listed Deployment had one ready replica and a
+Running/ready manager container with the following image identity. These are
+point-in-time observations, not a compatibility certification or issuance grant.
+
+| Namespace / Deployment | Declared manager image | Running container image digest |
+| --- | --- | --- |
+| `capi-system/capi-controller-manager` | `registry.k8s.io/cluster-api/cluster-api-controller:v1.13.4` | `sha256:7a70942e0b45ae59514ee03cf448b64dbd2d77ef2fd7104e6c104f1c6b6b2013` |
+| `cabpt-system/cabpt-controller-manager` | `ghcr.io/siderolabs/cluster-api-talos-controller:v0.6.12` | `sha256:ff3f4fc7dada9c3a6ca310921ee68be3d50f6e714b42976d85965cf61180b788` |
+| `cacppt-system/cacppt-controller-manager` | `ghcr.io/siderolabs/cluster-api-control-plane-talos-controller:v0.5.13` | `sha256:5196c77e1dd872ea75aacc264d7cc720944e824237c766143da541dd49bd342f` |
+
+Scope was Deployment image references and Pod status/image IDs in these three
+management namespaces only, using existing access. No Secret query, credential
+issuance/renewal, resource mutation or workload API call was part of this
+inventory. The preceding failed inventory observed an API discovery timeout;
+that failure was not evidence of absent providers or expired credentials.
+
+The matching [CABPT v0.6.12 source, `writeK8sCASecret`](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/blob/v0.6.12/controllers/secrets.go#L121-L153)
+creates `<cluster>-ca` in the bootstrap config namespace, with a Cluster
+controller owner reference and `tls.crt` / `tls.key` entries. Crucially, it returns
+without validating an already existing Secret. Therefore a matching name and
+running provider version do **not** prove actual owner, key layout, CA identity
+or suitability as a signing source. The source check establishes a possible
+integration seam only; no live CA Secret metadata or data was inspected.
+Release-tag source inspection is not an image-to-source provenance attestation.
+
+Remaining activation blockers above are unchanged. A future separately scoped
+source-identity check must bind actual Cluster/Secret UID and owner references,
+CA fingerprint and the durable lifecycle receipt prefix; it must not expose a
+CA private key to the CLI or runner. Do not turn this inventory into implicit
+permission for Secret reads, a signing Job, new RBAC or certificate issuance.
 
 #### User experience after that contract is implemented
 
