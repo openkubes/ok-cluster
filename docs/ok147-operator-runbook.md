@@ -218,6 +218,94 @@ indeterminate with no automatic issuance retry, timeout takeover or runner
 replay. The issuer's coordination backend needs its own reviewed narrow write
 policy; existing immutable stage outcome records must not become mutable slots.
 
+#### Issuer-record protection: bounded installation plan for review
+
+**PLAN ONLY / NOT INSTALLED.** Merged #455 provides offline observer validation,
+#456 separates request/result authority and one-use coordination, and #457 adds
+an explicitly configured Kubernetes storage adapter. None is linked into the
+CLI/runner, and none installs an issuer. The locally approved observer profile
+does not constitute production security acceptance or deployment approval.
+See [the adapter evidence](evidence/ok147-bootstrap-issuer-store/README.md).
+
+The purpose is replay prevention, not preventing cluster deletion. A claim says
+that the one issuance opportunity for plan/attempt/target/role is consumed. If
+the process crashes after claiming, the durable state remains STOP, even if no
+result was recorded. Deleting the claim and result could otherwise make the
+same slot appear empty. Expiry of a certificate does not erase this history.
+These records are not cluster-convergence evidence or authorization to repeat
+an operation.
+
+Proposed controls, restricted to a **separate issuer-storage domain**:
+
+| Surface | Required protection before activation |
+| --- | --- |
+| Issuer writer | Dedicated platform identity: only required exact GETs and ConfigMap CREATE. No update, patch, delete/deletecollection, namespace mutation, RBAC/admission mutation, impersonation or Secret access through this storage role. The runner/user does not receive it. Other required signer capabilities need their own reviewed boundary. |
+| New claim/result | Admission checks the reviewed writer, full slot/name relationship, immutable flag, exact record envelope, pinned domain/namespace identity and absence of owners. No arbitrary ConfigMap creation. Schema checks do not authenticate signed contents; the Authority still verifies signatures, predecessor evidence and time. |
+| Existing records and fence | Deny UPDATE/PATCH and DELETE within the dedicated namespace, including deletion requests that omit an individual name. Protect metadata as well as data, preventing owner injection or removal of identity markers. No overwrite, TTL cleanup or automatic repair. |
+| Storage namespace | Protect the exact namespace against deletion and identity/purpose drift; do not rely on removable object labels for policy coverage. Include collection-delete/finalization paths in the review and tests, rather than assuming ConfigMap protection covers namespace lifecycle. |
+| Enforcement and writer identity | Runner/issuer may not alter policy/binding, service-account or RBAC definitions to bypass the controls. Their lifecycle belongs to separately authorized platform administration. Policy removal/reconfiguration is a security boundary, not ordinary cluster cleanup. |
+
+Kubernetes immutable ConfigMaps still permit deletion/recreation
+([ConfigMap documentation](https://kubernetes.io/docs/concepts/configuration/configmap/#configmap-immutable)).
+RBAC permissions are additive, and `resourceNames` cannot restrict collection
+CREATE requests ([RBAC documentation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)).
+Consequently, omitting DELETE from one Role or validating bodies only in Go is
+not sufficient enforcement. A candidate is built-in ValidatingAdmissionPolicy
+with failurePolicy Fail and a Deny binding; exact capabilities/version and CEL
+rules must be reviewed and tested before selecting an installable package
+([admission documentation](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/)).
+No executable policy manifest or claim that these controls are deployed is
+introduced here.
+
+Installation order for a **future separately authorized** platform setup:
+
+1. Prepare the exact object inventory, API-version prerequisites, protected
+   names, dedicated identity, intended rules and package digest offline. Reject
+   collisions rather than adopting similarly named objects. Do not invent UIDs
+   or assert that the current management API supports the proposal.
+2. After separate read-only approval, observe API capabilities and existing
+   objects. After separate installation approval, establish restrictive
+   policy/binding coverage before any issuance writer becomes usable. Keep the
+   issuer disabled throughout bootstrap; missing enforcement means NO-GO.
+3. Create the dedicated namespace and immutable fence through the narrowly
+   reviewed platform installation path, not through an issuer exception. Record
+   their actual UIDs and fence resourceVersion, bind API/CA trust and compute the
+   exact domain identity. Installation exceptions must not remain a general
+   replacement/delete capability. Enable only the reviewed narrow storage role.
+4. Verify the exact installed definitions and negative cases using disposable
+   fixtures under a separate bounded validation approval. Observed acceptance of
+   CREATE is not proof that DELETE is denied, nor are fake-API tests proof of
+   real admission enforcement. Partial installation, drift or an unknown write
+   outcome stops; do not automatically roll back protections or start a signer.
+5. Only after independent security review and the remaining bootstrap/probe/
+   installer contracts may a separately authorized issuance integration be
+   considered. Storage protection alone does not reopen #437 gates or prove a
+   successful cluster run.
+
+Acceptance matrix to implement/test before installation: allowed exact create
+and historical read; wrong writer/body/domain/name; concurrent same-slot create;
+record/fence update and delete; collection delete; namespace deletion and label/
+UID drift; owner-reference injection/garbage-collection paths; enforcement
+disablement; claim-only crash; lost write response; and normal Candidate teardown
+leaving the issuer store untouched. Tests of hypothetical rules are not evidence
+of the management cluster enforcing them. No live validation was run for this
+plan.
+
+**Limits and recovery:** these controls do not defend against an administrator
+who can remove enforcement, direct datastore access or restoration/forking of an
+old management snapshot with the same UIDs. Client-side pre/post checks are not
+an atomic namespace-lifecycle fence. After such an event the issuer must remain
+disabled; no automatic resume, empty-store adoption, domain rebinding or request
+reissuance is allowed. A separately reviewed externally trustworthy continuity/
+recovery mechanism is still required; this plan does not implement one. Initial
+retention proposes no automatic record removal. Future retention/recovery and
+administrative escape procedures need explicit review, not a hidden bypass.
+
+`ok cluster destroy <name>` should continue to remove the authorized workload
+cluster, not this independent history. No changes to existing execution-ledger
+RBAC, teardown ownership, OK-197/OK-198, Candidate manifests or readiness contracts
+are proposed. This is one-time platform work, not new recurring end-user prompts.
+
 **Still blocking activation:** exact deployed CA ownership/key-source contract;
 approved per-role subjects and RBAC/admission/probe restrictions; a justified
 certificate lifetime and clock-skew policy; issuance-request authentication and
