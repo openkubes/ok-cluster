@@ -2,6 +2,14 @@
 
 **The OpenKubes Cluster Lifecycle Engine**
 
+> **Runner credential-policy gate:** current v3/v4 live manifests, including the
+> friendly-YAML runner handoff introduced in #450, cannot complete preparation
+> or start Stage 1 until a reviewed bounded workload credential bootstrap exists.
+> A platform handoff or renewed management/provider/ledger tokens do not bypass
+> this gate. Static intent/Contract/plan preparation and the separately authorized
+> existing teardown lifecycle remain available. See the
+> [security contract](docs/ok147-security-review-contract.md).
+
 OK-Cluster is the cluster lifecycle engine for [OpenKubes](https://github.com/openkubes/openkubes) — declarative creation, operation and upgrade of Kubernetes clusters across KubeVirt, bare metal, edge and cloud.
 
 Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVirt)](https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt), [Talos Linux](https://www.talos.dev/), constrained [Flatcar](https://www.flatcar.org/), and [Ubuntu/kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/).

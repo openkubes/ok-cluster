@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -73,7 +74,10 @@ func resolvePreparedClusterIntent(intentPath, directory, expectedDigest string) 
 		return result, err
 	}
 	receipt, err := verifyPreparedManifestFixture(path, fixtureRaw)
-	if err != nil || !validFullRunManifestReceiptFormat(receipt.Format) || receipt.State != "VERIFIED" || receipt.MutationAllowed ||
+	if err != nil {
+		return result, fmt.Errorf("prepared YAML manifest verification failed: %w", err)
+	}
+	if !validFullRunManifestReceiptFormat(receipt.Format) || receipt.State != "VERIFIED" || receipt.MutationAllowed ||
 		receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP || receipt.ExecutionAttemptDigest != "" ||
 		!sha256DigestPattern.MatchString(receipt.ManifestDigest) || (expectedDigest != "" && expectedDigest != receipt.ManifestDigest) {
 		return result, errors.New("prepared YAML manifest/fixture verification failed or differs from the approved digest")

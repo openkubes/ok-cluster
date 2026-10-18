@@ -251,7 +251,7 @@ func TestOpenFullRunExecutionManifestStopsBeforeAnyRuntimeAction(t *testing.T) {
 	}
 }
 
-func TestFullRunExecutionManifestRejectsNetworkWindowShorterThanLifecycle(t *testing.T) {
+func TestFullRunPollingWindowGuardIndependentOfCredentialPolicy(t *testing.T) {
 	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()
 	raw, err := os.ReadFile(manifestPath)
@@ -269,17 +269,19 @@ func TestFullRunExecutionManifestRejectsNetworkWindowShorterThanLifecycle(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := func() time.Time { return time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC) }
-	probe := &recordingPlatformCapabilityProbe{result: PlatformCapabilityProbeResult{Passed: true}}
-	capability, _ := NewFirstRunPlatformCapabilityResolver(probe, clock)
-	_, err = manifest.ExecutionConfig(FullRunExecutionManifestRuntime{
-		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
-			return capability, nil
-		}),
-		Clock: clock, Wait: WaitWithTimer,
-	})
-	if err == nil || !errors.Is(err, ErrClientCertificateDisabled) {
+	_, lifecycleTimeout, err := parsePostRuntimePolling(manifest.document.LifecycleObservation.PollInterval, manifest.document.LifecycleObservation.PollTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, networkTimeout, err := parsePostRuntimePolling(manifest.document.NetworkObservation.PollInterval, manifest.document.NetworkObservation.PollTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateFullRunPollingWindow(lifecycleTimeout, networkTimeout); err == nil || !strings.Contains(err.Error(), "shorter than lifecycle") {
 		t.Fatalf("shorter network convergence window was accepted: %v", err)
+	}
+	if err := validateFullRunPollingWindow(lifecycleTimeout, lifecycleTimeout); err != nil {
+		t.Fatal(err)
 	}
 }
 

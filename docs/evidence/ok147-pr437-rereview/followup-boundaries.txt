@@ -1,0 +1,80 @@
+Command: go test -mod=readonly ./internal/runner -count=1 -v -run 'TestPreRuntimeCredentialPolicy|TestPreRuntimeResolverPreserves|TestFullRunCLIRejects|TestFullRunPollingWindow|TestBuildBareClusterManifestLoads|TestFullRunPlaneTargets'
+Environment: go1.26.7 darwin/amd64; effective UID 501 (non-root)
+Scope: offline; synthetic fixtures and loopback test servers only.
+
+=== RUN   TestBuildBareClusterManifestLoadsThroughExistingOwnerWithoutRuntimeExecution
+--- PASS: TestBuildBareClusterManifestLoadsThroughExistingOwnerWithoutRuntimeExecution (0.04s)
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne
+2026/10/18 11:52:47 http: TLS handshake error from 127.0.0.1:51330: remote error: tls: bad certificate
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--dry-run
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--prepare
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--live
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--dry-run
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--prepare
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--live
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/prepare
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/execute
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--dry-run
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--prepare
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--live
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--dry-run
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--prepare
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--live
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/prepare
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+=== RUN   TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/execute
+    full_run_cli_denial_test.go:135: explicit credential denial: API requests=0, mutation requests=0, grant requests=0, terminal marker absent
+--- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne (2.18s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--dry-run (0.70s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-create/--live (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--dry-run (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/up/--live (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v3-bare/cluster-stage-run-full/execute (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--dry-run (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-create/--live (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--dry-run (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--prepare (0.03s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/up/--live (0.06s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/prepare (0.02s)
+    --- PASS: TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne/v4-full/cluster-stage-run-full/execute (0.02s)
+=== RUN   TestFullRunPollingWindowGuardIndependentOfCredentialPolicy
+--- PASS: TestFullRunPollingWindowGuardIndependentOfCredentialPolicy (0.04s)
+=== RUN   TestFullRunPlaneTargetsMustMatchAuthoritiesAndProviderAccess
+--- PASS: TestFullRunPlaneTargetsMustMatchAuthoritiesAndProviderAccess (0.04s)
+=== RUN   TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants
+=== RUN   TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/network
+=== RUN   TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/binding
+=== RUN   TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/target
+=== RUN   TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/zero-materializer
+=== RUN   TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/nil-materializer
+--- PASS: TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants (0.02s)
+    --- PASS: TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/network (0.00s)
+    --- PASS: TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/binding (0.00s)
+    --- PASS: TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/target (0.00s)
+    --- PASS: TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/zero-materializer (0.00s)
+    --- PASS: TestPreRuntimeCredentialPolicyPrecedesFactoriesAndGrants/nil-materializer (0.00s)
+=== RUN   TestPreRuntimeResolverPreservesCredentialPolicySentinel
+--- PASS: TestPreRuntimeResolverPreservesCredentialPolicySentinel (0.02s)
+PASS
+ok  	github.com/openkubes/ok-cluster/internal/runner	3.055s
+
+Exit status: 0
+

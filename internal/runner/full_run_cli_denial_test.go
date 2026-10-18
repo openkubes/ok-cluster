@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,12 +26,12 @@ func TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	binary := filepath.Join(t.TempDir(), "ok")
-	build := exec.CommandContext(ctx, "go", "build", "-mod=readonly", "-o", binary, "../../cmd/ok")
+	build := exec.CommandContext(ctx, "go", "build", "-mod=readonly", "-buildvcs=false", "-o", binary, "../../cmd/ok")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v\n%s", err, output)
 	}
-	var apiCalls, mutations, grants atomic.Int64
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var apiCalls, mutations, grants, connections atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiCalls.Add(1)
 		if r.Method != http.MethodGet {
 			mutations.Add(1)
@@ -40,7 +41,23 @@ func TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusForbidden)
 	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.StartTLS()
 	defer server.Close()
+	// Positive control: count a connection even when TLS rejects the client.
+	client := &http.Client{Timeout: time.Second}
+	response, probeErr := client.Get(server.URL)
+	if response != nil {
+		response.Body.Close()
+	}
+	if probeErr == nil || connections.Load() == 0 || apiCalls.Load() != 0 {
+		t.Fatal("TLS-denied connection was not detected independently of HTTP requests")
+	}
+	connections.Store(0)
 	for _, version := range []string{"v3-bare", "v4-full"} {
 		path, cleanup := fullRunExecutionManifestFixture(t)
 		defer cleanup()
@@ -109,8 +126,8 @@ func TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne(t *testing.T) {
 					if err := cmd.Run(); err == nil || stdout.Len() != 0 || !strings.Contains(stderr.String(), ErrClientCertificateDisabled.Error()) {
 						t.Fatalf("wrong CLI denial: err=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
 					}
-					if apiCalls.Load() != 0 || mutations.Load() != 0 || grants.Load() != 0 {
-						t.Fatalf("pre-denial activity: API=%d mutations=%d grants=%d", apiCalls.Load(), mutations.Load(), grants.Load())
+					if connections.Load() != 0 || apiCalls.Load() != 0 || mutations.Load() != 0 || grants.Load() != 0 {
+						t.Fatalf("pre-denial activity: connections=%d API=%d mutations=%d grants=%d", connections.Load(), apiCalls.Load(), mutations.Load(), grants.Load())
 					}
 					if _, err := os.Lstat(marker); !os.IsNotExist(err) {
 						t.Fatalf("rejection wrote terminal marker: %v", err)

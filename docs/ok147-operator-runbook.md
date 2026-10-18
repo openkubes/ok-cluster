@@ -18,6 +18,22 @@ fencing remain open dependencies. ADR-030 item 9 remains OPEN.
 
 ## Scope
 
+**Current credential-policy limitation:** the v3/v4 execution manifest and its
+lifecycle-derived workload client certificate are disabled until a bounded
+workload credential bootstrap is reviewed. This also blocks the real #450 YAML
+runner handoff: supplying a matching `platform-handoff.json` cannot produce
+`PREPARED_NOT_AUTHORIZED`, a create confirmation, or a live run. Static local
+Contract/plan/policy-request preparation remains available and non-authorizing.
+Generic bearer-token input and management/provider/ledger TokenRequests are not
+substitutes for an approved workload credential bootstrap. The historical
+happy-run evidence is retained, not a claim of current security acceptance.
+
+Direct pre-runtime/full-run constructors enforce the same policy before Stage 1,
+including the disabled materializer's zero value. Rejections preserve the policy
+error through YAML handoff/prepared/managed wrappers. No fallback, replay,
+credential renewal, signing-policy relaxation or legacy-grant retirement is
+performed by these code checks.
+
 The runner performs one already-authorized `CreateCluster` transition and the
 bounded post-runtime suffix. It is neither a long-running operator nor a
 lifecycle source of truth. CAPI/CAPK, the selected Enablement mechanism and

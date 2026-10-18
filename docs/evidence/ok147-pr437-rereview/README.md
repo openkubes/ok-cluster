@@ -1,5 +1,32 @@
 # PR #437 re-review regression evidence
 
+## Follow-up to review 5561419466 (2026-10-18)
+
+The original transcripts below are historical. In particular their HTTP-handler
+counters **did not prove absence of network contact**: the fixture did not trust
+the local fake TLS server, so a connection could fail before reaching a handler.
+Do not use those counters as evidence of zero connections.
+
+The follow-up counts `ConnState(StateNew)` independently of HTTP handlers, and a
+positive control deliberately fails TLS while proving that the connection was
+counted. The 16 built-CLI denial cases require zero connections as well as zero
+HTTP/mutation/grant requests and no terminal marker. Build VCS stamping is
+disabled for reproducible execution inside worktrees. The new
+`followup-boundaries.txt` records these cases and the constructor/zero-value,
+sentinel-propagation, static plane/manifest and polling-window regressions.
+
+Current-main #450 real-loader YAML integration tests now require explicit
+credential-policy denial, not a successful handoff. Automatic, guided-terminal
+and existing-prepared YAML paths cannot emit a successful handoff or start
+marker; concurrent/repeated handoffs retain failure without replay. Static
+Contract/plan/target selection tests remain, as do fake-adapter tests that
+exercise future sequencing without claiming present execution readiness.
+
+The merge of `main@e56835d` is integration only, not a merge of this PR into main.
+No policy gate is relaxed, bounded issuer is invented, or live action performed.
+
+## Historical B1/S2 transcripts
+
 These are new local runs for the B1/S2 corrections. They do not revise Suchit's
 corrected record in Jira 14978: his earlier complete non-root race transcript
 was not retained. Effective UID **501** is non-root. Each transcript records its

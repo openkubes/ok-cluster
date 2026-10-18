@@ -130,6 +130,9 @@ func OpenPreRuntimeExecution(config PreRuntimeExecutionConfig) (*PreRuntimeExecu
 }
 
 func openPreRuntimeExecution(config PreRuntimeExecutionConfig, factories preRuntimeExecutionFactories) (*PreRuntimeExecution, error) {
+	if err := validatePreRuntimeCredentialPolicy(config); err != nil {
+		return nil, err
+	}
 	if config.Authorization == nil || config.WorkloadAuthority == nil || config.ReceiptDirectory == "" || config.PlanPath == "" ||
 		factories.submission == nil || factories.lifecycle == nil || factories.enablement == nil ||
 		factories.network == nil || factories.binding == nil || factories.target == nil || factories.persist == nil {
@@ -276,6 +279,9 @@ func (executor *PreRuntimeExecution) Run(ctx context.Context) (PreRuntimeExecuti
 	orchestration.RunNetworkObservation = func(ctx context.Context, _ execution.StagedOperationReceipt) (execution.ObservationStageRunReceipt, error) {
 		resolved, err := executor.config.WorkloadAuthority.ResolvePreRuntimeWorkloadAuthority(ctx, executor.resume(receipts))
 		if err != nil {
+			if errors.Is(err, ErrClientCertificateDisabled) {
+				return execution.ObservationStageRunReceipt{}, fmt.Errorf("resolve lifecycle-derived workload authority: %w", ErrClientCertificateDisabled)
+			}
 			return execution.ObservationStageRunReceipt{}, errors.New("resolve lifecycle-derived workload authority")
 		}
 		if err := bindPreRuntimeWorkloadAuthority(&runtimeConfig, resolved); err != nil {
@@ -411,6 +417,20 @@ func (executor *PreRuntimeExecution) resume(receipts []StageReceiptSource) Stage
 		PlanPath: executor.initial.PlanPath, PlanExpected: executor.initial.PlanExpected,
 		Receipts: prefix,
 	}
+}
+
+func validatePreRuntimeCredentialPolicy(config PreRuntimeExecutionConfig) error {
+	for _, workload := range []WorkloadAuthorityFileResolverConfig{config.NetworkObservation.Workload, config.RuntimeBinding.Workload, config.TargetAccess.Runtime.Workload} {
+		if workload.KubeconfigFile != "" {
+			return ErrClientCertificateDisabled
+		}
+	}
+	// The exported zero value must not bypass the rejecting constructor, even
+	// when a caller pairs it with token-shaped future destinations.
+	if _, disabled := config.WorkloadAuthority.(*KubernetesLifecycleWorkloadAuthorityMaterializer); disabled {
+		return ErrClientCertificateDisabled
+	}
+	return nil
 }
 
 func validatePreRuntimeWorkloadAuthorityDestinations(config PreRuntimeExecutionConfig) error {

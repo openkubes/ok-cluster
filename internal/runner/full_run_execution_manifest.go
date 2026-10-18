@@ -332,8 +332,8 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	// normally slower CAAPH/Cilium convergence boundary less tolerant than the
 	// lifecycle boundary that precedes it and repeatedly turns healthy late
 	// convergence into a stopped full run.
-	if networkTimeout < lifecycleTimeout {
-		return FullRunExecutionConfig{}, errors.New("full-run network polling timeout is shorter than lifecycle polling timeout")
+	if err := validateFullRunPollingWindow(lifecycleTimeout, networkTimeout); err != nil {
+		return FullRunExecutionConfig{}, err
 	}
 	authorization, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
 		Endpoint: document.Authorization.Endpoint, TokenFile: document.Authorization.TokenFile, CAFile: document.Authorization.CAFile,
@@ -495,6 +495,13 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 		},
 	}
 	return config, nil
+}
+
+func validateFullRunPollingWindow(lifecycleTimeout, networkTimeout time.Duration) error {
+	if networkTimeout < lifecycleTimeout {
+		return errors.New("full-run network polling timeout is shorter than lifecycle polling timeout")
+	}
+	return nil
 }
 
 // Open composes the concrete single-use Stage 1-12 executor from this

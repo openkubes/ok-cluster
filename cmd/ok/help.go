@@ -255,7 +255,7 @@ Usage:
   ok up network-suggest --file cluster.yaml --online --output cluster.proposed.yaml
   ok up --file cluster.yaml --dry-run
   ok up --file cluster.yaml --prepare       # automatic local preparation only
-  ok up --file cluster.yaml                 # guided preparation and ok/no approval
+  ok up --file cluster.yaml                 # local preparation; execution remains blocked
 
 Expert workflows (scripts must select an explicit mode):
   ok up render --file cluster.yaml --output <new-private-directory>
@@ -283,7 +283,9 @@ subcommands and legacy contract-planning flags. A friendly YAML without a mode
 starts automatic local Contract/plan/policy-request preparation without technical
 file prompts. Without a separately provided request-bound platform handoff it
 stops AWAITING_PLATFORM_AUTHORITY (NO-GO). No platform credential issuer is added.
-With verified platform inputs, review the exact plan, then type ok/no.
+Even with matching platform inputs, the current v3/v4 workload credential policy
+denies the runner handoff before confirmation and Stage 1. Static preparation is
+not execution readiness; a reviewed bounded workload credential bootstrap is required.
 Trusted source paths come from ok config init; credentials are never inferred
 from general config, issued or renewed. No terminal or no explicit ok: no runner.
 Preparation is managed privately in <OS user config directory>/ok/runs/<name>.
