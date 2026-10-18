@@ -8,6 +8,21 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 
 ---
 
+## Start Here — OpenKubes Documentation
+
+**New to OpenKubes?** Start with the website and choose the path that fits your environment.
+
+| Resource | Where to start |
+| --- | --- |
+| **[Official Website & Documentation](https://openkubes.org/)** | OpenKubes overview, architecture and platform capabilities |
+| **[Getting Started](https://openkubes.org/getting-started/)** | Choose OpenKubes Local, Cluster or AI |
+| **[OpenKubes Framework Repository](https://github.com/openkubes/openkubes)** | Platform contracts, architecture decisions and shared integration layer |
+| **[OK-Cluster documentation](docs/)** | Technical cluster lifecycle documentation maintained in this repository |
+
+> **Cluster installation:** Follow the documented `ok-cluster` Makefile workflows below, with the required infrastructure and provider configuration. The emerging `ok` CLI is **not yet a generally supported one-command cluster installer**. Its current Bare-MVP flows need explicitly reviewed inputs and separate authorization for live execution.
+
+---
+
 ## Platform Architecture (v0.12.0)
 
 ![OpenKubes platform architecture — ok-platform contracts, ok-mgmt control plane, and the ok-ai / ok-shared / ok-robotics workload clusters](docs/architecture/ok-platform-architecture.svg)
@@ -29,6 +44,8 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 - **Bounded Contract Executor MVP** — one shared Go core powers the local `ok` CLI and short-lived `ok-mgmt` Jobs across twelve bounded stages.
 
 ## `ok` CLI: Bare-MVP cluster creation
+
+> **Status: active development / bounded Bare-MVP.** The CLI can be built, inspected and smoke-tested offline. `ok cluster create` currently depends on prepared, reviewed private manifests and policy/evidence inputs; live execution has independent authorization gates. **Do not treat the commands in this section as a production-ready quickstart or a general replacement for the existing Makefile workflows.** For the supported documentation entry point, see [Getting Started](https://openkubes.org/getting-started/).
 
 Build the CLI locally and inspect its hierarchical help:
 
