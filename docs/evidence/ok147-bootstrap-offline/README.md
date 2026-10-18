@@ -1,0 +1,88 @@
+# OK-147: first offline bootstrap validation checkpoint
+
+This implements only the first checkpoint of the design in draft PR #452,
+following operator approval of the bounded bootstrap direction. It does not
+approve a production certificate profile or install/execute the proposed issuer.
+
+## Contract impact
+
+`internal/bootstrapcheck` is an isolated, internal experimental candidate model.
+There is no public schema, command, config option, handoff integration or runtime
+import. Existing v3/v4 manifests, requirements output, CLI behavior and the #437
+certificate/recovery/Stage-7 signing gates remain unchanged. The successful
+historical happy-run evidence is retained, not replayed or retroactively treated
+as approval of a credential policy.
+
+The checker takes independently established expected binding and explicit
+subject, CA certificate, lifetime and clock-skew constraints. It validates:
+
+- Exact plan, attempt, target UID/API, policy, Stage-4 receipt prefix and CA-source
+  namespace/name/UID/resourceVersion/Cluster owner UID binding.
+- Signed CSR, exact CN-only subject with no certificate groups, no SANs or other
+  CSR extensions/attributes, and an explicit pinned public CA certificate.
+- Result/request digest consistency, matching CSR public key, direct CA signature
+  and X.509 trust verification, clientAuth-only/digitalSignature-only leaf, no
+  groups/SANs/CA capability, total validity cap, initial backdating limit and
+  current validity at first handoff.
+- A proposed coordination-slot digest keyed by plan/attempt/target/observer role,
+  not CSR, policy revision or source RV. Changing those inputs changes the request
+  digest, not the slot, and must be rejected against independent expectations.
+
+Only network-observer and runtime-observer candidate roles are modeled. Fixed
+probe and privileged target-access installation are intentionally rejected here;
+their admission/exec/escalation boundaries need separate implementation review.
+
+All identities, times and CA signing in unit tests are synthetic, ephemeral and
+in memory. The fixture's ten-minute cap and one-minute backdating allowance are
+**test values, not production defaults or policy approval**. Clock skew here
+limits backdating at initial handoff; it does not permit future NotBefore or
+expired certificates and is not a general certificate-reuse check.
+
+## What this does not prove or implement
+
+The request digest is a consistency binding, **not request authentication or a
+signed issuer receipt**. The caller must supply trusted expectations; deriving
+them from the request defeats the check. Exact subject selection is not proof
+that the subject is operation-specific or that its live RBAC is least-privilege.
+No accepted subject template, issuer profile, numeric production TTL or protocol
+has been introduced.
+
+There is no CA-key reader, private-key generator, signer, Job launcher, file or
+network I/O, credential renewal, live source inspection, RBAC/admission installer,
+runner enablement or provisioning-success receipt in production code here.
+Slot hashing is not durable claiming: it does not solve concurrent issuance,
+crash-after-claim, authenticated provenance, result persistence or replay fencing.
+Those remain explicit activation blockers; no timeout takeover or automatic
+retry is authorized. Evidence of command completion never substitutes for
+existing convergence requirements. Teardown and OK-197/OK-198 are unchanged.
+
+## Verification
+
+Results are recorded after executing the relevant local checks. Live issuance,
+deployment, CA-source inspection and runner execution are NOT RUN: deliberately
+outside this checkpoint, not failed environmental tests.
+
+Local results (2026-10-18):
+
+- PASS: `go test ./...`.
+- PASS: `go test -race ./internal/bootstrapcheck ./cmd/ok ./internal/runner`.
+- PASS: final checker tests with race detection and 97.3% statement coverage.
+- PASS: `go vet ./...` and `git diff --check`.
+- PASS: `go list -deps ./cmd/ok` confirms the checker is not in CLI dependencies.
+- PASS: `make ok-cli-offline-smoke`, including 26 destroy, 27 YAML, 23 network
+  proposal and 8 config Python checks, plus its Go safety checks.
+- PASS: 64 OK-186 lifecycle checks (offline fixtures).
+- PASS: 31 split-provider teardown checks (offline fixtures).
+- FAIL (environment prerequisites): additional
+  `make ok178-workload-user-namespaces-test` on Darwin. Its exact `talosctl
+  v1.9.5` assertion fails with the installed client `v1.13.5`; its real Talos
+  patch validation then aborts because Python has no Linux `os.memfd_create`.
+  Earlier printed render/schema checks passed, but the complete target did not.
+  Remaining Talos-backed assertions are NOT RUN. This patch changes neither the
+  renderer nor that test; no compatibility claim is inferred from partial output
+  and the required tool/version/platform checks have not been relaxed.
+
+No Candidate manifest is modified: before/after manifests are identical because
+the change adds only this documentation and the isolated checker/test package.
+No live cluster mutation or real credential operation was performed during this
+implementation. GitHub CI status must be evaluated separately from local results.
