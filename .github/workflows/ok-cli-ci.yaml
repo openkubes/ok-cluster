@@ -73,6 +73,9 @@ jobs:
           "$RUNNER_TEMP/network-tests/bin/pip" install PyYAML==6.0.3
           PATH="$RUNNER_TEMP/network-tests/bin:$PATH" OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" python3 -B tests/ok_cli_network_suggest_test.py
 
+      - name: Test isolated Pod UID guard candidate without Kubernetes access
+        run: '"$RUNNER_TEMP/network-tests/bin/python" -B tests/ok147_cilium_uid_guard_candidate_test.py'
+
       - name: Check out reviewed profile owner for offline preparation tests
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:

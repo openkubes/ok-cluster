@@ -202,6 +202,53 @@ protocol is required before enabling the mediated probe; this proposal does not
 invent or claim to implement one. Keeping a broad exec credential off the
 runner reduces delegation but does not itself close that race.
 
+**In-container UID guard feasibility candidate (not enabled):** expose a unique
+`OK147_PROBE_POD_UID` through `valueFrom.fieldRef: metadata.uid` in the actual
+agent container. A fixed Bash body checks that local value against one positional
+expected UID before executing the same fixed health action. It may start in a
+replacement Pod, but must not start the health action there when its genuine
+local UID differs. This is a proposed guarded transport revision, not an atomic
+`pods/exec` precondition or approval to change the current five-argument command.
+
+The experiment is confined to `tests/fixtures/ok147_cilium_uid_guard_*` and
+`tests/ok147_cilium_uid_guard_candidate_test.py`. It uses a temporary fake health
+executable instead of `/usr/bin/cilium-health`; no real Cilium action runs. The
+proposed Bash invocation disables startup profiles and uses `-p`; tests check
+that injected startup files are not evaluated. The body uses no UID interpolation
+or arbitrary command arguments. Its candidate header distinguishes UID rejection
+from a genuine health command returning the same exit status. A future adapter
+must authenticate/bind that framing and strip it before existing probe parsing;
+it must not classify a missing/invalid guard header as ordinary Cilium warmup.
+No framing verifier or runtime integration is implemented by this experiment.
+
+This is conditional on a reviewed, enforced **trusted Pod template/writer
+boundary**: the actual container must have the genuine unique fieldRef, reviewed
+image/executables/environment, and no spoofing override. A malicious replacement
+can otherwise set a literal old UID and pass the guard. The suite intentionally
+demonstrates that counterexample: the guard does not authenticate an environment
+value. Verifying only the pre-exec Pod's template cannot protect a later hostile
+replacement. Whether existing platform-only Cilium writers suffice, or additional
+admission is required, needs explicit acceptance and real enforcement evidence;
+tenant access or an assumed owner label does not establish that boundary.
+
+Primary source checks: Kubernetes supports the
+[Pod UID through Downward API](https://kubernetes.io/docs/concepts/workloads/pods/downward-api/),
+and [Cilium v1.19.6's chart](https://github.com/cilium/cilium/blob/v1.19.6/install/kubernetes/cilium/templates/cilium-agent/daemonset.yaml)
+renders `extraEnv`. Local Helm rendering with the existing digest-verified chart
+is compared before/after: removing only the UID environment additions must yield
+the identical DaemonSet, including image, privilege, mounts and ServiceAccount.
+This preview uses chart defaults, not a deployed or site-specific HCP profile.
+No active renderer, HCP, chart values or Talos configuration is changed.
+
+Alternatives not selected: more pre/post GETs cannot make exec atomic; Kubelet
+has a UID-specific route but accessing it through `nodes/proxy` brings broad
+node-level authority ([Kubernetes guidance](https://kubernetes.io/docs/concepts/security/rbac-good-practices/#access-to-proxy-subresource-of-nodes)).
+Do not grant that right as a shortcut. A helper mounting host/Cilium sockets
+would add another privileged boundary and is not selected here. Removing
+`--probe` would substitute cached status for the required synchronous probe
+([Cilium v1.19.6 source](https://github.com/cilium/cilium/blob/v1.19.6/cilium-health/cmd/status.go));
+it is not an acceptable readiness shortcut under the current contract.
+
 Observation polling is distinct from mutation replay. Preserve the existing
 bounded convergence polling and evaluator Unknown/pending states for warmup.
 Each collection permits only its fixed bounded reads/probe within the accepted
