@@ -72,6 +72,9 @@ func OpenFullRunExecution(config FullRunExecutionConfig) (*FullRunExecution, err
 }
 
 func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecutionFactories) (*FullRunExecution, error) {
+	if err := validatePreRuntimeCredentialPolicy(config.PreRuntime); err != nil {
+		return nil, err
+	}
 	bareCluster := config.PreRuntime.PlanExpected.CompletionMode == stageplan.CompletionModeBareClusterMVP
 	if factories.preRuntime == nil || (!bareCluster && factories.postRuntime == nil) {
 		return nil, errors.New("full-run execution factories are incomplete")
@@ -82,6 +85,9 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 	}
 	if bareCluster {
 		preRuntime, err := factories.preRuntime(config.PreRuntime)
+		if errors.Is(err, ErrClientCertificateDisabled) {
+			return nil, ErrClientCertificateDisabled
+		}
 		if err != nil || preRuntime == nil {
 			return nil, errors.New("open full-run pre-runtime execution")
 		}
@@ -108,6 +114,9 @@ func openFullRunExecution(config FullRunExecutionConfig, factories fullRunExecut
 	}
 
 	preRuntime, err := factories.preRuntime(config.PreRuntime)
+	if errors.Is(err, ErrClientCertificateDisabled) {
+		return nil, ErrClientCertificateDisabled
+	}
 	if err != nil || preRuntime == nil {
 		return nil, errors.New("open full-run pre-runtime execution")
 	}

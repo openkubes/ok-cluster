@@ -372,7 +372,7 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact semantic digest emitted by prepare")
 	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent Observability evidence public key")
 	terminalMarker := flags.String("terminal-marker", "", "create-only private executor terminal marker")
-	execute := flags.Bool("execute", false, "perform the exact single-use Stage 1-12 full run")
+	execute := flags.Bool("execute", false, "request full-run execution; current certificate-bound manifests are rejected")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -385,15 +385,7 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 	if *manifestPath == "" || *evidencePublicKey == "" || *terminalMarker == "" || !sha256DigestPattern.MatchString(*expectedManifestDigest) {
 		return errors.New("--manifest, --independent-evidence-public-key, --terminal-marker and a lowercase SHA-256 --expected-manifest-digest are required")
 	}
-	defer func() {
-		if markerErr := writeFullRunExecutorTerminalMarker(*terminalMarker); markerErr != nil {
-			if returnErr == nil {
-				returnErr = markerErr
-			} else {
-				returnErr = errors.New("full-run execution stopped and terminal marker could not be persisted")
-			}
-		}
-	}()
+
 	verified, err := prepareFullRunExecutionManifest(*manifestPath)
 	if err != nil {
 		return fmt.Errorf("prepare full-run manifest: %w", err)
@@ -421,6 +413,15 @@ func runClusterStageRunFullExecute(ctx context.Context, arguments []string, stdo
 	if prepared.Manifest != verified {
 		return errors.New("full-run manifest differs from the prepared identity")
 	}
+	defer func() {
+		if markerErr := writeFullRunExecutorTerminalMarker(*terminalMarker); markerErr != nil {
+			if returnErr == nil {
+				returnErr = markerErr
+			} else {
+				returnErr = errors.New("full-run execution stopped and terminal marker could not be persisted")
+			}
+		}
+	}()
 	bounded, cancel := context.WithTimeout(ctx, fullRunExecutionTimeout)
 	defer cancel()
 	receipt, runErr := activation.Run(bounded)

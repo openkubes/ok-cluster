@@ -185,7 +185,7 @@ func TestBuildObservabilityCollectorActivationPackageAcceptsVerifiedManifestRece
 func observabilityCollectorActivationFixture(t *testing.T) (ObservabilityCollectorActivationPackageConfig, func()) {
 	t.Helper()
 	manifestPath, cleanup := fullRunExecutionManifestFixture(t)
-	manifest, manifestReceipt, err := LoadFullRunExecutionManifest(manifestPath)
+	manifest, manifestReceipt, err := inspectFullRunExecutionManifest(manifestPath)
 	if err != nil {
 		cleanup()
 		t.Fatal(err)

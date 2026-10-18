@@ -32,7 +32,7 @@ func finishClusterIntentRunnerHandoff(material clusterIntentMaterialized, plan c
 	}
 	verified, err := prepareFullRunExecutionManifest(manifestPath)
 	if err != nil {
-		return errors.New("YAML runner handoff incomplete: existing full-run verifier rejected manifest/credentials; partial output retained")
+		return fmt.Errorf("YAML runner handoff incomplete; partial output retained: %w", err)
 	}
 	if !validFullRunManifestReceiptFormat(verified.Format) || verified.State != "VERIFIED" || verified.MutationAllowed ||
 		verified.PlanDigest != plan.SemanticDigest || verified.CompletionMode != plan.Expected.CompletionMode ||

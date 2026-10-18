@@ -135,7 +135,7 @@ func TestOpenKubernetesObservabilityTransportBindsCredentialAndCA(t *testing.T) 
 	}
 }
 
-func TestOpenKubernetesObservabilityTransportAcceptsLifecycleClientCertificate(t *testing.T) {
+func TestOpenKubernetesObservabilityTransportRejectsLifecycleClientCertificate(t *testing.T) {
 	root := t.TempDir()
 	ca, certificate, key := testClientCredential(t)
 	caPath := filepath.Join(root, "workload-ca.crt")
@@ -155,11 +155,8 @@ func TestOpenKubernetesObservabilityTransportAcceptsLifecycleClientCertificate(t
 		},
 		Run: run, Fixture: capabilityFixtureConfig(), Checks: &recordingCapabilityChecks{},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if transport.client == nil || !transport.client.clientCertificate || transport.client.token != "" {
-		t.Fatalf("lifecycle client-certificate authority was not retained: %#v", transport.client)
+	if err == nil || transport != nil {
+		t.Fatalf("client-certificate observability transport enabled: %v", err)
 	}
 }
 

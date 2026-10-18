@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,9 +93,12 @@ func TestBuildBareClusterManifestLoadsThroughExistingOwnerWithoutRuntimeExecutio
 		writeBundleFile(t, projectionRoot, name, raw)
 	}
 	manifestPath := writeBundleFile(t, config.Root, "full-run-manifest.json", draft.Raw)
-	_, receipt, err := LoadFullRunExecutionManifest(manifestPath)
+	_, receipt, err := inspectFullRunExecutionManifest(manifestPath)
 	if err != nil || receipt.State != "VERIFIED" || receipt.CompletionMode != stageplan.CompletionModeBareClusterMVP || receipt.MutationAllowed {
 		t.Fatalf("draft failed the real full-run verifier: %v", err)
+	}
+	if _, _, err := LoadFullRunExecutionManifest(manifestPath); !errors.Is(err, ErrClientCertificateDisabled) {
+		t.Fatalf("structural draft became executable: %v", err)
 	}
 	after, _ := os.ReadFile(inputsPath)
 	if !bytes.Equal(before, after) {

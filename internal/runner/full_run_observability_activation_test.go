@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,8 +25,8 @@ func TestOpenKubernetesObservabilityFullRunActivationIsInertAndFullyBound(t *tes
 	activation, receipt, err := OpenKubernetesObservabilityFullRunActivation(manifestPath, KubernetesObservabilityFullRunActivationConfig{
 		IndependentEvidencePublicKeyPath: publicKeyPath, Clock: clock, Wait: WaitWithTimer,
 	})
-	if err != nil || activation == nil || receipt.Format != FullRunExecutionActivationReceiptFormat || receipt.State != "PREPARED" ||
-		receipt.Manifest.State != "VERIFIED" || receipt.Manifest.MutationAllowed || receipt.Execution != nil {
+	if !errors.Is(err, ErrClientCertificateDisabled) || activation != nil || receipt.Format != FullRunExecutionActivationReceiptFormat || receipt.State != "STOPPED" ||
+		receipt.Manifest.State != "STOPPED" || receipt.Manifest.MutationAllowed || receipt.Execution != nil {
 		t.Fatalf("concrete full-run activation did not open inertly: activation=%#v receipt=%#v err=%v", activation, receipt, err)
 	}
 	raw, err := json.Marshal(receipt)

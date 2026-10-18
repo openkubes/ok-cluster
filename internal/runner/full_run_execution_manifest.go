@@ -311,6 +311,10 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 		plan.NetworkObservationMode != expected.NetworkObservationMode || plan.CompletionMode != expected.CompletionMode {
 		return FullRunExecutionConfig{}, errors.New("verified full-run manifest plan changed after loading")
 	}
+	// Both supported manifest versions require the disabled certificate bootstrap.
+	if document.Format == FullRunExecutionManifestFormat || document.Format == FullRunExecutionManifestFormatV4 {
+		return FullRunExecutionConfig{}, ErrClientCertificateDisabled
+	}
 	bareCluster := plan.CompletionMode == stageplan.CompletionModeBareClusterMVP
 	if !bareCluster && runtime.PlatformCapability == nil {
 		return FullRunExecutionConfig{}, errors.New("verified full-run manifest runtime is incomplete")
@@ -328,8 +332,8 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	// normally slower CAAPH/Cilium convergence boundary less tolerant than the
 	// lifecycle boundary that precedes it and repeatedly turns healthy late
 	// convergence into a stopped full run.
-	if networkTimeout < lifecycleTimeout {
-		return FullRunExecutionConfig{}, errors.New("full-run network polling timeout is shorter than lifecycle polling timeout")
+	if err := validateFullRunPollingWindow(lifecycleTimeout, networkTimeout); err != nil {
+		return FullRunExecutionConfig{}, err
 	}
 	authorization, err := OpenStageAuthorizationHTTPResolver(StageAuthorizationHTTPResolverConfig{
 		Endpoint: document.Authorization.Endpoint, TokenFile: document.Authorization.TokenFile, CAFile: document.Authorization.CAFile,
@@ -493,6 +497,13 @@ func (manifest VerifiedFullRunExecutionManifest) ExecutionConfig(runtime FullRun
 	return config, nil
 }
 
+func validateFullRunPollingWindow(lifecycleTimeout, networkTimeout time.Duration) error {
+	if networkTimeout < lifecycleTimeout {
+		return errors.New("full-run network polling timeout is shorter than lifecycle polling timeout")
+	}
+	return nil
+}
+
 // Open composes the concrete single-use Stage 1-12 executor from this
 // verified manifest. It remains a local open boundary; Run is the only method
 // that may contact authorities or mutate authorized resources.
@@ -519,12 +530,23 @@ func OpenFullRunExecutionManifest(path string, runtime FullRunExecutionManifestR
 	return execution, receipt, nil
 }
 
-// LoadFullRunExecutionManifest verifies the complete private first-run
-// contract. It reads and validates referenced private credential material, but
-// constructs no network client, resolves no grant, contacts no API and creates
-// no file. Lifecycle-derived runtime identity and capability proof deliberately
-// remain later in-memory handoffs.
+// LoadFullRunExecutionManifest checks the private document then rejects the
+// unsupported certificate mode before referenced credentials, authorization
+// adapters or stages are opened. Current v3/v4 require this disabled bootstrap.
 func LoadFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest, FullRunExecutionManifestReceipt, error) {
+	receipt := FullRunExecutionManifestReceipt{Format: FullRunExecutionManifestReceiptFormat, State: "STOPPED", MutationAllowed: false}
+	_, identity, err := loadFullRunExecutionManifest(path)
+	if err != nil {
+		return VerifiedFullRunExecutionManifest{}, receipt, err
+	}
+	receipt.ManifestDigest = identity
+	return VerifiedFullRunExecutionManifest{}, receipt, ErrClientCertificateDisabled
+}
+
+// inspectFullRunExecutionManifest verifies structural evidence for offline
+// snapshots only. A VERIFIED structural receipt does not enable execution.
+// Executable entry points must use LoadFullRunExecutionManifest/ExecutionConfig.
+func inspectFullRunExecutionManifest(path string) (VerifiedFullRunExecutionManifest, FullRunExecutionManifestReceipt, error) {
 	receipt := FullRunExecutionManifestReceipt{
 		Format: FullRunExecutionManifestReceiptFormat, State: "STOPPED", MutationAllowed: false,
 	}

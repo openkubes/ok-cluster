@@ -231,6 +231,9 @@ func (resolved ResolvedStageAuthorization) Source() (StageAuthorizationSource, e
 }
 
 func newStageAuthorizationRequest(plan stageplan.Binding, decision stagecursor.Decision) (StageAuthorizationRequest, error) {
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return StageAuthorizationRequest{}, err
+	}
 	stage, stageDigest, err := plan.Stage(decision.StageID)
 	if err != nil || !stageplan.IsMutating(stage) || decision.Format != stagecursor.DecisionFormat ||
 		decision.State != "NEXT" || !decision.RequiresAuthorization || decision.PlanDigest != plan.PlanDigest ||

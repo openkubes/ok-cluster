@@ -88,6 +88,9 @@ func (operation BindingStageOperation) Retry(ctx context.Context, plan stageplan
 
 func (operation BindingStageOperation) run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, terminalReceiptDigest string) (BindingStageRunReceipt, error) {
 	receipt := BindingStageRunReceipt{Format: BindingStageReceiptFormat, State: "PREBINDING"}
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return receipt, err
+	}
 	if operation.Ledger == nil || operation.Binder == nil {
 		return receipt, errors.New("binding stage ledger and binder are required")
 	}

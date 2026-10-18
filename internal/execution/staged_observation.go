@@ -81,6 +81,9 @@ func (operation ObservationStageOperation) Retry(ctx context.Context, plan stage
 
 func (operation ObservationStageOperation) run(ctx context.Context, plan stageplan.Binding, cursor stagecursor.Cursor, failedReceiptDigest string) (ObservationStageRunReceipt, error) {
 	receipt := ObservationStageRunReceipt{Format: ObservationStageReceiptFormat, State: "PREOBSERVATION"}
+	if err := plan.RequireExecutionEnabled(); err != nil {
+		return receipt, err
+	}
 	if operation.Ledger == nil || operation.Observer == nil {
 		return receipt, errors.New("observation stage ledger and observer are required")
 	}

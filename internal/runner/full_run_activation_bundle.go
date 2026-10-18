@@ -108,7 +108,7 @@ type VerifiedFullRunExecutionBundle struct {
 // remain unchanged; only filesystem locations and the semantic manifest digest
 // change. No file is created and no authority is contacted.
 func BuildFullRunExecutionBundle(config FullRunExecutionBundleConfig) (VerifiedFullRunExecutionBundle, error) {
-	manifest, sourceReceipt, err := LoadFullRunExecutionManifest(config.ManifestPath)
+	manifest, sourceReceipt, err := inspectFullRunExecutionManifest(config.ManifestPath)
 	if err != nil || !manifest.verified || sourceReceipt.State != "VERIFIED" || sourceReceipt.MutationAllowed {
 		return VerifiedFullRunExecutionBundle{}, errors.New("verify source full-run execution manifest")
 	}

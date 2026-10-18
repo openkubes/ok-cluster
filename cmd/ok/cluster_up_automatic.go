@@ -315,7 +315,10 @@ func completeAutomaticUp(ctx context.Context, path, root string, stdout, stderr 
 		return errors.New("invalid managed preparation")
 	}
 	prepared, err := resolvePreparedClusterIntent(path, filepath.Join(root, "preparation"), setup.ManifestDigest)
-	if err != nil || prepared.Binding.NormalizedIntentDigest != setup.IntentDigest {
+	if err != nil {
+		return fmt.Errorf("managed preparation verification failed: %w", err)
+	}
+	if prepared.Binding.NormalizedIntentDigest != setup.IntentDigest {
 		return errors.New("managed preparation differs from verified YAML/manifest")
 	}
 	if _, err := guidedUpEvidencePath(setup); err != nil {

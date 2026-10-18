@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -103,7 +104,7 @@ func TestOpenKubernetesSubmissionClientBindsOneAuthority(t *testing.T) {
 	}
 }
 
-func TestOpenKubernetesSubmissionClientAcceptsStrictClientCertificateKubeconfig(t *testing.T) {
+func TestOpenKubernetesSubmissionClientRejectsClientCertificateKubeconfig(t *testing.T) {
 	root := t.TempDir()
 	ca, certificate, key := testClientCredential(t)
 	caPath := filepath.Join(root, "workload-ca.crt")
@@ -119,8 +120,8 @@ func TestOpenKubernetesSubmissionClientAcceptsStrictClientCertificateKubeconfig(
 		Endpoint: endpoint, AuthorityIdentity: "cluster-uid-disposable-ok147",
 		KubeconfigFile: kubeconfigPath, CAFile: caPath,
 	}
-	if _, identity, err := openKubernetesSubmissionClient(config); err != nil || !stageReceiptPrefixDigestPattern.MatchString(identity) {
-		t.Fatalf("strict client-certificate kubeconfig was not accepted: identity=%q err=%v", identity, err)
+	if client, identity, err := openKubernetesSubmissionClient(config); !errors.Is(err, ErrClientCertificateDisabled) || client != nil || identity != "" {
+		t.Fatalf("client-certificate credential escaped deny gate: client=%v identity=%q err=%v", client, identity, err)
 	}
 
 	t.Run("token and kubeconfig fail closed", func(t *testing.T) {
@@ -293,6 +294,12 @@ func testCA(t *testing.T) []byte {
 func testClientCredential(t *testing.T) ([]byte, []byte, []byte) {
 	t.Helper()
 	now := time.Now().UTC()
+	return testClientCredentialWithPolicy(t, pkix.Name{CommonName: "ok147-workload-client"}, now.Add(-time.Hour), now.Add(24*time.Hour))
+}
+
+func testClientCredentialWithPolicy(t *testing.T, subject pkix.Name, notBefore, notAfter time.Time) ([]byte, []byte, []byte) {
+	t.Helper()
+	now := time.Now().UTC()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -311,8 +318,8 @@ func testClientCredential(t *testing.T) ([]byte, []byte, []byte) {
 		t.Fatal(err)
 	}
 	clientTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(102), Subject: pkix.Name{CommonName: "ok147-workload-client"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
+		SerialNumber: big.NewInt(102), Subject: subject,
+		NotBefore: notBefore, NotAfter: notAfter,
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caTemplate, &clientKey.PublicKey, caKey)
