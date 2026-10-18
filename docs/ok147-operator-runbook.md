@@ -40,6 +40,93 @@ not provisioning success. CAPI and existing lifecycle owners retain convergence
 ownership. This is a design direction, not a new CRD/controller or authority
 contract implemented here.
 
+### Workload credential bootstrap: review proposal, not an enabled feature
+
+Status: **DESIGN ONLY / NO-GO**. This section does not approve an issuer,
+certificate identity, lifetime, RBAC installation or execution. The security
+contract and review of [PR #437](https://github.com/openkubes/ok-cluster/pull/437)
+remain authoritative; no accepted security requirement is changed here.
+After its credential gate is merged, even matching platform inputs cannot make
+the current v3/v4 YAML runner handoff executable. Do not implement preparation
+automation that works around that gate.
+
+#### Confirmed source boundaries
+
+The pinned CLI profile uses the existing Talos/KubeVirt renderer. Its control
+plane template already includes `cluster.inlineManifests` for local-path storage.
+That is a possible **declarative bootstrap seam**, not an existing credential
+issuer or permission to place credentials in rendered artifacts. The checked
+local `ok-linux/profiles/kubevirt/profile.yaml` pins Talos v1.9.6; this is source
+evidence, not verification of any deployed cluster/version.
+
+| Runner boundary | Existing workload action | Constraint on a future access profile |
+| --- | --- | --- |
+| Stage 5: network observation | Read Nodes, exact Cilium workloads and Cilium Pods; execute the fixed Cilium health probe in a selected Pod | A probe is not a read-only API capability. Do not describe `pods/exec` permission as command-restricted RBAC; the fixed command is enforced by the adapter, not ordinary RBAC. Pod selection/UID races and arbitrary-exec denial need explicit review. |
+| Stage 6: runtime binding | GET `kube-system` Namespace and `local-path` StorageClass; persist binding material and the stage receipt separately on the management plane | No workload storage sandbox or new write test is performed here. Keep workload observation rights separate from management evidence writes. |
+| Stage 7: target access | Submit the fixed namespace, ServiceAccount and RBAC object set, including reviewed platform ClusterRole prerequisites | Role creation/binding has privilege-escalation implications. Exact manifest validation in Go is not proof that a stolen credential cannot submit another body. |
+
+Sources: `internal/observation/network_collector.go`,
+`internal/runner/cilium_websocket.go`, `internal/runner/runtime_binding_source.go`,
+`internal/submission/target_access.go`, `profiles/cli/talos-kubevirt-mvp-v1.json`,
+and `templates/talos/providers/kubevirt/cluster-base.yaml.tpl`.
+
+The current full-run composition shares workload credential destinations between
+these stages. A per-role credential split must therefore be an explicit reviewed
+manifest/adapter change, not an undocumented widening of one observer identity.
+Do not change stage order, completion/readiness evidence or use the Bare-MVP
+label to omit any required probe. Stages 8–12 are not implicitly reopened by a
+Stage-5–7 proposal.
+
+#### Recommended integration sequence
+
+1. Finish independent review of #437; retain its certificate/recovery gates.
+2. Agree the initial workload issuance profile and the existing platform owner
+   that can enforce it. A narrowly scoped certificate issuer outside the runner
+   is a candidate because the current manifest is certificate-shaped; an approved
+   token bootstrap is an alternative, not already proven by TokenRequest support.
+   Neither option is selected or implemented by this proposal. A CSR or
+   TokenRequest alone does not solve authenticated first access to the new API.
+3. For certificate mode, review exact per-role CN, complete O/group set, trust
+   root, clientAuth usage, target binding and maximum total validity, together
+   with installed RBAC. No numeric TTL or accepted subject is invented here.
+   The runner must never receive a CA signing key or use the retained CAPI admin
+   kubeconfig to obtain the bounded credential. A signer with workload-CA access
+   is itself a privileged platform authority whose key isolation, issuance
+   restrictions, audit and compromise boundary require review; it is not made
+   least-privilege merely by being called a broker.
+4. Bind a typed issuance request/result to Contract/plan, execution attempt,
+   observed target Cluster UID and API/CA identity, role and policy revision.
+   Define the durable claim/outcome boundary before issuance: a lost response
+   must not silently cause a second issuance or runner replay. Target recreation,
+   predecessor drift, expired access or an indeterminate outcome stops the run.
+5. Review bootstrap RBAC/admission installation through the existing renderer/
+   lifecycle seam. Preserve Talos sysctls, user-namespace settings, kubelet bind
+   mounts and storage identity. Never hide this as a new imperative Go renderer.
+   Kubernetes `resourceNames` cannot constrain collection CREATE requests; named
+   `escalate` rules must not be assumed to protect Role CREATE. Exact-content
+   admission or an equivalently reviewed boundary is needed where body scope is
+   security-critical. Do not replace this with wildcard or broad escalation.
+6. Prove negative cases offline first: wrong issuer/subject/groups/target/CA,
+   lifetime drift, cross-role use, extra RBAC bodies, arbitrary exec, concurrent
+   duplicate requests, target recreation and crash after claim. Then obtain a
+   **separate** approval for a bounded live issuance/deployment validation. Only
+   reviewed supported profiles may be enabled; unsupported modes keep failing
+   before Stage 1. Recovery/fencing and old-grant retirement remain separate.
+
+#### User experience after that contract is implemented
+
+One explicit platform setup delegates the reviewed scope. Normal users still
+use `ok cluster create --file cluster.yaml` and `ok cluster destroy <name>` with
+one understandable confirmation. The CLI automates the internal preparation,
+private credential references and temporary connectivity within that delegation;
+users do not manage issuers, token files, digests or handoff JSON per cluster.
+No extra end-user command, long-running Installer Operator, public CRD, automatic
+retry or privileged bootstrap fallback is introduced by this design proposal.
+
+Primary references: [Talos v1.9 machine configuration / inline manifests](https://docs.siderolabs.com/talos/v1.9/reference/configuration/v1alpha1/config),
+[Kubernetes RBAC restrictions and escalation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/),
+and [Kubernetes certificate requests and signers](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/).
+
 For the Bare-MVP completion mode, operators use the product CLI facade rather
 than assembling stage commands manually:
 
