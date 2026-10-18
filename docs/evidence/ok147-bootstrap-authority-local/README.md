@@ -72,7 +72,9 @@ The injected `now` is a trusted adapter/test clock, never a client-supplied clai
   stale reads or permits deletion violates this contract. The in-memory tests
   do not prove those deployment properties or survive a process loss themselves.
 - Dedicated writer isolation, anti-deletion fencing and reviewed retention. No
-  existing ledger is widened and OK-197/OK-198 are not implemented here.
+  existing ledger is widened and OK-197/OK-198 are not implemented here. The
+  issuer storage domain must outlive Candidate namespace teardown; a recreated
+  storage namespace must not silently become a fresh empty authoritative domain.
 - An explicit future manifest/adapter revision and separate deployment/live
   approval. #437 certificate/recovery/Stage-7 signing gates stay in force.
 
@@ -89,7 +91,7 @@ Local verification (2026-10-18):
 - PASS: `go test ./...` and `go vet ./...`.
 - PASS: race tests for `bootstrapauthority`, `bootstrapcheck`, existing
   `authorization` and existing `ledger` packages.
-- PASS: issuer authority statement coverage 93.3%; observer checker 98.5%.
+- PASS: issuer authority statement coverage 93.5%; observer checker 98.6%.
 - PASS: the 24-contender single-winner/crash-STOP test repeated 50 times under
   race detection with the test backend.
 - PASS: positive request/claim/result paths for both observer roles; request and
@@ -98,6 +100,13 @@ Local verification (2026-10-18):
   historical retrieval versus expired authorization; nil/foreign opaque values.
 - PASS: `git diff --check`; `go list -deps ./cmd/ok` confirms neither experimental
   bootstrap package is linked into the CLI.
+- PASS: both packages cross-compile to Linux/amd64 with the declared Go 1.21
+  baseline (`GOTOOLCHAIN=go1.21.13 go test -c`). This is compilation only, not a
+  Linux runtime test.
+- FAIL (local execution environment): native Go 1.21.13 test commands on this
+  Mac abort in dyld with `missing LC_UUID load command`; their test bodies are
+  NOT RUN. Normal Go 1.26.7 local tests/race checks above pass. Linux CI must
+  independently execute the Go 1.21 tests on the final head.
 - NOT RUN for this isolated follow-up: CLI Python smoke/lifecycle suites. Earlier
   results and the existing OK-178 Darwin/tool-version limitation are recorded in
   `../ok147-bootstrap-offline/README.md`; they are not relabeled as new results.
@@ -106,3 +115,8 @@ Local verification (2026-10-18):
 
 This follow-up is stacked on PR #455 for a focused review diff. CI for its own
 head must be checked separately; no automatic merge or deployment is requested.
+
+Additional local hardening rejects lossy invalid-UTF-8/control-character binding
+strings before canonical JSON hashing and stops before storage on claim/result
+serialization errors. Typed-nil validation uses the Go 1.21-compatible reflection
+kind. No existing public schema, image, credential or Candidate changed.

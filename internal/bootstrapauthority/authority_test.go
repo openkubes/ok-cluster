@@ -604,3 +604,18 @@ func TestWorkloadCAIsNotAnIssuerAuthenticationKey(t *testing.T) {
 		}
 	}
 }
+
+func TestClaimSerializationFailureStopsBeforeWrite(t *testing.T) {
+	f := newFixture(t)
+	f.now = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	f.r.NotBefore = f.now
+	f.r.NotAfter = f.now.Add(5 * time.Minute)
+	f.signRequest(t)
+	verified, err := f.a.Verify(f.r, f.inputs, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.a.Claim(context.Background(), verified, f.now); err != ErrStop || f.store.claimWrites != 0 {
+		t.Fatal("serialization error reached claim store", err)
+	}
+}

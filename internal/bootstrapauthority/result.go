@@ -60,7 +60,10 @@ func (a *Authority) Complete(ctx context.Context, claim Claim, result SignedResu
 	result.Result.CertificateDER = append([]byte(nil), result.Result.CertificateDER...)
 	result.Signature = append([]byte(nil), result.Signature...)
 	record := resultRecord{"ok147-bootstrap-result-record-candidate/v1", claimDigest, result, now.UTC()}
-	raw, _ := json.Marshal(record)
+	raw, marshalErr := json.Marshal(record)
+	if marshalErr != nil {
+		return ErrStop
+	}
 	if err := a.store.CreateResult(ctx, claim.request.slotDigest, raw); err != nil {
 		if !errors.Is(err, ErrExists) {
 			return ErrStop

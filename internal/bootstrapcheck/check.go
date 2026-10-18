@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Binding is an internal candidate model, not an accepted manifest/wire format.
@@ -85,8 +87,13 @@ func validBinding(b Binding) bool {
 		return false
 	}
 	for _, s := range []string{b.Attempt, b.TargetUID, b.Endpoint, b.SourceNamespace, b.SourceName, b.SourceUID, b.SourceResourceVersion, b.SourceOwnerUID} {
-		if strings.TrimSpace(s) != s || s == "" || len(s) > 2048 {
+		if strings.TrimSpace(s) != s || s == "" || len(s) > 2048 || !utf8.ValidString(s) {
 			return false
+		}
+		for _, r := range s {
+			if unicode.IsControl(r) {
+				return false
+			}
 		}
 	}
 	// Privileged installer/probe profiles are deliberately not modeled yet.

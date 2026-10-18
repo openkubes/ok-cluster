@@ -45,7 +45,7 @@ func New(trust Trust, store Store) (*Authority, error) {
 	}
 	v := reflect.ValueOf(store)
 	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
 		if v.IsNil() {
 			return nil, errors.New("dedicated issuer store required")
 		}
@@ -114,7 +114,10 @@ func (a *Authority) Claim(ctx context.Context, r VerifiedRequest, now time.Time)
 		return Claim{}, ErrConsumed
 	}
 	record := claimRecord{"ok147-bootstrap-claim-candidate/v1", r.slotDigest, r.authorizationDigest, a.trust.PolicyDigest, r.request.KeyID, now.UTC()}
-	raw, _ := json.Marshal(record)
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return Claim{}, ErrStop
+	}
 	if err := a.store.CreateClaim(ctx, r.slotDigest, raw); err != nil {
 		if errors.Is(err, ErrExists) {
 			return Claim{}, ErrConsumed

@@ -178,3 +178,14 @@ func TestObserverRequiresRoleSpecificPredecessor(t *testing.T) {
 		}
 	}
 }
+
+func TestObserverRejectsLossyJSONBindingStrings(t *testing.T) {
+	for _, value := range []string{"invalid-\xff-uid", "control-\n-uid"} {
+		f, inputs, _, _ := observerFixture(t, "network-observer")
+		f.r.Binding.SourceUID = value
+		inputs.Expected = f.r.Binding
+		if ValidateObserverRequest(f.r, inputs) == nil {
+			t.Fatal("accepted ambiguous binding string")
+		}
+	}
+}
