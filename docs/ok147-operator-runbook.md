@@ -222,7 +222,8 @@ policy; existing immutable stage outcome records must not become mutable slots.
 approved per-role subjects and RBAC/admission/probe restrictions; a justified
 certificate lifetime and clock-skew policy; issuance-request authentication and
 durable coordination; authenticated plan provenance before any Stage-7 signing
-can return. Numeric TTL remains UNSET/NO-GO: the CLI's three-hour execution
+can return. An active numeric TTL remains UNSET/NO-GO (the review proposal below
+is not an enabled default): the CLI's three-hour execution
 timeout and the existing one-hour TokenRequest limit are not certificate-policy
 approval. Renewal after expiry is a new authorized issuance decision, not an
 implicit replay or automatic extension of a previous outcome.
@@ -233,6 +234,64 @@ signing method, CA-key reader, Job launcher, enabled certificate profile or live
 entry point. Then implement the separately authorized platform task and adapters
 under the reviewed next revision. Do not mix this into the accepted #437
 mitigation or silently expand a public CLI/runtime schema.
+
+#### First observer profile: concrete decisions for review
+
+**PROPOSED ONLY; no accepted issuer profile or live authorization.** Operator
+approval of the bounded-bootstrap direction allowed the offline checkpoint in
+[PR #455](https://github.com/openkubes/ok-cluster/pull/455). That PR checks local
+request/result and source-metadata consistency only. It does not authenticate an
+issuer, persist claims or enable the runner. Its CI passed at `949a16a`; this is
+not independent security acceptance of Candidate A.
+
+The next implementation needs explicit profile agreement, rather than treating
+the synthetic ten-minute test cap as policy. Proposed first decisions:
+
+| Decision | Review proposal, not an active default |
+| --- | --- |
+| Identities | Separate exact CNs `ok147:<operation-nonce>:network-observer` and `ok147:<operation-nonce>:runtime-observer`; nonce is 32 lowercase hexadecimal characters generated before rendering/plan hashing. Empty certificate O/group set; no SANs; digitalSignature and clientAuth only. |
+| Lifetime | Maximum total certificate validity 45 minutes, including at most 60 seconds of backdating. No acceptance before NotBefore or after NotAfter, and no automatic renewal. These numbers require profile approval. |
+| Issuance timing | One distinct role slot per plan/attempt/target UID, issued just before the relevant stage after its authoritative predecessor prefix. Do not issue both roles before infrastructure convergence, share one credential between stages, or reinterpret the current v3/v4 shared credential fields. |
+| Budget | The selected observation window must be at most 30 minutes. Initial issuer-result handoff plus scheduling must consume at most five minutes; check actual remaining certificate lifetime before stage entry. A missed budget stops without shortening observation, extending the certificate, reissuing or replaying. |
+| Runtime observer | Only GET the `kube-system` Namespace and `local-path` StorageClass in the bound workload cluster. No workload writes, Secret access, TokenRequest, RBAC modification or exec. Management receipt persistence uses a distinct authority. |
+| Network observer | LIST Nodes; GET `kube-system` DaemonSets `cilium`/`cilium-envoy` and Deployment `cilium-operator`. Recommend platform-mediated, fixed-selector Pod discovery instead of delegating raw Pod LIST to the runner/user. The current adapter's Cilium label selector is **not** an RBAC restriction: direct Pod LIST permits reading other Pods in that namespace. The mediated adapter/protocol must be reviewed before enablement; namespace-wide direct Pod LIST is not selected by this proposal. No exec, Secret access, TokenRequest or RBAC writes. |
+
+Timing rationale: `cmd/ok/cluster_create_template.go` supplies 30-minute
+lifecycle/network polling windows; `cmd/ok/cluster_intent_plan.go` supplies a
+1,800-second observation budget. The direct runtime-binding source independently
+allows 30 minutes (`internal/runner/runtime_binding_source.go`). A separate
+Stage-6 Job fixture has a 180-second deadline; that does not shorten the direct
+source contract. A proposed 45-minute cap leaves room for the selected 30-minute
+observation, bounded initial handoff and backdating; remaining margin is an
+operational proposal, not measured issuance latency or an existing entitlement.
+Longer expert polling windows must remain unsupported by this initial profile
+unless a separately reviewed policy changes it. No current polling limit changes.
+
+The profile budget check needs to include the actual role-specific stage wrapper
+overhead as well as polling and reject insufficient remaining lifetime. A
+network observer credential does not replace the required functional Cilium
+probe. Probe mediation/UID-race protection and exact-body target-access
+installation/admission are still separate unresolved capabilities; implementing
+only these observers cannot claim complete automatic cluster creation.
+
+Platform task requirements remain: fixed reviewed image/spec/ServiceAccount;
+authenticated request and predecessor evidence; source UID/RV/Cluster owner and
+CA fingerprint checks; CA certificate/private-key public-key correspondence
+checked **inside the privileged platform task**, never by exporting the signing
+key to the CLI; atomic single-winner claim before signing and immutable result
+persistence. Image digest, request authentication, coordination backend and
+admission rules still need concrete review. No arbitrary Job-create or Secret
+read is delegated to the runner/user, and a claim without a durable result stays
+STOP/indeterminate. Do not start a real signing task based on this proposal.
+
+A separately approved metadata-only observation on 2026-10-18 confirmed that one
+existing test cluster's named CA Secret had exactly the corresponding Cluster
+controller owner UID, using two GETs and no Secret data. Selected identities were
+retained privately; raw metadata and annotations were not published. This is
+point-in-time object-ownership evidence only, not proof of CA contents, signing
+key correspondence, cross-read stability or rights for a new operation. The
+observation grants no issuer installation, key access, credential issuance or
+runner execution.
 
 #### Deployed provider inventory and release-specific source check
 
