@@ -78,6 +78,51 @@ security requirement is changed here. Even matching platform inputs cannot make
 the current v3/v4 YAML runner handoff executable. Do not implement preparation
 automation that works around that gate.
 
+#### MVP simplification checkpoint: issuer deferred, authority decision open
+
+The operator requested postponing the automatic issuer for the MVP. Issuer
+activation, record-protection installation and further issuer-specific rollout
+work are therefore deferred. The isolated #455–#457 packages remain inactive;
+their merge is not permission to deploy them. The installation plan below is
+retained for a future delegated-runner profile, not the next MVP task.
+
+Source inspection establishes a meaningful distinction:
+
+- `Makefile` target `kubeconfig` retrieves the lifecycle-generated workload
+  kubeconfig through `clusterctl get kubeconfig`; `install-cni` then uses it for
+  installation. This is trusted operator tooling, not bounded delegation.
+- `KubernetesLifecycleWorkloadAuthorityMaterializer` expressly forbids importing
+  the CAPI admin Secret. Current manifest and constructor gates reject that
+  certificate path before stages or grant resolution. Parking the issuer does
+  not make those gates optional.
+- `bootstrap-post-apply` waits for Nodes Ready; the separate lifecycle runtime
+  evidence verifies node count/identity, CAPI state and Cilium chart/readiness.
+  Neither shell exit zero nor this evidence alone replaces the runner's full
+  required receipt/probe/target-access contract.
+- Make bootstrap currently routes both Golden/infrastructure checks and CAPI
+  operations through `TALOS_INFRA_KUBECONFIG`. It cannot simply be wrapped and
+  advertised as supporting independently selected management/infrastructure
+  targets. Existing split-plane selection must remain explicit and fail closed.
+
+The recommended alternative for **explicit authority review**, not yet selected
+or implemented, is a local trusted-operator execution profile. The CLI would
+invoke existing lifecycle owners with the operator's explicitly selected target
+access; any lifecycle-generated workload admin credential would stay in the
+trusted local operator boundary. It must never be supplied to the existing
+bounded runner, uploaded to an execution Job or represented as a least-privilege
+observer credential. Privilege and local credential persistence must be visible
+in the reviewed plan/confirmation, not hidden behind a generic create approval.
+
+This changes the execution trust model and may not silently become the default
+or a fallback after #437 rejection. Before implementation, approve that boundary
+and specify the minimal completion/evidence contract. Reuse existing lifecycle
+logic, pin target contexts/API trust, preserve non-zero/STOP outcomes and durable
+local start/result records, prohibit automatic mutation replay, and retain
+existing destroy safeguards. Missing required convergence evidence is incomplete,
+not success. Do not reuse `bare-cluster-mvp/v1` success or historical receipts for
+a weaker set of checks. No new operator profile, public schema or supported OS is
+enabled by this proposal; existing happy-run outcomes and Candidates stay intact.
+
 #### Confirmed source boundaries
 
 The pinned CLI profile uses the existing Talos/KubeVirt renderer. Its control
