@@ -70,6 +70,15 @@ func ValidateObserverRequest(request Request, inputs ObserverInputs) error {
 	return ValidateRequest(request, constraints)
 }
 
+// ValidateObserverPollingBudget rejects impossible request budgets before any
+// future issuance claim. Actual remaining validity is checked at stage entry.
+func ValidateObserverPollingBudget(poll, overhead time.Duration) error {
+	if poll <= 0 || poll > observerMaxPolling || overhead <= 0 || overhead >= observerMaxValidity-poll {
+		return errors.New("observer polling or wrapper budget rejected")
+	}
+	return nil
+}
+
 // ValidateObserverStageEntry checks certificate consistency at authenticated
 // issuance time and at the proposed stage entry. It does not execute a stage,
 // grant rights, persist a claim or return a reusable authorization token.
@@ -80,7 +89,7 @@ func ValidateObserverStageEntry(request Request, result Result, inputs ObserverI
 	if err != nil {
 		return err
 	}
-	if budget.IssuedAt.IsZero() || now.IsZero() || budget.IssuedAt.After(now) || now.Sub(budget.IssuedAt) > observerMaxHandoff || budget.PollTimeout <= 0 || budget.PollTimeout > observerMaxPolling || budget.WrapperOverhead <= 0 {
+	if budget.IssuedAt.IsZero() || now.IsZero() || budget.IssuedAt.After(now) || now.Sub(budget.IssuedAt) > observerMaxHandoff || ValidateObserverPollingBudget(budget.PollTimeout, budget.WrapperOverhead) != nil {
 		return errors.New("observer stage handoff or budget rejected")
 	}
 	// Backdating is measured at issuance, not at stage entry several minutes
