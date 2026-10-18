@@ -157,6 +157,78 @@ boundary. Do not activate a partially supported profile or re-enable a gate on
 the strength of this design decision. Existing historical happy-run evidence,
 Candidate files and immutable terminal outcomes remain unchanged.
 
+#### Concrete platform tasks: offline contract proposal
+
+This inventory makes the shared-runner minimum reviewable; it defines neither
+HTTP routes nor a new public schema, executable task registry or deployable Job.
+The labels below describe fixed capabilities, not caller-selected commands.
+One platform integration may own them, but must not expose their union as a
+credential to a runner, CLI user or browser. Actual issuer image/spec/identity,
+request-window policy and enforcement/recovery boundaries remain unapproved.
+
+Every future request must be authenticated under platform delegation and match
+independently verified operation/plan/attempt, target Cluster UID, API/CA trust,
+policy and authoritative predecessor evidence. Bind caller environment/tenant
+scope at the operation boundary; never infer it from submitted fields or a
+matching digest. The task owner must verify current authority at point of use.
+No client can choose an image, ServiceAccount, key path, shell command, arbitrary
+resource path, API endpoint, Pod selector or RBAC body outside that bound plan.
+Public source/CA identity is not authority to read its signing key.
+
+| Fixed task | Exact allowed input/action | Result allowed back across its boundary |
+| --- | --- | --- |
+| Observer access | Existing #456 signed request for exactly `network-observer` after the successful Stage-4 prefix or `runtime-observer` after Stage 5. Verify the exact CSR and local profile, source namespace/name/UID/RV/Cluster owner, CA fingerprint and public/private-key correspondence inside the privileged task. Claim the #456 slot before signing, check source identity immediately before use, then persist the bound authenticated result before delivery. | The existing signed candidate result contains the public leaf certificate and exact request/slot/claim binding. Private client key stays with the runner; CA key never leaves the task. The public certificate is runtime transport material, not a browser result or a stage grant. Claim-only/unknown write stays STOP; no second issuance. |
+| Cilium Pod discovery | Stage-5 target and four-receipt prefix; the platform performs only the fixed `kube-system` Cilium discovery, not a caller-chosen selector. Verify the bound DaemonSet/controller identity, selected Pod UID, expected node association and required container. Existing collection/evaluator size limits still apply. | A bounded allowlisted projection of agent identity/readiness required by the existing evaluator plus an authenticated binding to the target/sample. Never raw Pod objects/specs, environment variables, annotations, tokens or arbitrary Pod inventory. The current direct Pod LIST is not this mediated boundary. |
+| Fixed Cilium probe | Same authorized Stage-5 observation window and platform-selected Pod identity; only `cilium-health status --probe --output json` in `kube-system`, container `cilium-agent`, with no stdin/TTY or caller arguments. Platform retains the exec capability. | Only the bounded probe evidence needed by the existing network evaluator, bound to the observed target, selected Pod UID and sample. Raw stdout/stderr is not a Console response. Missing or unauthenticated evidence cannot become success. |
+| Target-access installation | Exact Stage-7 selection after six durable successful receipts, verified runtime target, separately authenticated plan provenance/grant and the renderer-owned sixteen-object artifact. Reuse existing plan/object checks; enforcement must also constrain accepted bodies and privileges at the platform/API boundary. No generic apply/patch/delete endpoint or blanket bind/escalate. | Durable per-object identity/content observations and the existing stage outcome/evidence semantics. No installer credential is returned to the runner/browser. A submitted body or HTTP success alone does not establish convergence; partial/unknown outcomes remain incomplete/STOP. |
+
+The observer candidate message checks already exist. For discovery, probe and
+installation, an authenticated request/result envelope and its exact delegation
+to the existing adapters still need review; a boolean such as `authorized=true`
+is not a substitute. Issuer request/result keys must not be repurposed as
+Stage-Authority, independent-evidence or CA signing keys. Do not silently extend
+#456 messages, stage grants or the current shared certificate manifest fields to
+carry these other tasks. Role-specific runtime wiring needs its own reviewed
+revision, not a flag that re-enables certificate mode globally.
+
+**Probe TOCTOU limit remains a blocker.** Existing
+`KubernetesCiliumWebSocketExecutor` performs a Pod identity GET, then a name-based
+exec, then another identity GET. A replacement discovered by the final GET
+discards output, but the stream may already have executed. The Kubernetes
+[`PodExecOptions` at v0.35.5](https://github.com/kubernetes/api/blob/v0.35.5/core/v1/types.go#L6810-L6836)
+does not provide a Pod-UID precondition. Consequently these reads alone cannot
+prove atomic UID-bound execution. A reviewed platform-side prevention/guard
+protocol is required before enabling the mediated probe; this proposal does not
+invent or claim to implement one. Keeping a broad exec credential off the
+runner reduces delegation but does not itself close that race.
+
+Observation polling is distinct from mutation replay. Preserve the existing
+bounded convergence polling and evaluator Unknown/pending states for warmup.
+Each collection permits only its fixed bounded reads/probe within the accepted
+stage/credential window. Polling must not renew credentials, acquire a second
+issuance slot, repeat installation or restart a stopped stage. Source identity,
+authorization or evidence-integrity failure is not a transient warmup condition.
+
+Offline acceptance cases, before selecting any runtime protocol:
+
+1. Observer request/claim/result: existing #455–#457 wrong-role/key/source/CSR,
+   concurrency, crash and lost-response tests, plus future authoritative-prefix
+   and actual source/key adapters. Existing fixtures prove only their local scope.
+2. Discovery: reject caller selectors, foreign controller/target/Pod/node,
+   duplicate or oversized projections and raw spec/credential leakage. No
+   discovery adapter or authenticated projection verifier is implemented here.
+3. Probe: every changed namespace/container/command argument must stop before
+   identity HTTP or stream construction. Post-exec UID drift must discard all
+   output with no automatic retry. These are existing-adapter regressions, not
+   proof of the still-missing atomic platform guard.
+4. Installation: retain full artifact/prefix/grant/target/body negatives from
+   `submission` and `runner`; future enforcement tests must also reject a
+   credential holder submitting another body outside the Go adapter. Reject
+   subset/success shortcuts, unknown writes and unsupported plan provenance.
+5. End-to-end: no request/result may open a disabled #437 entry point or count
+   task completion as full cluster success. Neither CLI nor Console gets a
+   parallel authorization path. Live enforcement/issuance proofs remain NOT RUN.
+
 #### Confirmed source boundaries
 
 The pinned CLI profile uses the existing Talos/KubeVirt renderer. Its control
