@@ -113,8 +113,10 @@ Local verification (2026-10-18):
 - NOT RUN by design: any real persistence backend, Job, HTTP issuer endpoint,
   key provisioning, CA signing, installation, credential renewal or live run.
 
-This follow-up is stacked on PR #455 for a focused review diff. CI for its own
-head must be checked separately; no automatic merge or deployment is requested.
+PR #455 was merged at `863d6d75a7439de2885cadd3e75d51d60da99673`.
+This follow-up now targets `main`; the merged observer-checkpoint changes are
+not repeated in its review diff. CI for the synchronized head must be checked
+separately; no automatic merge or deployment is requested.
 
 Additional local hardening rejects lossy invalid-UTF-8/control-character binding
 strings before canonical JSON hashing and stops before storage on claim/result
