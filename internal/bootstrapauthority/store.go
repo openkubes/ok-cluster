@@ -23,8 +23,8 @@ var (
 // Store must provide linearizable exact-name reads and atomic immutable creates
 // in a dedicated issuer domain. There is deliberately no update/delete/lease or
 // fallback capability. It must not alias stage-grant or teardown records. Only
-// an in-memory test implementation is included; production durability, writer
-// isolation, RBAC/admission and anti-deletion fencing remain unimplemented.
+// local fake-API tests cover the Kubernetes adapter; production durability,
+// writer isolation, RBAC/admission and anti-deletion fencing remain unproven.
 type Store interface {
 	DomainDigest() string
 	CreateClaim(context.Context, string, []byte) error

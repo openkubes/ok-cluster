@@ -1,6 +1,7 @@
-// Package bootstrapauthority is a local-only candidate issuer authorization and
-// coordination boundary. It has no signer, key loader, concrete persistence or
-// CLI/runner integration. Store implementations are a separate trust boundary.
+// Package bootstrapauthority is an experimental candidate issuer authorization and
+// coordination boundary. It has no signer, key loader or CLI/runner integration.
+// The explicitly configured Kubernetes store is not installed or activated by
+// this package; production storage properties are a separate trust boundary.
 package bootstrapauthority
 
 import (
