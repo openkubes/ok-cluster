@@ -27,6 +27,11 @@ subject, CA certificate, lifetime and clock-skew constraints. It validates:
 - A proposed coordination-slot digest keyed by plan/attempt/target/observer role,
   not CSR, policy revision or source RV. Changing those inputs changes the request
   digest, not the slot, and must be rejected against independent expectations.
+- Supplied CA-source `PartialObjectMetadata` against the independently expected
+  namespace/name/UID/resourceVersion and exact Cluster controller owner
+  name/API version/UID. Deleting sources, absent/ambiguous owners, full Secret
+  responses, duplicate JSON keys, case-alias identity shadowing and trailing
+  JSON are rejected. No live source is fetched or approved by this checker.
 
 Only network-observer and runtime-observer candidate roles are modeled. Fixed
 probe and privileged target-access installation are intentionally rejected here;
@@ -56,6 +61,16 @@ Those remain explicit activation blockers; no timeout takeover or automatic
 retry is authorized. Evidence of command completion never substitutes for
 existing convergence requirements. Teardown and OK-197/OK-198 are unchanged.
 
+The metadata checker is separate from request/result validation and does not
+make caller-supplied expectations trustworthy. A future source adapter must use
+[Kubernetes metadata-only negotiation](https://kubernetes.io/docs/reference/using-api/api-concepts/#metadata-only-fetches)
+without falling back to a full Secret. Client-side output filtering of a full
+Secret is not metadata-only access. Even metadata annotations can contain
+sensitive material; they must not be dumped into logs or evidence. This change
+contains no fetch adapter and grants no Secret access. UID/owner consistency
+does not establish the actual CA certificate/key relationship or authenticate
+the API response; those remain outside this offline checkpoint.
+
 ## Verification
 
 Results are recorded after executing the relevant local checks. Live issuance,
@@ -66,7 +81,8 @@ Local results (2026-10-18):
 
 - PASS: `go test ./...`.
 - PASS: `go test -race ./internal/bootstrapcheck ./cmd/ok ./internal/runner`.
-- PASS: final checker tests with race detection and 97.3% statement coverage.
+- PASS: final checker tests with race detection and 98.2% statement coverage,
+  including the added source metadata checks.
 - PASS: `go vet ./...` and `git diff --check`.
 - PASS: `go list -deps ./cmd/ok` confirms the checker is not in CLI dependencies.
 - PASS: `make ok-cli-offline-smoke`, including 26 destroy, 27 YAML, 23 network
@@ -86,3 +102,9 @@ No Candidate manifest is modified: before/after manifests are identical because
 the change adds only this documentation and the isolated checker/test package.
 No live cluster mutation or real credential operation was performed during this
 implementation. GitHub CI status must be evaluated separately from local results.
+
+Source-metadata follow-up: all Go tests, checker race/coverage, `go vet ./...`,
+diff check and CLI dependency isolation were rerun and passed. The earlier
+CLI smoke/lifecycle results above are from the initial checkpoint; those suites
+were not rerun for this isolated follow-up, which changes no existing runtime,
+CLI, lifecycle, renderer or tests outside `bootstrapcheck`.
