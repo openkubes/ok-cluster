@@ -31,6 +31,8 @@ func intentFixture(t *testing.T, transform func(string) string) string {
 }
 
 func TestClusterIntentDryRunIsDistinctAndNeverRunnerReady(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	path := intentFixture(t, nil)
 	previousPrepare, previousExecute, previousMarker := prepareFullRunExecutionManifest, executeClusterCreateLive, validateClusterCreateTerminalMarker
 	defer func() {
@@ -125,7 +127,7 @@ func TestClusterIntentRenderRejectsInputsBeforeChild(t *testing.T) {
 }
 
 func TestClusterIntentOfflineHelpAndTemplate(t *testing.T) {
-	for _, args := range [][]string{{"up", "render", "--help"}, {"up", "cluster-template", "--help"}, {"cluster", "create", "render", "--help"}} {
+	for _, args := range [][]string{{"up", "render", "--help"}, {"up", "bind", "--help"}, {"up", "cluster-template", "--help"}, {"cluster", "create", "render", "--help"}} {
 		var stdout, stderr bytes.Buffer
 		if err := run(args, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "NO_GO") || stderr.Len() != 0 {
 			t.Fatalf("help %v: %v", args, err)
@@ -134,5 +136,61 @@ func TestClusterIntentOfflineHelpAndTemplate(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := run([]string{"up", "cluster-template"}, &stdout, &bytes.Buffer{}); err != nil || !strings.Contains(stdout.String(), "cli.openkubes.io/v1alpha1") {
 		t.Fatalf("template %v", err)
+	}
+}
+
+func TestClusterIntentBindingRequiresExplicitContractAndBoundedFiles(t *testing.T) {
+	path := intentFixture(t, nil)
+	output := filepath.Join(t.TempDir(), "new-binding")
+	err := runClusterIntentBind(context.Background(), []string{"--file", path, "--output", output}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "explicit --contract") {
+		t.Fatalf("implicit Contract accepted: %v", err)
+	}
+	if _, err := os.Lstat(output); !os.IsNotExist(err) {
+		t.Fatal("missing Contract created output")
+	}
+	if _, err := readIntentBindingFile(t.TempDir()); err == nil {
+		t.Fatal("directory accepted as Contract")
+	}
+	oversized := filepath.Join(t.TempDir(), "large")
+	if err := os.WriteFile(oversized, bytes.Repeat([]byte("x"), 1024*1024+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readIntentBindingFile(oversized); err == nil {
+		t.Fatal("oversized binding input accepted")
+	}
+}
+
+func TestClusterIntentPreparationInputsAreModeSpecific(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	yamlPath := intentFixture(t, nil)
+	jsonPath := intentFixture(t, func(string) string { return `{ "format": "technical-json-fixture" }` })
+	for _, path := range []string{yamlPath, jsonPath} {
+		for _, mode := range []string{"--dry-run", "--prepare", "--live"} {
+			if path == yamlPath && mode == "--prepare" {
+				continue
+			}
+			for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config", "runtime-inputs"} {
+				var stdout bytes.Buffer
+				err := run([]string{"up", "--file", path, mode, "--" + name, "/must-not-read"}, &stdout, &bytes.Buffer{})
+				if err == nil || !strings.Contains(err.Error(), "only accepted with YAML --prepare") || stdout.Len() != 0 {
+					t.Fatalf("preparation input escaped mode gate: %s %s %s: %v", path, mode, name, err)
+				}
+			}
+		}
+	}
+	output := filepath.Join(t.TempDir(), "new-prepare")
+	err := run([]string{"up", "--file", yamlPath, "--prepare", "--output", output}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("missing trusted source/profile paths accepted: %v", err)
+	}
+	if _, err := os.Lstat(output); !os.IsNotExist(err) {
+		t.Fatal("incomplete inputs reserved output")
+	}
+	var help bytes.Buffer
+	writeClusterCreateHelp(&help)
+	if strings.Contains(help.String(), "ok up bind") || !strings.Contains(help.String(), "exits\nnon-zero") {
+		t.Fatal("help presents an extra binding step or successful partial preparation")
 	}
 }

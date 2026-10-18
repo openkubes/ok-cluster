@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Real CLI + PTY + lifecycle, against independent fake API states only."""
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 import pty
 import select
 import signal
+import shutil
+import ssl
 import subprocess
 import time
 import unittest
@@ -107,6 +111,60 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
     def test_configured_ok_keeps_owner_durable_convergence_and_evidence(self):
         self.use_saved_paths()
         self.test_ok_delegates_to_real_lifecycle_and_keeps_evidence()
+
+    def test_managed_render_is_discovered_and_owner_proves_convergence(self):
+        openssl = shutil.which('openssl')
+        if not openssl:
+            self.skipTest('OpenSSL required for synthetic offline kubeconfig CA')
+        config_path = self.use_saved_paths()
+        box = self.fixture.box
+        root = config_path.parent / 'runs' / fixtures.CLUSTER
+        preparation = root / 'preparation'
+        for path in (root.parent, root, preparation):
+            path.mkdir(mode=0o700)
+        destination = preparation / fixtures.CLUSTER
+        shutil.move(str(box.rendered), destination)
+        box.clusters = preparation
+        destination.chmod(0o700)
+        cert, key = box.home / 'test.crt', box.home / 'test.key'
+        subprocess.run([openssl, 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+            '-days', '1', '-subj', '/CN=offline-only', '-keyout', str(key), '-out', str(cert)],
+            check=True, capture_output=True, env=self.env, timeout=15)
+        def sha(raw):
+            return 'sha256:' + hashlib.sha256(raw).hexdigest()
+        trust = sha(json.dumps([sha(ssl.PEM_cert_to_DER_cert(cert.read_text()))],
+                              separators=(',', ':')).encode())
+        targets = {}
+        for plane, path in (('management', box.infra), ('infrastructure', self.fixture.provider)):
+            endpoint = 'https://' + plane + '.example'
+            config = {'apiVersion': 'v1', 'kind': 'Config', 'current-context': 'selected',
+                'contexts': [{'name': 'selected', 'context': {'cluster': plane, 'user': 'operator'}}],
+                'clusters': [{'name': plane, 'cluster': {'server': endpoint,
+                    'certificate-authority-data': base64.b64encode(cert.read_bytes()).decode()}}],
+                'users': [{'name': 'operator', 'user': {'token': 'expired-create-fixture'}}]}
+            path.write_text(json.dumps(config))
+            path.chmod(0o600)
+            targets[plane] = {'context': 'selected', 'cluster': plane, 'endpoint': endpoint,
+                             'caTrustDigest': trust}
+        identity = {'name': fixtures.CLUSTER, 'namespace': fixtures.CLUSTER}
+        binding = {'format': 'ok-cli-cluster-static-binding/v1',
+            'state': 'CONTRACT_PROJECTION_BOUND_NO_GO', 'contractIdentity': identity,
+            'normalizedIntentDigest': sha(b'intent'), 'intentRevision': sha(b'revision'),
+            'targets': targets}
+        binding_raw = json.dumps(binding).encode()
+        fixture = {'format': 'ok-cli-local-execution-fixture/v2', 'authorizationState': 'NO-GO',
+            'contractIdentity': identity, 'intentRevision': binding['intentRevision'],
+            'bindingReceiptDigest': sha(binding_raw)}
+        for name, raw in (('binding-receipt.json', binding_raw),
+                          ('execution-fixture.json', json.dumps(fixture).encode())):
+            path = preparation / name
+            path.write_bytes(raw)
+            path.chmod(0o600)
+        terminal = root / 'executor-terminal'
+        terminal.write_text('STOP')
+        terminal.chmod(0o600)
+        self.test_ok_delegates_to_real_lifecycle_and_keeps_evidence()
+        self.assertEqual(terminal.read_text(), 'STOP')
 
     def test_configured_failure_remains_nonzero_without_retry(self):
         self.use_saved_paths()

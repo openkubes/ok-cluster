@@ -364,6 +364,12 @@ func addonSpecDigest(spec map[string]any, includeClusterRef bool) (string, error
 	return canonicalDigest(semantic)
 }
 
+// ExpectedChartSpecDigest derives the HCP identity from an already verified
+// renderer artifact, using exactly the collector's API-default normalization.
+func ExpectedChartSpecDigest(hcpSpec map[string]any) (string, error) {
+	return addonSpecDigest(hcpSpec, false)
+}
+
 // ExpectedLiteralReleaseSpecDigest derives the exact HRP semantic identity
 // from an already verified HCP and an explicit Cluster reference. Templates
 // require runtime rendering and are outside this narrow recovery contract.

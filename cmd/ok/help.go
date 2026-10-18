@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 )
@@ -63,8 +64,12 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterCreateRequirementsHelp(stdout)
 		return true
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "network-suggest" && (helpPrefix || containsHelpArgument(arguments[3:])) {
+		_ = runNetworkSuggest(context.Background(), []string{"--help"}, stdout, stdout)
+		return true
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" &&
-		(arguments[2] == "render" || arguments[2] == "cluster-template") && containsHelpArgument(arguments[3:]) {
+		(arguments[2] == "render" || arguments[2] == "bind" || arguments[2] == "cluster-template") && containsHelpArgument(arguments[3:]) {
 		writeClusterIntentRenderHelp(stdout)
 		return true
 	}
@@ -247,8 +252,19 @@ func writeClusterCreateHelp(output io.Writer) {
 
 Usage:
   ok up cluster-template
+  ok up network-suggest --file cluster.yaml --online --output cluster.proposed.yaml
   ok up --file cluster.yaml --dry-run
+  ok up --file cluster.yaml --prepare       # automatic local preparation only
+  ok up --file cluster.yaml                 # guided preparation and ok/no approval
+
+Expert workflows (scripts must select an explicit mode):
   ok up render --file cluster.yaml --output <new-private-directory>
+  ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>
+  ok up --file cluster.yaml --prepare --contract <reviewed-contract.yaml> --output <new-private-directory> --runtime-inputs <private-references.json>
+  ok up --file cluster.yaml --prepared-dir <existing-preparation> --dry-run
+  ok up --file cluster.yaml --prepared-dir <existing-preparation> --live --execute \
+    --expected-manifest-digest sha256:<digest> --independent-evidence-public-key <file> \
+    --terminal-marker /absolute/private-dir/executor-terminal
   ok up --file <private-manifest.json> --dry-run
   ok up --file <private-manifest.json> --prepare
   ok cluster create requirements
@@ -263,21 +279,59 @@ Usage:
     --terminal-marker /absolute/private-dir/executor-terminal
 
 "ok up" is an exact shorthand for "ok cluster create", including preparation
-subcommands and legacy contract-planning flags. It does not select a mode, infer
-credentials from local config, renew access, or bypass live approval.
-Friendly YAML supports local intent validation/render only; see "ok up render --help".
-It is NOT runner-ready: YAML --prepare/--live fail closed until full binding exists.
+subcommands and legacy contract-planning flags. A friendly YAML without a mode
+starts automatic local Contract/plan/policy-request preparation without technical
+file prompts. Without a separately provided request-bound platform handoff it
+stops AWAITING_PLATFORM_AUTHORITY (NO-GO). No platform credential issuer is added.
+With verified platform inputs, review the exact plan, then type ok/no.
+Trusted source paths come from ok config init; credentials are never inferred
+from general config, issued or renewed. No terminal or no explicit ok: no runner.
+Preparation is managed privately in <OS user config directory>/ok/runs/<name>.
+No --prepared-dir, digest or marker flags are needed for the guided command.
+Existing unstarted preparation is reverified, not rerendered. Changed inputs or
+partial preparation stop; an execution start fence blocks automatic replay even
+after failure/interruption. Local preparation is not deployed-authority approval.
+
+Expert workflow:
+Optional YAML spec.management/spec.infrastructure may each select kubeconfig
+and optional context. Supply both references or neither. A single context is
+unambiguous; multiple contexts require an explicit context (never implicit
+current-context). ~/ expands in these paths; relative paths use the YAML directory.
+Explicit references are inspected locally, including dry-run; no credentials are
+imported and no auth plugin/global context is run/changed. API/CA targets must
+match the existing bounded runtime authorities/provider access before execution.
+Friendly YAML --prepare checks local Contract/projection inputs and generates
+credential-free stage artifacts and a verified seven-stage NO-GO plan from the
+versioned talos-kubevirt-mvp recipe (only its reviewed E/P revisions). It
+uses the reviewed Contract recipe when --contract is omitted. An expert --output
+selects a new directory; with no expert input flags, --prepare manages the local
+preparation and platform request, never a live confirmation.
+Without --runtime-inputs, YAML --prepare exits
+non-zero with a static NO-GO receipt. Explicit private 0600 --runtime-inputs may
+reference existing credentials and distinct Stage Authority/evidence trust keys;
+these files are locally parsed without opening a network client. Only the existing
+full-run verifier can complete the handoff as PREPARED_NOT_AUTHORIZED (exit zero).
+It does not verify installed RBAC/authority policies, network access or convergence.
+Live still requires separate approval for the generated technical JSON manifest.
+Flatcar and Ubuntu templates exist, but their bounded runner
+integration is not enabled; these profiles do not fall back to Talos.
+Optional local paths: --lifecycle-root, --ok-linux-path, --config (or saved paths).
+YAML --live requires an existing private --prepared-dir. Its fixture binds the
+original normalized YAML to the verified technical manifest. No re-rendering,
+implicit preparation, automatic retry or extra executor. --prepared-dir also
+supports --dry-run (local credential reads, no API contact), never --prepare or JSON.
+All original live gates remain mandatory. No separate binding command is needed.
 All options below work with either spelling; technical JSON manifest/evidence requirements
 and operation receipts are unchanged. Bare "ok up" only displays this help.
 
-Modes (exactly one is required):
+Expert modes (exactly one is required outside guided YAML):
   --dry-run    Verify all bound local inputs and print a non-mutating summary
   --prepare    Validate locally; certificate-bound manifests currently fail closed
   --live       Currently blocked before Stage 1 pending bounded credential bootstrap;
                --execute does not bypass this restriction
 
 Input:
-  -f, --file   Private full-run manifest bound to completionMode bare-cluster-mvp/v1
+  -f, --file   Friendly cluster YAML or private Bare-MVP full-run manifest
 
 Live inputs:
   --terminal-marker must be an absolute path naming an absent executor-terminal

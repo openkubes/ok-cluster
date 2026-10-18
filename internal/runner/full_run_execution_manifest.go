@@ -31,6 +31,12 @@ const (
 	maximumFullRunExecutionManifestBytes    = 1024 * 1024
 )
 
+// FullRunStaticTargetIdentityDigest is only a preflight placeholder. The live
+// runner still requires a target identity bound to durable lifecycle evidence.
+func FullRunStaticTargetIdentityDigest() string {
+	return digest.SHA256([]byte("ok147-full-run-lifecycle-derived-target"))
+}
+
 type fullRunPlanDocument struct {
 	Path     string                          `json:"path"`
 	Expected postRuntimePlanExpectedDocument `json:"expected"`
@@ -277,6 +283,16 @@ func (manifest VerifiedFullRunExecutionManifest) Receipt() (FullRunExecutionMani
 		return FullRunExecutionManifestReceipt{}, errors.New("full-run execution manifest is not verified")
 	}
 	return manifest.receipt, nil
+}
+
+// VerifyExecutionFixture checks a caller's local fixture bytes against the
+// verified plan identity without exposing private activation inputs or opening
+// an executor. It does not interpret the caller-owned fixture schema.
+func (manifest VerifiedFullRunExecutionManifest) VerifyExecutionFixture(raw []byte) error {
+	if !manifest.verified || manifest.receipt.State != "VERIFIED" || digest.SHA256(raw) != manifest.plan.ExecutionFixture {
+		return errors.New("local execution fixture differs from the verified plan")
+	}
+	return nil
 }
 
 // ExecutionConfig converts one already verified private manifest into the
@@ -714,7 +730,7 @@ func verifyFullRunStaticArtifacts(document fullRunExecutionManifestDocument, pla
 	}); err != nil {
 		return errors.New("verify full-run enablement artifact")
 	}
-	targetIdentity := digest.SHA256([]byte("ok147-full-run-lifecycle-derived-target"))
+	targetIdentity := FullRunStaticTargetIdentityDigest()
 	targetAccessStage, _, err := plan.Stage("target-access")
 	if err != nil || len(targetAccessStage.Inputs) != 1 || targetAccessStage.Inputs[0].Name != "stage.target-access" {
 		return errors.New("full-run target-access input is invalid")

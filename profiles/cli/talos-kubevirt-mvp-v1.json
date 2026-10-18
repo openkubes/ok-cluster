@@ -1,0 +1,1124 @@
+{
+  "format": "ok-cli-runner-recipe/v1",
+  "profile": "talos-kubevirt-mvp",
+  "gitOpsAuthority": "ok-gitops",
+  "enablementRevision": "sha256:2a849d69e9c64344e907c1bce3bb1abf3d8f77217377081a5be055d62c213300",
+  "platformRevision": "sha256:2956184005f4860607e91672fce82164095dee6ebcbe57e5af883951a199c427",
+  "enablement": {
+    "pins": {
+      "openkubes.io/oci-manifest-digest": "sha256:b8d600c542c97dc8652429e12487ecce922d73de9785505457a8f653833e75f9",
+      "openkubes.io/chart-artifact-digest": "sha256:21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179",
+      "openkubes.io/values-digest": "sha256:a02a2a8b5c5213c86e482ef7421884281d00d3bae1f27c34d67b3726df12d410",
+      "openkubes.io/digest-enforcement": "external-evidence-required"
+    },
+    "spec": {
+      "clusterSelector": {
+        "matchLabels": {
+          "openkubes.io/type": "talos",
+          "openkubes.io/provider": "kubevirt"
+        }
+      },
+      "chartName": "cilium",
+      "repoURL": "oci://quay.io/cilium/charts",
+      "releaseName": "cilium",
+      "namespace": "kube-system",
+      "version": "1.19.6",
+      "reconcileStrategy": "Continuous",
+      "valuesTemplate": "operator:\n  replicas: 1\nipam:\n  mode: kubernetes\nkubeProxyReplacement: true\nk8sServiceHost: localhost\nk8sServicePort: 7445\ntunnelPort: 8473\nk8sClientRateLimit:\n  qps: 10\n  burst: 20\nsecurityContext:\n  capabilities:\n    ciliumAgent:\n      - CHOWN\n      - KILL\n      - NET_ADMIN\n      - NET_RAW\n      - IPC_LOCK\n      - SYS_ADMIN\n      - SYS_RESOURCE\n      - DAC_OVERRIDE\n      - FOWNER\n      - SETGID\n      - SETUID\n    cleanCiliumState:\n      - NET_ADMIN\n      - SYS_ADMIN\n      - SYS_RESOURCE\ncgroup:\n  autoMount:\n    enabled: false\n  hostRoot: /sys/fs/cgroup\n",
+      "options": {
+        "atomic": true,
+        "wait": true,
+        "waitForJobs": true,
+        "timeout": "15m",
+        "takeOwnership": false,
+        "install": {
+          "createNamespace": false
+        },
+        "upgrade": {
+          "resetValues": true,
+          "reuseValues": false,
+          "cleanupOnFail": true,
+          "maxHistory": 3
+        },
+        "uninstall": {
+          "keepHistory": false
+        }
+      }
+    }
+  },
+  "network": {
+    "format": "ok147-network-profile/v1",
+    "expectedNodeCount": 2,
+    "expectedHcpSpecDigest": "sha256:bf4087ed76e221cf54d1cad09a5d5dfec78bcfa38d285387d93550a41dcfef81",
+    "expectedImages": {
+      "ciliumAgent": "quay.io/cilium/cilium:v1.19.6@sha256:0df5b2750b64c49843aba1d649e9eaf61467cb0645ad3171db6f6962c095ac92",
+      "ciliumEnvoy": "quay.io/cilium/cilium-envoy:v1.36.9-1782267392-edeb3f2af56c37c407efa1f63f0b32f595399bbc@sha256:767101fb8a5e38f055778cb43b7aa8eed80450b37f8121effac3d9de9e06dc99",
+      "ciliumOperator": "quay.io/cilium/operator-generic:v1.19.6@sha256:0db4ca4e06969d8904ee036617795d0e9c3228cf7b8d902ba74fc2bb98d2d665"
+    },
+    "minimumProbeFreshnessSeconds": 30,
+    "maximumProbeIntervalSeconds": 60,
+    "cacheExposureSeconds": 30
+  },
+  "targetAccess": [
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "ok-observability",
+        "labels": {
+          "pod-security.kubernetes.io/enforce": "privileged",
+          "pod-security.kubernetes.io/audit": "privileged",
+          "pod-security.kubernetes.io/warn": "privileged"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "ok147-argocd-manager",
+        "namespace": "kube-system"
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "ok147-argocd-platform-cluster"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "resourceNames": [
+            "ok-observability"
+          ],
+          "verbs": [
+            "get",
+            "patch",
+            "update"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apiextensions.k8s.io"
+          ],
+          "resources": [
+            "customresourcedefinitions"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterroles",
+            "clusterrolebindings"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "mutatingwebhookconfigurations",
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "authorization.k8s.io"
+          ],
+          "resources": [
+            "selfsubjectaccessreviews"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterroles"
+          ],
+          "resourceNames": [
+            "${CLUSTER_NAME}-observability-core-kube-state-metrics",
+            "ok-observability-grafana-clusterrole",
+            "ok-observability-log-collector",
+            "ok-observability-operator",
+            "ok-observability-prometheus"
+          ],
+          "verbs": [
+            "bind",
+            "escalate"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "ok147-argocd-platform-cluster"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "ok147-argocd-platform-cluster"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ok147-argocd-manager",
+          "namespace": "kube-system"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "ok147-argocd-platform",
+        "namespace": "ok-observability"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps",
+            "persistentvolumeclaims",
+            "pods",
+            "secrets",
+            "services",
+            "serviceaccounts"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "daemonsets",
+            "deployments",
+            "statefulsets"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "policy"
+          ],
+          "resources": [
+            "poddisruptionbudgets"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles",
+            "rolebindings"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "alertmanagers",
+            "prometheuses",
+            "prometheusrules",
+            "servicemonitors"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "ok147-argocd-platform",
+        "namespace": "ok-observability"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "ok147-argocd-platform"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ok147-argocd-manager",
+          "namespace": "kube-system"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "ok147-argocd-kube-system",
+        "namespace": "kube-system"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "ok147-argocd-kube-system",
+        "namespace": "kube-system"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "ok147-argocd-kube-system"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ok147-argocd-manager",
+          "namespace": "kube-system"
+        }
+      ]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "ok147-observability-autonomy",
+        "namespace": "ok-observability"
+      },
+      "automountServiceAccountToken": false
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "ok147-observability-autonomy",
+        "namespace": "ok-observability"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get"
+          ]
+        },
+        {
+          "apiGroups": [
+            "discovery.k8s.io"
+          ],
+          "resources": [
+            "endpointslices"
+          ],
+          "verbs": [
+            "list"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "ok147-observability-autonomy",
+        "namespace": "ok-observability"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "ok147-observability-autonomy"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ok147-observability-autonomy",
+          "namespace": "ok-observability"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "kube-state-metrics-5.25.1",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/component": "metrics",
+          "app.kubernetes.io/part-of": "kube-state-metrics",
+          "app.kubernetes.io/name": "kube-state-metrics",
+          "app.kubernetes.io/instance": "${CLUSTER_NAME}-observability-core",
+          "app.kubernetes.io/version": "2.13.0",
+          "release": "${CLUSTER_NAME}-observability-core"
+        },
+        "name": "${CLUSTER_NAME}-observability-core-kube-state-metrics"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "certificates.k8s.io"
+          ],
+          "resources": [
+            "certificatesigningrequests"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "cronjobs"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "extensions",
+            "apps"
+          ],
+          "resources": [
+            "daemonsets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "extensions",
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "endpoints"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "autoscaling"
+          ],
+          "resources": [
+            "horizontalpodautoscalers"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "extensions",
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "coordination.k8s.io"
+          ],
+          "resources": [
+            "leases"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "limitranges"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "mutatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "persistentvolumeclaims"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "persistentvolumes"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "policy"
+          ],
+          "resources": [
+            "poddisruptionbudgets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "extensions",
+            "apps"
+          ],
+          "resources": [
+            "replicasets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "replicationcontrollers"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "resourcequotas"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "statefulsets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "storageclasses"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "volumeattachments"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "ClusterRole",
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "grafana-8.6.4",
+          "app.kubernetes.io/name": "grafana",
+          "app.kubernetes.io/instance": "${CLUSTER_NAME}-observability-core",
+          "app.kubernetes.io/version": "11.3.1"
+        },
+        "name": "ok-observability-grafana-clusterrole"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps",
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "watch",
+            "list"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "ok-observability-log-collector",
+        "labels": {
+          "helm.sh/chart": "fluent-bit-0.48.6",
+          "app.kubernetes.io/name": "fluent-bit",
+          "app.kubernetes.io/instance": "${CLUSTER_NAME}-observability-core",
+          "app.kubernetes.io/version": "3.2.6",
+          "app.kubernetes.io/managed-by": "Helm"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces",
+            "pods"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "ok-observability-operator",
+        "labels": {
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/instance": "${CLUSTER_NAME}-observability-core",
+          "app.kubernetes.io/version": "62.7.0",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-62.7.0",
+          "release": "${CLUSTER_NAME}-observability-core",
+          "heritage": "Helm",
+          "app": "kube-prometheus-stack-operator",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "alertmanagers",
+            "alertmanagers/finalizers",
+            "alertmanagers/status",
+            "alertmanagerconfigs",
+            "prometheuses",
+            "prometheuses/finalizers",
+            "prometheuses/status",
+            "prometheusagents",
+            "prometheusagents/finalizers",
+            "prometheusagents/status",
+            "thanosrulers",
+            "thanosrulers/finalizers",
+            "thanosrulers/status",
+            "scrapeconfigs",
+            "servicemonitors",
+            "podmonitors",
+            "probes",
+            "prometheusrules"
+          ],
+          "verbs": [
+            "*"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "statefulsets"
+          ],
+          "verbs": [
+            "*"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps",
+            "secrets"
+          ],
+          "verbs": [
+            "*"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods"
+          ],
+          "verbs": [
+            "list",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services",
+            "services/finalizers",
+            "endpoints"
+          ],
+          "verbs": [
+            "get",
+            "create",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "events"
+          ],
+          "verbs": [
+            "patch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "storageclasses"
+          ],
+          "verbs": [
+            "get"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "ok-observability-prometheus",
+        "labels": {
+          "app": "kube-prometheus-stack-prometheus",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/instance": "${CLUSTER_NAME}-observability-core",
+          "app.kubernetes.io/version": "62.7.0",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-62.7.0",
+          "release": "${CLUSTER_NAME}-observability-core",
+          "heritage": "Helm"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes",
+            "nodes/metrics",
+            "services",
+            "endpoints",
+            "pods"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "discovery.k8s.io"
+          ],
+          "resources": [
+            "endpointslices"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "nonResourceURLs": [
+            "/metrics",
+            "/metrics/cadvisor"
+          ],
+          "verbs": [
+            "get"
+          ]
+        }
+      ]
+    }
+  ]
+}

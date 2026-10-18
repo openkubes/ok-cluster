@@ -14,6 +14,60 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestBuildProviderAccessPolicyIsFreshDeterministicAndLoaderCompatible(t *testing.T) {
+	_, expected := writeProviderAccessPolicy(t, t.TempDir())
+	config := ProviderAccessPolicyConfig{
+		ContractIdentity: expected.ContractIdentity, IntentRevision: expected.IntentRevision,
+		ExecutionFixture: expected.ExecutionFixture, ManagementAuthority: expected.ManagementAuthority,
+		ProviderAuthority: expected.ProviderAuthority,
+	}
+	raw, err := BuildProviderAccessPolicy(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := BuildProviderAccessPolicy(config)
+	if err != nil || !bytes.Equal(raw, again) {
+		t.Fatalf("policy is not deterministic: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "fresh-policy.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected.PolicyDigest = digest.SHA256(raw)
+	policy, err := LoadProviderAccessPolicy(path, expected)
+	if err != nil || !policy.verified {
+		t.Fatalf("generated policy failed owning loader: %v", err)
+	}
+	if policy.document.Secret.Name != "external-infra-kubeconfig-"+expected.ContractIdentity.Name || !policy.document.Secret.Immutable {
+		t.Fatal("generated policy changed the Secret contract")
+	}
+	for _, mutate := range []func(*ProviderAccessPolicyConfig){
+		func(c *ProviderAccessPolicyConfig) { c.ContractIdentity.Name = "../old" },
+		func(c *ProviderAccessPolicyConfig) { c.ContractIdentity.Namespace = "" },
+		func(c *ProviderAccessPolicyConfig) { c.IntentRevision = "invalid" },
+		func(c *ProviderAccessPolicyConfig) { c.ExecutionFixture = "invalid" },
+		func(c *ProviderAccessPolicyConfig) { c.ManagementAuthority = c.ProviderAuthority },
+	} {
+		invalid := config
+		mutate(&invalid)
+		if raw, err := BuildProviderAccessPolicy(invalid); err == nil || raw != nil {
+			t.Fatal("invalid policy inputs were accepted")
+		}
+	}
+	changed := config
+	changed.ExecutionFixture = digest.SHA256([]byte("different-fresh-fixture"))
+	other, err := BuildProviderAccessPolicy(changed)
+	if err != nil || bytes.Equal(raw, other) {
+		t.Fatal("policy failed to bind a changed fixture")
+	}
+	if err := os.WriteFile(path, other, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProviderAccessPolicy(path, expected); err == nil {
+		t.Fatal("loader accepted a stale expected policy digest")
+	}
+}
+
 func TestProviderAccessPolicyMaterializesExactSecretAndRewritesNamespace(t *testing.T) {
 	root := t.TempDir()
 	policyPath, expected := writeProviderAccessPolicy(t, root)

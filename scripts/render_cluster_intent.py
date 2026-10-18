@@ -12,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+from types import SimpleNamespace
 
 
 def denied(*args, **kwargs):
@@ -22,19 +23,50 @@ def digest(path):
     return 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def resolve_intent_config(intent, ok_linux_path):
+    """Owning static profile resolution shared with the Contract compiler."""
+    import render
+    from profile_resolvers.talos import resolve_talos_config
+    name = intent['metadata']['name']
+    config = {'name': name, 'type': 'talos', 'provider': 'kubevirt',
+        'controlPlane': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
+        'workers': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
+        'versions': {'kubernetes': 'v1.34.1'}, 'network': intent['spec']['network'],
+        'infraClusterSecretRef': {'name': 'external-infra-kubeconfig-' + name, 'namespace': name}}
+    render.validate_registry_trust(config)
+    render.validate_workload_user_namespaces(config)
+    return resolve_talos_config(config, Path(ok_linux_path))
+
+
 def main():
     os.umask(0o077)
     args = argparse.ArgumentParser()
     args.add_argument('--output', required=True)
     args.add_argument('--ok-linux-path', required=True)
+    args.add_argument('--bind', action='store_true')
     options = args.parse_args()
-    raw = sys.stdin.buffer.read(65537)
-    if len(raw) > 65536:
+    maximum = 2 * 1024 * 1024 if options.bind else 65536
+    raw = sys.stdin.buffer.read(maximum + 1)
+    if len(raw) > maximum:
         raise ValueError('oversized intent')
-    intent = json.loads(raw)
+    payload = json.loads(raw)
+    if options.bind:
+        assert set(payload) == {'intent', 'contract', 'intentRevision'}
+        assert re.fullmatch(r'sha256:[0-9a-f]{64}', payload['intentRevision'])
+        intent = payload['intent']
+    else:
+        intent = payload
     assert set(intent) == {'apiVersion', 'kind', 'metadata', 'spec'}
     assert intent['apiVersion'] == 'cli.openkubes.io/v1alpha1' and intent['kind'] == 'Cluster'
-    assert set(intent['metadata']) == {'name'} and set(intent['spec']) == {'profile', 'network'}
+    assert set(intent['metadata']) == {'name'}
+    assert set(intent['spec']) in ({'profile', 'network'}, {'profile', 'network', 'management', 'infrastructure'})
+    # Local target references were inspected by Go. Never open these private
+    # files or transport their credential contents into the renderer.
+    for plane in ('management', 'infrastructure'):
+        if plane in intent['spec']:
+            reference = intent['spec'][plane]
+            assert set(reference) in ({'kubeconfig'}, {'kubeconfig', 'context'})
+            assert all(isinstance(value, str) and value for value in reference.values())
     name = intent['metadata']['name']
     assert isinstance(name, str) and re.fullmatch(r'[a-z0-9](?:[-a-z0-9]*[a-z0-9])?', name) and len(name) <= 63
     assert name != 'default' and not name.startswith('kube-')
@@ -57,17 +89,36 @@ def main():
     subprocess.Popen = denied
     sys.path.insert(0, str(root))
     import render
-    from profile_resolvers.talos import resolve_talos_config
     render.live_metallb_allocations = denied
     render.resolve_config = denied
-    config = {'name': name, 'type': 'talos', 'provider': 'kubevirt',
-        'controlPlane': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
-        'workers': {'replicas': 1, 'cores': 2, 'memory': '4Gi', 'disk': '20Gi'},
-        'versions': {'kubernetes': 'v1.34.1'}, 'network': network,
-        'infraClusterSecretRef': {'name': 'external-infra-kubeconfig-' + name, 'namespace': name}}
-    render.validate_registry_trust(config)
-    render.validate_workload_user_namespaces(config)
-    config = resolve_talos_config(config, Path(options.ok_linux_path))
+    config = resolve_intent_config(intent, options.ok_linux_path)
+    if options.bind:
+        # The Go entry point already canonicalized this normalized Contract with
+        # the owning versioned schema. Compare it against the actual resolved
+        # recipe, never a renamed historical Candidate or copied stage receipt.
+        contract = payload['contract']
+        assert contract['metadata'] == {'name': name, 'namespace': name}
+        spec = contract['spec']
+        assert spec['kubernetesVersion'] == config['versions']['kubernetes']
+        infrastructure = spec['infrastructure']
+        assert infrastructure['provider'] == config['provider']
+        assert infrastructure['profile'] == config['providerProfile']
+        assert infrastructure['providerAccess'] == {
+            'mode': 'external-cluster-secret', 'managementPlane': 'ok-mgmt', 'providerPlane': 'ok-infra',
+            'secretRef': {'apiVersion': 'v1', 'kind': 'Secret', **config['infraClusterSecretRef']},
+            'targetNamespace': name}
+        for role in ('controlPlane', 'workers'):
+            assert spec['topology'][role] == {'replicas': config[role]['replicas'],
+                'machine': {k: config[role][k] for k in ('cores', 'memory', 'disk')}}
+        assert spec['connectivity']['podCIDR'] == network['podCIDR']
+        assert spec['connectivity']['serviceCIDR'] == network['serviceCIDR']
+        os_config = config['os']
+        assert spec['operatingSystem'] == {
+            'distribution': os_config['distribution'], 'profile': os_config['profile'],
+            'version': config['versions']['talos'], 'architecture': os_config['architecture'],
+            'schematicID': os_config['schematic_id'], 'imageDigest': os_config['imageDigest'],
+            'identity': os_config['identity'],
+            'goldenImage': {k: os_config['goldenImage'][k] for k in ('namespace', 'claim', 'storageClass')}}
     # Resolve profile/template inputs before reserving output. Any later failure
     # retains the new directory; the next call must not replay over partial data.
     output.mkdir(mode=0o700)
@@ -75,18 +126,24 @@ def main():
     render.CLUSTERS_DIR = output
     with contextlib.redirect_stdout(io.StringIO()):
         render.render_cluster(name, output / name, config)
+        if options.bind:
+            render.cmd_projection(SimpleNamespace(cluster=name, intent_revision=payload['intentRevision'],
+                                                  output=str(output / 'projection')))
     for path in output.rglob('*'):
         path.chmod(0o700 if path.is_dir() else 0o600)
     files = {str(p.relative_to(output)): digest(p) for p in sorted(output.rglob('*')) if p.is_file()}
     receipt = {'format': 'ok-cli-cluster-intent-render/v1', 'state': 'RENDERED_NO_GO',
         'name': name, 'profile': intent['spec']['profile'], 'outputDirectory': str(output),
-        'files': files, 'normalizedIntentDigest': 'sha256:' + hashlib.sha256(raw).hexdigest(),
+        'files': files, 'normalizedIntentDigest': 'sha256:' + hashlib.sha256(
+            json.dumps(intent, separators=(',', ':')).encode() if options.bind else raw).hexdigest(),
         'sourceDigests': {'adapter': digest(Path(__file__).resolve()), 'renderer': digest(root / 'render.py'),
             'resolver': digest(root / 'profile_resolvers/talos.py'),
             'okLinuxProfile': digest(Path(options.ok_linux_path) / 'profiles/kubevirt/profile.yaml')},
         'apiContacted': False, 'authorizationConsumed': False, 'mutationAllowed': False,
         'runnerReady': False, 'collisionChecked': False, 'generatedHelpersExecuted': False,
-        'nextAction': 'Full Contract/Plan/fixture/authority/credential binding remains unimplemented. Do not execute generated helpers or apply these files; this is not full-run prepare or live approval.'}
+        'nextAction': ('Static Contract/projection generated; full Plan/fixture/authority/credential binding is still missing.' if options.bind else
+                       'Use ok up --file <cluster.yaml> --prepare --contract <reviewed-contract.yaml> --output <new-private-directory>; preparation remains incomplete until full Plan/fixture/authority/credential binding exists.') +
+                      ' Do not execute generated helpers or apply these files; this is not full-run prepare or live approval.'}
     path = output / 'render-receipt.json'
     with path.open('x') as stream:
         json.dump(receipt, stream, indent=2)

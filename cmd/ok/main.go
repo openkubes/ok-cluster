@@ -698,7 +698,7 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 
 func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) >= 1 && arguments[0] == "config" {
-		return runConfig(arguments[1:], stdout, stderr)
+		return runConfig(ctx, arguments[1:], stdout, stderr)
 	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "destroy" {
 		return runDestroyCluster(ctx, arguments[2:], stdout, stderr)
@@ -728,6 +728,9 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 3 && arguments[0] == "evidence" && arguments[1] == "observability" && arguments[2] == "serve" {
 		return runEvidenceObservabilityServe(ctx, arguments[3:], stdout, stderr)
 	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "network-suggest" {
+		return runNetworkSuggest(ctx, arguments[3:], stdout, stderr)
+	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "cluster-template" {
 		if len(arguments) != 3 {
 			return errors.New("cluster-template accepts no arguments")
@@ -736,6 +739,9 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "render" {
 		return runClusterIntentRender(ctx, arguments[3:], stdout, stderr)
+	}
+	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "bind" {
+		return runClusterIntentBind(ctx, arguments[3:], stdout, stderr)
 	}
 	if len(arguments) >= 3 && arguments[0] == "cluster" && arguments[1] == "create" && arguments[2] == "requirements" {
 		return runClusterCreateRequirements(arguments[3:], stdout)
@@ -751,7 +757,10 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "create" {
 		productFlags := hasClusterCreateProductFlag(arguments[2:])
-		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:])
+		// --contract also supplies reviewed YAML intent to product preparation.
+		// All other legacy flags remain forbidden with the product workflow.
+		legacyFlags := hasLegacyClusterCreateFlag(arguments[2:]) ||
+			(!productFlags && hasAnyCommandFlag(arguments[2:], "--contract"))
 		if productFlags && legacyFlags {
 			return errors.New("product --file workflow flags cannot be combined with legacy --contract workflow flags")
 		}
@@ -925,13 +934,13 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 func hasClusterCreateProductFlag(arguments []string) bool {
 	return hasAnyCommandFlag(arguments,
 		"--file", "-f", "--prepare", "--live", "--execute", "--expected-manifest-digest",
-		"--independent-evidence-public-key", "--terminal-marker",
+		"--independent-evidence-public-key", "--terminal-marker", "--prepared-dir",
 	)
 }
 
 func hasLegacyClusterCreateFlag(arguments []string) bool {
 	return hasAnyCommandFlag(arguments,
-		"--contract", "--schema", "--projection-manifest", "--projection-root", "--authorization",
+		"--schema", "--projection-manifest", "--projection-root", "--authorization",
 		"--authorization-key", "--evaluation-time", "--ledger-inspect", "--ledger-api-endpoint",
 		"--ledger-token-file", "--ledger-ca-file",
 	)

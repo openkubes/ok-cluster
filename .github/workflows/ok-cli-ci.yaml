@@ -47,7 +47,9 @@ jobs:
           "$RUNNER_TEMP/ok" up --help
           "$RUNNER_TEMP/ok" up requirements
           "$RUNNER_TEMP/ok" up cluster-template
+          "$RUNNER_TEMP/ok" up network-suggest --help
           "$RUNNER_TEMP/ok" up render --help
+          "$RUNNER_TEMP/ok" up bind --help
           "$RUNNER_TEMP/ok" config --help
           "$RUNNER_TEMP/ok" config init --help
           "$RUNNER_TEMP/ok" config show --help
@@ -61,3 +63,27 @@ jobs:
           "$RUNNER_TEMP/ok" evidence --help
           "$RUNNER_TEMP/ok" evidence observability --help
           "$RUNNER_TEMP/ok" version
+
+      - name: Test interactive path setup on a real terminal
+        run: OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" python3 -B tests/ok_cli_config_interactive_test.py
+
+      - name: Test network proposals with synthetic inventories and fake APIs
+        run: |
+          python3 -m venv "$RUNNER_TEMP/network-tests"
+          "$RUNNER_TEMP/network-tests/bin/pip" install PyYAML==6.0.3
+          PATH="$RUNNER_TEMP/network-tests/bin:$PATH" OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" python3 -B tests/ok_cli_network_suggest_test.py
+
+      - name: Check out reviewed profile owner for offline preparation tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: openkubes/ok-linux
+          ref: a1687263d46c48e47c14f5bf202c9a652d7c1a71
+          path: .ci/ok-linux
+          persist-credentials: false
+
+      - name: Test automatic preparation and runner handoff without cluster access
+        run: |
+          PATH="$RUNNER_TEMP/network-tests/bin:$PATH" \
+          OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" \
+          OK_CLI_TEST_OK_LINUX_PATH="$GITHUB_WORKSPACE/.ci/ok-linux" \
+          python3 -B tests/ok147_cluster_intent_test.py

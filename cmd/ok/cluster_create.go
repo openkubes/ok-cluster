@@ -154,6 +154,12 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 	expectedManifestDigest := flags.String("expected-manifest-digest", "", "exact digest emitted by --prepare")
 	evidencePublicKey := flags.String("independent-evidence-public-key", "", "pinned independent evidence public key")
 	terminalMarker := flags.String("terminal-marker", "", "new create-only private terminal marker")
+	preparedDirectory := flags.String("prepared-dir", "", "Existing private YAML preparation; no rendering or replay")
+	// YAML preparation inputs are local-only; never passed to the JSON runner.
+	yamlInputs := map[string]*string{}
+	for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config", "runtime-inputs"} {
+		yamlInputs[name] = flags.String(name, "", "local YAML preparation input")
+	}
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -170,12 +176,65 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 		}
 	}
 	if modeCount != 1 {
+		if modeCount == 0 && isClusterYAMLFile(manifestPath) {
+			onlyFile := true
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name != "file" && f.Name != "f" {
+					onlyFile = false
+				}
+			})
+			if onlyFile {
+				return runGuidedClusterUp(ctx, manifestPath, stdout, stderr)
+			}
+		}
 		return errors.New("exactly one of --dry-run, --prepare, or --live is required")
 	}
 	if !*live && (*execute || *expectedManifestDigest != "" || *evidencePublicKey != "" || *terminalMarker != "") {
 		return errors.New("--execute and live-only inputs require --live")
 	}
-	if isClusterYAMLFile(manifestPath) {
+	yamlInputSelected := false
+	flags.Visit(func(f *flag.Flag) {
+		if _, ok := yamlInputs[f.Name]; ok {
+			yamlInputSelected = true
+		}
+	})
+	isYAML := isClusterYAMLFile(manifestPath)
+	preparedSelected := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "prepared-dir" {
+			preparedSelected = true
+		}
+	})
+	if preparedSelected && (*preparedDirectory == "" || !isYAML || *prepare) {
+		return errors.New("--prepared-dir requires a non-empty path and YAML --dry-run or --live")
+	}
+	if yamlInputSelected && (!isYAML || !*prepare) {
+		return errors.New("YAML preparation inputs (--contract, --output, --runtime-inputs and local source paths) are only accepted with YAML --prepare")
+	}
+	if isYAML && *prepare {
+		if _, err := readClusterIntent(manifestPath); err != nil {
+			return err
+		}
+		if !yamlInputSelected {
+			if err := runAutomaticClusterUp(ctx, manifestPath, stdout, stderr, guidedUpRuntime{}, true); err != nil {
+				return fmt.Errorf("automatic preparation NO-GO: %w", err)
+			}
+			return nil
+		}
+		if *yamlInputs["output"] == "" {
+			return errors.New("expert YAML preparation is NO-GO: requires new --output; omit expert input flags for automatic managed preparation")
+		}
+		material := []string{"--file", manifestPath}
+		for _, name := range []string{"contract", "output", "lifecycle-root", "ok-linux-path", "config", "runtime-inputs"} {
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name == name {
+					material = append(material, "--"+name, *yamlInputs[name])
+				}
+			})
+		}
+		return runClusterIntentPrepare(ctx, material, stdout, stderr)
+	}
+	if isYAML && !preparedSelected {
 		return validateClusterYAMLWorkflow(manifestPath, *dryRun, stdout)
 	}
 	if *live {
@@ -189,10 +248,19 @@ func runClusterCreateWorkflow(ctx context.Context, arguments []string, stdout, s
 			return errors.New("--terminal-marker must be an absent executor-terminal file in an existing private directory")
 		}
 	}
-
-	manifest, err := prepareFullRunExecutionManifest(manifestPath)
-	if err != nil {
-		return fmt.Errorf("verify Bare-MVP manifest: %w", err)
+	var manifest runner.FullRunExecutionManifestReceipt
+	if isYAML {
+		resolved, err := resolvePreparedClusterIntent(manifestPath, *preparedDirectory, *expectedManifestDigest)
+		if err != nil {
+			return err
+		}
+		manifestPath, manifest = resolved.ManifestPath, resolved.Receipt
+	} else {
+		var err error
+		manifest, err = prepareFullRunExecutionManifest(manifestPath)
+		if err != nil {
+			return fmt.Errorf("verify Bare-MVP manifest: %w", err)
+		}
 	}
 	if !validFullRunManifestReceiptFormat(manifest.Format) || manifest.State != "VERIFIED" || manifest.MutationAllowed {
 		return errors.New("Bare-MVP manifest preparation did not verify")

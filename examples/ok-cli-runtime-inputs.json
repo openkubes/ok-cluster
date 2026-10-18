@@ -1,0 +1,31 @@
+{
+  "format": "ok-cli-cluster-runtime-inputs/v1",
+  "authorization": {
+    "endpoint": "https://ok147-stage-authority.openkubes-execution-system.svc:8443/v1/stage-authorizations",
+    "tokenFile": "/private/replace/authorization.token",
+    "caFile": "/private/replace/authorization-ca.crt",
+    "publicKeyPath": "/private/replace/authorization.pub"
+  },
+  "ledger": {
+    "endpoint": "https://192.0.2.15:6443",
+    "namespace": "openkubes-execution-system",
+    "tokenFile": "/private/replace/ledger.token",
+    "caFile": "/private/replace/ledger-ca.crt"
+  },
+  "infrastructure": {
+    "endpoint": "https://192.0.2.13:6443",
+    "authorityIdentity": "ok-infra",
+    "tokenFile": "/private/replace/infrastructure.token",
+    "caFile": "/private/replace/infrastructure-ca.crt",
+    "caBundleDigest": "sha256:<replace-with-64-lowercase-hex>"
+  },
+  "management": {
+    "endpoint": "https://192.0.2.14:6443",
+    "authorityIdentity": "ok-mgmt",
+    "tokenFile": "/private/replace/management.token",
+    "caFile": "/private/replace/management-ca.crt",
+    "caBundleDigest": "sha256:<replace-with-64-lowercase-hex>"
+  },
+  "providerAccessKubeconfigFile": "/private/replace/provider-access.kubeconfig",
+  "independentEvidencePublicKeyPath": "/private/replace/independent-evidence.pub"
+}
