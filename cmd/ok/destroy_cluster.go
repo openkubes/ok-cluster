@@ -50,7 +50,7 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	flags := flag.NewFlagSet("ok cluster destroy", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("lifecycle-root", "", "Trusted ok-cluster checkout (saved path, otherwise current directory)")
-	clusterDir := flags.String("cluster-dir", "", "Render/evidence directory (default: <lifecycle-root>/<name>)")
+	clusterDir := flags.String("cluster-dir", "", "Explicit render/evidence directory (otherwise discover managed preparation or saved inventory)")
 	management := flags.String("management-kubeconfig", "", "Explicit management kubeconfig (required)")
 	provider := flags.String("provider-kubeconfig", "", "Explicit separate provider kubeconfig (required)")
 	okLinux := flags.String("ok-linux-path", "", "ok-linux checkout (default: sibling of lifecycle-root)")
@@ -71,6 +71,7 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 		return errors.New("explicit path flags must not be empty")
 	}
 	configUsed := "none (explicit flags/current directory)"
+	legacyDirectory := ""
 	if *configFile != "" || *root == "" || *okLinux == "" || *clusterDir == "" || *management == "" || *provider == "" {
 		path, err := localConfigPath(*configFile)
 		if err != nil {
@@ -89,7 +90,7 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 				}
 			}
 			if *clusterDir == "" {
-				*clusterDir = filepath.Join(config.ClustersDir, name)
+				legacyDirectory = filepath.Join(config.ClustersDir, name)
 			}
 		}
 	}
@@ -107,8 +108,15 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	if err := destroyRegularFile(script); err != nil {
 		return fmt.Errorf("select a trusted current ok-cluster checkout with --lifecycle-root: %w", err)
 	}
+	var managedTargets *clusterIntentTargets
 	if *clusterDir == "" {
-		*clusterDir = filepath.Join(rootPath, name)
+		if legacyDirectory == "" {
+			legacyDirectory = filepath.Join(rootPath, name)
+		}
+		*clusterDir, managedTargets, err = discoverDestroyDirectory(name, legacyDirectory)
+		if err != nil {
+			return err
+		}
 	}
 	directory, err := filepath.Abs(*clusterDir)
 	if err != nil {
@@ -132,6 +140,9 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	}
 	if managementPath == providerPath {
 		return errors.New("management and provider must be separate kubeconfigs; this command supports split-plane teardown")
+	}
+	if err := verifyDestroyTargets(managedTargets, managementPath, providerPath); err != nil {
+		return err
 	}
 	if *okLinux == "" {
 		*okLinux = filepath.Join(filepath.Dir(rootPath), "ok-linux")
@@ -164,6 +175,17 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 		return errors.New("confirmation must be exactly ok or no; no lifecycle command started")
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Recheck the effective targets after human review. Never change a user's
+	// current-context or silently follow it to a different same-name cluster.
+	if managedTargets != nil {
+		currentDirectory, currentTargets, err := discoverDestroyDirectory(name, legacyDirectory)
+		if err != nil || currentDirectory != directory || currentTargets == nil || *currentTargets != *managedTargets {
+			return errors.New("managed selection changed during confirmation; no teardown")
+		}
+	}
+	if err := verifyDestroyTargets(managedTargets, managementPath, providerPath); err != nil {
 		return err
 	}
 	args := []string{script, "--teardown", "--cluster", name, "--cluster-dir", directory,
@@ -256,18 +278,22 @@ Compatibility alias: ok destroy cluster <name> [same flags]
 
 Inputs:
   --lifecycle-root          Trusted current ok-cluster checkout (default: current directory)
-  --cluster-dir             Render/evidence directory (default: <lifecycle-root>/<name>)
+  --cluster-dir             Explicit render/evidence directory (normally discovered)
   --management-kubeconfig   Explicit management kubeconfig; never the default context
   --provider-kubeconfig     Explicit separate provider kubeconfig
   --ok-linux-path           Profile checkout (default: sibling of lifecycle-root)
   --config                  Local path configuration file (default: OS user config directory/ok/config.json)
 
 Run "ok config init --help" to save all five paths once. Saved paths fill omitted
-flags only; explicit flags override them. Saved clustersDir determines the retained
-<clustersDir>/<name> directory unless --cluster-dir is given. A malformed existing
-configuration fails closed; explicit --config never falls back if missing.
+flags only; explicit flags override them. Without --cluster-dir, discover the private
+ok up preparation first; otherwise use <clustersDir>/<name> (or <lifecycle-root>/<name>).
+If managed and legacy directories both exist, stop and request --cluster-dir.
+Managed discovery checks bound name and management/provider target identities locally;
+changed/missing targets or incomplete metadata stop before confirmation, without fallback.
+Terminal create outcomes and expired create credentials do not prevent discovery.
+A malformed existing configuration fails closed; explicit --config never falls back if missing.
 With all five path flags explicit, no default configuration is read.
-Create/runner commands never use this path configuration.
+Create runtime credentials are never imported from this path configuration.
 
 Confirmation:
   An interactive terminal is required. Type exactly ok to delete, or no to cancel.

@@ -12,6 +12,34 @@ bounded post-runtime suffix. It is neither a long-running operator nor a
 lifecycle source of truth. CAPI/CAPK, the selected Enablement mechanism and
 GitOps remain the owners of convergence.
 
+### Product UX direction (not additional authority)
+
+The user-facing goal is `ok cluster create --file cluster.yaml` and
+`ok cluster destroy <name>`, each with one understandable plan and an explicit
+`ok`/`no` confirmation. Internal digests, runtime references, short-lived access
+and connectivity should not become recurring manual user tasks. Make remains a
+useful development interface to the same lifecycle owners; the CLI must add
+consistent intent validation, local state discovery and actionable results, not
+another lifecycle implementation.
+
+Managed destroy discovery below is one delivered step, **not complete create
+automation**. Automatic creation currently still stops at
+`AWAITING_PLATFORM_AUTHORITY` without a separately supplied handoff. Next, an
+explicit platform setup must establish who may issue which bounded credentials
+and grants. Only within that delegation can preparation, temporary connectivity
+and access renewal become automatic. A kubeconfig path alone does not establish
+that authority. No issuer, standing delegation or automatic renewal is installed
+by this change.
+
+A future Installer Operator could reconcile installation requests and launch or
+adopt a UID/generation-bound runner operation. The runner remains a bounded
+executor: controller reconciliation must inspect durable outcomes, not replay
+potentially mutating operations after an error or missing response. Terminal
+STOP requires separately authorized recovery; command/Job completion alone is
+not provisioning success. CAPI and existing lifecycle owners retain convergence
+ownership. This is a design direction, not a new CRD/controller or authority
+contract implemented here.
+
 For the Bare-MVP completion mode, operators use the product CLI facade rather
 than assembling stage commands manually:
 
@@ -200,10 +228,15 @@ resume, credential renewal or policy installation is introduced. The normal
 runner owns the terminal marker, immutable outcomes and convergence evidence.
 Only its existing durable success contract determines success, not confirmation,
 local preparation or a command invocation. No separate guided success is fabricated.
-Managed storage does not change teardown discovery: the existing expert teardown
-can select the retained render at `<managed-run>/preparation/<name>` through
-`--cluster-dir`. This change does not register new destroy defaults, authorize
-cleanup or remove managed evidence/start fences.
+`ok cluster destroy <name>` discovers the retained render at
+`<managed-run>/preparation/<name>` automatically. It checks private non-symlink
+directories, the name-bound static binding/execution fixture, and both effective
+kubeconfig targets (context, cluster, API endpoint and CA trust) locally. It never
+loads create credentials or requires the old executable/unfinished create state.
+Terminal outcomes and start fences remain untouched. A separate interactive
+`ok` is still required before the existing teardown lifecycle can contact APIs.
+Incomplete/changed managed metadata or conflicting legacy inventory stops without
+fallback; `--cluster-dir` remains an explicit expert override after review.
 
 ### Optional explicit management/infra kubeconfig references
 
@@ -915,10 +948,14 @@ After setup, from any directory:
 ok cluster destroy <approved-old-candidate>
 ```
 
-Omitted flags use the saved paths. `clustersDir` is the parent of retained
-cluster directories, not the lifecycle source checkout; the selected target is
-exactly `<clustersDir>/<name>`. Explicit flags override individual saved paths,
-and `--cluster-dir` overrides that target's retained directory. The confirmation
+Omitted flags use the saved paths. Without `--cluster-dir`, a managed `ok up` render
+is discovered first, with its name and plane identities checked locally (and
+rechecked after confirmation). If no managed run exists, `clustersDir` is the
+parent of retained legacy cluster directories, not the lifecycle source checkout;
+the legacy target is `<clustersDir>/<name>`. If both directories exist, selection
+is ambiguous and stops; no precedence silently chooses a destructive target.
+Explicit flags override individual saved paths, and `--cluster-dir` overrides
+discovery with the existing expert routing contract. The confirmation
 dialog displays the actual resolved paths and configuration file. A malformed
 existing configuration stops before the dialog; an explicitly selected missing
 file never falls back. With all five original path flags supplied explicitly,
