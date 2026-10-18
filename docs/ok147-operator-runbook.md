@@ -157,7 +157,15 @@ Saved config supplies only the two source paths, not management/provider access.
 
 Without platform inputs the result is `AWAITING_PLATFORM_AUTHORITY`, nonzero
 NO-GO with `runnerReady=false`. The Contract, stage artifacts and policy request
-are complete locally, not authorized for execution. Repeating the command checks
+are complete locally, not authorized for execution. In the normal interactive
+command, this is presented as a short human-readable summary: local preparation
+complete, cluster creation not started, platform access setup required. It does
+not offer confirmation, print internal digests or ask for token/handoff paths.
+`--prepare` retains its existing machine-readable JSON receipt and nonzero
+exit status, including request identity and false safety/readiness fields.
+This is presentation only, not a platform issuer, credential-policy decision or
+promise that providing a handoff enables an otherwise unsupported workload
+credential profile. Repeating the command checks
 the same immutable artifacts and reports the same request digest; it does not
 rerender. The CLI currently has **no platform issuer/broker integration**. This
 change automates preparation, not the external decision to grant new authority.

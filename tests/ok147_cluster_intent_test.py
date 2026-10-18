@@ -479,6 +479,45 @@ class IntentRenderTests(unittest.TestCase):
         return subprocess.run([str(BINARY), 'up', '--file', str(self.input), '--prepare'],
             capture_output=True, text=True, env=self.env, cwd=self.home, timeout=25)
 
+    def test_interactive_missing_platform_access_is_readable_and_retains_json_mode(self):
+        self.automatic_config()
+        before = None
+        for command in (['up'], ['cluster', 'create']):
+            master, slave = pty.openpty()
+            process = subprocess.Popen([str(BINARY), *command, '--file', str(self.input)],
+                stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=self.env, cwd=self.home)
+            os.close(slave)
+            try:
+                stdout, stderr = process.communicate(timeout=25)
+                self.assertNotEqual(process.returncode, 0)
+                text = stdout.decode()
+                self.assertIn('Cluster "my-cluster"', text)
+                self.assertIn('Local preparation: complete', text)
+                self.assertIn('Cluster creation:  not started', text)
+                self.assertIn('No cluster API was contacted', text)
+                self.assertIn('No credentials were issued or renewed', text)
+                self.assertNotIn('requestDigest', text)
+                self.assertNotIn('sha256:', text)
+                self.assertNotIn('Type ok', text + stderr.decode())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+                os.close(master)
+            if before is None:
+                pending = json.loads(self.automatic_prepare().stdout)
+                root = Path(pending['requestPath']).parent
+                before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+        self.assertEqual(before, {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()})
+        repeated = self.automatic_prepare()
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertEqual(json.loads(repeated.stdout), pending)
+        self.assertFalse((root / 'execution-started.json').exists())
+        self.assertFalse((root / 'handoff-started.json').exists())
+        self.assertFalse((root / 'executor-terminal').exists())
+        self.assertFalse(self.marker.exists())
+
     def install_platform_handoff(self, request, runtime_path):
         path = Path(request['requestPath']).parent / 'platform-handoff.json'
         path.write_text(json.dumps({'format': 'ok-cli-platform-handoff/v1',
