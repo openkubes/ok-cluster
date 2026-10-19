@@ -191,67 +191,63 @@ Stage-Authority, independent-evidence or CA signing keys. Do not silently extend
 carry these other tasks. Role-specific runtime wiring needs its own reviewed
 revision, not a flag that re-enables certificate mode globally.
 
-**Probe TOCTOU limit remains a blocker.** Existing
+**Accepted MVP platform trust boundary:** in [Suchit's independent review
+decision](https://github.com/openkubes/ok-cluster/pull/452#issuecomment-6264742337),
+platform administrators, CAPI/Enablement, the approved ArgoCD identity and the
+privileged Cilium runtime are trusted. CLI, runner, Console and tenant workloads
+remain outside that administrative boundary. Containing a compromised platform
+controller or privileged Cilium runtime is out of scope for this MVP. That
+residual risk matters because a successful network-observation receipt gates
+runtime binding; trusted-source evidence is part of this model, not proof
+against a compromised trusted runtime.
+
+**Probe TOCTOU is an accepted limitation under that trust model, not an
+additional activation blocker.** Existing
 `KubernetesCiliumWebSocketExecutor` performs a Pod identity GET, then a name-based
-exec, then another identity GET. A replacement discovered by the final GET
-discards output, but the stream may already have executed. The Kubernetes
+exec, then another identity GET. The Kubernetes
 [`PodExecOptions` at v0.35.5](https://github.com/kubernetes/api/blob/v0.35.5/core/v1/types.go#L6810-L6836)
-does not provide a Pod-UID precondition. Consequently these reads alone cannot
-prove atomic UID-bound execution. A reviewed platform-side prevention/guard
-protocol is required before enabling the mediated probe; this proposal does not
-invent or claim to implement one. Keeping a broad exec credential off the
-runner reduces delegation but does not itself close that race.
+does not provide a Pod-UID precondition: the fixed command may already have run
+in a normal rollout replacement when the final GET detects a changed UID.
+The post-exec check rejects that observation and returns no usable probe output.
+It does not prevent the earlier stream from executing, and must not be
+described as an atomic UID-bound execution guarantee.
 
-**In-container UID guard feasibility candidate (not enabled):** expose a unique
-`OK147_PROBE_POD_UID` through `valueFrom.fieldRef: metadata.uid` in the actual
-agent container. A fixed Bash body checks that local value against one positional
-expected UID before executing the same fixed health action. It may start in a
-replacement Pod, but must not start the health action there when its genuine
-local UID differs. This is a proposed guarded transport revision, not an atomic
-`pods/exec` precondition or approval to change the current five-argument command.
+The accepted scope is the existing fixed
+`cilium-health status --probe --output json` action in a trusted Cilium runtime,
+not arbitrary exec or configuration modification. It sends functional probe
+traffic and updates health observations/metrics; it is not a read-only
+Kubernetes API request. The [pinned Cilium command](https://github.com/cilium/cilium/blob/v1.19.6/cilium-health/cmd/status.go)
+requests a synchronous connectivity probe rather than merely returning cached
+status. Under the accepted platform trust boundary, allowing that fixed action
+to run in a trusted replacement Pod while discarding its raced output is
+acceptable. No Bash wrapper, UID environment projection, guarded framing
+decoder or new prevention protocol is required for that race.
 
-The experiment is confined to `tests/fixtures/ok147_cilium_uid_guard_*` and
-`tests/ok147_cilium_uid_guard_candidate_test.py`. It uses a temporary fake health
-executable instead of `/usr/bin/cilium-health`; no real Cilium action runs. The
-proposed Bash invocation disables startup profiles and uses `-p`; tests check
-that injected startup files are not evaluated. The body uses no UID interpolation
-or arbitrary command arguments. Its candidate header distinguishes UID rejection
-from a genuine health command returning the same exit status. A future adapter
-must authenticate/bind that framing and strip it before existing probe parsing;
-it must not classify a missing/invalid guard header as ordinary Cilium warmup.
-No framing verifier or runtime integration is implemented by this experiment.
+| Principal/path | Accepted MVP trust scope | Still required before activation |
+| --- | --- | --- |
+| Platform administrators, CAPI/Enablement, approved ArgoCD identity and privileged Cilium runtime | Trusted for their existing platform responsibilities, including Cilium and admission/RBAC integrity. Compromise containment of these trusted actors is out of scope. | Bind the actual approved platform identities and delegation to the selected profile. Existing object labels/names alone are not authorization. No existing Platform rights are silently removed. |
+| CLI, runner, Console callers and tenant workloads | Outside platform administrative authority. No arbitrary command/image/Pod/endpoint selection or platform exec credential is delegated to them. | Authenticated operation/plan/attempt/target and fixed-task delegation; bounded discovery; effective negative-RBAC/indirect privilege-path checks for actual execution identities. A UI permission or code allowlist alone is not proof. |
+| Trusted network observation used for runtime binding | Source evidence is evaluated under the accepted trusted-runtime model, not as evidence resistant to a compromised Cilium runtime. | Exact successful NetworkReady receipt, target/prefix binding and all unchanged convergence/evidence checks. UID drift discards the sample; process exit success or incomplete output cannot produce success. |
 
-This is conditional on a reviewed, enforced **trusted Pod template/writer
-boundary**: the actual container must have the genuine unique fieldRef, reviewed
-image/executables/environment, and no spoofing override. A malicious replacement
-can otherwise set a literal old UID and pass the guard. The suite intentionally
-demonstrates that counterexample: the guard does not authenticate an environment
-value. Verifying only the pre-exec Pod's template cannot protect a later hostile
-replacement. Whether existing platform-only Cilium writers suffice, or additional
-admission is required, needs explicit acceptance and real enforcement evidence;
-tenant access or an assumed owner label does not establish that boundary.
+This decision does not enable mediated exec, discovery, authorization,
+certificate issuance, store continuity/anti-delete enforcement, Stage-7 signing,
+recovery or a live run. These gates remain closed as written. The new shared
+task must not expose the union of platform privileges to the runner or Console.
+The renderer-owned sixteen-object Stage-7 contract and ADR-030 item 9 OPEN are
+unchanged; #458 remains a separate internal-denial follow-up. No resolver
+allowlist is expanded by accepting this trust model.
 
 Source-only writer review (2026-10-19): the current CLI profile grants
 `ok147-argocd-manager` Services access, not Pod writes, through its `kube-system`
-Role. Its cluster role nevertheless grants CREATE/UPDATE/PATCH/DELETE on
-mutating/validating webhook configurations. Do not infer isolation from the
-namespace Role alone or silently remove these existing Platform permissions.
-Webhook control is itself a privileged boundary
-([Kubernetes guidance](https://kubernetes.io/docs/concepts/security/rbac-good-practices/#control-admission-webhooks)).
-These are source facts, not an inventory of deployed grants or actual token
-holders. Stage 7 follows the initial network observation; its later grants must
-not be retroactively assumed present before Stage 5, or assumed absent in a
-reused/partially configured target. Existing execution/provenance gates remain.
-
-Before selecting this guard, review direct and indirect writers: Pod create and
-image updates, controller-template changes, ephemeral-container/debug and exec
-access, bindings/escalation/impersonation, Secret/token access and admission
-configuration. Protect the actual image, fieldRef uniqueness/source and command/
-mount/startup environment, not just the owner reference or an approved template
-on disk. A read-only snapshot can inform this review but cannot prove the absence
-of other credentials, runtime compromise or future changes. An existing cluster
-is not proof of a fresh Candidate's bootstrap frontier. No live inventory or new
-writer/admission policy was performed/installed for this source review.
+Role. Its cluster role grants CREATE/UPDATE/PATCH/DELETE on mutating/validating
+webhook configurations. This is privileged platform authority
+([Kubernetes guidance](https://kubernetes.io/docs/concepts/security/rbac-good-practices/#control-admission-webhooks)),
+not automatically an unexpected tenant privilege under the accepted trust
+model. Do not infer tenant isolation from the namespace Role alone, or silently
+remove existing Platform permissions. Stage 7 follows initial network
+observation; its grants must not be retroactively assumed present before Stage
+5, or absent in a reused/partially configured target. No source review proves
+the identity of every credential holder or the absence of future changes.
 
 Separately authorized read-only follow-up on `ok-cli-mvp-3` (2026-10-19): the
 existing CAPI guest kubeconfig was retrieved from the management plane and
@@ -260,92 +256,27 @@ contained nine `kube-system` Roles and RoleBindings each, 78 ClusterRoles and 57
 ClusterRoleBindings. It confirmed the webhook-mutation ClusterRole and its
 binding to `kube-system/ok147-argocd-manager`. No mutating/validating webhooks,
 ValidatingAdmissionPolicies or policy bindings were present in that snapshot.
-Absence of current webhooks does not prevent an authorized writer creating one.
-The Cilium DaemonSet used the digest-pinned 1.19.6 image and lacked the candidate
-UID environment entry. No Pod exec or Cilium action was performed, no credential
-was issued/renewed, and no cluster resource was changed. This limited projection
-does not enumerate all token holders, arbitrary namespace roles, runtime image
-state or a fresh Candidate's Stage-5 frontier. Raw credentials and snapshots are
-not committed to this PR.
+The Cilium DaemonSet used the digest-pinned 1.19.6 image. No Pod exec or Cilium
+action was performed, no credential was issued/renewed, and no cluster resource
+was changed. This limited projection does not enumerate all token holders,
+arbitrary namespace roles, runtime image state or a fresh Candidate's Stage-5
+frontier. Raw credentials and snapshots are not committed to this PR.
 
-Selection remains NO-GO until the platform's trust boundary is explicitly
-reviewed: either all direct/indirect Cilium writers (including admission/RBAC
-administrators and controller credentials) are accepted as trusted platform
-principals, or independently controlled enforcement must prevent them from
-spoofing the actual selected container's identity/executable environment.
-Removing an existing ArgoCD grant or installing a new policy is not an implicit
-consequence of this review. Any proposed restriction must separately demonstrate
-that the renderer-owned sixteen-object Stage-7 install still works and that
-tenants/runner identities cannot bypass it through admission, controller,
-impersonation, token or privileged workload paths. Protecting only labels,
-ownerReferences or the original pre-exec template is insufficient.
+The earlier UID-guard candidate and its Bash/YAML fixtures, Python suite,
+test-only Go decoder and dedicated CI step are removed following the review.
+The accurate executor TOCTOU comment, changed-task-before-I/O regression and
+empty-output assertion on UID drift remain. Historical experiment results do not
+constitute activation evidence; actual platform-task authorization, discovery,
+issuance and Stage-7 proofs remain outstanding.
 
-**Recommended minimum MVP trust decision (proposal, NOT accepted):** retain the
-existing Platform rights and explicitly place the target's control-plane
-administrators, CAPI/Enablement controllers and approved ArgoCD controller
-identity inside the trusted platform boundary. Webhook administration is not
-itself an unexpected tenant privilege when held by that reviewed platform
-principal. Do not silently redefine these principals as hostile and then make a
-new general-purpose admission system a prerequisite for the first runner MVP.
-Conversely, their existing rights are not evidence that this trust decision has
-already been accepted.
-
-| Principal/path | Proposed MVP boundary | Required evidence before enabling |
-| --- | --- | --- |
-| Platform administrators and approved controllers | Trusted for Cilium template/image/mount/environment integrity and their existing admission/RBAC responsibilities. No existing rights are removed by this proposal. | Explicit independent acceptance of that trust set; reviewed controller/delegation identities, not just object labels or names; pinned renderer/image and genuine unique UID fieldRef in the actual selected container. |
-| CLI, runner, Console caller and tenant workloads | Outside that administrative boundary. They cannot choose a command/image/Pod/endpoint, alter Cilium, obtain the platform exec credential, mint or impersonate platform identities, or control webhook/RBAC policy. | Authenticated operation/plan/attempt/target and fixed-task delegation, plus effective negative-RBAC and indirect privilege-path checks for the actual execution identities. A UI permission or code allowlist alone is not proof. |
-| Normal Cilium rollout / name-reuse race | A trusted replacement can occur, but the fixed health action must not execute there for a different expected Pod UID. | Actual-image guard/startup tests and controlled replacement evidence through the reviewed platform task, in addition to framing tests. A mismatch or incomplete transport cannot be treated as ordinary health warmup. |
-| Compromised platform administrator/controller or privileged Cilium runtime | Not claimed to be contained by the shell guard. Such an actor can forge the header, alter the environment or otherwise undermine the probe. | Explicit residual-risk acceptance. If containment of these actors is required, this minimum proposal is insufficient: independently controlled enforcement/isolation needs its own design and review. |
-
-Acceptance must come from the human security/platform owners, including Suchit's
-independent review, and identify the exact profile and delegation. A human
-"continue implementation" or a passing fixture is not that acceptance. Even
-accepting this limited trust model would not by itself approve certificate
-issuance, store continuity/anti-delete enforcement, Stage-7 provenance, recovery
-or a live run. Those separate gates remain unchanged. The new shared task must
-not expose the union of platform privileges to the runner or Console.
-
-This proposal adds no trusted subject, API permission, policy object or allowed
-resolver in code. It keeps the renderer-owned sixteen-object Stage-7 contract
-unchanged. Before eventual activation, verify that exact-body target-access
-installation and all required convergence evidence still work; do not substitute
-process exit success or remove objects to make the profile pass. If a reviewer
-requires new restrictions, assess their actual Stage-7 compatibility before
-changing the profile. #458's empty resolver allowlist and ADR-030 item 9 OPEN
-are not altered by this proposal.
-
-An additional **test-only** framing decoder now lives in
-`internal/runner/cilium_guard_candidate_test.go`. Missing/wrong/truncated/duplicate
-headers, UID mismatch, excess output and invalid transport exit status must STOP
-with no usable payload, before considering ordinary health warmup. A valid frame
-with a non-zero health-child exit can remain pending; exit 42 without a frame
-cannot. A successful framed child yields only copied bytes for the unchanged
-health evaluator, never operation success. A deliberate forged-header
-counterexample documents that framing does not authenticate the container. No
-production symbol, manifest, adapter, authority or network client is added; this
-is not an accepted protocol revision or a resolution of the writer boundary.
-
-Local follow-up validation (Go 1.26.7/macOS amd64, Python 3.13.7): all-package
+Cleanup validation (Go 1.26.7/macOS amd64): all-package
 `go test -mod=readonly ./... -count=1` and `go vet -mod=readonly ./...` PASS;
 `go test -race -mod=readonly ./internal/runner -run
-'TestCandidateGuardFrame|TestKubernetesCilium' -count=10` PASS. The opt-in
-`OK147_WEBSOCKET_INTEGRATION=yes` RemoteCommand-v5 test PASS uses only a local
-fake TLS server. The Python candidate suite with the explicit digest-verified
-local Cilium chart PASS (10/10, including Helm render comparison). Its initial
-parallel run had two five-second subprocess timeouts; an unchanged separate
-rerun PASS in 1.881s. No timeout or production bound was relaxed; a root cause
-for those local timeouts is not established. Linux PR CI is separate evidence,
-not inferred from these results. Actual-image guard execution, admission/writer
-enforcement and live Stage-5 acceptance remain NOT RUN and unapproved.
-
-Primary source checks: Kubernetes supports the
-[Pod UID through Downward API](https://kubernetes.io/docs/concepts/workloads/pods/downward-api/),
-and [Cilium v1.19.6's chart](https://github.com/cilium/cilium/blob/v1.19.6/install/kubernetes/cilium/templates/cilium-agent/daemonset.yaml)
-renders `extraEnv`. Local Helm rendering with the existing digest-verified chart
-is compared before/after: removing only the UID environment additions must yield
-the identical DaemonSet, including image, privilege, mounts and ServiceAccount.
-This preview uses chart defaults, not a deployed or site-specific HCP profile.
-No active renderer, HCP, chart values or Talos configuration is changed.
+TestKubernetesCiliumWebSocketExecutor -count=10` PASS. The opt-in
+`OK147_WEBSOCKET_INTEGRATION=yes` RemoteCommand-v5 test PASS three times against
+only a local fake TLS server. CI YAML parsing and diff checks PASS; the removed
+candidate has no remaining executable/CI references. These are offline proofs,
+not live authorization, issuer installation or complete security acceptance.
 
 Alternatives not selected: more pre/post GETs cannot make exec atomic; Kubelet
 has a UID-specific route but accessing it through `nodes/proxy` brings broad
@@ -373,8 +304,9 @@ Offline acceptance cases, before selecting any runtime protocol:
    discovery adapter or authenticated projection verifier is implemented here.
 3. Probe: every changed namespace/container/command argument must stop before
    identity HTTP or stream construction. Post-exec UID drift must discard all
-   output with no automatic retry. These are existing-adapter regressions, not
-   proof of the still-missing atomic platform guard.
+   output with no automatic retry. These regressions prove detection/discard,
+   not prevention of an already-started fixed probe in a trusted replacement;
+   that TOCTOU limit is accepted under the MVP platform trust boundary.
 4. Installation: retain full artifact/prefix/grant/target/body negatives from
    `submission` and `runner`; future enforcement tests must also reject a
    credential holder submitting another body outside the Go adapter. Reject
@@ -394,7 +326,7 @@ evidence, not verification of any deployed cluster/version.
 
 | Runner boundary | Existing workload action | Constraint on a future access profile |
 | --- | --- | --- |
-| Stage 5: network observation | Read Nodes, exact Cilium workloads and Cilium Pods; execute the fixed Cilium health probe in a selected Pod | A probe is not a read-only API capability. Do not describe `pods/exec` permission as command-restricted RBAC; the fixed command is enforced by the adapter, not ordinary RBAC. Pod selection/UID races and arbitrary-exec denial need explicit review. |
+| Stage 5: network observation | Read Nodes, exact Cilium workloads and Cilium Pods; execute the fixed Cilium health probe in a selected Pod | A probe is not a read-only API capability. Do not describe `pods/exec` permission as command-restricted RBAC; the fixed command is enforced by the adapter, not ordinary RBAC. Keep Pod identity checks and arbitrary-exec denial; trusted replacement execution with raced output discarded is an accepted MVP limitation, not atomic execution. |
 | Stage 6: runtime binding | GET `kube-system` Namespace and `local-path` StorageClass; persist binding material and the stage receipt separately on the management plane | No workload storage sandbox or new write test is performed here. Keep workload observation rights separate from management evidence writes. |
 | Stage 7: target access | Submit the fixed namespace, ServiceAccount and RBAC object set, including reviewed platform ClusterRole prerequisites | Role creation/binding has privilege-escalation implications. Exact manifest validation in Go is not proof that a stolen credential cannot submit another body. |
 
@@ -500,7 +432,7 @@ Proposed identity separation for review (not an accepted CN allowlist):
 | Capability | Proposed boundary |
 | --- | --- |
 | Network observation | Read-only workload identity; no exec, RBAC write, Secret read or token minting. |
-| Fixed Cilium probe | Separate platform-mediated fixed-probe capability; no arbitrary command argument or raw exec credential returned to the user-facing CLI. Pod-name/UID replacement races require an accepted guard/protocol before enabling it; ordinary exec has no atomic target-UID precondition. |
+| Fixed Cilium probe | Separate platform-mediated fixed-probe capability; no arbitrary command argument or raw exec credential returned to the user-facing CLI. Ordinary exec has no atomic target-UID precondition; fixed-probe execution in a trusted rollout replacement with output discarded on UID drift is an accepted MVP limitation. Mediated task authorization remains unimplemented and closed. |
 | Runtime binding | Separate observer limited to the required Namespace/StorageClass reads; management persistence remains separate. |
 | Target-access installation | Separate exact-body submission capability; RBAC/admission and privilege-escalation negatives must be proven before issuing usable installer access. No blanket `escalate`, `bind`, impersonation or wildcard alternative. |
 
@@ -663,9 +595,11 @@ unless a separately reviewed policy changes it. No current polling limit changes
 The profile budget check needs to include the actual role-specific stage wrapper
 overhead as well as polling and reject insufficient remaining lifetime. A
 network observer credential does not replace the required functional Cilium
-probe. Probe mediation/UID-race protection and exact-body target-access
+probe. Probe mediation/authorization and exact-body target-access
 installation/admission are still separate unresolved capabilities; implementing
 only these observers cannot claim complete automatic cluster creation.
+The fixed probe's name/UID TOCTOU limit is accepted under the trusted-platform
+model; no additional atomic-exec guard is a prerequisite for this MVP.
 
 Platform task requirements remain: fixed reviewed image/spec/ServiceAccount;
 authenticated request and predecessor evidence; source UID/RV/Cluster owner and

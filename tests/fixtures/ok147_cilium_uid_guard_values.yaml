@@ -1,7 +1,0 @@
-# OFFLINE RENDER FIXTURE ONLY. Not merged into any active HCP/profile/manifest.
-extraEnv:
-  - name: OK147_PROBE_POD_UID
-    valueFrom:
-      fieldRef:
-        apiVersion: v1
-        fieldPath: metadata.uid
