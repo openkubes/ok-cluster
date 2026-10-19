@@ -398,6 +398,11 @@ The exact provider release and source must be pinned before implementation;
 do not infer ownership from a `<cluster>-ca` name alone. Upstream maintenance
 status is an integration risk to review, not authority to migrate providers.
 
+The offline source/key helper proposed in #460 accepts one unencrypted PEM
+block. Multi-block `EC PARAMETERS` plus `EC PRIVATE KEY` output (for example
+from `openssl ecparam -genkey`) is rejected, not implicitly stripped or
+converted. This format limit does not select or approve a live key source.
+
 The proposed trust boundaries are:
 
 - The runner generates its own client private key and CSR locally/in its private
