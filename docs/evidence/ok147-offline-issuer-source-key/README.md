@@ -1,8 +1,9 @@
 # Offline issuer source/key correspondence candidate
 
 Baseline: `main@b2e0c60cceb20289ba1ae68eb5100d0e8d7e541b`.
-Implementation/test source: `0955136561975d01f5b12a7e6a6b9ef97b112776`.
-Later evidence-only commits do not alter executable/test source.
+Initial source: `0955136561975d01f5b12a7e6a6b9ef97b112776`.
+Corrected implementation/test source: `0c0daf0bb5e07a216c30abd72659532e880f2280`.
+Subsequent evidence-only commits do not alter that executable/test source.
 
 ## Scope and authority
 
