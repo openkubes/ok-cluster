@@ -280,6 +280,40 @@ tenants/runner identities cannot bypass it through admission, controller,
 impersonation, token or privileged workload paths. Protecting only labels,
 ownerReferences or the original pre-exec template is insufficient.
 
+**Recommended minimum MVP trust decision (proposal, NOT accepted):** retain the
+existing Platform rights and explicitly place the target's control-plane
+administrators, CAPI/Enablement controllers and approved ArgoCD controller
+identity inside the trusted platform boundary. Webhook administration is not
+itself an unexpected tenant privilege when held by that reviewed platform
+principal. Do not silently redefine these principals as hostile and then make a
+new general-purpose admission system a prerequisite for the first runner MVP.
+Conversely, their existing rights are not evidence that this trust decision has
+already been accepted.
+
+| Principal/path | Proposed MVP boundary | Required evidence before enabling |
+| --- | --- | --- |
+| Platform administrators and approved controllers | Trusted for Cilium template/image/mount/environment integrity and their existing admission/RBAC responsibilities. No existing rights are removed by this proposal. | Explicit independent acceptance of that trust set; reviewed controller/delegation identities, not just object labels or names; pinned renderer/image and genuine unique UID fieldRef in the actual selected container. |
+| CLI, runner, Console caller and tenant workloads | Outside that administrative boundary. They cannot choose a command/image/Pod/endpoint, alter Cilium, obtain the platform exec credential, mint or impersonate platform identities, or control webhook/RBAC policy. | Authenticated operation/plan/attempt/target and fixed-task delegation, plus effective negative-RBAC and indirect privilege-path checks for the actual execution identities. A UI permission or code allowlist alone is not proof. |
+| Normal Cilium rollout / name-reuse race | A trusted replacement can occur, but the fixed health action must not execute there for a different expected Pod UID. | Actual-image guard/startup tests and controlled replacement evidence through the reviewed platform task, in addition to framing tests. A mismatch or incomplete transport cannot be treated as ordinary health warmup. |
+| Compromised platform administrator/controller or privileged Cilium runtime | Not claimed to be contained by the shell guard. Such an actor can forge the header, alter the environment or otherwise undermine the probe. | Explicit residual-risk acceptance. If containment of these actors is required, this minimum proposal is insufficient: independently controlled enforcement/isolation needs its own design and review. |
+
+Acceptance must come from the human security/platform owners, including Suchit's
+independent review, and identify the exact profile and delegation. A human
+"continue implementation" or a passing fixture is not that acceptance. Even
+accepting this limited trust model would not by itself approve certificate
+issuance, store continuity/anti-delete enforcement, Stage-7 provenance, recovery
+or a live run. Those separate gates remain unchanged. The new shared task must
+not expose the union of platform privileges to the runner or Console.
+
+This proposal adds no trusted subject, API permission, policy object or allowed
+resolver in code. It keeps the renderer-owned sixteen-object Stage-7 contract
+unchanged. Before eventual activation, verify that exact-body target-access
+installation and all required convergence evidence still work; do not substitute
+process exit success or remove objects to make the profile pass. If a reviewer
+requires new restrictions, assess their actual Stage-7 compatibility before
+changing the profile. #458's empty resolver allowlist and ADR-030 item 9 OPEN
+are not altered by this proposal.
+
 An additional **test-only** framing decoder now lives in
 `internal/runner/cilium_guard_candidate_test.go`. Missing/wrong/truncated/duplicate
 headers, UID mismatch, excess output and invalid transport exit status must STOP
