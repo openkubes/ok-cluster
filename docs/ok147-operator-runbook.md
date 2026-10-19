@@ -231,6 +231,28 @@ replacement. Whether existing platform-only Cilium writers suffice, or additiona
 admission is required, needs explicit acceptance and real enforcement evidence;
 tenant access or an assumed owner label does not establish that boundary.
 
+Source-only writer review (2026-10-19): the current CLI profile grants
+`ok147-argocd-manager` Services access, not Pod writes, through its `kube-system`
+Role. Its cluster role nevertheless grants CREATE/UPDATE/PATCH/DELETE on
+mutating/validating webhook configurations. Do not infer isolation from the
+namespace Role alone or silently remove these existing Platform permissions.
+Webhook control is itself a privileged boundary
+([Kubernetes guidance](https://kubernetes.io/docs/concepts/security/rbac-good-practices/#control-admission-webhooks)).
+These are source facts, not an inventory of deployed grants or actual token
+holders. Stage 7 follows the initial network observation; its later grants must
+not be retroactively assumed present before Stage 5, or assumed absent in a
+reused/partially configured target. Existing execution/provenance gates remain.
+
+Before selecting this guard, review direct and indirect writers: Pod create and
+image updates, controller-template changes, ephemeral-container/debug and exec
+access, bindings/escalation/impersonation, Secret/token access and admission
+configuration. Protect the actual image, fieldRef uniqueness/source and command/
+mount/startup environment, not just the owner reference or an approved template
+on disk. A read-only snapshot can inform this review but cannot prove the absence
+of other credentials, runtime compromise or future changes. An existing cluster
+is not proof of a fresh Candidate's bootstrap frontier. No live inventory or new
+writer/admission policy was performed/installed for this source review.
+
 Primary source checks: Kubernetes supports the
 [Pod UID through Downward API](https://kubernetes.io/docs/concepts/workloads/pods/downward-api/),
 and [Cilium v1.19.6's chart](https://github.com/cilium/cilium/blob/v1.19.6/install/kubernetes/cilium/templates/cilium-agent/daemonset.yaml)
