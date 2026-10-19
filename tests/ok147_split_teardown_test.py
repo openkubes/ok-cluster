@@ -15,7 +15,7 @@ from unittest import mock
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ok186_lifecycle_test import CLUSTER, Sandbox, lifecycle, render  # noqa: E402
+from ok186_lifecycle_test import CLUSTER, OK_LINUX_PATH, Sandbox, lifecycle, render  # noqa: E402
 
 
 class SplitTeardownTests(unittest.TestCase):
@@ -60,7 +60,9 @@ class SplitTeardownTests(unittest.TestCase):
         self.provider_state.write_text(json.dumps(state))
 
     def record(self):
-        cm = self.box.read_state()["configmaps"][lifecycle.TEARDOWN_LEDGER_PREFIX + CLUSTER]
+        cm = self.box.read_state()["configmaps"][
+            f"{lifecycle.TEARDOWN_LEDGER_NAMESPACE}/{lifecycle.TEARDOWN_LEDGER_PREFIX}{CLUSTER}"
+        ]
         return json.loads(cm["data"]["record.json"])
 
     def assert_preserved(self):
@@ -196,7 +198,7 @@ class SplitTeardownTests(unittest.TestCase):
     def test_external_provider_secret_reference_local_validation(self):
         config, _ = self.add_external_provider_reference()
         args = argparse.Namespace(cluster=CLUSTER, cluster_dir=str(self.box.rendered),
-                                  ok_linux_path=str(lifecycle.ROOT.parent / "ok-linux"))
+                                  ok_linux_path=str(OK_LINUX_PATH))
         with mock.patch.object(lifecycle.subprocess, "run", side_effect=AssertionError(
             "local manifest validation must not invoke operator tools"
         )):
@@ -327,7 +329,9 @@ class SplitTeardownTests(unittest.TestCase):
         del record["planes"]
         del record["storage_uids"]
         def replace(state):
-            state["configmaps"][lifecycle.TEARDOWN_LEDGER_PREFIX + CLUSTER]["data"]["record.json"] = json.dumps(record)
+            state["configmaps"][
+                f"{lifecycle.TEARDOWN_LEDGER_NAMESPACE}/{lifecycle.TEARDOWN_LEDGER_PREFIX}{CLUSTER}"
+            ]["data"]["record.json"] = json.dumps(record)
         self.box.mutate(replace)
         result, calls = self.run_teardown()
         self.assertNotEqual(result.returncode, 0)

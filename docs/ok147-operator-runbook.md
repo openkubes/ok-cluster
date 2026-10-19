@@ -743,7 +743,8 @@ verifying the replacement; do not re-run provisioning.
 Same-name Secret recovery and local one-shot orchestration used for an operator
 handoff are not new product CLI commands or standing recovery authority. A
 finite renewed credential supplies only a bounded MVP window, not durable
-lifecycle access. Teardown and OK-197/OK-198 remain outside this change.
+lifecycle access. Teardown ledger work (OK-197) and readiness expansion remain
+outside this change.
 
 ## Job-based activation path
 
@@ -1035,7 +1036,24 @@ are not removed.
 #### Expert lifecycle entry point
 
 After a separately reviewed cleanup inventory and explicit deletion approval,
-the lifecycle entry point supports:
+install the durable ledger on the management plane first. For a split-plane
+teardown, also install the provider-only Namespace reader on the provider plane:
+
+```sh
+make install-teardown-ledger \
+  TALOS_INFRA_KUBECONFIG=<absolute-management-kubeconfig> CONFIRM=yes
+make install-teardown-provider-reader \
+  TALOS_TEARDOWN_PROVIDER_KUBECONFIG=<absolute-provider-kubeconfig> CONFIRM=yes
+```
+
+After teardown and verification, `make remove-teardown-provider-reader` first
+lists every ClusterRoleBinding and every namespaced RoleBinding on the provider
+plane. It refuses to delete the ClusterRole while any binding refers to it and
+names each blocker. An unreadable or malformed binding inventory also refuses
+removal. Remove the bindings through their separately reviewed lifecycle before
+retrying the reader removal.
+
+Bind the installed roles to the corresponding teardown identities, then run:
 
 ```sh
 make teardown CLUSTER=<approved-old-candidate> \
@@ -1054,7 +1072,7 @@ authorities. Shared Golden images and unrelated snapshots are preserved.
 Routing is explicit:
 
 - Management: CAPI Cluster, management namespace and durable teardown ConfigMap
-  in `kube-system`.
+  in `ok-cluster-teardown`.
 - Provider: candidate namespace, DataVolumes/PVC inventory, retained PV cleanup,
   existing Longhorn cleanup, clone RBAC and proven cluster-owned CDI snapshots.
 - Local: split-plane teardown **always preserves** the render directory,
@@ -1080,8 +1098,15 @@ preconditions. The record contains no credentials.
 Existing single-plane schema-1 records remain readable
 and writable unchanged; switching schema/plane routing on a retry is refused,
 not migrated automatically. Older lifecycle code rejects schema-2 records.
-Reading `kube-system` on both planes therefore requires explicit RBAC access;
-absence or denial stops before any delete.
+On each plane, the teardown identity reads only the `kube-system` Namespace
+object to bind that API plane's UID. It does not read ConfigMaps, Secrets or
+other contents from `kube-system`. The provider-plane identity needs the same
+exact-name Namespace `get` as the management-plane identity; absence or denial
+stops before any delete. The ledger itself remains on the management plane in
+`ok-cluster-teardown`. The provider-plane identity also needs `get` on the
+`longhorn-system` and `ok-images` Namespace objects: after a delete, kubectl
+confirms a namespaced 404 by reading the object's Namespace, and a denied read
+turns a confirmed absence into an incomplete teardown.
 Cleanup identities must remain usable after deleting the candidate namespaces:
 do not assume a create-runner ServiceAccount inside a target namespace can
 observe deletion or finish storage cleanup after its own identity is removed.
@@ -1102,11 +1127,39 @@ UID/resourceVersion-preconditioned deletion; a storage read/delete error keeps
 the record incomplete. Backing storage is not deleted after an uncertain PV
 operation. The legacy single-plane best-effort Longhorn behavior is unchanged.
 
+Record schemas `1` and `2` share the owned `ok-cluster-teardown` namespace.
+The `openkubes.io/teardown-ledger-schema: "1"` annotation on that Namespace and
+its RBAC objects is the namespace-layout version, not the version of every
+stored `record.json`. Existing schema-1 or schema-2 receipts in `kube-system` are legacy
+storage only. Before using them, an administrator must run the guarded
+`make migrate-teardown-ledger CLUSTER=<name>
+TALOS_INFRA_KUBECONFIG=<management-kubeconfig> CONFIRM=yes` workflow, which
+validates and copies the receipt into `ok-cluster-teardown`, verifies the copied
+bytes, and only then removes the legacy ConfigMap. Ordinary teardown does not
+fall back to `kube-system`.
+
+Completed schema-2 receipts remain retained unless provider-plane absence has
+been proved. The current `make prune-teardown-ledger` command refuses schema-2
+records because it has only the management kubeconfig and cannot establish that
+the recorded provider Namespace and storage identities are absent. After an
+administrator verifies those objects are absent on the recorded provider plane,
+the administrator may manually remove the exact ledger ConfigMap using its UID
+and `resourceVersion` as delete preconditions. Management-plane absence alone
+is insufficient.
+
+For troubleshooting, read the ledger ConfigMap from `ok-cluster-teardown` on
+the management plane and compare the schema-2 `planes` UIDs with `kubectl get
+namespace kube-system -o jsonpath='{.metadata.uid}'` against each explicit
+kubeconfig. A forbidden Namespace read calls for the exact-name Namespace
+`get` binding on that plane. Do not grant access to `kube-system` ConfigMaps or
+Secrets. A schema-2 prune refusal is expected until provider absence has been
+verified through the separate administrator procedure above.
+
 The plane UID binding does not grant authority or turn this command into a
-generic recovery controller. Full candidate-authority removal, richer ledger
-RBAC/retention policy (OK-197), and readiness expansion (OK-198) remain outside
-this change. A live cleanup still needs its own current inventory, bounded
-authorization and review of the existing storage cleanup contract.
+generic recovery controller. Full candidate-authority removal and readiness
+expansion (OK-198) remain outside this change. A live cleanup still needs its
+own current inventory, bounded authorization and review of the existing storage
+cleanup contract.
 
 Offline verification: `make ok186-lifecycle-test` runs both the existing
 single-plane lifecycle checks and the split-plane integration tests against
