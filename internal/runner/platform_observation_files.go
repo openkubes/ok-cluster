@@ -29,6 +29,9 @@ type PlatformObservationStageFileRuntimeConfig struct {
 // LoadPlatformObservationStageFileRuntime performs only bounded local file
 // reads. It does not open credentials or contact any Kubernetes API.
 func LoadPlatformObservationStageFileRuntime(config PlatformObservationStageFileRuntimeConfig) (PlatformObservationStageRuntimeConfig, error) {
+	if err := rejectKubernetesClientCertificate(config.Argo); err != nil {
+		return PlatformObservationStageRuntimeConfig{}, err
+	}
 	runtime, err := LoadRuntimeBindingMaterialFiles(RuntimeBindingMaterialFileConfig{
 		Bundle: config.Bundle, MaterialPath: config.RuntimeMaterialPath, ReceiptPath: config.RuntimeReceiptPath,
 	})

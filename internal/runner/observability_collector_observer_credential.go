@@ -90,6 +90,9 @@ type KubernetesObservabilityCollectorObserverCredentialIssuer struct {
 // OpenKubernetesObservabilityCollectorObserverCredentialIssuer binds the
 // lifecycle-derived workload authority. Issue is the sole TokenRequest edge.
 func OpenKubernetesObservabilityCollectorObserverCredentialIssuer(config ObservabilityCollectorObserverCredentialConfig) (*KubernetesObservabilityCollectorObserverCredentialIssuer, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return nil, err
+	}
 	if config.Clock == nil || !stageReceiptPrefixDigestPattern.MatchString(config.ExpectedTargetDigest) {
 		return nil, errors.New("collector observer credential binding is incomplete")
 	}

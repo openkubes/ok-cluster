@@ -63,6 +63,9 @@ type observabilityCredentialSecret struct {
 }
 
 func OpenObservabilityCredentialInstaller(config ObservabilityCredentialInstallationConfig) (*observabilityCredentialInstaller, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return nil, err
+	}
 	if config.Authority.AuthorityIdentity == "" || config.GrafanaAdminUserFile == "" ||
 		config.GrafanaAdminPasswordFile == "" || config.OpenSearchAdminPasswordFile == "" {
 		return nil, errors.New("observability credential installation configuration is incomplete")

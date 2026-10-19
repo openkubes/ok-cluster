@@ -165,6 +165,9 @@ func (bundle VerifiedPlatformApplicationsStageBundle) Receipt() (PlatformApplica
 // ledger. It opens bounded credential files but performs no API request and no
 // mutation.
 func (bundle VerifiedPlatformApplicationsStageBundle) Open(config PlatformApplicationsStageRuntimeConfig) (BoundPlatformApplicationsStage, error) {
+	if err := rejectKubernetesClientCertificate(config.GitOps); err != nil {
+		return BoundPlatformApplicationsStage{}, err
+	}
 	if err := verifyPlatformApplicationsStageBundle(bundle); err != nil || config.Clock == nil {
 		return BoundPlatformApplicationsStage{}, errors.New("verified platform-applications bundle and clock are required")
 	}

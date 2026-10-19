@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
@@ -101,6 +102,9 @@ func (bundle VerifiedRuntimeBindingStageBundle) Decision() (stagecursor.Decision
 // reads bounded credential material but performs neither API requests nor file
 // creation.
 func (bundle VerifiedRuntimeBindingStageBundle) Open(config RuntimeBindingStageRuntimeConfig) (OpenedRuntimeBindingStage, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return OpenedRuntimeBindingStage{}, err
+	}
 	if !bundle.verified || config.Clock == nil {
 		return OpenedRuntimeBindingStage{}, errors.New("verified runtime binding bundle and clock are required")
 	}
@@ -113,6 +117,12 @@ func (bundle VerifiedRuntimeBindingStageBundle) Open(config RuntimeBindingStageR
 // OpenKubernetes binds the exact immutable Secret persistence capability. It
 // reads three bounded credentials but performs no API request.
 func (bundle VerifiedRuntimeBindingStageBundle) OpenKubernetes(config RuntimeBindingStageKubernetesRuntimeConfig) (OpenedRuntimeBindingStage, error) {
+	if err := rejectKubernetesClientCertificate(config.Persistence); err != nil {
+		return OpenedRuntimeBindingStage{}, err
+	}
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return OpenedRuntimeBindingStage{}, err
+	}
 	if !bundle.verified || config.Clock == nil {
 		return OpenedRuntimeBindingStage{}, errors.New("verified runtime binding bundle and clock are required")
 	}
@@ -127,7 +137,7 @@ func (bundle VerifiedRuntimeBindingStageBundle) OpenKubernetes(config RuntimeBin
 		config.Persistence, bundle.plan.Authorities.Management, submissionStageInputNamespace, name,
 	)
 	if err != nil {
-		return OpenedRuntimeBindingStage{}, errors.New("open runtime binding Kubernetes persistence")
+		return OpenedRuntimeBindingStage{}, fmt.Errorf("open runtime binding Kubernetes persistence: %w", err)
 	}
 	return bundle.open(config.Ledger, config.Workload, config.Clock, "", store, persistenceToken)
 }
@@ -139,7 +149,7 @@ func (bundle VerifiedRuntimeBindingStageBundle) open(ledgerConfig KubernetesLedg
 	}
 	binding, authority, err := loadWorkloadAuthorityFiles(workloadConfig)
 	if err != nil {
-		return OpenedRuntimeBindingStage{}, errors.New("open runtime binding workload authority")
+		return OpenedRuntimeBindingStage{}, fmt.Errorf("open runtime binding workload authority: %w", err)
 	}
 	if binding.IntentRevision != bundle.plan.IntentRevision || digest.SHA256([]byte(binding.TargetClusterUID)) != lifecycle.TargetClusterUIDDigest {
 		return OpenedRuntimeBindingStage{}, errors.New("runtime binding workload authority differs from durable lifecycle target")

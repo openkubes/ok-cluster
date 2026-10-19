@@ -3,6 +3,7 @@ package runner
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
@@ -23,6 +24,9 @@ type KubernetesEnablementStageOperationConfig struct {
 // OpenKubernetesEnablementStageOperation reads bounded credentials and
 // constructs the shared operation without contacting Kubernetes.
 func OpenKubernetesEnablementStageOperation(config KubernetesEnablementStageOperationConfig) (execution.StagedOperation, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return execution.StagedOperation{}, wrapEnablementSubmissionAuthorityError(err)
+	}
 	if config.Clock == nil {
 		return execution.StagedOperation{}, errors.New("enablement operation clock is required")
 	}
@@ -35,7 +39,7 @@ func OpenKubernetesEnablementStageOperation(config KubernetesEnablementStageOper
 	}
 	submitter, authorityToken, err := openKubernetesSubmissionClient(config.Authority)
 	if err != nil {
-		return execution.StagedOperation{}, errors.New("open enablement submission authority")
+		return execution.StagedOperation{}, wrapEnablementSubmissionAuthorityError(err)
 	}
 	if len(ledgerToken) == len(authorityToken) && subtle.ConstantTimeCompare([]byte(ledgerToken), []byte(authorityToken)) == 1 {
 		return execution.StagedOperation{}, errors.New("ledger and enablement credentials must be distinct")
@@ -45,4 +49,8 @@ func OpenKubernetesEnablementStageOperation(config KubernetesEnablementStageOper
 		return execution.StagedOperation{}, err
 	}
 	return execution.StagedOperation{Ledger: store, Mutator: mutator, Clock: config.Clock}, nil
+}
+
+func wrapEnablementSubmissionAuthorityError(err error) error {
+	return fmt.Errorf("open enablement submission authority: %w", err)
 }

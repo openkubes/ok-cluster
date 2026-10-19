@@ -64,6 +64,9 @@ type KubernetesLifecycleObservationStageLauncher struct {
 // the prepared candidate and bounded installer credential. It performs no API
 // request.
 func OpenKubernetesLifecycleObservationStageLauncher(config LifecycleObservationStageLauncherConfig, packaged VerifiedLifecycleObservationStagePackage, credentials VerifiedLifecycleObservationStageCredentialPackage, runtime VerifiedLifecycleObservationStageRuntimePrerequisite) (*KubernetesLifecycleObservationStageLauncher, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return nil, err
+	}
 	plan, err := PlanLifecycleObservationStageLaunch(packaged, credentials, runtime)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/openkubes/ok-cluster/internal/observation"
@@ -33,7 +34,7 @@ func (resolver *DeferredFullRunWorkloadAuthorityResolver) BindFullRunWorkloadAut
 	}
 	bound, err := OpenWorkloadAuthorityFileResolver(config)
 	if err != nil {
-		return errors.New("bind lifecycle-derived full-run workload authority")
+		return fmt.Errorf("bind lifecycle-derived full-run workload authority: %w", err)
 	}
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()

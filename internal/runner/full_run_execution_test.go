@@ -312,9 +312,11 @@ func (binder *recordingFullRunWorkloadAuthorityBinder) BindFullRunWorkloadAuthor
 	return binder.err
 }
 
-func TestFullRunExecutionRunsRealPreRuntimeAdapterBeforeOpeningSuffix(t *testing.T) {
+func TestFullRunExecutionRunsSyntheticPreRuntimeAdapterBeforeOpeningSuffix(t *testing.T) {
 	preConfig, preFactories, calls, _ := preRuntimeExecutionFixture(t)
 	config := FullRunExecutionConfig{PreRuntime: preConfig}
+	// The full-run orchestration test uses only fake stage factories; no resolver is approved.
+	config.PreRuntime.WorkloadAuthority = nil
 	config.PostRuntime.TargetCredential.PlanPath = preConfig.PlanPath
 	config.PostRuntime.TargetCredential.PlanExpected = preConfig.PlanExpected
 	config.PostRuntime.RuntimeBinding.MaterialPath = preConfig.RuntimeBinding.OutputPath
@@ -322,7 +324,7 @@ func TestFullRunExecutionRunsRealPreRuntimeAdapterBeforeOpeningSuffix(t *testing
 	postCalls := 0
 	execution, err := openFullRunExecution(config, fullRunExecutionFactories{
 		preRuntime: func(config PreRuntimeExecutionConfig) (fullRunPreRuntimeExecution, error) {
-			return openPreRuntimeExecution(config, preFactories)
+			return openSyntheticPreRuntimeExecution(preConfig, preFactories)
 		},
 		postRuntime: func(bound PostRuntimeExecutionConfig) (PostRuntimeContinuation, error) {
 			postCalls++
