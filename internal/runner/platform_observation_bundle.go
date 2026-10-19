@@ -89,6 +89,9 @@ func (bundle VerifiedPlatformObservationStageBundle) Decision() (stagecursor.Dec
 // Open reads bounded credentials and private runtime identity but performs no
 // Kubernetes request and no capability action.
 func (bundle VerifiedPlatformObservationStageBundle) Open(config PlatformObservationStageRuntimeConfig) (OpenedPlatformObservationStage, error) {
+	if err := rejectKubernetesClientCertificate(config.Argo); err != nil {
+		return OpenedPlatformObservationStage{}, err
+	}
 	if err := verifyPlatformObservationStageBundle(bundle); err != nil || config.Capability == nil || config.Clock == nil || config.Wait == nil {
 		return OpenedPlatformObservationStage{}, errors.New("verified platform observation bundle, capability, clock, and waiter are required")
 	}

@@ -101,6 +101,9 @@ type KubernetesObservabilityCollectorInstallerCredentialIssuer struct {
 }
 
 func OpenKubernetesObservabilityCollectorInstallerCredentialIssuer(config ObservabilityCollectorInstallerCredentialConfig) (*KubernetesObservabilityCollectorInstallerCredentialIssuer, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return nil, err
+	}
 	if config.Clock == nil || !stageReceiptPrefixDigestPattern.MatchString(config.ExpectedTargetDigest) {
 		return nil, errors.New("collector installer credential binding is incomplete")
 	}

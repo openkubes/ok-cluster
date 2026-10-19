@@ -214,6 +214,9 @@ func (bundle VerifiedTargetRegistrationStageBundle) Receipt() (TargetRegistratio
 // credential, GitOps writer and durable ledger. It reads bounded credential
 // files but performs no API request and no mutation.
 func (bundle VerifiedTargetRegistrationStageBundle) Open(config TargetRegistrationStageRuntimeConfig) (BoundTargetRegistrationStage, error) {
+	if err := rejectKubernetesClientCertificate(config.GitOps); err != nil {
+		return BoundTargetRegistrationStage{}, err
+	}
 	if err := verifyTargetRegistrationStageBundle(bundle); err != nil || config.Clock == nil {
 		return BoundTargetRegistrationStage{}, errors.New("verified target-registration bundle and clock are required")
 	}
@@ -247,6 +250,9 @@ func (bundle VerifiedTargetRegistrationStageBundle) Open(config TargetRegistrati
 // OpenHandoff consumes the memory-only credential exactly once and binds it to
 // the already verified Stage-9 projection, writer and durable ledger.
 func (bundle VerifiedTargetRegistrationStageBundle) OpenHandoff(config TargetRegistrationStageHandoffRuntimeConfig) (BoundTargetRegistrationStage, error) {
+	if err := rejectKubernetesClientCertificate(config.GitOps); err != nil {
+		return BoundTargetRegistrationStage{}, err
+	}
 	if err := verifyTargetRegistrationStageBundle(bundle); err != nil || bundle.handoff == nil || config.Clock == nil || config.MaterializationTime.IsZero() {
 		return BoundTargetRegistrationStage{}, errors.New("target-registration bundle was not loaded from an in-process handoff")
 	}

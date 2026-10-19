@@ -75,6 +75,12 @@ func (bundle VerifiedNetworkObservationStageBundle) Decision() (stagecursor.Deci
 // Open reads each bounded local input and credential once, builds isolated TLS
 // clients, and performs no Kubernetes request.
 func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservationStageRuntimeConfig) (OpenedNetworkObservationStage, error) {
+	if err := rejectKubernetesClientCertificate(config.Management); err != nil {
+		return OpenedNetworkObservationStage{}, err
+	}
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return OpenedNetworkObservationStage{}, err
+	}
 	if !bundle.verified || config.Clock == nil || config.Wait == nil {
 		return OpenedNetworkObservationStage{}, errors.New("verified network observation bundle, clock, and waiter are required")
 	}
@@ -87,7 +93,7 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 	}
 	binding, workload, err := loadWorkloadAuthorityFiles(config.Workload)
 	if err != nil {
-		return OpenedNetworkObservationStage{}, errors.New("open network workload authority binding")
+		return OpenedNetworkObservationStage{}, fmt.Errorf("open network workload authority binding: %w", err)
 	}
 	if binding.IntentRevision != bundle.plan.IntentRevision || digest.SHA256([]byte(binding.TargetClusterUID)) != lifecycle.TargetClusterUIDDigest {
 		return OpenedNetworkObservationStage{}, errors.New("network workload authority differs from durable lifecycle target")

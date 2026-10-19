@@ -168,6 +168,9 @@ func (bundle VerifiedSubmissionStageBundle) Decision() (stagecursor.Decision, er
 // Open binds the verified artifact bundle to runtime credentials without
 // invoking it. Local and Job callers receive the same BoundSubmissionStage.
 func (bundle VerifiedSubmissionStageBundle) Open(config SubmissionStageRuntimeConfig) (BoundSubmissionStage, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return BoundSubmissionStage{}, err
+	}
 	if !bundle.verified {
 		return BoundSubmissionStage{}, errors.New("submission stage bundle was not produced by verification")
 	}

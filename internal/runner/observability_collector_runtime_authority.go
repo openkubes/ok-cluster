@@ -182,6 +182,9 @@ func PlanObservabilityCollectorRuntimeAuthorityInstallation(packaged VerifiedObs
 }
 
 func OpenKubernetesObservabilityCollectorRuntimeAuthorityInstaller(workload WorkloadAuthorityFileResolverConfig, packaged VerifiedObservabilityCollectorRuntimeAuthorityPackage) (*KubernetesObservabilityCollectorRuntimeAuthorityInstaller, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: workload.KubeconfigFile}); err != nil {
+		return nil, err
+	}
 	receipt, err := packaged.Receipt()
 	if err != nil {
 		return nil, err

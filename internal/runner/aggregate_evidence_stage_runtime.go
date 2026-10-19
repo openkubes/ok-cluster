@@ -28,6 +28,12 @@ type OpenedAggregateEvidenceStage struct {
 // Open validates credentials and composes the final bounded source pass, but
 // performs no Kubernetes request.
 func (bundle VerifiedAggregateEvidenceStageBundle) Open(config AggregateEvidenceStageRuntimeConfig) (OpenedAggregateEvidenceStage, error) {
+	if err := rejectKubernetesClientCertificate(config.Observer.Management); err != nil {
+		return OpenedAggregateEvidenceStage{}, err
+	}
+	if err := rejectKubernetesClientCertificate(config.Observer.Argo); err != nil {
+		return OpenedAggregateEvidenceStage{}, err
+	}
 	if err := verifyAggregateEvidenceStageBundle(bundle); err != nil {
 		return OpenedAggregateEvidenceStage{}, err
 	}

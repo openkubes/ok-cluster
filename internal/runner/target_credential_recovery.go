@@ -235,6 +235,9 @@ type TargetCredentialRecoveryReceipt struct {
 // or overwrites the authoritative successful Stage-8 receipt.
 func RecoverTargetCredential(ctx context.Context, config TargetCredentialRecoveryConfig) (TargetCredentialRecoveryReceipt, *VerifiedTargetCredentialStageHandoff, error) {
 	receipt := TargetCredentialRecoveryReceipt{Format: TargetCredentialRecoveryReceiptFormat, State: "PRECLAIM"}
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return receipt, nil, err
+	}
 	if err := verifyTargetCredentialStageBundle(config.Bundle); err != nil || config.Clock == nil {
 		return receipt, nil, errors.New("verified target-credential recovery config and clock are required")
 	}

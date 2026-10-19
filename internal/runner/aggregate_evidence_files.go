@@ -31,6 +31,13 @@ type AggregateEvidenceStageFileRuntimeConfig struct {
 // immutable public profiles and private restart material. It performs bounded
 // local file reads only and contacts no authority.
 func LoadAggregateEvidenceStageFileRuntime(config AggregateEvidenceStageFileRuntimeConfig) (AggregateEvidenceStageRuntimeConfig, error) {
+	for _, authority := range []KubernetesAuthorityConfig{
+		config.Management, config.Argo, {KubeconfigFile: config.WorkloadKubeconfigFile},
+	} {
+		if err := rejectKubernetesClientCertificate(authority); err != nil {
+			return AggregateEvidenceStageRuntimeConfig{}, err
+		}
+	}
 	runtime, err := LoadRuntimeBindingMaterialFiles(RuntimeBindingMaterialFileConfig{
 		Bundle: config.Bundle, MaterialPath: config.RuntimeMaterialPath, ReceiptPath: config.RuntimeReceiptPath,
 	})
@@ -80,6 +87,9 @@ type runtimeBindingWorkloadAuthorityResolver struct {
 func (resolver *runtimeBindingWorkloadAuthorityResolver) ResolveWorkloadAuthority(ctx context.Context, policy observation.Policy) (KubernetesAuthorityConfig, error) {
 	if resolver == nil {
 		return KubernetesAuthorityConfig{}, errors.New("runtime-bound workload resolver is required")
+	}
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: resolver.kubeconfigFile}); err != nil {
+		return KubernetesAuthorityConfig{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return KubernetesAuthorityConfig{}, errors.New("runtime-bound workload resolution cancelled")

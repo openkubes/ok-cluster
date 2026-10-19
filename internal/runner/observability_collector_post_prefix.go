@@ -100,6 +100,9 @@ func (activation *KubernetesObservabilityCollectorPostPrefix) ActivateFullRunPos
 	if activation == nil {
 		return errors.New("observability collector post-prefix activation is required")
 	}
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: prefix.Workload.KubeconfigFile}); err != nil {
+		return err
+	}
 	activation.mu.Lock()
 	if activation.used {
 		activation.mu.Unlock()

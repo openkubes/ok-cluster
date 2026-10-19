@@ -73,6 +73,11 @@ type kubernetesAggregateSourceOpeners struct {
 // OpenKubernetesAggregateObserver validates and freezes the pre-runtime
 // inputs. It performs no file read and no Kubernetes request.
 func OpenKubernetesAggregateObserver(config KubernetesAggregateObserverConfig) (*KubernetesAggregateObserver, error) {
+	for _, authority := range []KubernetesAuthorityConfig{config.Management, config.Argo} {
+		if err := rejectKubernetesClientCertificate(authority); err != nil {
+			return nil, err
+		}
+	}
 	if config.ExpectedManagementAuthority == "" || config.ExpectedArgoAuthority == "" || config.Namespace == "" || config.Name == "" || config.HCPName == "" || config.WorkloadAuthority == nil || config.PlatformCapability == nil || config.Clock == nil {
 		return nil, errors.New("aggregate Kubernetes observer binding is incomplete")
 	}

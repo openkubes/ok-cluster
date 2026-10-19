@@ -155,6 +155,24 @@ func TestAuthorityOpenWrappersPreserveCredentialPolicySentinel(t *testing.T) {
 			t.Fatalf("network lost sentinel: %v", err)
 		}
 	})
+	t.Run("network workload", func(t *testing.T) {
+		bundle, err := LoadNetworkObservationStageBundle(networkObservationBundleConfig(t, true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime := networkObservationRuntime(t, bundle, "ledger-token", "management-token", "workload-token", "cluster-runtime-uid-147")
+		runtime.Workload.KubeconfigFile, runtime.Workload.TokenFile = "/must-not-read", ""
+		if _, err := bundle.Open(runtime); !errors.Is(err, ErrClientCertificateDisabled) {
+			t.Fatalf("network workload lost sentinel: %v", err)
+		}
+	})
+	t.Run("enablement", func(t *testing.T) {
+		config := runnerEnablementOperationConfig(t, runnerStagedPlan(t))
+		config.Authority.KubeconfigFile, config.Authority.TokenFile = "/must-not-read", ""
+		if _, err := OpenKubernetesEnablementStageOperation(config); !errors.Is(err, ErrClientCertificateDisabled) {
+			t.Fatalf("enablement lost sentinel: %v", err)
+		}
+	})
 	t.Run("network workload at source open", func(t *testing.T) {
 		// Exercise the Workload half independently: no Management kubeconfig
 		// may hide a missing Workload guard. Both kubeconfig-only and mixed

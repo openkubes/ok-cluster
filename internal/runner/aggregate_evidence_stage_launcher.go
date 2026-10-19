@@ -63,6 +63,9 @@ type KubernetesAggregateEvidenceStageLauncher struct {
 // OpenKubernetesAggregateEvidenceStageLauncher opens the exact prepared API
 // client and installer credential without performing an API request.
 func OpenKubernetesAggregateEvidenceStageLauncher(config AggregateEvidenceStageLauncherConfig, packaged VerifiedAggregateEvidenceStagePackage, credentials VerifiedAggregateEvidenceStageCredentialPackage, privateInputs VerifiedAggregateEvidenceStagePrivateInputPackage, runtime VerifiedAggregateEvidenceStageRuntimePrerequisite) (*KubernetesAggregateEvidenceStageLauncher, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return nil, err
+	}
 	plan, err := PlanAggregateEvidenceStageLaunch(packaged, credentials, privateInputs, runtime)
 	if err != nil {
 		return nil, err

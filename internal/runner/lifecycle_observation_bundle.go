@@ -75,6 +75,9 @@ func (bundle VerifiedLifecycleObservationStageBundle) Decision() (stagecursor.De
 // Open constructs the exact ledger and management observation capabilities.
 // It reads bounded credentials once but performs no Kubernetes API request.
 func (bundle VerifiedLifecycleObservationStageBundle) Open(config LifecycleObservationStageRuntimeConfig) (OpenedLifecycleObservationStage, error) {
+	if err := rejectKubernetesClientCertificate(config.Management); err != nil {
+		return OpenedLifecycleObservationStage{}, err
+	}
 	if !bundle.verified || config.Clock == nil || config.Wait == nil {
 		return OpenedLifecycleObservationStage{}, errors.New("verified lifecycle observation bundle, clock, and waiter are required")
 	}

@@ -117,6 +117,9 @@ func (bundle VerifiedEnablementStageBundle) Decision() (stagecursor.Decision, er
 // Open binds verified artifacts to bounded credentials but performs no API
 // request. The returned operation owns the single-use durable claim.
 func (bundle VerifiedEnablementStageBundle) Open(config SubmissionStageRuntimeConfig) (BoundEnablementStage, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return BoundEnablementStage{}, err
+	}
 	if !bundle.verified {
 		return BoundEnablementStage{}, errors.New("enablement stage bundle was not produced by verification")
 	}

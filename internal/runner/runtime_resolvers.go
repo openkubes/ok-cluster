@@ -54,6 +54,9 @@ type WorkloadAuthorityFileResolver struct {
 // OpenWorkloadAuthorityFileResolver validates only the static configuration;
 // it performs no file read and no API request.
 func OpenWorkloadAuthorityFileResolver(config WorkloadAuthorityFileResolverConfig) (*WorkloadAuthorityFileResolver, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.KubeconfigFile}); err != nil {
+		return nil, err
+	}
 	if config.Path == "" || config.CAFile == "" || !validWorkloadTransportCredential(config) || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
 		return nil, errors.New("workload authority file resolver binding is invalid")
 	}
@@ -83,6 +86,9 @@ func (resolver *WorkloadAuthorityFileResolver) ResolveWorkloadAuthority(ctx cont
 // loadWorkloadAuthorityFiles reads one strict private binding and its CA. It
 // does not read the transport credential or contact either API authority.
 func loadWorkloadAuthorityFiles(config WorkloadAuthorityFileResolverConfig) (WorkloadAuthorityBinding, KubernetesAuthorityConfig, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.KubeconfigFile}); err != nil {
+		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, err
+	}
 	if config.Path == "" || config.CAFile == "" || !validWorkloadTransportCredential(config) || !platformInputDigestPattern.MatchString(config.ExpectedBindingDigest) {
 		return WorkloadAuthorityBinding{}, KubernetesAuthorityConfig{}, errors.New("workload authority file resolver binding is invalid")
 	}
