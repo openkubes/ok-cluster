@@ -253,6 +253,57 @@ of other credentials, runtime compromise or future changes. An existing cluster
 is not proof of a fresh Candidate's bootstrap frontier. No live inventory or new
 writer/admission policy was performed/installed for this source review.
 
+Separately authorized read-only follow-up on `ok-cli-mvp-3` (2026-10-19): the
+existing CAPI guest kubeconfig was retrieved from the management plane and
+stored privately; its endpoint matched the exact CAPI Cluster. The snapshot
+contained nine `kube-system` Roles and RoleBindings each, 78 ClusterRoles and 57
+ClusterRoleBindings. It confirmed the webhook-mutation ClusterRole and its
+binding to `kube-system/ok147-argocd-manager`. No mutating/validating webhooks,
+ValidatingAdmissionPolicies or policy bindings were present in that snapshot.
+Absence of current webhooks does not prevent an authorized writer creating one.
+The Cilium DaemonSet used the digest-pinned 1.19.6 image and lacked the candidate
+UID environment entry. No Pod exec or Cilium action was performed, no credential
+was issued/renewed, and no cluster resource was changed. This limited projection
+does not enumerate all token holders, arbitrary namespace roles, runtime image
+state or a fresh Candidate's Stage-5 frontier. Raw credentials and snapshots are
+not committed to this PR.
+
+Selection remains NO-GO until the platform's trust boundary is explicitly
+reviewed: either all direct/indirect Cilium writers (including admission/RBAC
+administrators and controller credentials) are accepted as trusted platform
+principals, or independently controlled enforcement must prevent them from
+spoofing the actual selected container's identity/executable environment.
+Removing an existing ArgoCD grant or installing a new policy is not an implicit
+consequence of this review. Any proposed restriction must separately demonstrate
+that the renderer-owned sixteen-object Stage-7 install still works and that
+tenants/runner identities cannot bypass it through admission, controller,
+impersonation, token or privileged workload paths. Protecting only labels,
+ownerReferences or the original pre-exec template is insufficient.
+
+An additional **test-only** framing decoder now lives in
+`internal/runner/cilium_guard_candidate_test.go`. Missing/wrong/truncated/duplicate
+headers, UID mismatch, excess output and invalid transport exit status must STOP
+with no usable payload, before considering ordinary health warmup. A valid frame
+with a non-zero health-child exit can remain pending; exit 42 without a frame
+cannot. A successful framed child yields only copied bytes for the unchanged
+health evaluator, never operation success. A deliberate forged-header
+counterexample documents that framing does not authenticate the container. No
+production symbol, manifest, adapter, authority or network client is added; this
+is not an accepted protocol revision or a resolution of the writer boundary.
+
+Local follow-up validation (Go 1.26.7/macOS amd64, Python 3.13.7): all-package
+`go test -mod=readonly ./... -count=1` and `go vet -mod=readonly ./...` PASS;
+`go test -race -mod=readonly ./internal/runner -run
+'TestCandidateGuardFrame|TestKubernetesCilium' -count=10` PASS. The opt-in
+`OK147_WEBSOCKET_INTEGRATION=yes` RemoteCommand-v5 test PASS uses only a local
+fake TLS server. The Python candidate suite with the explicit digest-verified
+local Cilium chart PASS (10/10, including Helm render comparison). Its initial
+parallel run had two five-second subprocess timeouts; an unchanged separate
+rerun PASS in 1.881s. No timeout or production bound was relaxed; a root cause
+for those local timeouts is not established. Linux PR CI is separate evidence,
+not inferred from these results. Actual-image guard execution, admission/writer
+enforcement and live Stage-5 acceptance remain NOT RUN and unapproved.
+
 Primary source checks: Kubernetes supports the
 [Pod UID through Downward API](https://kubernetes.io/docs/concepts/workloads/pods/downward-api/),
 and [Cilium v1.19.6's chart](https://github.com/cilium/cilium/blob/v1.19.6/install/kubernetes/cilium/templates/cilium-agent/daemonset.yaml)
