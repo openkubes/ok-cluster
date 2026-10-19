@@ -108,3 +108,22 @@ activation and recovery/fencing acceptance are **NOT RUN**, deliberately outside
 this follow-up's authorization and security scope. No live cluster API was
 contacted during this follow-up. The preceding separately authorized read-only
 `ok-cli-mvp-3` snapshot is a different operation and not execution evidence here.
+
+## Independent re-review correction
+
+Suchit approved `52b0688` and requested one focused additional negative case:
+the Workload half of the network source adapter's kubeconfig guard. The new
+subtest sets only `Workload.KubeconfigFile`, with and without a token-shaped
+path, and requires the policy sentinel plus no collector/returned credential
+material from both private and public source openers. Removing only that guard
+half makes this test FAIL; restoring the unchanged production code makes it
+PASS. Final full Go suite, vet and the wrapper-sentinel race suite repeated ten
+times PASS locally. This correction changes tests/evidence only.
+
+The in-module opener fake counters are not a general network interception
+oracle: sentinel assertions detect the unsupported-open regressions. The
+separate actual-CLI test retains its positive TLS/TCP counter control. Direct
+installer/launcher credential-mode consistency, two unrelated `%w` wrappers and
+future enabled target-drift call-site coverage remain explicit follow-ups from
+the review, not silently included or declared resolved here. No new execution
+authority or security acceptance is inferred.

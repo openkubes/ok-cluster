@@ -173,4 +173,22 @@ func TestAuthorityOpenWrappersPreserveCredentialPolicySentinel(t *testing.T) {
 			t.Fatalf("enablement lost sentinel: %v", err)
 		}
 	})
+	t.Run("network workload at source open", func(t *testing.T) {
+		// Exercise the Workload half independently: no Management kubeconfig
+		// may hide a missing Workload guard. Both kubeconfig-only and mixed
+		// input must deny before completeness checks or credential reads.
+		for _, token := range []string{"", "/must-not-read-token"} {
+			config := KubernetesNetworkObserverConfig{Workload: KubernetesAuthorityConfig{
+				KubeconfigFile: "/must-not-read-workload", TokenFile: token,
+			}}
+			collector, management, workload, err := openKubernetesNetworkSourceCollector(config)
+			if collector != nil || management != "" || workload != "" || !errors.Is(err, ErrClientCertificateDisabled) {
+				t.Fatalf("private workload source lost sentinel or returned material: %v", err)
+			}
+			collector, err = OpenKubernetesNetworkSourceCollector(config)
+			if collector != nil || !errors.Is(err, ErrClientCertificateDisabled) {
+				t.Fatalf("public workload source lost sentinel: %v", err)
+			}
+		}
+	})
 }
