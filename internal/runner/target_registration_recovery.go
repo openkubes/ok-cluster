@@ -213,6 +213,9 @@ type TargetRegistrationRecoveryReceipt struct {
 }
 
 func RecoverTargetRegistration(ctx context.Context, config TargetRegistrationRecoveryConfig) (TargetRegistrationRecoveryReceipt, error) {
+	if err := rejectKubernetesClientCertificate(config.GitOps); err != nil {
+		return TargetRegistrationRecoveryReceipt{}, err
+	}
 	receipt := TargetRegistrationRecoveryReceipt{Format: TargetRegistrationRecoveryReceiptFormat, State: "PRECLAIM"}
 	if config.Handoff == nil || config.Clock == nil || config.MaterializationTime.IsZero() || !config.Authorization.verified {
 		return receipt, errors.New("verified target-registration recovery config is required")

@@ -89,6 +89,9 @@ func (source *sharedPlatformCapabilitySource) Capability(ctx context.Context) (o
 }
 
 func loadFirstRunPlatformObservationRuntime(config PlatformObservationStageFileRuntimeConfig, capability PlatformCapabilityResolver) (PlatformObservationStageRuntimeConfig, error) {
+	if err := rejectKubernetesClientCertificate(config.Argo); err != nil {
+		return PlatformObservationStageRuntimeConfig{}, err
+	}
 	runtime, err := LoadRuntimeBindingMaterialFiles(RuntimeBindingMaterialFileConfig{
 		Bundle: config.Bundle, MaterialPath: config.RuntimeMaterialPath, ReceiptPath: config.RuntimeReceiptPath,
 	})
@@ -107,6 +110,13 @@ func loadFirstRunPlatformObservationRuntime(config PlatformObservationStageFileR
 }
 
 func loadFirstRunAggregateEvidenceRuntime(config AggregateEvidenceStageFileRuntimeConfig, capability PlatformCapabilityResolver) (AggregateEvidenceStageRuntimeConfig, error) {
+	for _, authority := range []KubernetesAuthorityConfig{
+		config.Management, config.Argo, {KubeconfigFile: config.WorkloadKubeconfigFile},
+	} {
+		if err := rejectKubernetesClientCertificate(authority); err != nil {
+			return AggregateEvidenceStageRuntimeConfig{}, err
+		}
+	}
 	runtime, err := LoadRuntimeBindingMaterialFiles(RuntimeBindingMaterialFileConfig{
 		Bundle: config.Bundle, MaterialPath: config.RuntimeMaterialPath, ReceiptPath: config.RuntimeReceiptPath,
 	})

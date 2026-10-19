@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
@@ -59,7 +60,7 @@ func OpenKubernetesLifecycleStageObserver(config KubernetesLifecycleStageObserve
 		config.Plan.ContractIdentity.Name,
 	)
 	if err != nil {
-		return nil, errors.New("open bounded lifecycle observation source")
+		return nil, fmt.Errorf("open bounded lifecycle observation source: %w", err)
 	}
 	return NewLifecycleStageObserver(LifecycleStageObserverConfig{
 		Plan: config.Plan, Cursor: config.Cursor, Source: source,

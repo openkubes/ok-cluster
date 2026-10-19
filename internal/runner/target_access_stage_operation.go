@@ -24,6 +24,9 @@ type KubernetesTargetAccessStageOperationConfig struct {
 // OpenKubernetesTargetAccessStageOperation verifies the private raw target UID
 // against the public digest and reads bounded credentials without API contact.
 func OpenKubernetesTargetAccessStageOperation(config KubernetesTargetAccessStageOperationConfig) (execution.StagedOperation, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return execution.StagedOperation{}, err
+	}
 	if config.Clock == nil {
 		return execution.StagedOperation{}, errors.New("target-access operation clock is required")
 	}

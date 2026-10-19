@@ -128,6 +128,9 @@ type targetCredentialJWTClaims struct {
 // workload authority. It reads bounded credential material but performs no
 // TokenRequest or other API call.
 func OpenTargetCredentialIssuer(bundle VerifiedTargetCredentialStageBundle, config TargetCredentialIssuerConfig) (*KubernetesTargetCredentialIssuer, error) {
+	if err := rejectKubernetesClientCertificate(KubernetesAuthorityConfig{KubeconfigFile: config.Workload.KubeconfigFile}); err != nil {
+		return nil, err
+	}
 	if err := verifyTargetCredentialStageBundle(bundle); err != nil || config.Clock == nil {
 		return nil, errors.New("verified target-credential bundle and clock are required")
 	}

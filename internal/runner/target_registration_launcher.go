@@ -93,6 +93,9 @@ type targetRegistrationLauncherClientConfig struct {
 // OpenKubernetesTargetRegistrationLauncher opens the bounded ok-shared
 // credential and verifies all private material without contacting an API.
 func OpenKubernetesTargetRegistrationLauncher(config TargetRegistrationLauncherConfig, material VerifiedTargetRegistrationMaterial) (*KubernetesTargetRegistrationLauncher, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return nil, err
+	}
 	if err := verifyTargetRegistrationMaterial(material); err != nil {
 		return nil, err
 	}

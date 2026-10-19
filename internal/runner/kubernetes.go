@@ -142,6 +142,9 @@ func OpenKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submissi
 // operation composition can prove that two write authorities do not share one
 // credential. It never enters an error or receipt.
 func openKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submission.KubernetesClient, string, error) {
+	if err := rejectKubernetesClientCertificate(config); err != nil {
+		return nil, "", err
+	}
 	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.CAFile == "" {
 		return nil, "", errors.New("Kubernetes authority endpoint, identity, credential, and CA file are required")
 	}
@@ -160,6 +163,9 @@ func openKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submissi
 }
 
 func openBoundedKubernetesAuthorityTransport(config KubernetesAuthorityConfig) (boundedKubernetesTransport, error) {
+	if err := rejectKubernetesClientCertificate(config); err != nil {
+		return boundedKubernetesTransport{}, err
+	}
 	tokenMode := config.TokenFile != ""
 	kubeconfigMode := config.KubeconfigFile != ""
 	if config.Endpoint == "" || config.CAFile == "" || tokenMode == kubeconfigMode {
@@ -180,6 +186,13 @@ func openBoundedKubernetesAuthorityTransport(config KubernetesAuthorityConfig) (
 // No bounded certificate issuer/subject/group/lifetime policy is approved.
 // CA-signed CAPI admin certificates must never become executor credentials.
 var ErrClientCertificateDisabled = errors.New("client-certificate execution is disabled pending a bounded credential bootstrap policy")
+
+func rejectKubernetesClientCertificate(config KubernetesAuthorityConfig) error {
+	if config.KubeconfigFile != "" {
+		return ErrClientCertificateDisabled
+	}
+	return nil
+}
 
 func openBoundedKubernetesKubeconfigTransport(kubeconfigFile, expectedEndpoint, caFile string) (boundedKubernetesTransport, error) {
 	// Reject before reading credential files or constructing an HTTP client.
@@ -202,8 +215,8 @@ func OpenKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expec
 // stage-level composition can prove that observation and ledger writes use
 // distinct credentials. The token never leaves this package.
 func openKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*observation.CAPILifecycleObserver, string, error) {
-	if config.KubeconfigFile != "" {
-		return nil, "", ErrClientCertificateDisabled
+	if err := rejectKubernetesClientCertificate(config); err != nil {
+		return nil, "", err
 	}
 	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.TokenFile == "" || config.CAFile == "" {
 		return nil, "", errors.New("Kubernetes CAPI observer endpoint, identity, token file, and CA file are required")
@@ -235,8 +248,11 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 // openKubernetesNetworkSourceCollector returns credential identities only to
 // private stage composition so it can prove that capabilities remain separate.
 func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig) (*observation.NetworkSourceCollector, string, string, error) {
-	if config.Management.KubeconfigFile != "" || config.Workload.KubeconfigFile != "" {
-		return nil, "", "", ErrClientCertificateDisabled
+	if err := rejectKubernetesClientCertificate(config.Management); err != nil {
+		return nil, "", "", err
+	}
+	if err := rejectKubernetesClientCertificate(config.Workload); err != nil {
+		return nil, "", "", err
 	}
 	if config.ExpectedManagementAuthority == "" || config.Management.AuthorityIdentity != config.ExpectedManagementAuthority {
 		return nil, "", "", errors.New("network observer management authority differs from the verified management plane")
@@ -301,6 +317,9 @@ func OpenKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConf
 }
 
 func openKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConfig) (*observation.PlatformSourceCollector, string, error) {
+	if err := rejectKubernetesClientCertificate(config.Argo); err != nil {
+		return nil, "", err
+	}
 	if config.ExpectedArgoAuthority == "" || config.Argo.AuthorityIdentity != config.ExpectedArgoAuthority {
 		return nil, "", errors.New("platform observer authority differs from the verified GitOps control plane")
 	}
@@ -333,6 +352,9 @@ func openKubernetesPlatformSourceCollector(config KubernetesPlatformObserverConf
 // one runtime workload authority. It reads credential files but performs no
 // Kubernetes request until the capability probe opens its execution gate.
 func OpenKubernetesObservabilityTransport(config KubernetesObservabilityTransportConfig) (*KubernetesObservabilityTransport, error) {
+	if err := rejectKubernetesClientCertificate(config.Workload); err != nil {
+		return nil, err
+	}
 	if config.Workload.AuthorityIdentity != config.Run.TargetClusterUID || !platformInputDigestPattern.MatchString(config.Workload.CABundleDigest) {
 		return nil, errors.New("observability transport workload authority differs from runtime target")
 	}

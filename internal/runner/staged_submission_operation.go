@@ -27,6 +27,9 @@ type KubernetesSubmissionStageOperationConfig struct {
 // usable by a local process or ephemeral Job. Construction reads bounded
 // credential files but performs no Kubernetes API request.
 func OpenKubernetesSubmissionStageOperation(config KubernetesSubmissionStageOperationConfig) (execution.StagedOperation, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return execution.StagedOperation{}, fmt.Errorf("open staged submission authority: %w", err)
+	}
 	if config.Clock == nil {
 		return execution.StagedOperation{}, errors.New("staged submission operation clock is required")
 	}

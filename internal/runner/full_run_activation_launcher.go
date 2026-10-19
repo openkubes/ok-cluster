@@ -54,6 +54,9 @@ type KubernetesFullRunExecutionActivationLauncher struct {
 // OpenKubernetesFullRunExecutionActivationLauncher verifies the exact package
 // identity before opening the management credential and performs no API call.
 func OpenKubernetesFullRunExecutionActivationLauncher(config FullRunExecutionActivationLauncherConfig, packaged VerifiedFullRunExecutionActivationPackage) (*KubernetesFullRunExecutionActivationLauncher, error) {
+	if err := rejectKubernetesClientCertificate(config.Authority); err != nil {
+		return nil, err
+	}
 	receipt, err := packaged.Receipt()
 	if err != nil || config.ExpectedPackageDigest != receipt.PackageDigest {
 		return nil, errors.New("full-run activation package differs from expected identity")

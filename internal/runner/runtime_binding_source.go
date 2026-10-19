@@ -60,6 +60,9 @@ func OpenKubernetesRuntimeBindingSource(authority KubernetesAuthorityConfig, bin
 // identity so stage composition can prove that workload reads and ledger
 // writes use distinct credentials. It never enters evidence.
 func openKubernetesRuntimeBindingSource(authority KubernetesAuthorityConfig, binding WorkloadAuthorityBinding) (*KubernetesRuntimeBindingSource, string, error) {
+	if err := rejectKubernetesClientCertificate(authority); err != nil {
+		return nil, "", err
+	}
 	if err := validateWorkloadAuthorityBinding(binding); err != nil {
 		return nil, "", errors.New("runtime binding workload authority is invalid")
 	}
