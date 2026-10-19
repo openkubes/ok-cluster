@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/digest"
@@ -109,7 +110,7 @@ func (bundle VerifiedNetworkObservationStageBundle) Open(config NetworkObservati
 		Name: bundle.plan.ContractIdentity.Name, HCPName: bundle.plan.ContractIdentity.Name + "-cilium", Clock: config.Clock,
 	})
 	if err != nil {
-		return OpenedNetworkObservationStage{}, errors.New("open bounded network observation source")
+		return OpenedNetworkObservationStage{}, fmt.Errorf("open bounded network observation source: %w", err)
 	}
 	if sameSecret(ledgerToken, managementToken) || sameSecret(ledgerToken, workloadToken) {
 		return OpenedNetworkObservationStage{}, errors.New("ledger and network observation credentials must be distinct")

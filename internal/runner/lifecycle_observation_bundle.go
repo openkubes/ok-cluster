@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
@@ -88,7 +89,7 @@ func (bundle VerifiedLifecycleObservationStageBundle) Open(config LifecycleObser
 		bundle.plan.ContractIdentity.Name,
 	)
 	if err != nil {
-		return OpenedLifecycleObservationStage{}, errors.New("open lifecycle observation management source")
+		return OpenedLifecycleObservationStage{}, fmt.Errorf("open lifecycle observation management source: %w", err)
 	}
 	if len(ledgerToken) == len(managementToken) && subtle.ConstantTimeCompare([]byte(ledgerToken), []byte(managementToken)) == 1 {
 		return OpenedLifecycleObservationStage{}, errors.New("ledger and observation credentials must be distinct")

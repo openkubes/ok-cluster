@@ -202,6 +202,9 @@ func OpenKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expec
 // stage-level composition can prove that observation and ledger writes use
 // distinct credentials. The token never leaves this package.
 func openKubernetesCAPILifecycleObserver(config KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*observation.CAPILifecycleObserver, string, error) {
+	if config.KubeconfigFile != "" {
+		return nil, "", ErrClientCertificateDisabled
+	}
 	if config.Endpoint == "" || config.AuthorityIdentity == "" || config.TokenFile == "" || config.CAFile == "" {
 		return nil, "", errors.New("Kubernetes CAPI observer endpoint, identity, token file, and CA file are required")
 	}
@@ -232,6 +235,9 @@ func OpenKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig
 // openKubernetesNetworkSourceCollector returns credential identities only to
 // private stage composition so it can prove that capabilities remain separate.
 func openKubernetesNetworkSourceCollector(config KubernetesNetworkObserverConfig) (*observation.NetworkSourceCollector, string, string, error) {
+	if config.Management.KubeconfigFile != "" || config.Workload.KubeconfigFile != "" {
+		return nil, "", "", ErrClientCertificateDisabled
+	}
 	if config.ExpectedManagementAuthority == "" || config.Management.AuthorityIdentity != config.ExpectedManagementAuthority {
 		return nil, "", "", errors.New("network observer management authority differs from the verified management plane")
 	}

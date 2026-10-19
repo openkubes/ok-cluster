@@ -108,6 +108,10 @@ func TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne(t *testing.T) {
 			}
 			for _, mode := range modes {
 				t.Run(version+"/"+strings.Join(command, "-")+"/"+mode, func(t *testing.T) {
+					apiCalls.Store(0)
+					mutations.Store(0)
+					grants.Store(0)
+					connections.Store(0)
 					markerRoot := t.TempDir()
 					if err := os.Chmod(markerRoot, 0o700); err != nil {
 						t.Fatal(err)
