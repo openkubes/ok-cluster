@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
@@ -52,6 +53,9 @@ var _ execution.StageObserver = (*LifecycleStageObserver)(nil)
 // OpenKubernetesLifecycleStageObserver binds the exact management authority
 // and reads its bounded credential files, but performs no Kubernetes request.
 func OpenKubernetesLifecycleStageObserver(config KubernetesLifecycleStageObserverConfig) (*LifecycleStageObserver, error) {
+	if err := validateTokenOnlyAuthority(config.Management); err != nil {
+		return nil, fmt.Errorf("open bounded lifecycle observation source: %w", err)
+	}
 	source, err := OpenKubernetesCAPILifecycleObserver(
 		config.Management,
 		config.Plan.Authorities.Management,
@@ -59,7 +63,7 @@ func OpenKubernetesLifecycleStageObserver(config KubernetesLifecycleStageObserve
 		config.Plan.ContractIdentity.Name,
 	)
 	if err != nil {
-		return nil, errors.New("open bounded lifecycle observation source")
+		return nil, fmt.Errorf("open bounded lifecycle observation source: %w", err)
 	}
 	return NewLifecycleStageObserver(LifecycleStageObserverConfig{
 		Plan: config.Plan, Cursor: config.Cursor, Source: source,

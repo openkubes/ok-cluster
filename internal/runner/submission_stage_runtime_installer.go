@@ -55,6 +55,9 @@ type submissionStageRuntimeInstallerClientConfig struct {
 // client for one verified tokenless ServiceAccount prerequisite. It performs
 // no API request.
 func OpenKubernetesSubmissionStageRuntimeInstaller(config KubernetesAuthorityConfig, runtime VerifiedSubmissionStageRuntimePrerequisite) (*KubernetesSubmissionStageRuntimeInstaller, error) {
+	if err := validateTokenOnlyAuthority(config); err != nil {
+		return nil, err
+	}
 	if err := verifySubmissionStageRuntimePrerequisite(runtime); err != nil {
 		return nil, err
 	}

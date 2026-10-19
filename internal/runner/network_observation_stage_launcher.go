@@ -61,6 +61,9 @@ type KubernetesNetworkObservationStageLauncher struct {
 // OpenKubernetesNetworkObservationStageLauncher opens the exact prepared API
 // client and bounded installer credential without performing an API request.
 func OpenKubernetesNetworkObservationStageLauncher(config NetworkObservationStageLauncherConfig, packaged VerifiedNetworkObservationStagePackage, credentials VerifiedNetworkObservationStageCredentialPackage, runtime VerifiedNetworkObservationStageRuntimePrerequisite) (*KubernetesNetworkObservationStageLauncher, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	plan, err := PlanNetworkObservationStageLaunch(packaged, credentials, runtime)
 	if err != nil {
 		return nil, err

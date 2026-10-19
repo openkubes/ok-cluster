@@ -61,6 +61,9 @@ type KubernetesTargetAccessStageLauncher struct {
 // OpenKubernetesTargetAccessStageLauncher opens the exact prepared API client
 // and bounded installer credential without contacting Kubernetes.
 func OpenKubernetesTargetAccessStageLauncher(config TargetAccessStageLauncherConfig, packaged VerifiedTargetAccessStagePackage, credentials VerifiedTargetAccessStageCredentialPackage, runtime VerifiedTargetAccessStageRuntimePrerequisite) (*KubernetesTargetAccessStageLauncher, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	plan, err := PlanTargetAccessStageLaunch(packaged, credentials, runtime)
 	if err != nil {
 		return nil, err

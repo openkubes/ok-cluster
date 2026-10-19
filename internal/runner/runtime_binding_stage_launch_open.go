@@ -48,6 +48,9 @@ type OpenedRuntimeBindingStageLaunch struct {
 // Open validates and consumes local installer material against the exact
 // prepared candidate. It does not contact Kubernetes or authorize mutation.
 func (material VerifiedRuntimeBindingStageLaunchMaterial) Open(config RuntimeBindingStageLaunchOpenConfig) (*OpenedRuntimeBindingStageLaunch, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	if err := verifyRuntimeBindingStageLaunchMaterial(material); err != nil {
 		return nil, err
 	}

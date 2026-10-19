@@ -84,6 +84,9 @@ type submissionStageLauncherClientConfig struct {
 // OpenKubernetesSubmissionStageLauncher opens one exact management-plane
 // client for one coherent launch. It performs no API request.
 func OpenKubernetesSubmissionStageLauncher(config SubmissionStageLauncherConfig, packaged VerifiedSubmissionStagePackage, credentials VerifiedSubmissionStageCredentialPackage, runtime VerifiedSubmissionStageRuntimePrerequisite) (*KubernetesSubmissionStageLauncher, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	plan, err := PlanSubmissionStageLaunch(packaged, credentials, runtime)
 	if err != nil {
 		return nil, err

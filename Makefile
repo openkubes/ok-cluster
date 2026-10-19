@@ -243,6 +243,8 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@go test -mod=readonly ./internal/runner -count=1 \
 		-run 'TestLoadFullRunExecutionManifestBindsBareClusterCompletion|TestLoadBareClusterManifestDoesNotRequirePostRuntimeMaterial|TestFullRunExecutionActivationAcceptsExactBareClusterSuccess|TestFullRunExecutionBareClusterNeverOpensPostRuntimeMaterial|TestFullRunOrchestrationCompletesBareClusterAfterExactPrefix|TestFullRunCLIRejectsUnsupportedCredentialsBeforeStageOne|TestKubernetesLifecycleWorkloadAuthorityMaterializerRejectsBeforeAPIContact'
 	@$(SCRIPT_DIR)/.tools/bin/ok --help >/dev/null
+	@go test -mod=readonly ./internal/runner -count=1 \
+		-run 'TestStageAdapterCredentialPolicyBeforeOpen|TestRuntimeInstallerCredentialPolicyWithValidPrerequisite|TestStageAdapterOpenErrorsRetainCause'
 	@$(SCRIPT_DIR)/.tools/bin/ok destroy --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok destroy cluster --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster destroy --help >/dev/null

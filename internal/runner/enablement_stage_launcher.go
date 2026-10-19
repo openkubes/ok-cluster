@@ -64,6 +64,9 @@ type KubernetesEnablementStageLauncher struct {
 // prepared candidate and bounded installer credential. It performs no API
 // request.
 func OpenKubernetesEnablementStageLauncher(config EnablementStageLauncherConfig, packaged VerifiedEnablementStagePackage, credentials VerifiedEnablementStageCredentialPackage, runtime VerifiedEnablementStageRuntimePrerequisite) (*KubernetesEnablementStageLauncher, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	plan, err := PlanEnablementStageLaunch(packaged, credentials, runtime)
 	if err != nil {
 		return nil, err

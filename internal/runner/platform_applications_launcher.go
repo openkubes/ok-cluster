@@ -72,6 +72,9 @@ type platformApplicationsLauncherClientConfig struct {
 // OpenKubernetesPlatformApplicationsLauncher opens the bounded GitOps writer
 // credential without contacting an API.
 func OpenKubernetesPlatformApplicationsLauncher(config PlatformApplicationsLauncherConfig, bundle VerifiedPlatformApplicationsStageBundle) (*KubernetesPlatformApplicationsLauncher, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	if err := verifyPlatformApplicationsStageBundle(bundle); err != nil {
 		return nil, err
 	}

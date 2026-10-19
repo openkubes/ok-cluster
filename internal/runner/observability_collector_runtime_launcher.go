@@ -206,6 +206,9 @@ type KubernetesObservabilityCollectorRuntimeLauncher struct {
 }
 
 func OpenKubernetesObservabilityCollectorRuntimeLauncher(config ObservabilityCollectorRuntimeLauncherConfig, packaged VerifiedObservabilityCollectorRuntimePackage) (*KubernetesObservabilityCollectorRuntimeLauncher, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	receipt, err := packaged.Receipt()
 	if err != nil || receipt.PackageDigest != config.ExpectedPackageDigest {
 		return nil, errors.New("observability collector package differs from expected identity")

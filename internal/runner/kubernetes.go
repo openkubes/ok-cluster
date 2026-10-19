@@ -160,21 +160,19 @@ func openKubernetesSubmissionClient(config KubernetesAuthorityConfig) (*submissi
 }
 
 func openBoundedKubernetesAuthorityTransport(config KubernetesAuthorityConfig) (boundedKubernetesTransport, error) {
-	tokenMode := config.TokenFile != ""
-	kubeconfigMode := config.KubeconfigFile != ""
-	if config.Endpoint == "" || config.CAFile == "" || tokenMode == kubeconfigMode {
+	if err := validateTokenOnlyAuthority(config); err != nil {
+		return boundedKubernetesTransport{}, err
+	}
+	if config.Endpoint == "" || config.CAFile == "" {
 		return boundedKubernetesTransport{}, errors.New("Kubernetes authority requires exactly one transport credential")
 	}
-	if tokenMode {
-		token, ca, client, err := openBoundedKubernetesMaterial(config.TokenFile, config.CAFile)
-		if err != nil {
-			return boundedKubernetesTransport{}, err
-		}
-		return boundedKubernetesTransport{
-			bearerToken: token, caData: ca, credentialIdentity: token, client: client,
-		}, nil
+	token, ca, client, err := openBoundedKubernetesMaterial(config.TokenFile, config.CAFile)
+	if err != nil {
+		return boundedKubernetesTransport{}, err
 	}
-	return openBoundedKubernetesKubeconfigTransport(config.KubeconfigFile, config.Endpoint, config.CAFile)
+	return boundedKubernetesTransport{
+		bearerToken: token, caData: ca, credentialIdentity: token, client: client,
+	}, nil
 }
 
 // No bounded certificate issuer/subject/group/lifetime policy is approved.

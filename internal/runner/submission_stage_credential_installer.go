@@ -90,6 +90,9 @@ type submissionStageCredentialInstallerClientConfig struct {
 // credentialed management-plane writer for exactly one private two-Secret
 // package. It performs no API request.
 func OpenKubernetesSubmissionStageCredentialInstaller(config SubmissionStageCredentialInstallerConfig, packaged VerifiedSubmissionStageCredentialPackage) (*KubernetesSubmissionStageCredentialInstaller, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	if _, _, err := prepareSubmissionStageCredentialInstallation(packaged); err != nil {
 		return nil, err
 	}

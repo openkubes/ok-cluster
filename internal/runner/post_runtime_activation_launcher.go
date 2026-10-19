@@ -53,6 +53,9 @@ type KubernetesPostRuntimeExecutionActivationLauncher struct {
 // OpenKubernetesPostRuntimeExecutionActivationLauncher opens the exact
 // management credential but performs no API request.
 func OpenKubernetesPostRuntimeExecutionActivationLauncher(config PostRuntimeExecutionActivationLauncherConfig, packaged VerifiedPostRuntimeExecutionActivationPackage) (*KubernetesPostRuntimeExecutionActivationLauncher, error) {
+	if err := validateTokenOnlyAuthority(config.Authority); err != nil {
+		return nil, err
+	}
 	receipt, err := packaged.Receipt()
 	if err != nil || config.ExpectedPackageDigest != receipt.PackageDigest {
 		return nil, errors.New("post-runtime activation package differs from expected identity")
