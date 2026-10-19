@@ -404,6 +404,10 @@ class IntentRenderTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(stdout, b'')
         self.assertIn(b'client-certificate execution is disabled', prompts)
+        self.assertIn(b'Automatic workload-access setup is not enabled yet', prompts)
+        self.assertIn(b'There is no user-side workaround', prompts)
+        self.assertIn(b'do not switch to an administrator kubeconfig', prompts)
+        self.assertIn(b'delete retained preparation, or retry the run', prompts)
         self.assertNotIn(b'Type ok to create', prompts)
         self.assertEqual(list(self.home.rglob('managed-preparation.json')), [])
         root = Path(json.loads(pending.stdout)['requestPath']).parent
