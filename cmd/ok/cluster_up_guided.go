@@ -38,7 +38,21 @@ type guidedUpPreparation struct {
 }
 
 func runGuidedClusterUp(ctx context.Context, path string, stdout, stderr io.Writer) error {
-	return runAutomaticClusterUp(ctx, path, stdout, stderr, guidedUpRuntime{os.Stdin, term.IsTerminal(int(os.Stdin.Fd()))}, false)
+	err := runAutomaticClusterUp(ctx, path, stdout, stderr, guidedUpRuntime{os.Stdin, term.IsTerminal(int(os.Stdin.Fd()))}, false)
+	return explainGuidedUpCredentialPolicy(err)
+}
+
+// Human guidance only, after the existing workflow has stopped. Never infer
+// stage outcomes, readiness or authorization from an error category. Expert
+// and JSON preparation paths retain their existing errors and output contracts.
+func explainGuidedUpCredentialPolicy(err error) error {
+	if !errors.Is(err, runner.ErrClientCertificateDisabled) {
+		return err
+	}
+	return fmt.Errorf("cluster creation is blocked by the runner's credential security policy. "+
+		"Automatic workload-access setup is not enabled yet; a platform operator must provide a reviewed integration. "+
+		"There is no user-side workaround: do not switch to an administrator kubeconfig, delete retained preparation, or retry the run. "+
+		"Existing preparation and evidence remain unchanged by this guidance. Reason: %w", err)
 }
 
 func runGuidedClusterUpWithRuntime(ctx context.Context, path string, stdout, stderr io.Writer, runtime guidedUpRuntime) error {
