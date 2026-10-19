@@ -41,7 +41,7 @@ func Validate(metadata, certificateDER, privateKeyPEM []byte, expected bootstrap
 		return errInvalidSource
 	}
 	certificate, err := x509.ParseCertificate(certificateDER)
-	if err != nil || !certificate.IsCA || !certificate.BasicConstraintsValid || certificate.KeyUsage&x509.KeyUsageCertSign == 0 {
+	if err != nil || !certificate.IsCA || !certificate.BasicConstraintsValid || certificate.KeyUsage&x509.KeyUsageCertSign == 0 || len(certificate.UnhandledCriticalExtensions) != 0 {
 		return errInvalidSource
 	}
 	raw := bytes.TrimSpace(privateKeyPEM)
@@ -73,22 +73,15 @@ func Validate(metadata, certificateDER, privateKeyPEM []byte, expected bootstrap
 		return errInvalidSource
 	}
 	var public crypto.PublicKey
+	// Use the public key obtained from the standard-library parser. This is
+	// correspondence checking, not validation of optional embedded public-key
+	// fields or canonicalization of every inner ASN.1 element.
 	switch key := parsed.(type) {
 	case *rsa.PrivateKey:
-		if key.Validate() != nil {
-			return errInvalidSource
-		}
 		public = &key.PublicKey
 	case *ecdsa.PrivateKey:
-		x, y := key.Curve.ScalarBaseMult(key.D.Bytes())
-		if x.Cmp(key.X) != 0 || y.Cmp(key.Y) != 0 {
-			return errInvalidSource
-		}
 		public = &key.PublicKey
 	case ed25519.PrivateKey:
-		if len(key) != ed25519.PrivateKeySize || !bytes.Equal(key, ed25519.NewKeyFromSeed(key.Seed())) {
-			return errInvalidSource
-		}
 		public = key.Public()
 	default:
 		return errInvalidSource

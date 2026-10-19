@@ -25,14 +25,16 @@ Stage 5-7 path is re-enabled. #452/#458 remain separate; ADR-030 item 9 OPEN.
 - Reuse #455's metadata-only validator for exact namespace/name/UID/RV and sole
   expected Cluster controller owner. Complete Secret objects are rejected.
 - Match the exact supplied CA DER SHA-256 to the independently expected digest;
-  require parseable CA constraints and certificate-signing key usage.
+  require parseable CA constraints, certificate-signing key usage and no
+  unhandled critical extensions.
 - Bound CA DER to 64 KiB and PEM to 16 KiB. Accept only one unencrypted,
   headerless PKCS#8, PKCS#1 RSA or SEC1 EC PEM block, with no leading/trailing
   junk, second block or trailing outer DER value.
-- Decode RSA/ECDSA/Ed25519 keys, check their internal consistency as applicable,
-  and compare canonical public-key encodings with the CA certificate. No signing
-  operation is used to perform that comparison. Decoding support is **not**
-  approval of an algorithm, curve, key strength or issuer profile.
+- Decode RSA/ECDSA/Ed25519 keys using the standard library and compare the
+  resulting public-key encodings with the CA certificate. No additional
+  private-key consistency validator or signing operation is performed by this
+  helper. Decoding support is **not** approval of an algorithm, curve, key
+  strength or issuer profile.
 - Return one fixed redacted error for every failure; no parser error, metadata,
   endpoint, key bytes or private input is returned/logged. Caller buffers remain
   unchanged. Go-managed temporary key allocations are not a secure-erasure or
@@ -46,10 +48,18 @@ future privileged task must bind source identity to its actual key-source read,
 recheck immediately before use, and fail on source drift. This helper does not
 select a provider version, Secret layout/data key or live key source.
 
+The envelope checks are not canonical validation of every inner ASN.1 element.
+Optional embedded public-key fields or extra inner elements may be ignored by
+the standard-library parser; correspondence uses its resulting public key, not
+an assertion that those embedded fields agree. The future task's actual key use
+and parser/profile still need review. Multi-block EC PARAMETERS plus EC PRIVATE
+KEY output is rejected; no implicit stripping/conversion is implemented.
+
 It does not validate issuance-time CA validity/chain/profile, authenticate the
 operation/request/authoritative predecessor, claim a durable slot, establish
 store continuity or issue a certificate. A deliberately expired-CA test still
-passes **correspondence only**, making that distinction explicit. Existing
+passes **correspondence only**, making that distinction explicit; it is not a
+requirement to retain that behavior if an issuance-time policy is added. Existing
 Binding roles remain observer-only; `target-access` is rejected rather than
 inventing a privileged profile. Existing #455/#456 request/result/profile/time
 checks, platform delegation, key isolation and all remaining store/issuer/
@@ -69,18 +79,36 @@ inputs. The trailing-DER negative initially exposed permissive x509 parsing and
 was fixed with an explicit complete outer-sequence check; that intermediate FAIL
 is not counted as PASS.
 
-Local environment: Go 1.26.7 / macOS amd64. Validation results below are local
-evidence only; Linux/Go 1.21 PR CI is separate and pending until reported.
+Local environment: Go 1.26.7 / macOS amd64. Initial-head `b7f3f6b` Linux/Go 1.21
+CI is green and Suchit independently reproduced the suite/vet/race (including
+45s PEM-input fuzzing) on Go 1.21.13. That is review evidence for the initial
+head, not a result for this corrected head. New-head CI is separate and pending
+until reported; the corrected-head local checks are listed below.
 
 | Check | Result |
 | --- | --- |
 | Package tests | PASS |
 | `go test -mod=readonly ./... -count=1` on final implementation source | PASS, all packages |
 | `go test -race -mod=readonly ./internal/issuersourcecheck -count=10` | PASS |
-| Package statement coverage | 88.6% |
+| Package statement coverage after review correction | 94.6% |
 | `go vet -mod=readonly ./...` | PASS |
 | `go list -deps ./cmd/ok` and `./internal/bootstrapauthority` | New helper absent |
 | `git diff --check` | PASS |
+
+Review corrections remove the redundant post-parser RSA/EC/Ed25519 consistency
+blocks and narrow the claims above. New tests isolate otherwise-valid material:
+PEM at 16383/16384/16385 bytes; bound CA certificates at 65535/65536/65537 bytes;
+a valid key with a Comment header; valid plaintext under an encrypted label;
+and an ASN.1 EncryptedPrivateKeyInfo/PBES2 envelope with opaque synthetic
+ciphertext (no password/decryption correctness claim). Critical/non-critical
+extension controls exercise the new fail-closed critical-extension check.
+
+Nine focused local mutation checks each FAIL as intended: removing the header
+guard, removing either size bound, shifting each bound one byte in either
+direction, routing the encrypted label to the plaintext parser, and removing
+critical-extension rejection. Source was restored after every mutation; the
+normal final tests PASS. These are isolated local negative experiments, not
+production changes or a claim that all possible mutants were tested.
 
 Full-repo race and live issuer/storage/authorization/runner/Stage-7/Console integration
 are NOT RUN on this branch. No live cluster contact/mutation, credential action,

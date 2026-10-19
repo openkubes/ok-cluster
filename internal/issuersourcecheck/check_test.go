@@ -184,6 +184,8 @@ func TestSourceMetadataAndCertificateCannotDrift(t *testing.T) {
 func TestKeyCorrespondenceIsNotIssuanceOrFreshnessApproval(t *testing.T) {
 	// This counterexample makes the helper's limit explicit. Matching source
 	// bytes and a usable key do not replace the issuer's time/profile checks.
+	// This is not a requirement to keep accepting expired CAs: replace the
+	// example when a separately reviewed issuance-time contract adds time checks.
 	der, key, expected := fixture(t, edKey(t), func(c *x509.Certificate) { c.NotAfter = time.Unix(100, 0) })
 	if err := Validate([]byte(metadataFixture), der, key, expected, ownerFixture); err != nil {
 		t.Fatalf("correspondence helper unexpectedly became an issuance-time policy: %v", err)
