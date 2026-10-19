@@ -571,6 +571,32 @@ def negative_tests(base: Path) -> None:
     surplus_test(base / "surplus")
 
 
+def phase_message_tests() -> None:
+    makefile = ROOT / "Makefile"
+    template = ROOT / "templates" / "talos" / "bootstrap.sh.tpl"
+    rendered = sorted(ROOT.glob("ok-*/bootstrap.sh"))
+    for path in (makefile, template, *rendered):
+        text = path.read_text(encoding="utf-8")
+        check(
+            "✅ Done. Test" not in text and "Cluster $(CLUSTER) ready!" not in text,
+            f"{path.relative_to(ROOT)} contains no premature Done/Cluster ready message",
+        )
+        if path == makefile:
+            install_cni = text.split("\ninstall-cni:", 1)[1].split("\ninstall-storage:", 1)[0]
+            check(
+                "✅ CNI installation completed; waiting for expected nodes to become Ready"
+                in install_cni,
+                "install-cni reports CNI phase completion and pending expected-node readiness",
+            )
+        else:
+            variable = "$${KUBECONFIG_OUT}" if path == template else "${KUBECONFIG_OUT}"
+            check(
+                "✅ Talos bootstrap and kubeconfig retrieval completed. Inspect nodes: "
+                f"kubectl --kubeconfig {variable} get nodes" in text,
+                f"{path.relative_to(ROOT)} reports Talos bootstrap phase completion with node hint",
+            )
+
+
 def validation_and_make_tests(base: Path) -> None:
     malformed = Sandbox(base / "malformed")
     (malformed.cluster_dir / "cluster-base.yaml").write_text(
@@ -609,7 +635,7 @@ def main() -> int:
         "--case",
         choices=(
             "positive", "count-only", "ignore-worker", "not-ready",
-            "timeout", "edge", "validation", "surplus",
+            "timeout", "edge", "validation", "surplus", "messages",
         ),
         help="run one mutation discriminator instead of the complete module",
     )
@@ -617,6 +643,7 @@ def main() -> int:
     base = Path(tempfile.mkdtemp(prefix="ok198-"))
     try:
         cases = {
+            "messages": phase_message_tests,
             "positive": lambda: positive_tests(base / "positive"),
             "surplus": lambda: surplus_test(base / "surplus"),
             "count-only": lambda: identity_test(base / "count-only"),
@@ -634,6 +661,7 @@ def main() -> int:
         if args.case:
             cases[args.case]()
         else:
+            phase_message_tests()
             positive_tests(base / "positive")
             negative_tests(base / "negative")
             validation_and_make_tests(base / "validation")

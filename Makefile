@@ -647,7 +647,7 @@ install-cni: require-cluster kubeconfig
 			--set kubeProxyReplacement=true; \
 	fi
 	@echo ""
-	@echo "✅ Cluster $(CLUSTER) ready!"
+	@echo "✅ CNI installation completed; waiting for expected nodes to become Ready"
 	@echo "   kubectl --kubeconfig $(GUEST_KUBECONFIG) get nodes"
 
 install-storage: require-cluster kubeconfig ## Install local-path StorageClass (required for Talos clusters)
