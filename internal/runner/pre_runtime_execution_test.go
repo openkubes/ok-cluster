@@ -18,7 +18,7 @@ import (
 
 func TestPreRuntimeExecutionComposesExactPrefixWithDynamicAuthorization(t *testing.T) {
 	config, factories, calls, requests := preRuntimeExecutionFixture(t)
-	executor, err := openPreRuntimeExecution(config, factories)
+	executor, err := openSyntheticPreRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestPreRuntimeExecutionStopsBeforeNetworkWhenWorkloadAuthorityIsUnavailable
 	config.WorkloadAuthority = PreRuntimeWorkloadAuthorityResolverFunc(func(context.Context, StageResumeConfig) (WorkloadAuthorityFileResolverConfig, error) {
 		return WorkloadAuthorityFileResolverConfig{}, errors.New("private workload authority unavailable")
 	})
-	executor, err := openPreRuntimeExecution(config, factories)
+	executor, err := openSyntheticPreRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestPreRuntimeExecutionRejectsWorkloadAuthorityOutsideBoundDestinations(t *
 			CAFile: config.NetworkObservation.Workload.CAFile,
 		}, nil
 	})
-	executor, err := openPreRuntimeExecution(config, factories)
+	executor, err := openSyntheticPreRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestPreRuntimeExecutionStopsAfterDurableReceiptWhenNextGrantIsUnavailable(t
 		}
 		return resolved.ResolveStageAuthorization(ctx, request)
 	})
-	executor, err := openPreRuntimeExecution(config, factories)
+	executor, err := openSyntheticPreRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestPreRuntimeExecutionReportsRedactedClusterLifecycleOpenCategories(t *tes
 				}
 				return original(resume, stageID, source, config)
 			}
-			executor, err := openPreRuntimeExecution(config, factories)
+			executor, err := openSyntheticPreRuntimeExecution(config, factories)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -308,7 +308,7 @@ func TestPreRuntimeExecutionPreservesClusterLifecycleMismatchEvidence(t *testing
 			}, &execution.StageResultError{State: "COMPLETED_STOPPED", FailureCategory: category, MismatchEvidence: evidence}
 		}}, nil
 	}
-	executor, err := openPreRuntimeExecution(config, factories)
+	executor, err := openSyntheticPreRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestPreRuntimeExecutionStopsWithoutReplayWhenReceiptPersistenceFails(t *tes
 		persistCalls++
 		return StageReceiptSource{}, errors.New("private persistence failure")
 	}
-	executor, err := openPreRuntimeExecution(config, factories)
+	executor, err := openSyntheticPreRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestPreRuntimeExecutionStopsAfterStageSixWhenMaterialReceiptDiffers(t *test
 		}
 		return invocation, nil
 	}
-	executor, err := openPreRuntimeExecution(config, factories)
+	executor, err := openSyntheticPreRuntimeExecution(config, factories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,24 +385,24 @@ func TestPreRuntimeExecutionStopsAfterStageSixWhenMaterialReceiptDiffers(t *test
 	}
 }
 
-func TestOpenPreRuntimeExecutionRejectsUnsafeReceiptDestination(t *testing.T) {
+func TestPreRuntimeStructureRejectsUnsafeReceiptDestination(t *testing.T) {
 	config, factories, calls, _ := preRuntimeExecutionFixture(t)
 	if err := os.Chmod(config.ReceiptDirectory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openPreRuntimeExecution(config, factories); err == nil || len(*calls) != 0 {
+	if _, err := openSyntheticPreRuntimeExecution(config, factories); err == nil || len(*calls) != 0 {
 		t.Fatalf("unsafe receipt directory was accepted: calls=%v err=%v", *calls, err)
 	}
 }
 
-func TestOpenPreRuntimeExecutionRejectsPreboundWorkloadIdentity(t *testing.T) {
+func TestPreRuntimeStructureRejectsPreboundWorkloadIdentity(t *testing.T) {
 	config, factories, calls, _ := preRuntimeExecutionFixture(t)
 	prebound := config.NetworkObservation.Workload
 	prebound.ExpectedBindingDigest = runnerStageSHA("d")
 	config.NetworkObservation.Workload = prebound
 	config.RuntimeBinding.Workload = prebound
 	config.TargetAccess.Runtime.Workload = prebound
-	if _, err := openPreRuntimeExecution(config, factories); err == nil || len(*calls) != 0 {
+	if _, err := openSyntheticPreRuntimeExecution(config, factories); err == nil || len(*calls) != 0 {
 		t.Fatalf("caller-selected workload identity was accepted: calls=%v err=%v", *calls, err)
 	}
 }

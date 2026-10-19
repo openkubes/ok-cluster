@@ -3,6 +3,7 @@ package runner
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/execution"
@@ -51,7 +52,7 @@ func OpenKubernetesSubmissionStageOperation(config KubernetesSubmissionStageOper
 	}
 	submitter, authorityToken, err := openKubernetesSubmissionClient(config.Authority)
 	if err != nil {
-		return execution.StagedOperation{}, errors.New("open staged submission authority")
+		return execution.StagedOperation{}, fmt.Errorf("open staged submission authority: %w", err)
 	}
 	if len(ledgerToken) == len(authorityToken) && subtle.ConstantTimeCompare([]byte(ledgerToken), []byte(authorityToken)) == 1 {
 		return execution.StagedOperation{}, errors.New("ledger and write authority credentials must be distinct")

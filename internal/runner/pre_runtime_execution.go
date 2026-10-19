@@ -133,32 +133,41 @@ func openPreRuntimeExecution(config PreRuntimeExecutionConfig, factories preRunt
 	if err := validatePreRuntimeCredentialPolicy(config); err != nil {
 		return nil, err
 	}
+	initial, err := validatePreRuntimeExecutionStructure(config, factories)
+	if err != nil {
+		return nil, err
+	}
+	config.TargetAccess.ExpectedObjects = append([]projection.ResourceIdentity(nil), config.TargetAccess.ExpectedObjects...)
+	return &PreRuntimeExecution{config: config, initial: initial, factories: factories}, nil
+}
+
+// Pure structural validation, not an execution opener or credential approval.
+func validatePreRuntimeExecutionStructure(config PreRuntimeExecutionConfig, factories preRuntimeExecutionFactories) (StageResumeConfig, error) {
 	if config.Authorization == nil || config.WorkloadAuthority == nil || config.ReceiptDirectory == "" || config.PlanPath == "" ||
 		factories.submission == nil || factories.lifecycle == nil || factories.enablement == nil ||
 		factories.network == nil || factories.binding == nil || factories.target == nil || factories.persist == nil {
-		return nil, errors.New("pre-runtime execution configuration is incomplete")
+		return StageResumeConfig{}, errors.New("pre-runtime execution configuration is incomplete")
 	}
 	initial := StageResumeConfig{PlanPath: config.PlanPath, PlanExpected: config.PlanExpected, Receipts: []StageReceiptSource{}}
 	decision, err := InspectStageResume(initial)
 	if err != nil || decision.State != "NEXT" || decision.StageID != "provider-prerequisites" {
-		return nil, errors.New("pre-runtime execution requires the exact Stage-1 cursor")
+		return StageResumeConfig{}, errors.New("pre-runtime execution requires the exact Stage-1 cursor")
 	}
 	for _, stageID := range preRuntimeStageOrder {
 		name, ok := preRuntimeReceiptFiles[stageID]
 		if !ok || validateRuntimeBindingOutputPath(filepath.Join(config.ReceiptDirectory, name)) != nil {
-			return nil, errors.New("pre-runtime receipt destination is invalid")
+			return StageResumeConfig{}, errors.New("pre-runtime receipt destination is invalid")
 		}
 	}
 	if config.RuntimeBinding.OutputPath == config.RuntimeBindingReceiptPath ||
 		validateRuntimeBindingOutputPath(config.RuntimeBinding.OutputPath) != nil ||
 		validateRuntimeBindingOutputPath(config.RuntimeBindingReceiptPath) != nil {
-		return nil, errors.New("pre-runtime binding handoff destination is invalid")
+		return StageResumeConfig{}, errors.New("pre-runtime binding handoff destination is invalid")
 	}
 	if err := validatePreRuntimeWorkloadAuthorityDestinations(config); err != nil {
-		return nil, err
+		return StageResumeConfig{}, err
 	}
-	config.TargetAccess.ExpectedObjects = append([]projection.ResourceIdentity(nil), config.TargetAccess.ExpectedObjects...)
-	return &PreRuntimeExecution{config: config, initial: initial, factories: factories}, nil
+	return initial, nil
 }
 
 // Run executes exactly one Stage 1-7 prefix. Every successful stage receipt
@@ -420,14 +429,25 @@ func (executor *PreRuntimeExecution) resume(receipts []StageReceiptSource) Stage
 }
 
 func validatePreRuntimeCredentialPolicy(config PreRuntimeExecutionConfig) error {
+	for _, authority := range []KubernetesAuthorityConfig{
+		config.ProviderPrerequisites.Authority, config.ClusterLifecycle.Authority,
+		config.LifecycleObservation.Management, config.NetworkObservation.Management,
+		config.Enablement.Runtime.Authority,
+	} {
+		if authority.KubeconfigFile != "" {
+			return ErrClientCertificateDisabled
+		}
+	}
 	for _, workload := range []WorkloadAuthorityFileResolverConfig{config.NetworkObservation.Workload, config.RuntimeBinding.Workload, config.TargetAccess.Runtime.Workload} {
 		if workload.KubeconfigFile != "" {
 			return ErrClientCertificateDisabled
 		}
 	}
-	// The exported zero value must not bypass the rejecting constructor, even
-	// when a caller pairs it with token-shaped future destinations.
-	if _, disabled := config.WorkloadAuthority.(*KubernetesLifecycleWorkloadAuthorityMaterializer); disabled {
+	// Approved resolver allowlist: EMPTY. The experimental bootstrap packages
+	// are not integrated or security-accepted. No concrete type, wrapper,
+	// embedded implementation, typed nil or function adapter is approved.
+	// A nil resolver still fails the constructor's completeness check.
+	if config.WorkloadAuthority != nil {
 		return ErrClientCertificateDisabled
 	}
 	return nil
