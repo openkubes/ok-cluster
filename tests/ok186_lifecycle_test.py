@@ -312,7 +312,10 @@ class Sandbox:
             directory.mkdir(parents=True)
         if golden:
             raw = yaml.safe_load(FIXTURE.read_text())
-            config = render.resolve_config(raw, CLUSTER)
+            # Fixture rendering must never query the operator's management
+            # kubeconfig before the subprocess fake PATH/HOME are installed.
+            with mock.patch.object(render, "live_metallb_allocations", return_value={}):
+                config = render.resolve_config(raw, CLUSTER)
             with open(os.devnull, "w") as sink:
                 old_stdout = sys.stdout
                 old_script_dir = render.SCRIPT_DIR
@@ -488,7 +491,7 @@ class Sandbox:
             [
                 sys.executable, str(ROOT / "scripts" / "talos_golden_lifecycle.py"),
                 mode, "--cluster", CLUSTER, "--cluster-dir", str(self.rendered),
-                "--kubeconfig", str(self.infra), "--ok-linux-path", str(ROOT.parent / "ok-linux"),
+                "--kubeconfig", str(self.infra), "--ok-linux-path", str(render.OK_LINUX_PATH),
                 *( ["--confirm", "yes"] if mode == "--teardown" else [] ),
             ],
             env={
