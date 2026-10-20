@@ -522,46 +522,309 @@ controllers, or a `Provisioning` or `Provisioned` Cluster for which the guest ku
 available, or one or more guest nodes are still `NotReady`. The target does not
 apply manifests or repeat the Golden Image preflight.
 
-`make teardown` is safe to retry after an interruption. Before deleting the
-Cluster or its namespace, it records a versioned teardown entry in a ConfigMap
-in the management cluster's `kube-system` namespace. The entry binds the
-cluster name, Golden Image namespace and claim, OS identity and image digest,
-the original Cluster and Namespace UIDs, the exact observed DataVolume UIDs,
-and the Retain-policy PV names. Its name is `ok-cluster-teardown-<cluster>`.
-It contains no credentials or other secret data. Teardown therefore requires
-the identity used by `TALOS_INFRA_KUBECONFIG` to read, create, and update that ConfigMap as
-well as to perform the existing lifecycle operations. An unavailable or
-unreadable record fails closed. An incomplete entry refuses a same-name Cluster
-or Namespace with a different UID before deletion. A completed receipt is
-superseded by a fresh entry for recreated resources, using the ConfigMap's
-resourceVersion to guard the update.
+#### Talos teardown ledger operational contract
+
+`ok-cluster` owns the durable Talos teardown ledger, including its namespace,
+RBAC manifest, record formats and admin lifecycle. Record schemas `1` and `2`
+store one ConfigMap per consumer cluster in namespace `ok-cluster-teardown`.
+Schema `1` records a single-plane teardown. Schema `2` adds the management and
+provider plane identities and provider storage provenance required by a
+split-plane teardown. The exact ConfigMap name is
+`ok-cluster-teardown-<cluster>` and it has these labels:
+
+```yaml
+app.kubernetes.io/managed-by: ok-cluster
+openkubes.io/consumer-cluster: <cluster>
+```
+
+The sole payload is `data["record.json"]`. It binds the cluster name, Golden
+Image namespace and claim, OS identity and image digest, the original Cluster
+and Namespace UIDs, exact observed DataVolume UIDs, Retain-policy PV names and
+completion state. Schema `2` additionally binds both planes by the UID of their
+`kube-system` Namespace, the provider workload Namespace UID and the provider
+storage UIDs. It contains no credentials. A record with a version other than
+`1` or `2` fails with an unsupported-schema diagnostic. A missing payload,
+malformed JSON, extra or missing field, invalid identity, invalid inventory or
+invalid completion marker is refused.
+
+The `openkubes.io/teardown-ledger-schema: "1"` annotation on the Namespace and
+RBAC objects versions the owned namespace layout. It does not declare or limit
+the `record.json` schema; that namespace stores both supported record schemas.
+
+Install the namespace and roles once on the management plane with an
+administrative management identity:
+
+```bash
+make install-teardown-ledger \
+  TALOS_INFRA_KUBECONFIG=/path/to/management.yaml \
+  CONFIRM=yes
+```
+
+The target applies `deploy/talos-teardown-ledger.yaml` and fails closed unless
+`CONFIRM=yes` is supplied literally. The namespaced Role grants only `get`,
+`create` and `patch` on ConfigMaps. `patch` is required because teardown
+advances the same receipt under its `resourceVersion`; `update`, `delete`,
+`list` and `watch` are not lifecycle authority. A separate ClusterRole grants
+only `get` on the exact Namespace resources named `ok-cluster-teardown` and
+`kube-system`. The first bounded read lets lifecycle distinguish an absent or
+unreadable ledger namespace from a missing per-cluster ConfigMap. The second
+lets split-plane teardown bind each API plane to the UID of its `kube-system`
+Namespace. It grants no Namespace creation and no access to ConfigMaps,
+Secrets or any other namespaced contents in either Namespace.
+
+Bind both roles to the identity carried by `TALOS_INFRA_KUBECONFIG`. For a user
+credential, the matching templates are:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ok-cluster-teardown-ledger
+  namespace: ok-cluster-teardown
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ok-cluster-teardown-ledger
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: "<teardown-principal>"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ok-cluster-teardown-namespace-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ok-cluster-teardown-namespace-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: "<teardown-principal>"
+```
+
+Use a ServiceAccount subject instead when the kubeconfig authenticates as a
+ServiceAccount. The bindings are deliberately operator-specific and therefore
+are templates rather than objects installed by the shared manifest.
+For split-plane teardown, bind this Namespace-reader ClusterRole to the
+management-plane identity. Install the separate provider reader on the provider
+plane, then bind its `ok-cluster-teardown-provider-namespace-reader` ClusterRole
+to the provider-plane identity. Both roles grant the same exact-name `get` for
+the `kube-system` Namespace object so lifecycle can bind the plane UID; neither
+grants access to `kube-system` contents. Bind the namespaced ledger Role only on
+the management plane, where the durable ConfigMap lives.
+
+Namespace reads the provider-plane identity needs during split-plane teardown
+(found in the live split-plane proof):
+
+| Namespace object (`get` only) | Why |
+| --- | --- |
+| `kube-system` | Binds the provider plane's UID. Granted by the provider reader above. |
+| The guest cluster's Namespace (the cluster name) | Confirms the candidate Namespace and its deletion. |
+| `longhorn-system` | After a volume delete, kubectl confirms the 404 by reading the object's Namespace. |
+| The Golden Image Namespace (`ok-images`) | Same 404 confirmation for the Golden clone Role and RoleBinding. |
+
+Only `kube-system` is in the shipped provider reader. Grant the other three as
+exact-name (`resourceNames`) Namespace `get` rules bound to the provider-plane
+identity, together with the teardown permissions for that guest; never grant a
+cluster-wide Namespace `list`, and never access to ConfigMaps or Secrets in
+`kube-system`. A denied read turns a confirmed absence into an incomplete
+teardown, which is retried; it never deletes anything extra. The
+[operator runbook](docs/ok147-operator-runbook.md) describes the same
+requirements.
+
+```bash
+make install-teardown-provider-reader \
+  TALOS_TEARDOWN_PROVIDER_KUBECONFIG=/path/to/provider.yaml \
+  CONFIRM=yes
+```
+
+After the approved split teardown and any required verification, remove that
+provider-plane ClusterRole with the same explicit kubeconfig and confirmation:
+
+```bash
+make remove-teardown-provider-reader \
+  TALOS_TEARDOWN_PROVIDER_KUBECONFIG=/path/to/provider.yaml \
+  CONFIRM=yes
+```
+
+Removal first inventories every ClusterRoleBinding and every namespaced
+RoleBinding on the provider plane. It refuses while any binding refers to
+`ok-cluster-teardown-provider-namespace-reader`, naming each blocking binding,
+and fails closed if either inventory cannot be read. Remove those bindings
+through their separately reviewed lifecycle before retrying the ClusterRole
+removal.
+
+`make teardown` checks the exact ledger Namespace before reading a receipt or
+deleting anything. If the Namespace is absent or unreadable, it fails with a
+diagnostic naming `ok-cluster-teardown` and the
+`make install-teardown-ledger TALOS_INFRA_KUBECONFIG=<path> CONFIRM=yes`
+recovery target. It then creates
+or patches a schema-1 (single-plane) or schema-2 (split-plane) record before deletion. An unavailable or unreadable
+record fails closed. An incomplete entry refuses a same-name Cluster or
+Namespace with a different UID. A completed receipt returns idempotently when
+both resources remain absent. If the cluster name has been reused and the live
+UIDs differ, the next authorized teardown supersedes the completed receipt
+with the recreated resources' identities using a resourceVersion-guarded
+patch; an incomplete receipt never authorizes that reuse.
+
 Deletes bind to the verified UID on the API server; RBAC and snapshot deletes
 also bind to the resource version whose ownership was checked. Deletion waits
 up to ten minutes per resource for absence; a timeout leaves the entry
-incomplete.
+incomplete. After foreground Cluster deletion, teardown merges final
+DataVolume and PV identities before deleting the workload Namespace. Retained
+volume and Golden clone cleanup runs only after both the CAPI Cluster and its
+Namespace are verified absent. Failures keep the incomplete receipt and local
+render directory for a retry. Only explicit `NotFound` counts as absence.
 
-An incomplete entry retains the original resource identities until every
-cleanup step succeeds; failures also keep the local render directory. After
-foreground Cluster deletion, teardown merges any final DataVolume and PV
-identities into the entry before deleting the namespace. On success, the entry becomes the retained completion receipt, so another
-`make teardown` can return cleanly even if the local render directory and
-workload namespace are already absent. Only explicit `NotFound` responses
-count as already absent. Cluster or namespace delete failures exit non-zero,
-suppress the success line, and retain recovery material. Retain-policy PV and
-Longhorn cleanup runs only after both Cluster and Namespace are verified absent;
-otherwise the entry keeps the PV inventory for a retry.
+Only the separate admin migration target reads legacy schema-1 or schema-2 receipts in
+`kube-system`; ordinary teardown never falls back to that namespace for a
+receipt and never reads its ConfigMaps. Split-plane teardown separately reads
+only the `kube-system` Namespace object on each plane to bind the plane UIDs.
+Move a legacy receipt into the owned namespace with the guarded admin operation:
 
-The ledger is also the safety boundary for cleanup after destructive deletion.
-Clone authorization cannot be removed before the workload namespace because
-live CDI clones may still require it. After DataVolumes are deleted, their UIDs
-cannot be reconstructed safely from snapshots alone. If the namespace and
-ledger entry are both missing, restoring only the local render does not prove
-the prior DataVolume identities, so teardown fails closed instead of recording
-an empty UID set. If both the render and record are lost, the error names the
-missing Golden namespace, claim, OS identity and DataVolume ownership inventory;
-it never treats missing metadata as verified cleanup. Snapshot deletion requires
-a saved DataVolume UID plus the CDI label and expected Golden PVC source; a
-matching source PVC or cluster name alone does not authorize deletion.
+```bash
+make migrate-teardown-ledger \
+  CLUSTER=<cluster> \
+  TALOS_INFRA_KUBECONFIG=/path/to/management.yaml \
+  CONFIRM=yes
+```
+
+Migration validates the legacy record, copies `record.json` byte for byte,
+reads the destination back and verifies the exact bytes before deleting the
+legacy ConfigMap. Re-running after a successful migration is idempotent. An
+existing destination with different bytes is a conflict and neither record is
+changed or deleted.
+
+Completed receipts are retained by default. Pruning is a separate admin action
+that needs ConfigMap `delete` authority outside the lifecycle Role. For a
+schema-1 receipt, it succeeds only when the receipt is valid and complete and
+both the CAPI Cluster and workload Namespace are absent. An incomplete receipt
+is never pruned:
+
+```bash
+make prune-teardown-ledger \
+  CLUSTER=<cluster> \
+  TALOS_INFRA_KUBECONFIG=/path/to/management.yaml \
+  CONFIRM=yes
+```
+
+The current prune command refuses schema-2 receipts because its management
+kubeconfig cannot prove provider-plane absence. Retain the completed receipt by
+default. If policy requires its removal, an administrator must first verify the
+recorded provider Namespace and storage objects are absent on the recorded
+provider plane, then manually delete the exact ConfigMap with UID and
+`resourceVersion` preconditions. Do not treat management-plane absence alone as
+proof that a split-plane receipt is safe to remove.
+
+#### Disposable split-plane proof (OK-197)
+
+The coordinator runs `tests/live/ok197_split_plane_proof.py`; its offline
+companion is `make ok197-split-plane-proof-test`. Use Linux, Python/PyYAML,
+kubectl, Helm, an `OK_LINUX_PATH` checkout matching the Golden image, and the
+pinned Cilium chart (`make prepare-cilium-chart`). The explicit administrative
+kubeconfigs need ServiceAccount TokenRequest, RBAC binding, guest provisioning
+and impersonation authority. The helper never uses their credentials in CAPK's
+external-infra Secret or in the teardown identities.
+
+```bash
+export CLUSTER=ok197-split-ab12
+export MGMT_KUBECONFIG=/private/management.yaml
+export INFRA_KUBECONFIG=/private/provider.yaml
+export OK197_EVIDENCE_DIR=/private/evidence/ok197-split-ab12
+export OK_LINUX_PATH=/mnt/d/kubernauts/temp/kubernauts/ok/ok-linux
+export CILIUM_CHART="$(pwd)/.tools/cilium-1.19.6.tgz"
+make prepare-cilium-chart
+python3 tests/live/ok197_split_plane_proof.py preflight
+OK197_SPLIT_CONFIRM=yes python3 tests/live/ok197_split_plane_proof.py create
+OK197_SPLIT_CONFIRM=yes python3 tests/live/ok197_split_plane_proof.py teardown
+python3 tests/live/ok197_split_plane_proof.py verify
+OK197_SPLIT_CONFIRM=yes python3 tests/live/ok197_split_plane_proof.py cleanup-check
+```
+
+Use a fresh name and evidence directory. Evidence must be outside this repo;
+each command writes a timestamped transcript and JSON summary, including on
+guard failure. `preflight` records `ok-cli-mvp-3` names/UIDs on both planes;
+`cleanup-check` compares them and, with confirmation, removes proof identities and bindings
+using UID preconditions. Interrupted creates retain tracked resources: retry
+`cleanup-check` before CAPI submission, or `teardown` after submission. A failed
+teardown retains its receipt and local render for retry. The completed receipt,
+local render and shared ledger/reader installations remain for operator review.
+
+`create` installs the ledger on management first and the separate Namespace
+reader on provider, then uses `make new`/`render` with `infraClusterSecretRef`.
+It prints the complete kind-based split before guest writes: the guest Namespace
+exists on both planes; CAPI `Cluster`, `KubevirtCluster`,
+`KubevirtMachineTemplate`, `TalosControlPlane`, `TalosConfigTemplate` and
+`MachineDeployment` go to management; Golden Role/RoleBinding and KubeVirt/CDI
+runtime objects go to provider. Unknown kinds fail closed. CAPK creates the VMs
+and DataVolumes through the external-infra credential.
+
+The immutable Opaque Secret uses key `kubeconfig`, the static bearer-token shape
+accepted by `internal/submission/provider_access.go`. Its fresh four-hour
+ServiceAccount token is bound to the exact provider lifecycle Role emitted by
+`render.py projection`, scoped to this guest namespace. The issued token must
+have 210–241 minutes remaining before the helper submits the Secret. Secret
+creation is one atomic CREATE; an `AlreadyExists` response stops the run without
+prefetching the existing Secret. Complete the disposable run promptly within
+that lifetime; this helper supplies no credential renewal. The actual token
+expiry is saved without the token. The post-Ready path retains a 30-minute
+floor; teardown requires that floor only while the recorded management Cluster
+UID still exists. An expired interrupted guest needs coordinator credential
+recovery when that Cluster remains. Teardown
+uses separate fresh tokens bound to the shipped ledger/Namespace-reader roles
+and printed extra teardown rules. Shared-storage deletes are restricted to
+captured PV/Longhorn/snapshot names; guest inventory Roles disappear with the
+guest namespace and are checked as revoked afterward. Credentials live in memory, including the
+guest kubeconfig used by the existing CNI install and node Ready gate.
+
+`teardown` proves provider plane binding fails with HTTP 403 when the reader is
+unbound, before any mutation. It then exercises split teardown, completed-receipt
+retry, and schema-2 prune refusal. Sanitized `kubectl -v=6` traces assert exactly
+one `kube-system` Namespace GET per plane; server-side impersonated `auth can-i`
+checks cover granted verbs and forbidden ledger/`kube-system`/Namespace access.
+`cleanup-check` checks guest objects, saved PV/Longhorn names, Golden RBAC and
+owned snapshots. Legacy migration is outside this proof's scope.
+
+The ledger is also the safety boundary after destructive deletion. Clone
+authorization cannot be removed before the workload Namespace because live CDI
+clones may still require it. After DataVolumes are deleted, their UIDs cannot
+be reconstructed safely from snapshots alone. If both local render and durable
+record are missing, teardown refuses to infer ownership. Snapshot deletion
+requires a saved DataVolume UID, the CDI label and the expected Golden PVC
+source.
+
+For troubleshooting, use an administrative read credential and preserve raw
+errors:
+
+```bash
+kubectl --kubeconfig /path/to/management.yaml get namespace ok-cluster-teardown
+kubectl --kubeconfig /path/to/management.yaml \
+  -n ok-cluster-teardown get configmap ok-cluster-teardown-<cluster> -o yaml
+kubectl --kubeconfig /path/to/management.yaml \
+  -n ok-cluster-teardown get configmaps \
+  -l app.kubernetes.io/managed-by=ok-cluster
+kubectl --kubeconfig /path/to/management.yaml \
+  -n kube-system get configmap ok-cluster-teardown-<cluster> -o yaml
+kubectl --kubeconfig /path/to/management.yaml \
+  get namespace kube-system -o jsonpath='{.metadata.uid}{"\\n"}'
+kubectl --kubeconfig /path/to/provider.yaml \
+  get namespace kube-system -o jsonpath='{.metadata.uid}{"\\n"}'
+```
+
+An absent or forbidden Namespace requires the install/binding repair before
+teardown. A malformed or unsupported record requires operator investigation;
+do not overwrite it. A migration conflict means the two byte streams differ;
+retain both and resolve their provenance. A forbidden `kube-system` Namespace
+read means the corresponding management or provider identity lacks the exact
+Namespace `get`; granting ConfigMap or Secret access there is neither required
+nor an acceptable repair. A prune refusal means the receipt is incomplete, a
+live Cluster or Namespace still exists, provider-plane absence is unproven for
+schema `2`, or another absence check could not be completed.
+Completed split-plane receipts are retained by prune unless provider-plane
+absence is proven; remove them by hand with admin rights after verification,
+using the preconditions described above.
 
 #### Reviewed Talos KubeVirt scheduling profiles
 

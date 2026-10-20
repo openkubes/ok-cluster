@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ok-cluster-teardown
+  labels:
+    app.kubernetes.io/managed-by: ok-cluster
+  annotations:
+    # Namespace-layout version; record.json independently supports schemas 1 and 2.
+    openkubes.io/teardown-ledger-schema: "1"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ok-cluster-teardown-ledger
+  namespace: ok-cluster-teardown
+  labels:
+    app.kubernetes.io/managed-by: ok-cluster
+  annotations:
+    openkubes.io/teardown-ledger-schema: "1"
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ok-cluster-teardown-namespace-reader
+  labels:
+    app.kubernetes.io/managed-by: ok-cluster
+  annotations:
+    openkubes.io/teardown-ledger-schema: "1"
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [ok-cluster-teardown]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [kube-system]
+    verbs: [get]
