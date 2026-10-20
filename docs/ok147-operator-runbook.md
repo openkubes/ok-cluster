@@ -1104,7 +1104,8 @@ other contents from `kube-system`. The provider-plane identity needs the same
 exact-name Namespace `get` as the management-plane identity; absence or denial
 stops before any delete. The ledger itself remains on the management plane in
 `ok-cluster-teardown`. The provider-plane identity also needs `get` on the
-`longhorn-system` and `ok-images` Namespace objects: after a delete, kubectl
+guest cluster's Namespace, `longhorn-system` and `ok-images` Namespace objects
+(exact-name rules only): after a delete, kubectl
 confirms a namespaced 404 by reading the object's Namespace, and a denied read
 turns a confirmed absence into an incomplete teardown.
 Cleanup identities must remain usable after deleting the candidate namespaces:

@@ -615,6 +615,25 @@ the `kube-system` Namespace object so lifecycle can bind the plane UID; neither
 grants access to `kube-system` contents. Bind the namespaced ledger Role only on
 the management plane, where the durable ConfigMap lives.
 
+Namespace reads the provider-plane identity needs during split-plane teardown
+(found in the live split-plane proof):
+
+| Namespace object (`get` only) | Why |
+| --- | --- |
+| `kube-system` | Binds the provider plane's UID. Granted by the provider reader above. |
+| The guest cluster's Namespace (the cluster name) | Confirms the candidate Namespace and its deletion. |
+| `longhorn-system` | After a volume delete, kubectl confirms the 404 by reading the object's Namespace. |
+| The Golden Image Namespace (`ok-images`) | Same 404 confirmation for the Golden clone Role and RoleBinding. |
+
+Only `kube-system` is in the shipped provider reader. Grant the other three as
+exact-name (`resourceNames`) Namespace `get` rules bound to the provider-plane
+identity, together with the teardown permissions for that guest; never grant a
+cluster-wide Namespace `list`, and never access to ConfigMaps or Secrets in
+`kube-system`. A denied read turns a confirmed absence into an incomplete
+teardown, which is retried; it never deletes anything extra. The
+[operator runbook](docs/ok147-operator-runbook.md) describes the same
+requirements.
+
 ```bash
 make install-teardown-provider-reader \
   TALOS_TEARDOWN_PROVIDER_KUBECONFIG=/path/to/provider.yaml \
