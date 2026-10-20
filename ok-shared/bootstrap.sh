@@ -63,4 +63,4 @@ talosctl kubeconfig \
   "${KUBECONFIG_OUT}"
 
 echo ""
-echo "✅ Done. Test: kubectl --kubeconfig ${KUBECONFIG_OUT} get nodes"
+echo "✅ Talos bootstrap and kubeconfig retrieval completed. Inspect nodes: kubectl --kubeconfig ${KUBECONFIG_OUT} get nodes"

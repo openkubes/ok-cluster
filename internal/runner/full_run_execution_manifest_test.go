@@ -285,6 +285,30 @@ func TestFullRunPollingWindowGuardIndependentOfCredentialPolicy(t *testing.T) {
 	}
 }
 
+func TestFullRunExecutionConfigPollingWindowCallSite(t *testing.T) {
+	path, cleanup := fullRunExecutionManifestFixture(t)
+	defer cleanup()
+	manifest, _, err := inspectFullRunExecutionManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This in-package synthetic value cannot be loaded through the public
+	// loader. Only the test changes its private format to reach the call site;
+	// the production v3/v4 denial remains untouched and tested separately.
+	manifest.document.Format = "test-only-unloadable-format"
+	manifest.document.LifecycleObservation.PollTimeout = "2m"
+	manifest.document.NetworkObservation.PollTimeout = "1m"
+	config, err := manifest.ExecutionConfig(FullRunExecutionManifestRuntime{Clock: time.Now, Wait: WaitWithTimer,
+		PlatformCapability: FullRunPlatformCapabilityFactoryFunc(func(FullRunPlatformCapabilityBinding) (PlatformCapabilityResolver, error) {
+			t.Fatal("polling failure reached capability factory")
+			return nil, errors.New("must not open")
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "shorter than lifecycle") || config.PreRuntime.PlanPath != "" {
+		t.Fatalf("ExecutionConfig omitted polling-window validation: %v", err)
+	}
+}
+
 func TestFullRunExecutionManifestFailsClosed(t *testing.T) {
 	manifest, cleanup := fullRunExecutionManifestFixture(t)
 	defer cleanup()

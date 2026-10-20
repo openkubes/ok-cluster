@@ -12,10 +12,10 @@ func TestDeferredFullRunWorkloadAuthorityBindsLifecycleResultOnce(t *testing.T) 
 	root := t.TempDir()
 	policy, binding, ca := runtimeWorkloadBindingFixture(t)
 	bindingPath := filepath.Join(root, "binding.json")
-	kubeconfigPath := filepath.Join(root, "workload.kubeconfig")
+	tokenPath := filepath.Join(root, "workload.token")
 	caPath := filepath.Join(root, "ca.crt")
 	writePlatformJSON(t, bindingPath, binding)
-	if err := os.WriteFile(kubeconfigPath, []byte("lifecycle-derived-kubeconfig"), 0o600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte("bounded-workload-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
@@ -26,7 +26,7 @@ func TestDeferredFullRunWorkloadAuthorityBindsLifecycleResultOnce(t *testing.T) 
 		t.Fatal(err)
 	}
 	config := WorkloadAuthorityFileResolverConfig{
-		Path: bindingPath, ExpectedBindingDigest: bindingDigest, KubeconfigFile: kubeconfigPath, CAFile: caPath,
+		Path: bindingPath, ExpectedBindingDigest: bindingDigest, TokenFile: tokenPath, CAFile: caPath,
 	}
 
 	resolver := NewDeferredFullRunWorkloadAuthorityResolver()
@@ -40,7 +40,7 @@ func TestDeferredFullRunWorkloadAuthorityBindsLifecycleResultOnce(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authority.Endpoint != binding.Endpoint || authority.AuthorityIdentity != binding.TargetClusterUID || authority.KubeconfigFile != kubeconfigPath || authority.TokenFile != "" || authority.CABundleDigest != binding.CABundleDigest {
+	if authority.Endpoint != binding.Endpoint || authority.AuthorityIdentity != binding.TargetClusterUID || authority.TokenFile != tokenPath || authority.KubeconfigFile != "" || authority.CABundleDigest != binding.CABundleDigest {
 		t.Fatalf("deferred full-run authority differs from lifecycle binding: %#v", authority)
 	}
 	if err := resolver.BindFullRunWorkloadAuthority(config); err == nil {
@@ -57,7 +57,7 @@ func TestDeferredFullRunWorkloadAuthorityRejectsInvalidBindingWithoutReading(t *
 	resolver := NewDeferredFullRunWorkloadAuthorityResolver()
 	missing := filepath.Join(t.TempDir(), "not-created")
 	config := WorkloadAuthorityFileResolverConfig{
-		Path: missing, ExpectedBindingDigest: digestOf("a"), KubeconfigFile: missing + "-kubeconfig", CAFile: missing + "-ca",
+		Path: missing, ExpectedBindingDigest: digestOf("a"), TokenFile: missing + "-token", CAFile: missing + "-ca",
 	}
 	if err := resolver.BindFullRunWorkloadAuthority(config); err != nil {
 		t.Fatalf("binding performed an eager private file read: %v", err)

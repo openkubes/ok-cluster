@@ -81,6 +81,9 @@ type submissionStageInstallerClientConfig struct {
 // credential. It performs no API request and does not read either credential
 // Secret named by the future Job.
 func OpenKubernetesSubmissionStagePackageInstaller(config KubernetesAuthorityConfig, packaged VerifiedSubmissionStagePackage) (*KubernetesSubmissionStagePackageInstaller, error) {
+	if err := rejectKubernetesClientCertificate(config); err != nil {
+		return nil, err
+	}
 	if _, _, err := prepareSubmissionStageInstallation(packaged); err != nil {
 		return nil, err
 	}

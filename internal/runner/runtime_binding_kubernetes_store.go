@@ -75,6 +75,9 @@ func OpenKubernetesRuntimeBindingStore(authority KubernetesAuthorityConfig, expe
 // stage composition can prove that ledger, persistence and workload roles use
 // distinct credentials. The token never enters a receipt or returned error.
 func openKubernetesRuntimeBindingStore(authority KubernetesAuthorityConfig, expectedAuthority, namespace, name string) (*KubernetesRuntimeBindingStore, string, error) {
+	if err := rejectKubernetesClientCertificate(authority); err != nil {
+		return nil, "", err
+	}
 	if authority.AuthorityIdentity == "" || authority.AuthorityIdentity != expectedAuthority {
 		return nil, "", errors.New("runtime binding persistence authority differs from management")
 	}

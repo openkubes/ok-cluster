@@ -27,6 +27,13 @@ type KubernetesExecutionOperationConfig struct {
 // capabilities without contacting a Kubernetes API. Credential files are read
 // once during construction, and infra/mgmt write credentials must be distinct.
 func OpenKubernetesExecutionOperation(config KubernetesExecutionOperationConfig) (execution.Operation, error) {
+	for _, authority := range []KubernetesAuthorityConfig{
+		config.Infrastructure, config.Management, config.Observer.Management, config.Observer.Argo,
+	} {
+		if err := rejectKubernetesClientCertificate(authority); err != nil {
+			return execution.Operation{}, err
+		}
+	}
 	if config.Clock == nil || config.Wait == nil {
 		return execution.Operation{}, errors.New("execution clock and bounded waiter are required")
 	}
