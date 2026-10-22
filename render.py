@@ -3,6 +3,8 @@
 render.py — OpenKubes Cluster Manifest Renderer
 Reads cluster-config.yaml, resolves auto IP/CIDR, renders templates to manifests.
 """
+from __future__ import annotations
+
 import argparse
 import hashlib
 import ipaddress
