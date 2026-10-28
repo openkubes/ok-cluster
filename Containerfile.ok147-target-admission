@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1.7.1@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+ARG GO_IMAGE=docker.io/library/golang:1.24.6-alpine3.22@sha256:c8c5f95d64aa79b6547f3b626eb84b16a7ce18a139e3e9ca19a8c078b85ba80d
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
+
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ok-target-admission ./cmd/ok-target-admission
+COPY internal/contract ./internal/contract
+COPY internal/digest ./internal/digest
+COPY internal/jsonstrict ./internal/jsonstrict
+COPY internal/observation ./internal/observation
+COPY internal/projection ./internal/projection
+COPY internal/submission ./internal/submission
+COPY internal/targetadmission ./internal/targetadmission
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -mod=readonly -trimpath -buildvcs=false \
+    -ldflags="-s -w -buildid=" \
+    -o /out/ok-target-admission ./cmd/ok-target-admission
+
+FROM ${RUNTIME_IMAGE}
+ARG REVISION=local-worktree
+LABEL org.opencontainers.image.title="OpenKubes OK-147 Target Admission" \
+      org.opencontainers.image.description="Fail-closed target admission HTTPS service" \
+      org.opencontainers.image.source="https://github.com/openkubes/ok-cluster" \
+      org.opencontainers.image.revision="${REVISION}"
+COPY --from=build --chown=65532:65532 /out/ok-target-admission /ok-target-admission
+USER 65532:65532
+ENTRYPOINT ["/ok-target-admission"]

@@ -235,16 +235,16 @@ func runAutomaticClusterUp(ctx context.Context, path string, stdout, stderr io.W
 			if err := writeAwaitingPlatformAccess(stdout, intent.Metadata.Name); err != nil {
 				return err
 			}
-			return errors.New("cluster not started: platform access setup is incomplete; local preparation retained")
+			return errors.New("cluster NOT started: this ok CLI has no connected platform controller; local preparation is retained")
 		}
 		summary := map[string]any{"format": "ok-cli-automatic-preparation/v1", "state": "AWAITING_PLATFORM_AUTHORITY", "name": intent.Metadata.Name,
 			"requestPath": filepath.Join(root, "platform-preparation-request.json"), "requestDigest": requestDigest, "stageAuthorityPolicyDigest": request.StageAuthorityPolicyDigest,
 			"apiContacted": false, "mutationAllowed": false, "authorizationConsumed": false, "runnerReady": false,
-			"nextAction": "Platform operator must separately review/install this exact bounded policy and provide a request-bound platform-handoff.json with existing private runtime references. No platform issuer is configured; no Contract/runtime path prompts or self-granted rights."}
+			"nextAction": "This ok CLI can prepare the cluster request but cannot create a cluster yet: the reviewed platform controller and credential hand-off are not connected. Keep this preparation; do not create a hand-off file manually or treat this as a started cluster."}
 		if err := json.NewEncoder(stdout).Encode(summary); err != nil {
 			return err
 		}
-		return errors.New("local preparation complete; waiting for separately provided platform authority (NO-GO); no cluster started")
+		return errors.New("preparation complete; cluster NOT started: this ok CLI has no connected platform controller yet")
 	} else if err != nil {
 		return err
 	}
@@ -296,7 +296,7 @@ func runAutomaticClusterUp(ctx context.Context, path string, stdout, stderr io.W
 // Presentation only: never turn retained local artifacts into execution
 // readiness, prompt for approval, issue access, or consume a stage grant.
 func writeAwaitingPlatformAccess(output io.Writer, name string) error {
-	_, err := fmt.Fprintf(output, "Cluster %q\n  Local preparation: complete\n  Cluster creation:  not started\n\nPlatform access has not been provided for this run.\nA platform operator must finish the bounded access setup, including a reviewed\nworkload credential profile. Local preparation alone cannot authorize a run.\n\nNo cluster API was contacted. No credentials were issued or renewed.\nYour preparation is saved. Re-running does not grant access or start a cluster.\n", name)
+	_, err := fmt.Fprintf(output, "Cluster %q\n  Local preparation: complete\n  Cluster creation:  NOT started\n\nThis ok CLI has no connected reviewed platform controller yet, so it cannot\ncreate the cluster. Do not create a platform hand-off file manually.\n\nNo cluster API was contacted. No credentials were issued or renewed.\nYour preparation is saved; re-running does not grant access or start a cluster.\n", name)
 	return err
 }
 

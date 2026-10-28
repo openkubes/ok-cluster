@@ -39,7 +39,7 @@ func TestStagedOperationRunsOneBoundMutationAndResumesFromOutcome(t *testing.T) 
 	if err != nil || receipt.State != "COMPLETED_SUCCEEDED" || receipt.StageReceiptDigest == "" || mutator.calls != 1 {
 		t.Fatalf("unexpected staged run: %#v calls=%d err=%v", receipt, mutator.calls, err)
 	}
-	if mutator.request.StageID != "provider-prerequisites" || mutator.request.ContractIdentity != plan.ContractIdentity || mutator.request.GrantID == "" {
+	if mutator.request.StageID != "provider-prerequisites" || mutator.request.ContractIdentity != plan.ContractIdentity || mutator.request.ExecutionAttemptDigest != plan.ExecutionAttempt || mutator.request.GrantID == "" {
 		t.Fatalf("mutator received a different binding: %#v", mutator.request)
 	}
 	verified, err := store.LoadStageReceipt(context.Background(), plan, "provider-prerequisites", receipt.StageReceiptDigest, []stagereceipt.Verified{})

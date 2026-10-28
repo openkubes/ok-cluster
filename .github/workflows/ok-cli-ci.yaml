@@ -87,3 +87,27 @@ jobs:
           OK_CLI_TEST_BINARY="$RUNNER_TEMP/ok" \
           OK_CLI_TEST_OK_LINUX_PATH="$GITHUB_WORKSPACE/.ci/ok-linux" \
           python3 -B tests/ok147_cluster_intent_test.py
+
+  target-admission-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Buildx action
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build image into the local runner only
+        run: make ok-target-admission-image-build
+        env:
+          OK_TARGET_ADMISSION_IMAGE_BUILD: yes
+          OK_TARGET_ADMISSION_IMAGE: ok147-target-admission:ci
+          OK_TARGET_ADMISSION_IMAGE_REVISION: ${{ github.sha }}
+
+      - name: Verify non-root offline startup
+        run: make ok-target-admission-image-smoke
+        env:
+          OK_TARGET_ADMISSION_IMAGE: ok147-target-admission:ci

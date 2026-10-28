@@ -2,6 +2,7 @@
 """Offline create-only checks for the OK-147 projection renderer."""
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -47,7 +48,9 @@ def verify_workload_user_namespace_projection(root: Path, revision: str) -> None
         "maxUserNamespaces": 11255,
         "provisionerBasePath": base_path,
     }
-    resolved = resolve_talos_config(source, ROOT.parent / "ok-linux")
+    resolved = resolve_talos_config(
+        source, Path(os.environ.get("OK_LINUX_PATH", ROOT.parent / "ok-linux"))
+    )
     cluster_dir = root / name
     render.render_cluster(name, cluster_dir, resolved)
     rendered = [
@@ -104,7 +107,9 @@ def main() -> None:
                 "name": "external-infra-kubeconfig-ok-cli-mvp",
                 "namespace": "ok-cli-mvp",
             }
-            resolved = resolve_talos_config(source, ROOT.parent / "ok-linux")
+            resolved = resolve_talos_config(
+                source, Path(os.environ.get("OK_LINUX_PATH", ROOT.parent / "ok-linux"))
+            )
             cluster_dir = root / "ok-cli-mvp"
             render.render_cluster("ok-cli-mvp", cluster_dir, resolved)
             revision = "sha256:" + "1" * 64

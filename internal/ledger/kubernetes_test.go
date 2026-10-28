@@ -105,6 +105,14 @@ func TestKubernetesStoreFailsClosed(t *testing.T) {
 			t.Fatalf("expected local canonical rejection, requests=%d err=%v", api.requests.Load(), err)
 		}
 	})
+	t.Run("does not treat grant claims as dispatch fences", func(t *testing.T) {
+		api := newFakeConfigMapAPI(t)
+		store := newTestKubernetesStore(t, api.client())
+		err := store.Create(context.Background(), "dispatches", strings.Repeat("a", 64), []byte("{}"))
+		if err == nil || !strings.Contains(err.Error(), "category") || api.requests.Load() != 0 {
+			t.Fatalf("unsupported dispatch category reached Kubernetes: requests=%d err=%v", api.requests.Load(), err)
+		}
+	})
 	t.Run("does not follow API redirect", func(t *testing.T) {
 		var calls atomic.Int32
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {

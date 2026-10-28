@@ -15,7 +15,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(os.environ.get('OK_CLI_TEST_BINARY', ROOT / '.tools/bin/ok'))
-PROFILES = Path(os.environ.get('OK_CLI_TEST_OK_LINUX_PATH', ROOT.parent / 'ok-linux'))
+PROFILES = Path(os.environ.get(
+    'OK_LINUX_PATH', os.environ.get('OK_CLI_TEST_OK_LINUX_PATH', ROOT.parent / 'ok-linux')
+))
 
 
 class IntentRenderTests(unittest.TestCase):
@@ -456,7 +458,7 @@ class IntentRenderTests(unittest.TestCase):
                 text = stdout.decode()
                 self.assertIn('Cluster "my-cluster"', text)
                 self.assertIn('Local preparation: complete', text)
-                self.assertIn('Cluster creation:  not started', text)
+                self.assertIn('Cluster creation:  NOT started', text)
                 self.assertIn('No cluster API was contacted', text)
                 self.assertIn('No credentials were issued or renewed', text)
                 self.assertNotIn('requestDigest', text)
@@ -494,6 +496,10 @@ class IntentRenderTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         receipt = json.loads(result.stdout)
         self.assertEqual(receipt['state'], 'AWAITING_PLATFORM_AUTHORITY')
+        self.assertIn('cannot create a cluster yet', receipt['nextAction'])
+        self.assertIn('do not create a hand-off file manually', receipt['nextAction'])
+        self.assertIn('cluster NOT started', result.stderr)
+        self.assertIn('no connected platform controller yet', result.stderr)
         for field in ('apiContacted', 'authorizationConsumed', 'mutationAllowed', 'runnerReady'):
             self.assertIs(receipt[field], False)
         root = Path(receipt['requestPath']).parent

@@ -18,6 +18,7 @@ import ok147_split_teardown_test as fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / '.tools/bin/ok'
+OK_LINUX = Path(os.environ.get('OK_LINUX_PATH', ROOT.parent / 'ok-linux'))
 
 
 class DestroyCLIIntegrationTests(unittest.TestCase):
@@ -33,7 +34,7 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
             '--lifecycle-root', str(ROOT), '--cluster-dir', str(box.rendered),
             '--management-kubeconfig', str(box.infra),
             '--provider-kubeconfig', str(self.fixture.provider),
-            '--ok-linux-path', str(ROOT.parent / 'ok-linux')]
+            '--ok-linux-path', str(OK_LINUX)]
         self.env = {**os.environ, 'HOME': str(box.home),
             'XDG_CONFIG_HOME': str(box.home / '.config'),
             'PATH': str(box.bin) + os.pathsep + os.environ['PATH'],
@@ -76,7 +77,7 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
     def use_saved_paths(self):
         box = self.fixture.box
         arguments = [str(BINARY), 'config', 'init', '--lifecycle-root', str(ROOT),
-            '--ok-linux-path', str(ROOT.parent / 'ok-linux'),
+            '--ok-linux-path', str(OK_LINUX),
             '--clusters-dir', str(box.rendered.parent),
             '--management-kubeconfig', str(box.infra),
             '--provider-kubeconfig', str(self.fixture.provider)]

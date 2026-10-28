@@ -109,6 +109,76 @@ verifies the complete package digest before opening the installer credential,
 and admission plus response verification constrain the installed objects. A
 failed or uncertain write is a terminal partial/unknown state for that run.
 
+## Stage-7 target admission: local core implemented, deployment not integrated
+
+The fail-closed admission policy above protects only immutable ledger
+ConfigMaps in `openkubes-execution-system`; it does **not** constrain the
+sixteen Stage-7 target-access objects on a workload cluster. The local
+`internal/targetadmission` package now contains the decision core and deployment
+primitives, but no CLI/runner command installs or starts them. Stage-7 remains
+subject to the existing signer and runner gates; do not treat the new package
+as an active cluster control.
+
+The local implementation provides:
+
+- an Ed25519 signed policy envelope. `SignBundle` is for a separately
+  controlled platform signer; the signing key must not be made available to
+  `ok-cli` or the Stage-7 writer. Consumers must pin the verification key
+  out-of-band, verify the signature, and recompile the exact sixteen-object
+  content allowlist before use;
+- a startup gate (`NewBoundTLSServer`) that will not return a serving HTTPS
+  handler until the signature is valid and two read-only GETs to the same
+  explicitly pinned target API endpoint succeed over its pinned CA: one reads
+  the `kube-system` Namespace UID and compares it with the signed bundle; the
+  other reads `/version` and requires a stable Kubernetes 1.30-or-later
+  release (vendor build metadata is allowed; prerelease versions are rejected).
+  The signed CAPI
+  Cluster UID must also hash to the plan's `targetIdentityDigest`. Same-name
+  target replacement and unsupported Kubernetes versions therefore fail
+  closed. Its dedicated ServiceAccount requires only `get` on Namespace
+  `kube-system` plus non-resource `get` on `/version`;
+- a TLS 1.2+ handler requiring a certificate SAN for the exact Kubernetes
+  Service DNS name and a valid chain to the same CA bundle intended for the
+  API-server webhook configuration. The target-bound signed policy also
+  carries a bounded, canonical API-server source-CIDR allowlist; only the
+  actual TCP peer on the admission route is checked against it, and forwarded
+  client-IP headers are ignored; and
+- a generated `ValidatingWebhookConfiguration` with `failurePolicy: Fail`, no
+  namespace/object selector, and CEL `matchConditions` that scope calls to the
+  exact approved resource names, namespaces and CREATE operation. This narrow
+  configuration requires stable Kubernetes 1.30 or later (stable CEL webhook match
+  conditions); and
+- an offline, digest-addressed two-phase activation plan which puts the
+  six-resource service scaffold before the webhook configuration, records
+  only a digest of signed target UIDs, and states that target/version checks
+  remain unverified and the webhook inactive; and
+- a separate read-only activation preflight which verifies that plan, performs
+  exactly two pinned GETs (target `kube-system` UID and `/version`), and marks
+  the evidence stale and unusable for any later write boundary.
+
+This remains a **local building block**, not independent delivery by itself.
+No signer implementation/key custody, Kubernetes Deployment/Service/RBAC
+materializer, install command, or activation receipt is wired into the runner.
+Before activation, a separately reviewed installer must verify authoritative
+runtime evidence for the CAPI UID ↔ workload `kube-system` UID association,
+sign with a separately held key, pin the public key, deliver certificate and
+CA material safely, create the webhook/service/server resources, and retain
+durable receipts for both the target bind and activation. The raw UIDs and
+private bundle are sensitive local data and must not enter public receipts or
+Git. No such installation, API request, or live cluster mutation was performed
+by implementing these local primitives.
+
+The handler checks the AdmissionReview's authenticated username as asserted by
+the API server; the Kubernetes webhook protocol here provides server-side TLS,
+not mutual TLS authentication of the API-server client. The serving adapter
+additionally restricts admission requests to the actual TCP peer CIDRs in the
+independently signed target policy; `X-Forwarded-For` is not trusted. Those
+CIDRs must come from verified target-network evidence and must reflect the
+source address actually observed at the pod. Network reachability should also
+be limited by the platform's service/network design. The policy still never
+grants authority: it only denies requests that do not exactly match the
+separately installed allowlist.
+
 ## Evidence boundary
 
 Public receipts contain semantic identities and digests only. They must not

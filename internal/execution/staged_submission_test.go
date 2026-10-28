@@ -295,10 +295,31 @@ func successfulPlaneReceipt(plane submission.Plane, state, mutationState string)
 
 func stagedMutationRequest(t *testing.T, plan stageplan.Binding, binding StageMutationBinding) StageMutationRequest {
 	t.Helper()
+	envelope := []byte(`{"format":"test-signed-stage-grant"}`)
+	stage, _, err := plan.Stage(binding.StageID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return StageMutationRequest{
-		StageMutationBinding: binding,
-		ContractIdentity:     plan.ContractIdentity,
-		GrantID:              "ok147-stage-grant-20260816-01",
-		PredecessorDigest:    stagedSHA("6"),
+		StageMutationBinding:   binding,
+		ContractIdentity:       plan.ContractIdentity,
+		EnablementRevision:     plan.EnablementRevision,
+		PlatformRevision:       plan.PlatformRevision,
+		ExecutionFixture:       plan.ExecutionFixture,
+		StageOrder:             stage.Order,
+		ExecutionAttemptDigest: plan.ExecutionAttempt,
+		AuthorizationDigest:    digest.SHA256(envelope),
+		AuthorizationKeyID:     stagedSHA("9"),
+		AuthorizationEnvelope:  envelope,
+		GrantID:                "ok147-stage-grant-20260816-01",
+		PredecessorDigest:      stagedSHA("6"),
+		StageClaim: ledger.StageClaimReceipt{
+			Format: ledger.StageClaimFormat, State: "CLAIMED", AuthorizationDigest: digest.SHA256(envelope),
+			GrantID: "ok147-stage-grant-20260816-01", KeyID: stagedSHA("9"), PlanDigest: binding.PlanDigest,
+			StageID: binding.StageID, StageDigest: binding.StageDigest, Operation: binding.Operation,
+			Authority: binding.Authority, PredecessorDigest: stagedSHA("6"), ContractRevision: binding.ContractRevision,
+			ClaimedAt: "2026-08-16T18:00:00Z",
+		},
+		verifiedStageGrant: true,
 	}
 }

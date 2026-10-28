@@ -281,8 +281,10 @@ Expert workflows (scripts must select an explicit mode):
 "ok up" is an exact shorthand for "ok cluster create", including preparation
 subcommands and legacy contract-planning flags. A friendly YAML without a mode
 starts automatic local Contract/plan/policy-request preparation without technical
-file prompts. Without a separately provided request-bound platform handoff it
-stops AWAITING_PLATFORM_AUTHORITY (NO-GO). No platform credential issuer is added.
+file prompts. The current CLI has no connected reviewed platform controller:
+preparation stops AWAITING_PLATFORM_AUTHORITY (NO-GO), and the cluster is not
+started. Do not create a platform handoff file manually. No platform credential
+issuer is connected.
 Even with matching platform inputs, the current v3/v4 workload credential policy
 denies the runner handoff before confirmation and Stage 1. Static preparation is
 not execution readiness; a reviewed bounded workload credential bootstrap is required.

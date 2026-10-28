@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok147-runner-image-plan ok147-runner-image-build install-teardown-ledger install-teardown-provider-reader remove-teardown-provider-reader migrate-teardown-ledger prune-teardown-ledger ok197-teardown-ledger-test ok198-expected-nodes-test
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok-target-admission-build ok-target-admission-image-build ok-target-admission-image-smoke ok147-runner-image-plan ok147-runner-image-build install-teardown-ledger install-teardown-provider-reader remove-teardown-provider-reader migrate-teardown-ledger prune-teardown-ledger ok197-teardown-ledger-test ok198-expected-nodes-test
 .DEFAULT_GOAL := help
 
 OK_CLI_VERSION  ?= $(shell git describe --tags --always --dirty)
@@ -232,6 +232,27 @@ ok-cli-build: ## Build the local ok CLI without contacting a cluster
 		-ldflags "-s -w -X=main.version=$(OK_CLI_VERSION) -X=main.revision=$(OK_CLI_REVISION)" \
 		-o $(SCRIPT_DIR)/.tools/bin/ok ./cmd/ok
 	@echo "Built $(SCRIPT_DIR)/.tools/bin/ok"
+
+ok-target-admission-build: ## Build the target admission HTTPS service without contacting a cluster
+	@mkdir -p $(SCRIPT_DIR)/.tools/bin
+	@CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false \
+		-o $(SCRIPT_DIR)/.tools/bin/ok-target-admission ./cmd/ok-target-admission
+	@echo "Built $(SCRIPT_DIR)/.tools/bin/ok-target-admission"
+
+OK_TARGET_ADMISSION_IMAGE ?= ok147-target-admission:local
+OK_TARGET_ADMISSION_IMAGE_REVISION ?= local-worktree
+
+ok-target-admission-image-build: ## Load the target admission image into local Docker only (requires OK_TARGET_ADMISSION_IMAGE_BUILD=yes)
+	@test "$(OK_TARGET_ADMISSION_IMAGE_BUILD)" = yes || { echo "Set OK_TARGET_ADMISSION_IMAGE_BUILD=yes to build locally; this target never publishes." >&2; exit 1; }
+	@command -v docker >/dev/null || { echo "docker is required for the local image build." >&2; exit 1; }
+	@docker buildx build --load --build-arg REVISION="$(OK_TARGET_ADMISSION_IMAGE_REVISION)" --file Containerfile.ok147-target-admission --tag "$(OK_TARGET_ADMISSION_IMAGE)" .
+	@echo "Loaded local-only image $(OK_TARGET_ADMISSION_IMAGE)"
+
+ok-target-admission-image-smoke: ## Verify the local target admission image is non-root and starts without network access
+	@command -v docker >/dev/null || { echo "docker is required for the local image smoke test." >&2; exit 1; }
+	@test "$$(docker image inspect --format '{{.Config.User}}|{{json .Config.Entrypoint}}' "$(OK_TARGET_ADMISSION_IMAGE)")" = '65532:65532|["/ok-target-admission"]' || { echo "Unexpected local image user or entrypoint." >&2; exit 1; }
+	@docker run --rm --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges "$(OK_TARGET_ADMISSION_IMAGE)" --help >/dev/null
+	@echo "Local image smoke passed: non-root entrypoint starts offline with read-only root and no capabilities."
 
 ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries without cluster contact
 	@go test -mod=readonly ./cmd/ok -count=1 \
@@ -1256,6 +1277,8 @@ help:
 	@echo "  make contract-executor-test          # OK-147: offline Go core tests"
 	@echo "  make contract-executor-dry-run       # OK-147: immutable plan; no cluster contact"
 	@echo "  make ok-cli-build                     # local .tools/bin/ok binary; no cluster contact"
+	@echo "  make ok-target-admission-build        # local webhook service binary; no cluster contact"
+	@echo "  make ok-target-admission-image-smoke  # local image startup/security-config smoke; no network"
 	@echo "  make ok-cli-offline-smoke             # product CLI safety smoke; no cluster contact"
 	@echo "  make new           CLUSTER=ok1 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=2] [NODE_SELECTOR=ok-gpu|NODE=ok-gpu] [START_IP=192.168.100.210]   # TYPE is required (OK-119)"
 	@echo "  make render        CLUSTER=ok1"
