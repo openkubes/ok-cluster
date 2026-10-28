@@ -132,11 +132,54 @@ func TestKubernetesCiliumWebSocketExecutorRejectsUIDRace(t *testing.T) {
 	executor := newTestCiliumWebSocketExecutor(t, client)
 	stream := &fakeRemoteCommandExecutor{stdout: []byte(`{"nodes":[]}`)}
 	executor.factory = func(*rest.Config, string, string) (remotecommand.Executor, error) { return stream, nil }
-	if _, err := executor.Exec(context.Background(), validCiliumExecRequest()); err == nil || !strings.Contains(err.Error(), "runtime identity") {
+	raw, err := executor.Exec(context.Background(), validCiliumExecRequest())
+	if err == nil || !strings.Contains(err.Error(), "runtime identity") {
 		t.Fatalf("Pod UID replacement race was accepted: %v", err)
 	}
+	if len(raw) != 0 {
+		t.Fatal("Pod UID replacement returned usable probe output")
+	}
+	// Detection after a stream is not proof that exec on a replacement was
+	// prevented. Do not treat this fixture as a mediated-probe security proof.
 	if identityCalls != 2 || stream.calls != 1 {
 		t.Fatalf("unexpected UID-race boundary: identity=%d stream=%d", identityCalls, stream.calls)
+	}
+}
+
+func TestKubernetesCiliumWebSocketExecutorRejectsChangedTaskBeforeAnyIO(t *testing.T) {
+	mutations := map[string]func(*observation.CiliumProbeExecRequest){
+		"namespace": func(r *observation.CiliumProbeExecRequest) { r.Namespace = "default" },
+		"pod path":  func(r *observation.CiliumProbeExecRequest) { r.PodName = "cilium-abc12/exec" },
+		"pod uid":   func(r *observation.CiliumProbeExecRequest) { r.PodUID = "" },
+		"container": func(r *observation.CiliumProbeExecRequest) { r.Container = "other-container" },
+		"binary":    func(r *observation.CiliumProbeExecRequest) { r.Command[0] = "sh" },
+		"subcommand": func(r *observation.CiliumProbeExecRequest) {
+			r.Command[1] = "status; id"
+		},
+		"probe flag":    func(r *observation.CiliumProbeExecRequest) { r.Command[2] = "--help" },
+		"output flag":   func(r *observation.CiliumProbeExecRequest) { r.Command[3] = "--verbose" },
+		"output format": func(r *observation.CiliumProbeExecRequest) { r.Command[4] = "json; id" },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			identityCalls, factoryCalls := 0, 0
+			client := &http.Client{Transport: ciliumRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				identityCalls++
+				return ciliumPodResponse("cilium-abc12", "pod-uid-1", "41"), nil
+			})}
+			executor := newTestCiliumWebSocketExecutor(t, client)
+			stream := &fakeRemoteCommandExecutor{stdout: []byte(`{"nodes":[]}`)}
+			executor.factory = func(*rest.Config, string, string) (remotecommand.Executor, error) {
+				factoryCalls++
+				return stream, nil
+			}
+			request := validCiliumExecRequest()
+			mutate(&request)
+			raw, err := executor.Exec(context.Background(), request)
+			if err == nil || len(raw) != 0 || identityCalls != 0 || factoryCalls != 0 || stream.calls != 0 {
+				t.Fatalf("changed task crossed boundary: err=%v output=%d reads=%d factories=%d streams=%d", err, len(raw), identityCalls, factoryCalls, stream.calls)
+			}
+		})
 	}
 }
 
