@@ -51,7 +51,7 @@ func OpenKubernetesTargetAccessStageOperation(config KubernetesTargetAccessStage
 	if len(ledgerToken) == len(workloadToken) && subtle.ConstantTimeCompare([]byte(ledgerToken), []byte(workloadToken)) == 1 {
 		return execution.StagedOperation{}, errors.New("ledger and target-access credentials must be distinct")
 	}
-	mutator, err := execution.NewTargetAccessMutator(config.Plan, config.Projection, submitter)
+	mutator, err := execution.NewTargetAccessMutator(config.Plan, config.Projection, execution.DirectTargetAccessSubmitter{Submitter: submitter})
 	if err != nil {
 		return execution.StagedOperation{}, err
 	}

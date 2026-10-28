@@ -1,5 +1,6 @@
 // Package bootstrapauthority is an experimental candidate issuer authorization and
-// coordination boundary. It has no signer, key loader or CLI/runner integration.
+// coordination boundary, including a candidate task core with trusted in-process
+// adapters. It has no built-in source loader, signer or CLI/runner integration.
 // The explicitly configured Kubernetes store is not installed or activated by
 // this package; production storage properties are a separate trust boundary.
 package bootstrapauthority
@@ -62,8 +63,8 @@ func validDigest(value string) bool {
 	return err == nil
 }
 
-// RequestSigningBytes constructs a domain-separated candidate message only. No
-// production method accepts a private key or performs signing.
+// RequestSigningBytes constructs a domain-separated candidate message only.
+// This function takes no private key and does not perform signing.
 func RequestSigningBytes(r SignedRequest) ([]byte, error) {
 	requestDigest, err := bootstrapcheck.RequestDigest(r.Request)
 	if err != nil {

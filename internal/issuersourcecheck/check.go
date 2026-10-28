@@ -1,5 +1,6 @@
 // Package issuersourcecheck is an experimental offline helper for the future
-// privileged platform task. It is not linked into CLI/runner/bootstrapauthority.
+// privileged platform task. The experimental bootstrapauthority task core uses
+// it, but neither package is linked into the CLI or runner.
 // It loads no files or Secrets, signs nothing, returns no key or capability and
 // cannot authorize issuance. Real CA keys must remain inside the privileged task.
 package issuersourcecheck

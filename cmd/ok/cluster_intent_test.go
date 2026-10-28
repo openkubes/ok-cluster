@@ -190,7 +190,10 @@ func TestClusterIntentPreparationInputsAreModeSpecific(t *testing.T) {
 	}
 	var help bytes.Buffer
 	writeClusterCreateHelp(&help)
-	if strings.Contains(help.String(), "ok up bind") || !strings.Contains(help.String(), "exits\nnon-zero") {
+	if strings.Contains(help.String(), "ok up bind") || !strings.Contains(help.String(), "exits\nnon-zero") ||
+		!strings.Contains(help.String(), "no connected reviewed platform controller") ||
+		!strings.Contains(help.String(), "Do not create a platform handoff file manually") ||
+		!strings.Contains(help.String(), "the cluster is not\nstarted") {
 		t.Fatal("help presents an extra binding step or successful partial preparation")
 	}
 }

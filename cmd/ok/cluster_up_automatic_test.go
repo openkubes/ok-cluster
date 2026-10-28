@@ -15,7 +15,7 @@ func TestAutomaticUpAwaitingAccessSummaryIsNonAuthorizing(t *testing.T) {
 	if err := writeAwaitingPlatformAccess(&output, "my-cluster"); err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{`Cluster "my-cluster"`, "Local preparation: complete", "Cluster creation:  not started", "reviewed", "No cluster API was contacted", "No credentials were issued or renewed", "Re-running does not grant access"} {
+	for _, required := range []string{`Cluster "my-cluster"`, "Local preparation: complete", "Cluster creation:  NOT started", "no connected reviewed platform controller yet", "Do not create a platform hand-off file manually", "No cluster API was contacted", "No credentials were issued or renewed", "re-running does not grant access"} {
 		if !strings.Contains(output.String(), required) {
 			t.Fatalf("missing %q: %s", required, &output)
 		}

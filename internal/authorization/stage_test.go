@@ -38,6 +38,14 @@ func TestVerifyStageAcceptsExactMutatingStage(t *testing.T) {
 	if err != nil || binding.StageDigest != receipt.StageDigest || binding.GrantID != payload.GrantID {
 		t.Fatalf("unexpected consumption binding: %#v %v", binding, err)
 	}
+	envelope := grant.SignedEnvelope()
+	if len(envelope) == 0 || digest.SHA256(envelope) != receipt.AuthorizationDigest {
+		t.Fatal("verified grant did not retain its exact signed authorization envelope")
+	}
+	envelope[0] ^= 1
+	if digest.SHA256(grant.SignedEnvelope()) != receipt.AuthorizationDigest {
+		t.Fatal("signed authorization accessor returned aliased storage")
+	}
 }
 
 func TestVerifyStageRejectsReadOnlyStageAndCrossStageReuse(t *testing.T) {
@@ -145,6 +153,71 @@ func TestBindStageGrantAcceptsExactCursorStage(t *testing.T) {
 	}
 	if binding.StageID != "enablement" || binding.PlanDigest != plan.PlanDigest || binding.PredecessorDigest != grant.Receipt().PredecessorDigest {
 		t.Fatalf("unexpected cursor binding: %#v", binding)
+	}
+}
+
+func TestVerifyStageDispatchAuthorizationIsOfflineAndExact(t *testing.T) {
+	plan := stagePlanFixture(t)
+	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := stagePayloadFixture(t, plan, "target-access", at)
+	raw := signStage(t, payload, publicKey, privateKey)
+	trustedKey := []byte(base64.StdEncoding.EncodeToString(publicKey))
+	grant, err := VerifyStage(raw, trustedKey, plan, "target-access", stagePredecessorReceipts(t, plan, "target-access", at), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := grant.Receipt()
+	binding, err := grant.ConsumptionBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := StageDispatchExpectation{
+		AuthorizationDigest: receipt.AuthorizationDigest, AuthorizationKeyID: receipt.KeyID,
+		GrantID: payload.GrantID, PlanDigest: payload.PlanDigest, ContractIdentity: payload.ContractIdentity,
+		ContractRevision: payload.ContractRevision, EnablementRevision: payload.EnablementRevision,
+		PlatformRevision: payload.PlatformRevision, ExecutionFixture: payload.ExecutionFixture,
+		ExecutionAttempt: payload.ExecutionAttempt, StageID: payload.StageID, StageOrder: payload.StageOrder,
+		StageDigest: payload.StageDigest, Operation: payload.Operation, Authority: payload.Authority,
+		PredecessorDigest: binding.PredecessorDigest, RequiredPredecessors: []string{"runtime-binding"},
+	}
+	if err := VerifyStageDispatchAuthorization(raw, trustedKey, expected, at); err != nil {
+		t.Fatalf("exact signed target-access grant rejected: %v", err)
+	}
+	tests := map[string]func(*StageDispatchExpectation){
+		"wrong operation":            func(value *StageDispatchExpectation) { value.Operation = "RegisterTarget" },
+		"wrong attempt":              func(value *StageDispatchExpectation) { value.ExecutionAttempt = authSHA("a") },
+		"wrong predecessor":          func(value *StageDispatchExpectation) { value.RequiredPredecessors = []string{"enablement"} },
+		"wrong authorization digest": func(value *StageDispatchExpectation) { value.AuthorizationDigest = authSHA("b") },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			candidate := expected
+			candidate.RequiredPredecessors = append([]string(nil), expected.RequiredPredecessors...)
+			mutate(&candidate)
+			if VerifyStageDispatchAuthorization(raw, trustedKey, candidate, at) == nil {
+				t.Fatal("mismatched dispatch authorization was accepted")
+			}
+		})
+	}
+	if VerifyStageDispatchAuthorization(raw, trustedKey, expected, at.Add(21*time.Minute)) == nil {
+		t.Fatal("expired stage grant was accepted")
+	}
+	otherPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTrustedKey := []byte(base64.StdEncoding.EncodeToString(otherPublic))
+	if VerifyStageDispatchAuthorization(raw, otherTrustedKey, expected, at) == nil {
+		t.Fatal("grant signed by a different key was accepted")
+	}
+	tampered := append([]byte(nil), raw...)
+	tampered[len(tampered)-3] ^= 1
+	if VerifyStageDispatchAuthorization(tampered, trustedKey, expected, at) == nil {
+		t.Fatal("tampered authorization envelope was accepted")
 	}
 }
 

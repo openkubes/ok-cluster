@@ -104,10 +104,18 @@ type StageConsumptionBinding struct {
 type VerifiedStageGrant struct {
 	receipt  StageReceipt
 	binding  StageConsumptionBinding
+	envelope []byte
 	verified bool
 }
 
 func (grant VerifiedStageGrant) Receipt() StageReceipt { return grant.receipt }
+
+// SignedEnvelope returns an owned copy of the public signed authorization.
+// It contains no credential; a delegated executor must still verify it against
+// its independently pinned stage-authority key before accepting the operation.
+func (grant VerifiedStageGrant) SignedEnvelope() []byte {
+	return append([]byte(nil), grant.envelope...)
+}
 
 func (grant VerifiedStageGrant) ConsumptionBinding() (StageConsumptionBinding, error) {
 	if !grant.verified {
@@ -220,6 +228,7 @@ func VerifyStage(raw, publicKeyRaw []byte, plan stageplan.Binding, expectedStage
 			ContractRevision:  plan.IntentRevision, NotBefore: document.Payload.NotBefore, NotAfter: document.Payload.NotAfter,
 			ExecutionAttempt: document.Payload.ExecutionAttempt,
 		},
+		envelope: append([]byte(nil), raw...),
 		verified: true,
 	}, nil
 }

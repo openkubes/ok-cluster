@@ -47,7 +47,7 @@ func (a *Authority) verifyResult(r VerifiedRequest, claim claimRecord, claimDige
 }
 
 // Complete only persists an already signed/verified candidate result. There is
-// no signing callback. Unknown write outcomes remain STOP; no write is retried.
+// no signing callback in Complete. Unknown writes remain STOP; none is retried.
 func (a *Authority) Complete(ctx context.Context, claim Claim, result SignedResult, now time.Time) error {
 	if !a.validVerified(claim.request) {
 		return ErrStop

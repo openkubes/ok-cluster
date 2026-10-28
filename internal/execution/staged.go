@@ -35,13 +35,24 @@ type StageMutationBinding struct {
 	ContractRevision string
 }
 
-// StageMutationRequest contains only verified identities. Implementation
-// inputs and credentials remain inside the preconstructed mutator.
+// StageMutationRequest contains the verified identities and the public signed
+// stage authorization needed by a delegated receiver. Implementation inputs
+// and credentials remain inside the preconstructed mutator.
 type StageMutationRequest struct {
 	StageMutationBinding
-	ContractIdentity  contract.Identity
-	GrantID           string
-	PredecessorDigest string
+	ContractIdentity       contract.Identity
+	EnablementRevision     string
+	PlatformRevision       string
+	ExecutionFixture       string
+	StageOrder             int
+	ExecutionAttemptDigest string
+	AuthorizationDigest    string
+	AuthorizationKeyID     string
+	AuthorizationEnvelope  []byte
+	GrantID                string
+	PredecessorDigest      string
+	StageClaim             ledger.StageClaimReceipt
+	verifiedStageGrant     bool
 }
 
 // StageMutationResult is the complete redaction-safe result of one call.
@@ -157,11 +168,22 @@ func (operation StagedOperation) Run(ctx context.Context, plan stageplan.Binding
 	}
 	receipt.Claim = &claim
 	receipt.State = "CLAIMED_INDETERMINATE_STOP"
+	authorizationReceipt := grant.Receipt()
 	result, mutationErr := operation.Mutator.Mutate(ctx, StageMutationRequest{
-		StageMutationBinding: wantMutation,
-		ContractIdentity:     plan.ContractIdentity,
-		GrantID:              binding.GrantID,
-		PredecessorDigest:    binding.PredecessorDigest,
+		StageMutationBinding:   wantMutation,
+		ContractIdentity:       plan.ContractIdentity,
+		EnablementRevision:     plan.EnablementRevision,
+		PlatformRevision:       plan.PlatformRevision,
+		ExecutionFixture:       plan.ExecutionFixture,
+		StageOrder:             decision.StageOrder,
+		ExecutionAttemptDigest: plan.ExecutionAttempt,
+		AuthorizationDigest:    authorizationReceipt.AuthorizationDigest,
+		AuthorizationKeyID:     authorizationReceipt.KeyID,
+		AuthorizationEnvelope:  grant.SignedEnvelope(),
+		GrantID:                binding.GrantID,
+		PredecessorDigest:      binding.PredecessorDigest,
+		StageClaim:             claim,
+		verifiedStageGrant:     true,
 	})
 	if err := validateStageMutationResult(decision.StageID, result, mutationErr); err != nil {
 		return receipt, err
