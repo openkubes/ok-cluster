@@ -458,7 +458,7 @@ class IntentRenderTests(unittest.TestCase):
                 text = stdout.decode()
                 self.assertIn('Cluster "my-cluster"', text)
                 self.assertIn('Local preparation: complete', text)
-                self.assertIn('Cluster creation:  not started', text)
+                self.assertIn('Cluster creation:  NOT started', text)
                 self.assertIn('No cluster API was contacted', text)
                 self.assertIn('No credentials were issued or renewed', text)
                 self.assertNotIn('requestDigest', text)
