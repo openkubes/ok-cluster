@@ -82,6 +82,103 @@ def expect_rejected(cfg: dict, label: str) -> None:
     raise AssertionError(f"resolver accepted unsupported {label}")
 
 
+def rejection_message(cfg: dict) -> str:
+    try:
+        resolve_flatcar_config(cfg, OK_LINUX)
+    except FlatcarProfileError as error:
+        return str(error)
+    raise AssertionError("resolver accepted an invalid config")
+
+
+def diagnostics_cases() -> None:
+    """OK-132: a wrong target must read as one, with every violation listed."""
+    cfg = base_config()
+    cfg["name"] = "ok-kagent"
+    cfg["type"] = "talos"
+    message = rejection_message(cfg)
+    check(
+        "ok-kagent is type 'talos', not a Flatcar cluster" in message,
+        "resolver names the cluster and its type when type is not flatcar",
+    )
+
+    cfg = base_config()
+    cfg["workers"]["disk"] = "20Gi"
+    cfg["workers"]["replicas"] = 2
+    cfg["nodeSelector"] = "ok-gpu"
+    message = rejection_message(cfg)
+    check(
+        all(
+            item in message
+            for item in (
+                "workers.disk must be '50Gi', observed '20Gi'",
+                "workers.replicas must be 1, observed 2",
+                "nodeSelector must be 'ok-infra', observed 'ok-gpu'",
+            )
+        )
+        and "3 violation(s)" in message,
+        "resolver reports every envelope violation, not only the first",
+    )
+    check(
+        message.startswith("flatcar-production-test ")
+        and "ADR-009" in message
+        and "not configurable" in message,
+        "envelope rejection names the cluster and the fixed ADR-009 envelope",
+    )
+
+
+def make_guard(target: str, clusters_dir: Path, cluster: str):
+    return subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "-s",
+            target,
+            f"CLUSTERS_DIR={clusters_dir}",
+            f"CLUSTER={cluster}",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def flatcar_targets_guarded() -> None:
+    """OK-132: Flatcar-only targets reject other cluster types up front."""
+    with tempfile.TemporaryDirectory() as directory:
+        clusters = Path(directory)
+        (clusters / "talos-test").mkdir()
+        (clusters / "talos-test" / "cluster-config.yaml").write_text(
+            "name: talos-test\ntype: talos\n", encoding="utf-8"
+        )
+        (clusters / "flatcar-test").mkdir()
+        (clusters / "flatcar-test" / "cluster-config.yaml").write_text(
+            "name: flatcar-test\ntype: flatcar\n", encoding="utf-8"
+        )
+        for target in ("flatcar-preflight", "install-flatcar", "teardown-flatcar"):
+            result = make_guard(target, clusters, "talos-test")
+            output = result.stdout + result.stderr
+            check(
+                result.returncode != 0
+                and "talos-test is type 'talos', not a Flatcar cluster"
+                in output
+                and "--management-kubeconfig" not in output,
+                f"{target} rejects a non-Flatcar cluster before the lifecycle",
+            )
+        missing = make_guard("flatcar-preflight", clusters, "absent")
+        check(
+            missing.returncode != 0
+            and "absent has no cluster-config.yaml"
+            in missing.stdout + missing.stderr,
+            "flatcar-preflight rejects a cluster without cluster-config.yaml",
+        )
+        accepted = make_guard("require-flatcar", clusters, "flatcar-test")
+        check(
+            accepted.returncode == 0,
+            "require-flatcar accepts a type: flatcar cluster",
+        )
+
+
 def negative_cases() -> None:
     cases = []
     cfg = base_config()
@@ -346,6 +443,7 @@ def main() -> int:
         in (generic_guard.stdout + generic_guard.stderr),
         "generic lifecycle targets reject Flatcar",
     )
+    flatcar_targets_guarded()
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     check(
         "teardown-all cannot own constrained Flatcar lifecycle" in makefile
@@ -368,6 +466,7 @@ def main() -> int:
     )
 
     negative_cases()
+    diagnostics_cases()
     return 0
 
 

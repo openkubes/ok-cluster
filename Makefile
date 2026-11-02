@@ -158,6 +158,23 @@ require-not-flatcar: require-cluster
 		fi; \
 	fi
 
+# OK-132: the mirror of require-not-flatcar. Without it a Talos or Ubuntu cluster
+# reaches the Flatcar lifecycle and fails on whichever input or envelope field is
+# checked first, which reads like a sizing problem instead of the wrong target.
+.PHONY: require-flatcar
+require-flatcar: require-cluster
+	@if [ ! -r "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml" ]; then \
+		echo "ERROR: $(CLUSTER) has no cluster-config.yaml; '$(MAKECMDGOALS)' only accepts type: flatcar clusters."; \
+		echo "       Create one with make new CLUSTER=<name> TYPE=flatcar."; \
+		exit 2; \
+	fi
+	@CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; print(d.get("type") or "")' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
+	if [ "$$CLUSTER_TYPE" != "flatcar" ]; then \
+		echo "ERROR: $(CLUSTER) is type '$${CLUSTER_TYPE:-<unset>}', not a Flatcar cluster."; \
+		echo "       '$(MAKECMDGOALS)' only accepts type: flatcar clusters."; \
+		exit 2; \
+	fi
+
 # OK-119: TYPE must be explicit. It decides the VM OS *and* the Cilium value set
 # install-cni later selects via cluster-config.yaml, so a wrong/implied value is
 # not a cosmetic mismatch — it installs a CNI the OS rejects.
@@ -399,7 +416,7 @@ talos-registry-trust-apply: require-cluster ## Apply trust to every node, no reb
 		--workload-kubeconfig "$(TALOS_WORKLOAD_KUBECONFIG)" \
 		$(if $(REGISTRY_ADDRESS),--address "$(REGISTRY_ADDRESS)")
 
-flatcar-preflight: require-cluster ## Read-only production Flatcar preflight
+flatcar-preflight: require-flatcar ## Read-only production Flatcar preflight
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 		python3 $(SCRIPT_DIR)/scripts/flatcar_lifecycle.py \
 		--preflight \
@@ -408,7 +425,7 @@ flatcar-preflight: require-cluster ## Read-only production Flatcar preflight
 		--cilium-chart "$(FLATCAR_CILIUM_CHART)" \
 		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
 
-install-flatcar: require-cluster ## Install constrained Flatcar (requires explicit paths and FLATCAR_APPLY=yes)
+install-flatcar: require-flatcar ## Install constrained Flatcar (requires explicit paths and FLATCAR_APPLY=yes)
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 	 FLATCAR_APPLY="$(FLATCAR_APPLY)" \
 		python3 $(SCRIPT_DIR)/scripts/flatcar_lifecycle.py \
@@ -418,7 +435,7 @@ install-flatcar: require-cluster ## Install constrained Flatcar (requires explic
 		--cilium-chart "$(FLATCAR_CILIUM_CHART)" \
 		--workload-kubeconfig "$(FLATCAR_WORKLOAD_KUBECONFIG)"
 
-teardown-flatcar: require-cluster ## Tear down only an owned constrained Flatcar cluster
+teardown-flatcar: require-flatcar ## Tear down only an owned constrained Flatcar cluster
 	@OK_LINUX_PATH="$(OK_LINUX_PATH)" \
 	 FLATCAR_TEARDOWN="$(FLATCAR_TEARDOWN)" \
 		python3 $(SCRIPT_DIR)/scripts/flatcar_lifecycle.py \

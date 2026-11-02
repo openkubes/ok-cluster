@@ -167,30 +167,50 @@ def validate_profile(profile: dict) -> None:
         )
 
 
-def set_exact(mapping: dict, key: str, expected, label: str) -> None:
+def set_exact(
+    mapping: dict, key: str, expected, label: str, violations: list[str]
+) -> None:
     if key in mapping and mapping[key] != expected:
-        raise FlatcarProfileError(
+        violations.append(
             f"{label} must be {expected!r}, observed {mapping[key]!r}"
         )
     mapping[key] = copy.deepcopy(expected)
 
 
-def exact_mapping(mapping: dict, expected: dict, label: str) -> None:
+def exact_mapping(
+    mapping: dict, expected: dict, label: str, violations: list[str]
+) -> None:
     unknown = set(mapping) - set(expected)
     if unknown:
-        raise FlatcarProfileError(
+        violations.append(
             f"{label} contains unsupported fields: {sorted(unknown)}"
         )
     for key, value in expected.items():
-        set_exact(mapping, key, value, f"{label}.{key}")
+        set_exact(mapping, key, value, f"{label}.{key}", violations)
+
+
+def envelope_error(name: str, violations: list[str]) -> FlatcarProfileError:
+    # OK-132: report every violation at once, with the cluster and the reason
+    # the values cannot be tuned, so a wrong target does not read like sizing.
+    lines = "\n".join(f"  - {item}" for item in violations)
+    return FlatcarProfileError(
+        f"{name} is outside the fixed ADR-009 Flatcar envelope "
+        f"({len(violations)} violation(s)); the envelope is not configurable, "
+        f"see ok-linux {EXPECTED_PROFILE['decision_ref']}:\n{lines}"
+    )
 
 
 def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
     """Materialize the production profile and reject every envelope widening."""
     resolved = copy.deepcopy(cfg)
     if resolved.get("type") != "flatcar":
-        raise FlatcarProfileError("Flatcar resolver requires type: flatcar")
-    validate_cluster_name(resolved.get("name"))
+        raise FlatcarProfileError(
+            f"{resolved.get('name') or '<unnamed>'} is type "
+            f"{resolved.get('type')!r}, not a Flatcar cluster; "
+            "the Flatcar resolver only accepts type: flatcar"
+        )
+    name = validate_cluster_name(resolved.get("name"))
+    violations: list[str] = []
     allowed_top_level = {
         "name",
         "type",
@@ -207,7 +227,7 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
     }
     unknown_top_level = set(resolved) - allowed_top_level
     if unknown_top_level:
-        raise FlatcarProfileError(
+        violations.append(
             "Flatcar config contains unsupported fields: "
             f"{sorted(unknown_top_level)}"
         )
@@ -224,22 +244,27 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
         "provider",
         EXPECTED_PROFILE["provider"],
         "provider",
+        violations,
     )
     versions = resolved.setdefault("versions", {})
     exact_mapping(
         versions,
         {"kubernetes": EXPECTED_PROFILE["kubernetes_version"]},
         "versions",
+        violations,
     )
     control_plane = resolved.setdefault("controlPlane", {})
-    exact_mapping(control_plane, EXPECTED_CONTROL_PLANE, "controlPlane")
+    exact_mapping(
+        control_plane, EXPECTED_CONTROL_PLANE, "controlPlane", violations
+    )
     workers = resolved.setdefault("workers", {})
-    exact_mapping(workers, EXPECTED_WORKERS, "workers")
+    exact_mapping(workers, EXPECTED_WORKERS, "workers", violations)
     set_exact(
         resolved,
         "nodeSelector",
         EXPECTED_PROFILE["node_selector"],
         "nodeSelector",
+        violations,
     )
     provider_profile = resolved.setdefault("providerProfile", {})
     exact_mapping(
@@ -250,6 +275,7 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
             ]
         },
         "providerProfile",
+        violations,
     )
 
     expected_os = {
@@ -272,7 +298,7 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
         },
     }
     os_config = resolved.setdefault("os", {})
-    exact_mapping(os_config, expected_os, "os")
+    exact_mapping(os_config, expected_os, "os", violations)
 
     expected_bootstrap = {
         "format": profile["bootstrap"]["format"],
@@ -281,7 +307,7 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
         ],
     }
     bootstrap = resolved.setdefault("bootstrap", {})
-    exact_mapping(bootstrap, expected_bootstrap, "bootstrap")
+    exact_mapping(bootstrap, expected_bootstrap, "bootstrap", violations)
 
     upgrade = resolved.setdefault("upgrade", {})
     exact_mapping(
@@ -294,7 +320,10 @@ def resolve_flatcar_config(cfg: dict, ok_linux_path: Path) -> dict:
             },
         },
         "upgrade",
+        violations,
     )
+    if violations:
+        raise envelope_error(name, violations)
     return resolved
 
 
