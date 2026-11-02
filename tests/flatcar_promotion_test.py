@@ -21,6 +21,7 @@ from profile_resolvers.flatcar import (  # noqa: E402
     FlatcarProfileError,
     resolve_flatcar_config,
 )
+import scripts.flatcar_lifecycle as lifecycle  # noqa: E402
 from scripts.flatcar_lifecycle import workload_kubeconfig_owned  # noqa: E402
 
 
@@ -125,6 +126,51 @@ def diagnostics_cases() -> None:
         "envelope rejection names the cluster and the fixed ADR-009 envelope",
     )
 
+    cfg = base_config()
+    cfg["workers"] = "big"
+    cfg["bootstrap"] = None
+    message = rejection_message(cfg)
+    check(
+        "workers must be a mapping, observed 'big'" in message
+        and "bootstrap must be a mapping, observed None" in message,
+        "a section that is not a mapping is a violation, not a TypeError",
+    )
+
+    cfg = base_config()
+    cfg["extra"] = True
+    try:
+        resolve_flatcar_config(cfg, Path("/nonexistent-ok-linux"))
+    except FlatcarProfileError as error:
+        message = str(error)
+    else:
+        raise AssertionError("resolver accepted a missing ok-linux profile")
+    check(
+        "unsupported fields: ['extra']" in message
+        and "ok-linux profile is absent" in message,
+        "a missing ok-linux profile keeps the violations found before it",
+    )
+
+    with tempfile.TemporaryDirectory() as directory:
+        original_root = lifecycle.ROOT
+        lifecycle.ROOT = Path(directory)
+        try:
+            (Path(directory) / "talos-test").mkdir()
+            (Path(directory) / "talos-test" / "cluster-config.yaml").write_text(
+                "name: talos-test\ntype: talos\n", encoding="utf-8"
+            )
+            try:
+                lifecycle.require_flatcar_type("talos-test")
+            except lifecycle.FlatcarLifecycleError as error:
+                message = str(error)
+            else:
+                raise AssertionError("lifecycle accepted a Talos cluster")
+        finally:
+            lifecycle.ROOT = original_root
+    check(
+        "talos-test is type 'talos', not a Flatcar cluster" in message,
+        "the lifecycle script itself rejects a non-Flatcar cluster first",
+    )
+
 
 def make_guard(target: str, clusters_dir: Path, cluster: str):
     return subprocess.run(
@@ -151,6 +197,10 @@ def flatcar_targets_guarded() -> None:
         (clusters / "talos-test" / "cluster-config.yaml").write_text(
             "name: talos-test\ntype: talos\n", encoding="utf-8"
         )
+        (clusters / "broken-test").mkdir()
+        (clusters / "broken-test" / "cluster-config.yaml").write_text(
+            "- not\n- a mapping\n", encoding="utf-8"
+        )
         (clusters / "flatcar-test").mkdir()
         (clusters / "flatcar-test" / "cluster-config.yaml").write_text(
             "name: flatcar-test\ntype: flatcar\n", encoding="utf-8"
@@ -162,7 +212,7 @@ def flatcar_targets_guarded() -> None:
                 result.returncode != 0
                 and "talos-test is type 'talos', not a Flatcar cluster"
                 in output
-                and "--management-kubeconfig" not in output,
+                and "[require-flatcar] Error" in output,
                 f"{target} rejects a non-Flatcar cluster before the lifecycle",
             )
         missing = make_guard("flatcar-preflight", clusters, "absent")
@@ -171,6 +221,14 @@ def flatcar_targets_guarded() -> None:
             and "absent has no cluster-config.yaml"
             in missing.stdout + missing.stderr,
             "flatcar-preflight rejects a cluster without cluster-config.yaml",
+        )
+        broken = make_guard("flatcar-preflight", clusters, "broken-test")
+        check(
+            broken.returncode != 0
+            and "cannot read the type of broken-test"
+            in broken.stdout + broken.stderr
+            and "<unset>" not in broken.stdout + broken.stderr,
+            "a malformed cluster-config.yaml is reported as malformed",
         )
         accepted = make_guard("require-flatcar", clusters, "flatcar-test")
         check(

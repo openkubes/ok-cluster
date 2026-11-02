@@ -50,6 +50,9 @@ override export MAX_USER_NAMESPACES := $(value MAX_USER_NAMESPACES)
 
 SCRIPT_DIR    := $(shell pwd)
 CLUSTERS_DIR  := $(SCRIPT_DIR)
+# Prints the declared `type` of a cluster-config.yaml (empty when unset) and
+# exits non-zero when the file is not YAML or not a mapping (OK-132).
+CLUSTER_TYPE_OF := python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])); sys.exit(sys.argv[1] + " is not a YAML mapping") if not isinstance(d, (dict, type(None))) else print((d or {}).get("type") or "")'
 OKB            = kubectl --kubeconfig "$(TALOS_INFRA_KUBECONFIG)"
 OK_LINUX_PATH ?= $(SCRIPT_DIR)/../ok-linux
 FLATCAR_INFRA_KUBECONFIG ?=
@@ -150,7 +153,7 @@ require-cluster:
 .PHONY: require-not-flatcar
 require-not-flatcar: require-cluster
 	@if [ -r "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml" ]; then \
-		CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; print(d.get("type") or "")' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
+		CLUSTER_TYPE="$$($(CLUSTER_TYPE_OF) "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
 		if [ "$$CLUSTER_TYPE" = "flatcar" ]; then \
 			echo "ERROR: generic target '$(MAKECMDGOALS)' is not a supported Flatcar lifecycle authority."; \
 			echo "       Use make flatcar-preflight/install-flatcar/teardown-flatcar with explicit inputs."; \
@@ -168,7 +171,10 @@ require-flatcar: require-cluster
 		echo "       Create one with make new CLUSTER=<name> TYPE=flatcar."; \
 		exit 2; \
 	fi
-	@CLUSTER_TYPE="$$(python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; print(d.get("type") or "")' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
+	@CLUSTER_TYPE="$$($(CLUSTER_TYPE_OF) "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")" || { \
+		echo "ERROR: cannot read the type of $(CLUSTER); cluster-config.yaml is not a valid YAML mapping."; \
+		exit 2; \
+	}; \
 	if [ "$$CLUSTER_TYPE" != "flatcar" ]; then \
 		echo "ERROR: $(CLUSTER) is type '$${CLUSTER_TYPE:-<unset>}', not a Flatcar cluster."; \
 		echo "       '$(MAKECMDGOALS)' only accepts type: flatcar clusters."; \
