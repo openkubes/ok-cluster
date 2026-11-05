@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 const localKubeconfigFixture = `apiVersion: v1
@@ -217,10 +219,37 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(config), "kind: Cluster") || !strings.Contains(string(config), localOwnerLabel+"="+first) {
-		t.Fatalf("kind config must bind generated owner ID to a node label: %s", config)
+	if strings.ContainsRune(string(config), '\t') {
+		t.Fatalf("generated Kind YAML must not contain tabs: %q", config)
 	}
-	if !strings.Contains(string(config), "name: "+localKindClusterName(localClusterDefaultName, first)) || localKindClusterName(localClusterDefaultName, first) == localKindClusterName(localClusterDefaultName, second) {
+	var parsed struct {
+		Kind       string `yaml:"kind"`
+		APIVersion string `yaml:"apiVersion"`
+		Name       string `yaml:"name"`
+		Nodes      []struct {
+			Role                 string   `yaml:"role"`
+			KubeadmConfigPatches []string `yaml:"kubeadmConfigPatches"`
+		} `yaml:"nodes"`
+	}
+	if err := yaml.Unmarshal(config, &parsed); err != nil {
+		t.Fatalf("generated Kind YAML must parse: %v\n%s", err, config)
+	}
+	if parsed.Kind != "Cluster" || parsed.APIVersion != "kind.x-k8s.io/v1alpha4" || parsed.Name != localKindClusterName(localClusterDefaultName, first) || len(parsed.Nodes) != 1 || parsed.Nodes[0].Role != "control-plane" || len(parsed.Nodes[0].KubeadmConfigPatches) != 1 {
+		t.Fatalf("unexpected parsed Kind cluster structure: %+v", parsed)
+	}
+	var patch struct {
+		Kind             string `yaml:"kind"`
+		NodeRegistration struct {
+			KubeletExtraArgs map[string]string `yaml:"kubeletExtraArgs"`
+		} `yaml:"nodeRegistration"`
+	}
+	if err := yaml.Unmarshal([]byte(parsed.Nodes[0].KubeadmConfigPatches[0]), &patch); err != nil {
+		t.Fatalf("owner-label kubeadm patch must parse: %v", err)
+	}
+	if patch.Kind != "InitConfiguration" || patch.NodeRegistration.KubeletExtraArgs["node-labels"] != localOwnerLabel+"="+first {
+		t.Fatalf("owner label is not placed on the control-plane node registration: %+v", patch)
+	}
+	if localKindClusterName(localClusterDefaultName, first) == localKindClusterName(localClusterDefaultName, second) {
 		t.Fatal("actual Kind cluster name must include the unique owner ID")
 	}
 	if _, err := renderKindOwnershipConfig("bad_name", first); err == nil {

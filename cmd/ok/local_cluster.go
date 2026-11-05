@@ -699,7 +699,7 @@ func renderKindOwnershipConfig(name, ownerID string) ([]byte, error) {
 	}
 	config := fmt.Sprintf(`kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-	name: %s
+name: %s
 nodes:
 - role: control-plane
   kubeadmConfigPatches:
