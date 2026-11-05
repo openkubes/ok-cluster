@@ -18,18 +18,24 @@ authorize this work.
 
 ## Decision register: approval versus implementation
 
-The following decisions change the authority or execution contract and need
-explicit human approval before implementation can enable them:
+The following seven decisions change the authority or execution contract. Each
+remains **OPEN** and needs explicit human approval plus sufficient evidence
+before implementation can enable activation:
 
-| Decision | Approval needed | Why it gates implementation |
-| --- | --- | --- |
-| Target-side enforcement source | Select an independently trusted profile/bootstrap installation point; otherwise keep activation disabled. | Activation cannot install the guard that must constrain its own writes. The current profile does not prove an earlier installed target guard. |
-| Installer ownership and identity | Select the fixed-purpose controller/installer and its authentication, target scope, and server-side restriction. | Kubernetes RBAC cannot restrict collection `create` by name or body; the proposed set includes ClusterRole, ClusterRoleBinding and a cluster-scoped webhook. |
-| Signing and private material custody | Approve who signs the target-bound policy, how the public-key pin is delivered independently, and how TLS/policy material reaches the installer. | No CLI/runner signer or private-material handoff is defined; the current offline plan intentionally excludes these private objects. |
-| API-server source CIDR evidence | Approve an independent method to establish the source addresses the webhook Pod actually observes. | The endpoint IP is not evidence of the peer source address; forwarded headers are untrusted. |
-| Durable dispatch and STOP/recovery | Select the immutable claim/outcome store and the operator-owned recovery procedure for partial or ambiguous installation. | A set of Kubernetes writes is not transactional; retry, rollback or automatic cleanup would risk replay or widening an unknown partial state. |
-| Stage-plan compatibility | Approve a new stage-plan/grant version with activation before `target-access`, invalidating old-plan grants without a skip path. | The current Bare-MVP plan has seven stages and the full plan twelve; insertion changes them to eight and thirteen. |
-| Stage-5/Stage-7 relationship | Confirm whether the activation work is coupled to the reviewed Stage-5 non-exec evidence and Stage-7 controller boundary. | Credential issuance alone does not make `pods/exec` or the 16-object Stage-7 write enforceably least-privileged. |
+| Decision | Approval needed | Why it gates implementation | Status |
+| --- | --- | --- | --- |
+| Target-side enforcement source | Select an independently trusted profile/bootstrap installation point; otherwise keep activation disabled. | Activation cannot install the guard that must constrain its own writes. The current profile does not prove an earlier installed target guard. | **OPEN** |
+| Installer ownership and identity | Select the fixed-purpose controller/installer and its authentication, target scope, and server-side restriction. | Kubernetes RBAC cannot restrict collection `create` by name or body; the proposed set includes ClusterRole, ClusterRoleBinding and a cluster-scoped webhook. | **OPEN** |
+| Signing and private material custody | Approve who signs the target-bound policy, how the public-key pin is delivered independently, and how TLS/policy material reaches the installer. | No CLI/runner signer or private-material handoff is defined; the current offline plan intentionally excludes these private objects. | **OPEN** |
+| API-server source CIDR evidence | Approve an independent method to establish the source addresses the webhook Pod actually observes. | The endpoint IP is not evidence of the peer source address; forwarded headers are untrusted. | **OPEN** |
+| Durable dispatch and STOP/recovery | Select the immutable claim/outcome store and the operator-owned recovery procedure for partial or ambiguous installation. | A set of Kubernetes writes is not transactional; retry, rollback or automatic cleanup would risk replay or widening an unknown partial state. | **OPEN** |
+| Stage-plan compatibility | Approve a new stage-plan/grant version with activation before `target-access`, invalidating old-plan grants without a skip path. | The current Bare-MVP plan has seven stages and the full plan twelve; insertion changes them to eight and thirteen. | **OPEN** |
+| Stage-5/Stage-7 relationship | Confirm whether the activation work is coupled to the reviewed Stage-5 non-exec evidence and Stage-7 controller boundary. | Credential issuance alone does not make `pods/exec` or the 16-object Stage-7 write enforceably least-privileged. | **OPEN** |
+
+These statuses are not approvals. This owner review accepts the proposal for
+continued design work only; it does not resolve any decision or authorize
+activation, privileged execution, installer credentials, or an ADR-030 status
+change.
 
 Implementation work that is already safe and non-activating is limited to
 maintaining the existing offline verifier/renderer and tests, documenting the
@@ -97,6 +103,119 @@ The proposed ten-write identity inventory is:
 | 8 | `v1` ConfigMap | `ok147-target-admission-system` | `ok147-target-admission-pin` | absent from plan; independent public-key pin |
 | 9 | `v1` Secret | `ok147-target-admission-system` | `ok147-target-admission-tls` | absent from plan; private TLS material |
 | 10 | `admissionregistration.k8s.io/v1` ValidatingWebhookConfiguration | — | `ok147-target-access.openkubes.io` | activation object |
+
+## Review findings: mandatory design constraints (still unapproved)
+
+### Trusted bootstrap boundary
+
+The target guard must already be installed and verified by a separately
+identified, independently trusted platform/bootstrap authority before any
+activation installer credential or operation is made available. The activation
+installer cannot establish the trust boundary that is supposed to constrain
+that same install. Evidence must bind the installed guard and its policy to
+the exact target identity and show that the guard is active before activation
+begins.
+
+The specific bootstrap authority, installation channel, guard identity,
+verification evidence and ownership remain unresolved approval decisions. If
+no such independently trusted and reviewable installation mechanism is
+available, target-admission activation stays disabled: no activation grant,
+installer credential, webhook registration or target mutation is permitted.
+This prerequisite does not approve or select a bootstrap implementation.
+
+### Exact object-content and authority binding
+
+The ten-object inventory is an exact content contract, not just a list of
+names and kinds. A future signed activation bundle must bind, for every object,
+its API version, kind, namespace (or cluster scope), exact name, and a
+`sha256:` digest of the canonical desired object content. It must also bind a
+digest of the ordered ten-entry inventory and a versioned canonicalization
+schema. The proposed canonicalization is deterministic JSON (JCS/RFC 8785)
+over the complete desired object; the only excluded read-back fields may be a
+fixed, reviewed list of API-server-generated metadata (`uid`,
+`resourceVersion`, `generation`, `creationTimestamp`, `managedFields`) and the
+server-maintained `status` subresource. No annotations, labels, owner
+references, selectors, policy fields or other unrecognized fields may be
+silently omitted. Defaults must be made explicit in the desired object; an
+unexpected default, pruned field, or added field is a mismatch until the
+versioned contract explicitly accounts for it.
+
+For each write, the installer must verify the signed per-object digest before
+dispatch. The already-installed independent target guard must also enforce the
+same target-bound digest allowlist against each incoming create request, rather
+than authorizing by name/kind alone. After each create, the installer reads the
+exact object back and compares its canonical content digest. Success requires
+all ten identities and digests to match. The guard and installer must obtain
+the allowlist through independently verified trust inputs; the installer must
+not be able to redefine the guard's accepted digests as part of activation.
+Secret bytes are delivered only through the separately reviewed private-
+material handoff; the public plan and receipts contain their content digests,
+never Secret values. Digests bind content but do not provide confidentiality.
+The policy signature must cover the inventory digest, target binding, image digest,
+webhook CA digest and canonicalization version, with the public-key pin
+delivered independently of the signed bundle.
+
+Content hashing is paired with semantic allowlists so a correctly signed but
+overbroad object cannot be accepted accidentally:
+
+- **RBAC:** pin the exact `ClusterRole` rules, `ClusterRoleBinding.roleRef`,
+  and every subject's kind, name and namespace. The reviewed allowlist must
+  state permitted API groups, resources, verbs and any `resourceNames`; reject
+  wildcard subjects/groups/resources/verbs and privilege-escalating verbs
+  (`bind`, `escalate`, `impersonate`) unless a separately approved, narrowly
+  justified contract explicitly requires one. The installer verifies both
+  the signed object digest and the parsed allowlist before writing and after
+  read-back. The exact principal and permission set remain an OPEN decision.
+- **Webhook:** verify the exact service reference (namespace, name, path and
+  port), CA-bundle digest, admission review versions, operations, API groups,
+  resources and scopes, namespace/object selectors, match conditions,
+  side-effects and timeout. Require `failurePolicy: Fail`; reject wildcard or
+  broader-than-approved matching. Compare the signed content digest and
+  semantic allowlist before registration and after read-back. The precise
+  admission scope remains an OPEN decision.
+- **Workload and service objects:** bind the image by immutable digest and
+  verify the exact service account, pod security settings, ports, selectors,
+  volumes and mount paths. The Secret and ConfigMap entries bind exact keys
+  and content digests without exposing private values.
+
+The digest schema, canonicalization rules, exact expected contents, RBAC
+principal/permission allowlist, and webhook scope/configuration require
+independent review and explicit approval before implementation can enforce
+them. No digest or allowlist is being activated by this documentation change.
+
+### Webhook availability, partial activation and recovery
+
+`failurePolicy: Fail` means the API server rejects matching admission requests
+when the webhook times out, is unreachable, or fails TLS/trust validation. This
+is intentionally fail-closed and can interrupt API operations in the matched
+scope. The final approved scope must therefore be the smallest exact set of
+resources, operations and namespaces needed by Stage 7; availability objectives
+and evidence must cover ready endpoints, API-server-to-service reachability,
+TLS identity/CA rotation, latency/timeouts, replica placement and disruption
+handling. The acceptable availability objective and corresponding replica /
+capacity requirements remain OPEN; successful `kubectl` writes alone do not
+establish webhook availability.
+
+The service and its dependencies must be installed and independently probed
+before the webhook configuration is created last. Before that final write,
+partial scaffold or material installation is inert but still durable state:
+record STOP/unknown and require separately authorized inspection; do not
+replay, roll back, or automatically clean it up. If the webhook create or its
+read-back is ambiguous, treat enforcement as **ACTIVE-UNKNOWN** and stop all
+subsequent activation/Stage-7 writes until an independent observer establishes
+the actual state. A failed response does not prove the webhook is absent.
+
+There is no automatic fail-open path: never switch `failurePolicy` to `Ignore`,
+delete the webhook, or widen its exclusions as recovery. A recovery path must
+be pre-designed, independently authorized, and usable even when the webhook
+service is unavailable. It may only inspect the exact target-bound activation
+and, after separate operator authorization, either restore the verified
+service/trust prerequisites or remove the exact webhook registration through
+that independent platform authority. It must preserve evidence, verify the
+post-recovery API object state and record a durable outcome. The recovery
+principal, allowed recovery operations and evidence contract remain OPEN. If
+that independent recovery capability is unavailable, activation remains
+disabled.
 
 The projected `kube-root-ca.crt` ConfigMap is supplied by Kubernetes and is
 read-only input; it is not one of these ten writes. Rows 7–9 have identities in
