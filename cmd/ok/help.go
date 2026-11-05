@@ -25,6 +25,15 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeConfigHelp(stdout)
 		return true
 	}
+	if len(arguments) == 1 && arguments[0] == "local" ||
+		len(arguments) == 2 && arguments[0] == "local" && isHelpArgument(arguments[1]) {
+		writeLocalHelp(stdout)
+		return true
+	}
+	if len(arguments) == 3 && arguments[0] == "local" && containsHelpArgument(arguments[2:]) {
+		writeLocalCommandHelp(arguments[1], stdout)
+		return true
+	}
 	if len(arguments) == 1 && arguments[0] == "destroy" ||
 		len(arguments) == 2 && arguments[0] == "destroy" && isHelpArgument(arguments[1]) {
 		writeDestroyHelp(stdout)
@@ -155,6 +164,7 @@ Commands:
   cluster     Validate, prepare, and explicitly run cluster workflows
   up          Shorthand for cluster create (same flags and safety gates)
   destroy     Compatibility spelling: ok destroy cluster (prefer ok cluster destroy)
+  local       Manage the dedicated local kind + Console demo environment
   config      Save and inspect local CLI paths (no cluster contact)
   version     Print version and source revision
   authority   Expert commands for the bounded stage authority

@@ -30,7 +30,11 @@ func TestHierarchicalHelp(t *testing.T) {
 		arguments []string
 		contains  []string
 	}{
-		"root":                   {[]string{"--help"}, []string{"ok <command>", "cluster"}},
+		"root":                   {[]string{"--help"}, []string{"ok <command>", "cluster", "local"}},
+		"local":                  {[]string{"local", "--help"}, []string{"ok local <command>", "fixture profile", "OK-147"}},
+		"local up":               {[]string{"local", "up", "--help"}, []string{"ok local up [--name ok-local]", "disabled"}},
+		"local status":           {[]string{"local", "status", "--help"}, []string{"isolated kubeconfig", "Read-only"}},
+		"local down":             {[]string{"local", "down", "--help"}, []string{"ok/no confirmation", "No state file"}},
 		"cluster":                {[]string{"cluster", "--help"}, []string{"ok cluster <command>", "create"}},
 		"authority":              {[]string{"authority", "--help"}, []string{"ok authority stage", "bounded stage authority"}},
 		"authority stage":        {[]string{"authority", "stage", "--help"}, []string{"launch execute", "separate approval"}},
