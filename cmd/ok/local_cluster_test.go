@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -182,6 +183,9 @@ func TestLocalUpPersistsIntentBeforeSingleVerifierCallAndStopsIncomplete(t *test
 			if command == "bash" && strings.Join(args, " ") == "--version" {
 				return []byte("GNU bash, version 5.3.20(1)-release\n"), nil
 			}
+			if command == "kind" && strings.Join(args, " ") == "version" {
+				return []byte("kind v0.33.0 go1.27.0 darwin/arm64\n"), nil
+			}
 			if command == "git" && strings.Contains(strings.Join(args, " "), "rev-parse HEAD") {
 				return []byte("revision\n"), nil
 			}
@@ -215,7 +219,7 @@ func TestLocalUpPersistsIntentBeforeSingleVerifierCallAndStopsIncomplete(t *test
 		},
 	}
 	err := runLocalWithRuntime(context.Background(), []string{"up"}, io.Discard, io.Discard, runtime)
-	if err == nil || !strings.Contains(err.Error(), "no retry performed") || !verified {
+	if err == nil || !strings.Contains(err.Error(), "no retry performed") || strings.Contains(err.Error(), "simulated partial") || !verified {
 		t.Fatalf("expected one failed verifier and terminal stop, got err=%v called=%v", err, verified)
 	}
 	state, err := readLocalClusterState(root, fixture.Name)
@@ -628,6 +632,118 @@ func TestLocalForwardCannotBeAuthorizedByPIDAlone(t *testing.T) {
 	for _, observed := range []struct{ started, command string }{{"different start", command}, {identity.StartedAt, command + " --other"}, {identity.StartedAt, "/tmp/other-kubectl " + strings.TrimPrefix(command, identity.Executable+" ")}} {
 		if err := validateLocalForwardObservation(identity, observed.started, observed.command); err == nil {
 			t.Fatalf("mismatched process authorized for signal: %+v", observed)
+		}
+	}
+}
+
+func TestLocalForwardInspectorClassifiesUnrelatedLivePIDAsReused(t *testing.T) {
+	identity := localForwardIdentity{PID: os.Getpid(), OwnerID: "0123456789abcdef0123456789abcdef", StartedAt: "not-the-current-start-time", Executable: "/no/such/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("0", 64)}
+	state, err := inspectLocalForwardProcess(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != localForwardPIDReused {
+		t.Fatalf("current unrelated process classified as %s", state)
+	}
+}
+
+func TestLocalDownClearsStaleForwardReceiptsWithoutSignalingReusedPID(t *testing.T) {
+	for _, processState := range []localForwardProcessState{localForwardAbsent, localForwardPIDReused} {
+		t.Run(string(processState), func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Forward = &localForwardIdentity{PID: 43210, OwnerID: state.OwnerID, StartedAt: "previous boot", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			deleted := false
+			base := localOwnershipRunner(state, state.OwnerID, true, &deleted)
+			signals := 0
+			runtime := localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: base,
+				inspectForward: func(localForwardIdentity) (localForwardProcessState, error) { return processState, nil },
+				stopForward:    func(localForwardIdentity) error { signals++; return nil },
+			}
+			err := runLocalWithRuntime(context.Background(), []string{"down"}, io.Discard, io.Discard, runtime)
+			if err != nil || !deleted {
+				t.Fatalf("stale receipt blocked owned cleanup: err=%v deleted=%v", err, deleted)
+			}
+			if signals != 0 {
+				t.Fatalf("stale/reused PID was signaled %d times", signals)
+			}
+		})
+	}
+}
+
+func TestLocalDownOnlyStopsMatchingForwardAndFailsOnUnknownIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		observed   localForwardProcessState
+		inspectErr bool
+		wantSignal bool
+	}{
+		{name: "matching", observed: localForwardMatches, wantSignal: true},
+		{name: "uninspectable", inspectErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Forward = &localForwardIdentity{PID: 1234, OwnerID: state.OwnerID, StartedAt: "start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("b", 64)}
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			deleted := false
+			base := localOwnershipRunner(state, state.OwnerID, true, &deleted)
+			signals := 0
+			runtime := localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: base,
+				inspectForward: func(localForwardIdentity) (localForwardProcessState, error) {
+					if test.inspectErr {
+						return "", errors.New("ps unavailable")
+					}
+					return test.observed, nil
+				},
+				stopForward: func(localForwardIdentity) error { signals++; return nil },
+			}
+			err := runLocalWithRuntime(context.Background(), []string{"down"}, io.Discard, io.Discard, runtime)
+			if test.inspectErr {
+				if err == nil || deleted || signals != 0 {
+					t.Fatalf("unknown identity must stop without signal/delete: err=%v deleted=%v signals=%d", err, deleted, signals)
+				}
+				return
+			}
+			if err != nil || !deleted || signals != 1 {
+				t.Fatalf("matching identity cleanup failed: err=%v deleted=%v signals=%d", err, deleted, signals)
+			}
+		})
+	}
+}
+
+func TestLocalVerifierDiagnosticsAreActionableAndDoNotLeakInput(t *testing.T) {
+	output := []byte("Required command not found: kubectl\nAuthorization: Bearer planted-secret-token\nclient-certificate-data: private-kubeconfig-material\n")
+	exitErr := exec.Command("sh", "-c", "exit 17").Run()
+	diagnostic := localVerifierDiagnostic(output, exitErr)
+	if !strings.Contains(diagnostic, "kubectl") || !strings.Contains(diagnostic, "exit 17") {
+		t.Fatalf("actionable safe category missing: %s", diagnostic)
+	}
+	for _, secret := range []string{"planted-secret-token", "private-kubeconfig-material", "Authorization", "certificate-data"} {
+		if strings.Contains(diagnostic, secret) {
+			t.Fatalf("sensitive verifier output leaked %q: %s", secret, diagnostic)
+		}
+	}
+	if got := safeLocalVerifierFailure(errors.New("Authorization: Bearer arbitrary-secret")); strings.Contains(got, "arbitrary-secret") {
+		t.Fatalf("untrusted callback error leaked: %s", got)
+	}
+}
+
+func TestLocalKindMinimumVersion(t *testing.T) {
+	for _, test := range []struct {
+		output    string
+		supported bool
+	}{
+		{"kind v0.33.0 go1.27.0 darwin/arm64", true},
+		{"kind v0.34.1 go1.27.0 darwin/arm64", true},
+		{"kind v0.32.9 go1.27.0 darwin/arm64", false},
+		{"kind unknown", false},
+	} {
+		if got := localKindVersionSupported(test.output, localKindMinimumVersion); got != test.supported {
+			t.Fatalf("version %q supported=%v, want %v", test.output, got, test.supported)
 		}
 	}
 }

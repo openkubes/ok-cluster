@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
@@ -33,11 +34,13 @@ const (
 	localClusterDefaultName = "ok-local"
 	localConsoleDefaultPort = 18787
 	localOwnerLabel         = "cli.openkubes.io/local-owner"
+	localKindMinimumVersion = "0.33.0"
 )
 
 var localOwnerIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var localClusterNamePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,28}[a-z0-9])?$`)
 var localBashVersionPattern = regexp.MustCompile(`version ([0-9]+)\.([0-9]+)`)
+var localKindVersionPattern = regexp.MustCompile(`kind v([0-9]+)\.([0-9]+)\.([0-9]+)`)
 
 type localNodeIdentity struct {
 	Name string `json:"name"`
@@ -87,14 +90,28 @@ type localForwardIdentity struct {
 type localCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
 type localRuntime struct {
-	stateRoot   string
-	consoleRoot string
-	input       io.Reader
-	interactive bool
-	run         localCommandRunner
-	runPinned   func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
-	runVerifier func(context.Context, string, map[string]string) error
+	stateRoot      string
+	consoleRoot    string
+	input          io.Reader
+	interactive    bool
+	run            localCommandRunner
+	runPinned      func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
+	runVerifier    func(context.Context, string, map[string]string) error
+	inspectForward func(localForwardIdentity) (localForwardProcessState, error)
+	stopForward    func(localForwardIdentity) error
 }
+
+type localVerifierFailure struct{ diagnostic string }
+
+func (failure localVerifierFailure) Error() string { return failure.diagnostic }
+
+type localForwardProcessState string
+
+const (
+	localForwardAbsent    localForwardProcessState = "ABSENT"
+	localForwardMatches   localForwardProcessState = "MATCHES"
+	localForwardPIDReused localForwardProcessState = "PID_REUSED"
+)
 
 func defaultLocalRuntime() localRuntime {
 	root, err := os.UserConfigDir()
@@ -224,6 +241,10 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 	if major < 4 || (major == 4 && minor < 4) {
 		return errors.New("Bash 4.4 or newer is required; no local state or cluster change was made")
 	}
+	kindVersion, err := runtime.run(ctx, "kind", "version")
+	if err != nil || !localKindVersionSupported(string(kindVersion), localKindMinimumVersion) {
+		return fmt.Errorf("kind %s or newer is required for isolated kubeconfig creation; no local state or cluster change was made", localKindMinimumVersion)
+	}
 	provider, err := observeLocalDockerProvider(ctx, runtime)
 	if err != nil {
 		return fmt.Errorf("identify local Docker provider before creating durable intent: %w", err)
@@ -254,21 +275,22 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 		return err
 	}
 	env := map[string]string{
-		"OK_CONSOLE_KIND_CLUSTER":    state.KindName,
-		"OK_CONSOLE_KEEP_CLUSTER":    "true",
-		"OK_CONSOLE_KIND_CONFIG":     configPath,
-		"OK_CONSOLE_KUBECONFIG":      state.Kubeconfig,
-		"OK_CONSOLE_LOCAL_PORT":      fmt.Sprint(localConsoleDefaultPort),
-		"DOCKER_HOST":                provider.Endpoint,
-		"KIND_EXPERIMENTAL_PROVIDER": "docker",
-		"KUBECONFIG":                 state.Kubeconfig,
+		"OK_CONSOLE_KIND_CLUSTER":     state.KindName,
+		"OK_CONSOLE_KEEP_CLUSTER":     "true",
+		"OK_CONSOLE_KIND_CONFIG":      configPath,
+		"OK_CONSOLE_KUBECONFIG":       state.Kubeconfig,
+		"OK_CONSOLE_LOCAL_PORT":       fmt.Sprint(localConsoleDefaultPort),
+		"DOCKER_HOST":                 provider.Endpoint,
+		"KIND_EXPERIMENTAL_PROVIDER":  "docker",
+		"KUBECONFIG":                  state.Kubeconfig,
+		"OK_CONSOLE_MIN_KIND_VERSION": localKindMinimumVersion,
 	}
 	if err := runtime.runVerifier(ctx, filepath.Join(runtime.consoleRoot, "deploy/kubernetes/verify-local-kind.sh"), env); err != nil {
 		state.Phase = "INCOMPLETE"
 		if persistErr := updateLocalClusterState(runtime.stateRoot, *name, state); persistErr != nil {
 			return fmt.Errorf("verifier failed (%v) and INCOMPLETE state update failed (%w); original CREATING intent remains", err, persistErr)
 		}
-		return fmt.Errorf("Console local-kind workflow stopped; durable INCOMPLETE state retained, no retry performed: %w", err)
+		return fmt.Errorf("Console local-kind workflow stopped; durable INCOMPLETE state retained, no retry performed: %s", safeLocalVerifierFailure(err))
 	}
 	if err := captureLocalClusterIdentity(ctx, &runtime, &state); err != nil {
 		state.Phase = "INCOMPLETE"
@@ -298,6 +320,28 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 	}
 	_, err = fmt.Fprintf(stdout, "OpenKubes Console is ready: http://127.0.0.1:%d\n", localConsoleDefaultPort)
 	return err
+}
+
+func localKindVersionSupported(output, minimum string) bool {
+	current := localKindVersionPattern.FindStringSubmatch(output)
+	wanted := regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)$`).FindStringSubmatch(minimum)
+	if len(current) != 4 || len(wanted) != 4 {
+		return false
+	}
+	for index := 1; index <= 3; index++ {
+		actual, errA := strconv.Atoi(current[index])
+		required, errR := strconv.Atoi(wanted[index])
+		if errA != nil || errR != nil {
+			return false
+		}
+		if actual > required {
+			return true
+		}
+		if actual < required {
+			return false
+		}
+	}
+	return true
 }
 
 func ensureLocalPortAvailable(port int) error {
@@ -360,11 +404,52 @@ func runLocalConsoleVerifier(ctx context.Context, script string, env map[string]
 		childEnv = append(childEnv, key+"="+value)
 	}
 	command.Env = childEnv
-	_, err := command.CombinedOutput()
+	output, err := command.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("verifier exited unsuccessfully: %w", err)
+		return localVerifierFailure{diagnostic: localVerifierDiagnostic(output, err)}
 	}
 	return nil
+}
+
+func safeLocalVerifierFailure(err error) string {
+	var failure localVerifierFailure
+	if errors.As(err, &failure) {
+		return failure.diagnostic
+	}
+	return "verifier failed; raw command output was suppressed to protect credentials and private configuration"
+}
+
+func localVerifierDiagnostic(output []byte, err error) string {
+	status := "unknown"
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		status = strconv.Itoa(exitError.ExitCode())
+	}
+	text := string(output)
+	switch {
+	case strings.Contains(text, "Required command not found:"):
+		matches := regexp.MustCompile(`Required command not found: ([A-Za-z0-9._-]+)`).FindStringSubmatch(text)
+		if len(matches) == 2 && (matches[1] == "docker" || matches[1] == "kind" || matches[1] == "kubectl" || matches[1] == "curl" || matches[1] == "git") {
+			return fmt.Sprintf("required local tool %q is missing (verifier exit %s)", matches[1], status)
+		}
+		return "a required local tool is missing (verifier exit " + status + ")"
+	case strings.Contains(text, "dirty worktree") || strings.Contains(text, "source tree is dirty"):
+		return "the Console checkout is not clean; keep the source-tree check intact (verifier exit " + status + ")"
+	case strings.Contains(text, "already exists; refusing to modify an unowned cluster"):
+		return "the owner-specific Kind name already exists; verifier refused adoption (exit " + status + ")"
+	case strings.Contains(text, "Isolated kubeconfig destination already exists"):
+		return "the isolated kubeconfig path already exists; verifier refused to overwrite it (exit " + status + ")"
+	case strings.Contains(text, "must be supplied together") || strings.Contains(text, "paths must be absolute") || strings.Contains(text, "Kind config must be"):
+		return "isolated Kind config/kubeconfig inputs failed validation (verifier exit " + status + ")"
+	case strings.Contains(text, "port-forward") || strings.Contains(text, "Live health probe failed"):
+		return "Console loopback forwarding or health verification failed (verifier exit " + status + ")"
+	case strings.Contains(text, "Deployment ok-console") || strings.Contains(text, "ReplicaSet") || strings.Contains(text, "Current ReplicaSet"):
+		return "Console deployment readiness verification failed (verifier exit " + status + ")"
+	case strings.Contains(text, "Image revision") || strings.Contains(text, "Rendered local manifest"):
+		return "Console image or rendered-manifest verification failed (verifier exit " + status + ")"
+	default:
+		return "Console verifier stopped before successful deployment verification (exit " + status + "); raw output was suppressed"
+	}
 }
 
 func writePrivateNewFile(path string, contents []byte) error {
@@ -517,29 +602,75 @@ func localProcessField(pid int, field string) (string, error) {
 }
 
 func stopLocalForward(identity localForwardIdentity) error {
-	if err := verifyLocalForward(identity); err != nil {
+	state, err := inspectLocalForwardProcess(identity)
+	if err != nil {
 		return err
+	}
+	if state == localForwardAbsent || state == localForwardPIDReused {
+		return nil
+	}
+	if state != localForwardMatches {
+		return errors.New("port-forward process state is ambiguous")
+	}
+	// Repeat the identity check immediately before the signal. This narrows the
+	// unavoidable PID check-to-signal race on platforms without pidfd support.
+	state, err = inspectLocalForwardProcess(identity)
+	if err != nil {
+		return err
+	}
+	if state == localForwardAbsent || state == localForwardPIDReused {
+		return nil
+	}
+	if state != localForwardMatches {
+		return errors.New("port-forward process state changed before signal")
 	}
 	process, err := os.FindProcess(identity.PID)
 	if err != nil {
 		return err
 	}
 	if err := process.Signal(os.Interrupt); err != nil {
+		if errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
 		return err
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		started, startErr := localProcessField(identity.PID, "lstart")
-		command, commandErr := localProcessField(identity.PID, "command")
-		if startErr != nil || commandErr != nil {
-			return nil
-		}
-		if validateLocalForwardObservation(identity, strings.TrimSpace(started), strings.TrimSpace(command)) != nil {
+		state, err := inspectLocalForwardProcess(identity)
+		if err == nil && (state == localForwardAbsent || state == localForwardPIDReused) {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	return errors.New("verified port-forward did not stop after interrupt; refusing cluster deletion")
+}
+
+func inspectLocalForwardProcess(identity localForwardIdentity) (localForwardProcessState, error) {
+	if identity.PID <= 0 {
+		return "", errors.New("recorded port-forward PID is invalid")
+	}
+	output, err := exec.Command("ps", "-p", fmt.Sprint(identity.PID), "-o", "pid=").Output()
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return "", errors.New("ps is unavailable; cannot classify recorded port-forward PID")
+		}
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 && strings.TrimSpace(string(output)) == "" {
+			return localForwardAbsent, nil
+		}
+		return "", fmt.Errorf("inspect recorded port-forward PID: %w", err)
+	}
+	if strings.TrimSpace(string(output)) == "" {
+		return localForwardAbsent, nil
+	}
+	started, startErr := localProcessField(identity.PID, "lstart")
+	command, commandErr := localProcessField(identity.PID, "command")
+	if startErr != nil || commandErr != nil {
+		return "", errors.New("PID exists but its full process identity cannot be read")
+	}
+	if validateLocalForwardObservation(identity, strings.TrimSpace(started), strings.TrimSpace(command)) != nil {
+		return localForwardPIDReused, nil
+	}
+	return localForwardMatches, nil
 }
 
 func verifyLocalForward(identity localForwardIdentity) error {
@@ -698,8 +829,30 @@ func runLocalDown(ctx context.Context, arguments []string, runtime localRuntime,
 		return nil
 	}
 	if state.Forward != nil {
-		if err := stopLocalForward(*state.Forward); err != nil {
-			return fmt.Errorf("cannot prove managed port-forward identity; refusing cluster deletion: %w", err)
+		inspect := runtime.inspectForward
+		if inspect == nil {
+			inspect = inspectLocalForwardProcess
+		}
+		processState, inspectErr := inspect(*state.Forward)
+		if inspectErr != nil {
+			return fmt.Errorf("cannot inspect recorded port-forward safely; refusing cluster deletion: %w", inspectErr)
+		}
+		switch processState {
+		case localForwardMatches:
+			stop := runtime.stopForward
+			if stop == nil {
+				stop = stopLocalForward
+			}
+			if err := stop(*state.Forward); err != nil {
+				return fmt.Errorf("cannot stop verified port-forward; refusing cluster deletion: %w", err)
+			}
+		case localForwardAbsent:
+			// A reboot or unexpected process exit leaves only stale local metadata.
+		case localForwardPIDReused:
+			// The PID now belongs to another process. Drop only our stale receipt;
+			// never signal a process whose identity differs.
+		default:
+			return errors.New("port-forward process state is ambiguous; refusing cluster deletion")
 		}
 		state.Forward = nil
 		if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
