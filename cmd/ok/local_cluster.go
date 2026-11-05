@@ -4,19 +4,24 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/openkubes/ok-cluster/internal/jsonstrict"
 	"golang.org/x/term"
@@ -24,7 +29,7 @@ import (
 )
 
 const (
-	localClusterStateFormat = "ok-cli-local-cluster/v2"
+	localClusterStateFormat = "ok-cli-local-cluster/v3"
 	localClusterDefaultName = "ok-local"
 	localConsoleDefaultPort = 18787
 	localOwnerLabel         = "cli.openkubes.io/local-owner"
@@ -32,6 +37,7 @@ const (
 
 var localOwnerIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var localClusterNamePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,28}[a-z0-9])?$`)
+var localBashVersionPattern = regexp.MustCompile(`version ([0-9]+)\.([0-9]+)`)
 
 type localNodeIdentity struct {
 	Name string `json:"name"`
@@ -56,6 +62,7 @@ type localProviderIdentity struct {
 // identities against the live kind cluster through its private kubeconfig.
 type localClusterState struct {
 	Format        string                   `json:"format"`
+	Phase         string                   `json:"phase"`
 	Name          string                   `json:"name"`
 	OwnerID       string                   `json:"ownerID"`
 	KindName      string                   `json:"kindName"`
@@ -81,10 +88,12 @@ type localCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
 type localRuntime struct {
 	stateRoot   string
+	consoleRoot string
 	input       io.Reader
 	interactive bool
 	run         localCommandRunner
 	runPinned   func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
+	runVerifier func(context.Context, string, map[string]string) error
 }
 
 func defaultLocalRuntime() localRuntime {
@@ -98,10 +107,12 @@ func defaultLocalRuntime() localRuntime {
 	}
 	return localRuntime{
 		stateRoot:   stateRoot,
+		consoleRoot: findLocalConsoleRoot(),
 		input:       os.Stdin,
 		interactive: term.IsTerminal(int(os.Stdin.Fd())),
 		run:         runLocalCommand,
 		runPinned:   runLocalCommandPinned,
+		runVerifier: runLocalConsoleVerifier,
 	}
 }
 
@@ -158,7 +169,7 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 	}
 	switch arguments[0] {
 	case "up":
-		return runLocalUp(arguments[1:], stdout, stderr)
+		return runLocalUp(ctx, arguments[1:], runtime, stdout, stderr)
 	case "status":
 		return runLocalStatus(ctx, arguments[1:], runtime, stdout)
 	case "down":
@@ -168,7 +179,7 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 	}
 }
 
-func runLocalUp(arguments []string, stdout, stderr io.Writer) error {
+func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ok local up", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	name := flags.String("name", localClusterDefaultName, "Dedicated local kind cluster name")
@@ -178,7 +189,411 @@ func runLocalUp(arguments []string, stdout, stderr io.Writer) error {
 	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) {
 		return errors.New("ok local up accepts no positional arguments and requires a valid --name")
 	}
-	return errors.New("ok local up is not enabled until the separately reviewed Console integration is available; no cluster was contacted or changed")
+	if runtime.consoleRoot == "" || runtime.runVerifier == nil {
+		return errors.New("cannot find the ok-console checkout and local-kind verifier; set OK_CONSOLE_DIR; no cluster was contacted")
+	}
+	if err := ensureLocalPortAvailable(localConsoleDefaultPort); err != nil {
+		return err
+	}
+	if _, err := os.Stat(localStateFilePath(runtime.stateRoot, *name)); err == nil {
+		return errors.New("local ownership state already exists; inspect with ok local status; automatic retries are disabled")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cannot inspect existing local state: %w", err)
+	}
+	revision, err := runtime.run(ctx, "git", "-C", runtime.consoleRoot, "rev-parse", "HEAD")
+	if err != nil || strings.TrimSpace(string(revision)) == "" {
+		return errors.New("cannot identify the Console source revision; no local state or cluster change was made")
+	}
+	dirty, err := runtime.run(ctx, "git", "-C", runtime.consoleRoot, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		return fmt.Errorf("cannot verify the Console source tree before preparation: %w", err)
+	}
+	if strings.TrimSpace(string(dirty)) != "" {
+		return errors.New("Console checkout is dirty; the existing local-image source cleanliness check requires a clean tree, including untracked files; no local state or cluster change was made")
+	}
+	bashVersion, err := runtime.run(ctx, "bash", "--version")
+	if err != nil {
+		return fmt.Errorf("Bash 4.4 or newer is required before local preparation: %w", err)
+	}
+	versionMatch := localBashVersionPattern.FindStringSubmatch(string(bashVersion))
+	if len(versionMatch) != 3 {
+		return errors.New("cannot establish Bash version; require Bash 4.4 or newer before local preparation")
+	}
+	major, _ := strconv.Atoi(versionMatch[1])
+	minor, _ := strconv.Atoi(versionMatch[2])
+	if major < 4 || (major == 4 && minor < 4) {
+		return errors.New("Bash 4.4 or newer is required; no local state or cluster change was made")
+	}
+	provider, err := observeLocalDockerProvider(ctx, runtime)
+	if err != nil {
+		return fmt.Errorf("identify local Docker provider before creating durable intent: %w", err)
+	}
+	ownerID, err := newLocalOwnerID()
+	if err != nil {
+		return err
+	}
+	clusterDir, err := initLocalStateDirectory(runtime.stateRoot, *name)
+	if err != nil {
+		return err
+	}
+	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
+	if _, err := os.Lstat(kubeconfigPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("private kubeconfig path already exists or cannot be checked; refusing to overwrite it")
+	}
+	state := localClusterState{Format: localClusterStateFormat, Phase: "CREATING", Name: *name, OwnerID: ownerID,
+		KindName: localKindClusterName(*name, ownerID), Provider: provider, Kubeconfig: kubeconfigPath}
+	config, err := renderKindOwnershipConfig(*name, ownerID)
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(clusterDir, "kind.yaml")
+	if err := writePrivateNewFile(configPath, config); err != nil {
+		return err
+	}
+	if err := writeLocalClusterIntent(runtime.stateRoot, *name, state); err != nil {
+		return err
+	}
+	env := map[string]string{
+		"OK_CONSOLE_KIND_CLUSTER":    state.KindName,
+		"OK_CONSOLE_KEEP_CLUSTER":    "true",
+		"OK_CONSOLE_KIND_CONFIG":     configPath,
+		"OK_CONSOLE_KUBECONFIG":      state.Kubeconfig,
+		"OK_CONSOLE_LOCAL_PORT":      fmt.Sprint(localConsoleDefaultPort),
+		"DOCKER_HOST":                provider.Endpoint,
+		"KIND_EXPERIMENTAL_PROVIDER": "docker",
+		"KUBECONFIG":                 state.Kubeconfig,
+	}
+	if err := runtime.runVerifier(ctx, filepath.Join(runtime.consoleRoot, "deploy/kubernetes/verify-local-kind.sh"), env); err != nil {
+		state.Phase = "INCOMPLETE"
+		if persistErr := updateLocalClusterState(runtime.stateRoot, *name, state); persistErr != nil {
+			return fmt.Errorf("verifier failed (%v) and INCOMPLETE state update failed (%w); original CREATING intent remains", err, persistErr)
+		}
+		return fmt.Errorf("Console local-kind workflow stopped; durable INCOMPLETE state retained, no retry performed: %w", err)
+	}
+	if err := captureLocalClusterIdentity(ctx, &runtime, &state); err != nil {
+		state.Phase = "INCOMPLETE"
+		if persistErr := updateLocalClusterState(runtime.stateRoot, *name, state); persistErr != nil {
+			return fmt.Errorf("identity capture failed (%v) and INCOMPLETE state update failed (%w); original CREATING intent remains", err, persistErr)
+		}
+		return fmt.Errorf("Console deployment returned success but ownership evidence is incomplete; no success claimed: %w", err)
+	}
+	state.Phase = "CLUSTER_READY"
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("persist verified cluster receipt: %w", err)
+	}
+	fwd, err := startLocalForward(ctx, state)
+	if err != nil {
+		return fmt.Errorf("cluster is deployed but Console forwarding failed; state retained for inspection: %w", err)
+	}
+	state.Forward = &fwd
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("forward started but receipt update failed; inspect process and state: %w", err)
+	}
+	if err := waitLocalConsole(ctx, localConsoleDefaultPort); err != nil {
+		return fmt.Errorf("cluster is deployed but Console health is not verified; no success claimed: %w", err)
+	}
+	state.Phase = "READY"
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "OpenKubes Console is ready: http://127.0.0.1:%d\n", localConsoleDefaultPort)
+	return err
+}
+
+func ensureLocalPortAvailable(port int) error {
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return fmt.Errorf("loopback port %d is unavailable; no local cluster will be created: %w", port, err)
+	}
+	return listener.Close()
+}
+
+func findLocalConsoleRoot() string {
+	if configured := os.Getenv("OK_CONSOLE_DIR"); configured != "" {
+		if validLocalConsoleRoot(configured) {
+			return configured
+		}
+		return ""
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		for _, candidate := range []string{filepath.Join(dir, "ok-console"), dir} {
+			if validLocalConsoleRoot(candidate) {
+				return candidate
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	return ""
+}
+
+func validLocalConsoleRoot(path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	for _, relative := range []string{"deploy/kubernetes/verify-local-kind.sh", "deploy/kubernetes/overlays/local-kind/kustomization.yaml"} {
+		info, err := os.Lstat(filepath.Join(path, relative))
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func runLocalConsoleVerifier(ctx context.Context, script string, env map[string]string) error {
+	command := exec.CommandContext(ctx, "bash", script)
+	command.Dir = filepath.Dir(filepath.Dir(filepath.Dir(script)))
+	childEnv := make([]string, 0, len(os.Environ())+len(env))
+	for _, entry := range os.Environ() {
+		key := strings.SplitN(entry, "=", 2)[0]
+		if _, replaced := env[key]; !replaced && key != "DOCKER_CONTEXT" && key != "DOCKER_TLS_VERIFY" && key != "DOCKER_CERT_PATH" {
+			childEnv = append(childEnv, entry)
+		}
+	}
+	for key, value := range env {
+		childEnv = append(childEnv, key+"="+value)
+	}
+	command.Env = childEnv
+	_, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("verifier exited unsuccessfully: %w", err)
+	}
+	return nil
+}
+
+func writePrivateNewFile(path string, contents []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(contents); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+func captureLocalClusterIdentity(ctx context.Context, runtime *localRuntime, state *localClusterState) error {
+	provider, err := observeLocalDockerProvider(ctx, *runtime)
+	if err != nil {
+		return err
+	}
+	if provider != state.Provider {
+		return errors.New("Docker provider changed during Console installation")
+	}
+	clusters, err := runLocalPinned(ctx, *runtime, state.Provider, "kind", "get", "clusters")
+	if err != nil {
+		return err
+	}
+	if !containsExactLine(string(clusters), state.KindName) {
+		return errors.New("expected owner-specific kind cluster is absent")
+	}
+	containers, err := observeLocalKindContainers(ctx, *runtime, state.Provider, state.KindName)
+	if err != nil {
+		return err
+	}
+	if len(containers) == 0 {
+		return errors.New("owner-specific Kind node containers are absent")
+	}
+	state.Containers = containers
+	if err := os.Chmod(state.Kubeconfig, 0o600); err != nil {
+		return err
+	}
+	info, err := os.Lstat(state.Kubeconfig)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("Kind did not produce a private isolated kubeconfig")
+	}
+	kindConfig, err := runLocalPinned(ctx, *runtime, state.Provider, "kind", "get", "kubeconfig", "--name", state.KindName)
+	if err != nil {
+		return err
+	}
+	privateConfig, err := readBoundedLocalFile(state.Kubeconfig, 4*1024*1024)
+	if err != nil {
+		return err
+	}
+	if err := compareKindKubeconfig(kindConfig, privateConfig, "kind-"+state.KindName); err != nil {
+		return err
+	}
+	ctxName := "kind-" + state.KindName
+	nodeJSON, err := runtime.run(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", ctxName, "get", "nodes", "-o", "json")
+	if err != nil {
+		return err
+	}
+	var nodes localNodeList
+	if err := json.Unmarshal(nodeJSON, &nodes); err != nil || len(nodes.Items) != len(containers) || len(nodes.Items) == 0 {
+		return errors.New("Kubernetes node set does not match owner-labeled Kind containers")
+	}
+	state.Nodes = nil
+	for _, node := range nodes.Items {
+		if node.Metadata.Labels[localOwnerLabel] != state.OwnerID || node.Metadata.UID == "" {
+			return errors.New("Kubernetes node owner label or UID does not match durable intent")
+		}
+		state.Nodes = append(state.Nodes, localNodeIdentity{Name: node.Metadata.Name, UID: node.Metadata.UID})
+	}
+	namespaceJSON, err := runtime.run(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", ctxName, "get", "namespace", "kube-system", "-o", "json")
+	if err != nil {
+		return err
+	}
+	var ns localNamespace
+	if err := json.Unmarshal(namespaceJSON, &ns); err != nil || ns.Metadata.UID == "" {
+		return errors.New("missing kube-system identity")
+	}
+	state.KubeSystemUID = ns.Metadata.UID
+	return nil
+}
+
+func startLocalForward(_ context.Context, state localClusterState) (localForwardIdentity, error) {
+	kubectl, err := exec.LookPath("kubectl")
+	if err != nil {
+		return localForwardIdentity{}, err
+	}
+	kubectl, err = filepath.Abs(kubectl)
+	if err != nil {
+		return localForwardIdentity{}, err
+	}
+	args := []string{"--kubeconfig", state.Kubeconfig, "--context", "kind-" + state.KindName, "-n", "openkubes-console", "port-forward", "--address", "127.0.0.1", "service/ok-console", fmt.Sprintf("%d:8787", localConsoleDefaultPort)}
+	logPath := filepath.Join(filepath.Dir(state.Kubeconfig), "port-forward.log")
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return localForwardIdentity{}, err
+	}
+	command := exec.Command(kubectl, args...)
+	command.Stdout = log
+	command.Stderr = log
+	if err := command.Start(); err != nil {
+		_ = log.Close()
+		return localForwardIdentity{}, err
+	}
+	_ = log.Close()
+	started, err := localProcessField(command.Process.Pid, "lstart")
+	if err != nil {
+		_ = command.Process.Kill()
+		return localForwardIdentity{}, err
+	}
+	commandLine, err := localProcessField(command.Process.Pid, "command")
+	if err != nil {
+		_ = command.Process.Kill()
+		return localForwardIdentity{}, err
+	}
+	digest := sha256.Sum256([]byte(strings.TrimSpace(commandLine)))
+	identity := localForwardIdentity{PID: command.Process.Pid, OwnerID: state.OwnerID, StartedAt: strings.TrimSpace(started), Executable: kubectl, ArgumentsSHA256: "sha256:" + hex.EncodeToString(digest[:])}
+	if err := verifyLocalForward(identity); err != nil {
+		_ = command.Process.Kill()
+		return localForwardIdentity{}, err
+	}
+	_ = command.Process.Release()
+	return identity, nil
+}
+
+func localProcessField(pid int, field string) (string, error) {
+	if pid <= 0 || (field != "lstart" && field != "command") {
+		return "", errors.New("invalid process identity query")
+	}
+	output, err := exec.Command("ps", "-p", fmt.Sprint(pid), "-o", field+"=").Output()
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(output))
+	if value == "" {
+		return "", errors.New("managed process is not observable")
+	}
+	return value, nil
+}
+
+func stopLocalForward(identity localForwardIdentity) error {
+	if err := verifyLocalForward(identity); err != nil {
+		return err
+	}
+	process, err := os.FindProcess(identity.PID)
+	if err != nil {
+		return err
+	}
+	if err := process.Signal(os.Interrupt); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		started, startErr := localProcessField(identity.PID, "lstart")
+		command, commandErr := localProcessField(identity.PID, "command")
+		if startErr != nil || commandErr != nil {
+			return nil
+		}
+		if validateLocalForwardObservation(identity, strings.TrimSpace(started), strings.TrimSpace(command)) != nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("verified port-forward did not stop after interrupt; refusing cluster deletion")
+}
+
+func verifyLocalForward(identity localForwardIdentity) error {
+	started, err := localProcessField(identity.PID, "lstart")
+	if err != nil {
+		return err
+	}
+	command, err := localProcessField(identity.PID, "command")
+	if err != nil {
+		return err
+	}
+	if err := validateLocalForwardObservation(identity, strings.TrimSpace(started), strings.TrimSpace(command)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateLocalForwardObservation(identity localForwardIdentity, started, command string) error {
+	hash := sha256.Sum256([]byte(strings.TrimSpace(command)))
+	if identity.PID <= 0 || !localOwnerIDPattern.MatchString(identity.OwnerID) || !filepath.IsAbs(identity.Executable) || started != identity.StartedAt || !strings.HasPrefix(command, identity.Executable+" ") || identity.ArgumentsSHA256 != "sha256:"+hex.EncodeToString(hash[:]) {
+		return errors.New("PID does not match recorded executable, command and start time")
+	}
+	return nil
+}
+
+func waitLocalConsole(ctx context.Context, port int) error {
+	client := &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	deadline := time.Now().Add(90 * time.Second)
+	endpoints := []string{"/health/live", "/health/ready", "/"}
+	for time.Now().Before(deadline) {
+		all := true
+		for _, endpoint := range endpoints {
+			request, _ := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, endpoint), nil)
+			response, err := client.Do(request)
+			if err != nil {
+				all = false
+				break
+			}
+			_ = response.Body.Close()
+			if response.StatusCode < 200 || response.StatusCode >= 300 {
+				all = false
+				break
+			}
+		}
+		if all {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return errors.New("Console did not pass loopback health checks within 90 seconds")
 }
 
 func runLocalStatus(ctx context.Context, arguments []string, runtime localRuntime, stdout io.Writer) error {
@@ -199,6 +614,12 @@ func runLocalStatus(ctx context.Context, arguments []string, runtime localRuntim
 	if err != nil {
 		return fmt.Errorf("local ownership state is invalid; refusing cluster access: %w", err)
 	}
+	if state.Phase == "CREATING" || state.Phase == "INCOMPLETE" {
+		if err := validateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+			return fmt.Errorf("local recovery state is invalid: %w", err)
+		}
+		return writeLocalStatus(stdout, *jsonOutput, localStatus{Format: "ok-cli-local-status/v1", State: state.Phase, Name: *name, ClusterContacted: false, ConsoleChecked: false})
+	}
 	if err := validateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
 		return fmt.Errorf("local ownership state is invalid; refusing cluster access: %w", err)
 	}
@@ -213,6 +634,15 @@ func runLocalStatus(ctx context.Context, arguments []string, runtime localRuntim
 		status.State = "OWNERSHIP_UNVERIFIED"
 	} else {
 		status.State = "OWNED_CLUSTER_PRESENT"
+		if state.Phase == "READY" && state.Forward != nil {
+			if err := verifyLocalForward(*state.Forward); err == nil && waitLocalConsole(ctx, localConsoleDefaultPort) == nil {
+				status.State = "READY"
+				status.ConsoleChecked = true
+				status.URL = fmt.Sprintf("http://127.0.0.1:%d", localConsoleDefaultPort)
+			} else {
+				status.State = "CONSOLE_UNAVAILABLE"
+			}
+		}
 	}
 	if err := writeLocalStatus(stdout, *jsonOutput, status); err != nil {
 		return err
@@ -243,6 +673,9 @@ func runLocalDown(ctx context.Context, arguments []string, runtime localRuntime,
 	if err != nil {
 		return fmt.Errorf("local ownership state is invalid; refusing deletion: %w", err)
 	}
+	if state.Phase == "CREATING" || state.Phase == "INCOMPLETE" {
+		return errors.New("local installation is incomplete; automatic cleanup is disabled because ownership evidence is not complete")
+	}
 	if err := validateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
 		return fmt.Errorf("local ownership state is invalid; refusing deletion: %w", err)
 	}
@@ -263,6 +696,15 @@ func runLocalDown(ctx context.Context, arguments []string, runtime localRuntime,
 	if strings.TrimSpace(answer) != "ok" {
 		_, _ = fmt.Fprintln(stdout, "Cancelled; cluster and local state were not changed.")
 		return nil
+	}
+	if state.Forward != nil {
+		if err := stopLocalForward(*state.Forward); err != nil {
+			return fmt.Errorf("cannot prove managed port-forward identity; refusing cluster deletion: %w", err)
+		}
+		state.Forward = nil
+		if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+			return fmt.Errorf("forward stopped but state update failed; refusing cluster deletion: %w", err)
+		}
 	}
 	// Recheck after the confirmation prompt, which may have taken arbitrary time.
 	owned, present, err = observeLocalOwnership(ctx, runtime, state)
@@ -325,6 +767,7 @@ type localStatus struct {
 	Name             string `json:"name"`
 	ClusterContacted bool   `json:"clusterContacted"`
 	ConsoleChecked   bool   `json:"consoleChecked"`
+	URL              string `json:"url,omitempty"`
 }
 
 func writeLocalStatus(output io.Writer, jsonOutput bool, status localStatus) error {
@@ -333,7 +776,11 @@ func writeLocalStatus(output io.Writer, jsonOutput bool, status localStatus) err
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(status)
 	}
-	_, err := fmt.Fprintf(output, "Local cluster %s: %s (Console status not available until integration is enabled).\n", status.Name, status.State)
+	if status.URL != "" {
+		_, err := fmt.Fprintf(output, "Local %s: %s — %s\n", status.Name, status.State, status.URL)
+		return err
+	}
+	_, err := fmt.Fprintf(output, "Local cluster %s: %s.\n", status.Name, status.State)
 	return err
 }
 
@@ -386,8 +833,17 @@ func validateLocalClusterState(root, name string, state localClusterState) error
 	if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 || dirInfo.Mode().Perm()&0o077 != 0 {
 		return errors.New("cluster state directory must be private (0700 or stricter), not a symlink")
 	}
-	if state.Format != localClusterStateFormat || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) || state.KindName != localKindClusterName(name, state.OwnerID) {
+	if (state.Format != localClusterStateFormat && state.Format != "ok-cli-local-cluster/v2") || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) || state.KindName != localKindClusterName(name, state.OwnerID) {
 		return errors.New("unsupported local state format, cluster name or owner identifier")
+	}
+	if state.Format == localClusterStateFormat && (state.Phase == "CREATING" || state.Phase == "INCOMPLETE") {
+		if state.Provider.Kind != "docker" || state.Provider.Context == "" || !strings.HasPrefix(state.Provider.Endpoint, "unix://") || state.Provider.DaemonID == "" || state.Kubeconfig != filepath.Join(clusterDir, "kubeconfig") {
+			return errors.New("partial local intent is not bound to a valid private Docker provider and kubeconfig path")
+		}
+		return nil
+	}
+	if state.Format == localClusterStateFormat && state.Phase != "READY" && state.Phase != "CLUSTER_READY" {
+		return errors.New("local state phase is not a complete installation receipt")
 	}
 	if state.Provider.Kind != "docker" || state.Provider.Context == "" || !strings.HasPrefix(state.Provider.Endpoint, "unix://") || state.Provider.DaemonID == "" {
 		return errors.New("local Docker provider identity is incomplete or unsupported")
@@ -758,15 +1214,97 @@ func writeLocalClusterState(root, name string, state localClusterState) error {
 	return nil
 }
 
+func writeLocalClusterIntent(root, name string, state localClusterState) error {
+	clusterDir := filepath.Join(root, "clusters", name)
+	if err := validateLocalClusterState(root, name, state); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	path := filepath.Join(clusterDir, "state.json")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(raw); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	dir, err := os.Open(clusterDir)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+func updateLocalClusterState(root, name string, state localClusterState) error {
+	if err := validateLocalClusterState(root, name, state); err != nil {
+		return err
+	}
+	path := localStateFilePath(root, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("existing local state is not a private regular file")
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	temporary := path + ".tmp-" + state.OwnerID
+	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(raw); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
 func removeLocalClusterState(root, name string) error {
 	clusterDir := filepath.Join(root, "clusters", name)
-	paths := []string{filepath.Join(clusterDir, "state.json"), filepath.Join(clusterDir, "kubeconfig")}
+	paths := []string{filepath.Join(clusterDir, "state.json"), filepath.Join(clusterDir, "kubeconfig"), filepath.Join(clusterDir, "kind.yaml"), filepath.Join(clusterDir, "port-forward.log")}
 	for _, path := range paths {
 		info, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
 			return errors.New("refusing to remove unexpected local state path")
 		}
 	}
@@ -793,8 +1331,8 @@ Usage:
   ok local <command> [flags]
 
 Commands:
-  up       Create the local kind cluster and deploy the Console demo (integration pending)
-  status   Inspect an ok-owned local cluster using its isolated kubeconfig
+  up       Create a dedicated kind cluster and deploy the local Console demo
+  status   Verify local cluster ownership and Console health
   down     Confirm and delete only a cluster whose live identity matches its receipt
 
 The local workflow is independent of OK-147 CreateCluster. It never selects the
@@ -806,9 +1344,9 @@ fixture profile; no production identity or database is installed.
 func writeLocalCommandHelp(command string, output io.Writer) {
 	switch command {
 	case "up":
-		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n\nCreates one managed local kind cluster and deploys the Console demo. This command remains disabled until the separately reviewed Console integration is available.\n")
+		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n\nCreates one owner-labeled local kind cluster and deploys the Console local-kind fixture profile. Requires Docker, kind, kubectl, and an ok-console checkout. Interrupted runs stop in INCOMPLETE; no automatic retry.\n")
 	case "status":
-		fmt.Fprint(output, "Usage: ok local status [--name ok-local] [--json]\n\nRead-only ownership inspection through the isolated kubeconfig; Console health reporting is added with the Console integration.\n")
+		fmt.Fprint(output, "Usage: ok local status [--name ok-local] [--json]\n\nRead-only ownership and Console health inspection through the isolated kubeconfig.\n")
 	case "down":
 		fmt.Fprint(output, "Usage: ok local down [--name ok-local]\n\nRequires an interactive ok/no confirmation and a live ownership match. No state file or cluster name alone authorizes deletion.\n")
 	default:

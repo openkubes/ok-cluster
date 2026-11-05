@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +56,7 @@ func localStateFixture(t *testing.T) (string, localClusterState) {
 		t.Fatal(err)
 	}
 	state := localClusterState{
-		Format: localClusterStateFormat, Name: localClusterDefaultName,
+		Format: localClusterStateFormat, Phase: "READY", Name: localClusterDefaultName,
 		OwnerID: "0123456789abcdef0123456789abcdef", KindName: kindName,
 		Provider:      localProviderIdentity{Kind: "docker", Context: "desktop-linux", Endpoint: "unix:///tmp/docker.sock", DaemonID: "daemon-123"},
 		Kubeconfig:    kubeconfig,
@@ -137,7 +138,7 @@ func localOwnershipRunner(state localClusterState, ownerID string, present bool,
 	}
 }
 
-func TestLocalUpIsNotEnabledBeforeConsoleIntegration(t *testing.T) {
+func TestLocalUpFailsClosedWhenConsoleIntegrationIsUnavailable(t *testing.T) {
 	called := false
 	root := t.TempDir()
 	err := runLocalWithRuntime(context.Background(), []string{"up"}, io.Discard, io.Discard,
@@ -145,7 +146,7 @@ func TestLocalUpIsNotEnabledBeforeConsoleIntegration(t *testing.T) {
 			called = true
 			return nil, nil
 		}})
-	if err == nil || !strings.Contains(err.Error(), "no cluster was contacted or changed") || called {
+	if err == nil || !strings.Contains(err.Error(), "no cluster was contacted") || called {
 		t.Fatalf("up must fail closed without invoking cluster tools; err=%v called=%v", err, called)
 	}
 	err = runLocalWithRuntime(context.Background(), []string{"up", "--name", "not_valid"}, io.Discard, io.Discard,
@@ -155,6 +156,142 @@ func TestLocalUpIsNotEnabledBeforeConsoleIntegration(t *testing.T) {
 		}})
 	if err == nil || called {
 		t.Fatalf("invalid name must fail locally; err=%v called=%v", err, called)
+	}
+}
+
+func TestLocalUpPersistsIntentBeforeSingleVerifierCallAndStopsIncomplete(t *testing.T) {
+	root, fixture := localStateFixture(t)
+	if err := os.RemoveAll(filepath.Join(root, "clusters", fixture.Name)); err != nil {
+		t.Fatal(err)
+	}
+	console := filepath.Join(t.TempDir(), "ok-console")
+	for _, path := range []string{"deploy/kubernetes", "deploy/kubernetes/overlays/local-kind"} {
+		if err := os.MkdirAll(filepath.Join(console, path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"deploy/kubernetes/verify-local-kind.sh", "deploy/kubernetes/overlays/local-kind/kustomization.yaml"} {
+		if err := os.WriteFile(filepath.Join(console, path), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := fixture.Provider
+	verified := false
+	runtime := localRuntime{stateRoot: root, consoleRoot: console,
+		run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			if command == "bash" && strings.Join(args, " ") == "--version" {
+				return []byte("GNU bash, version 5.3.20(1)-release\n"), nil
+			}
+			if command == "git" && strings.Contains(strings.Join(args, " "), "rev-parse HEAD") {
+				return []byte("revision\n"), nil
+			}
+			if command == "git" && strings.Contains(strings.Join(args, " "), "status --porcelain") {
+				return []byte(""), nil
+			}
+			if command == "docker" && strings.Join(args, " ") == "context show" {
+				return []byte(provider.Context), nil
+			}
+			if command == "docker" && strings.Contains(strings.Join(args, " "), "context inspect") {
+				return []byte(provider.Endpoint), nil
+			}
+			if command == "docker" && strings.Contains(strings.Join(args, " "), "info --format") {
+				return []byte(provider.DaemonID), nil
+			}
+			return nil, errors.New("unexpected external call")
+		},
+		runVerifier: func(_ context.Context, script string, env map[string]string) error {
+			verified = true
+			if _, err := os.Stat(localStateFilePath(root, fixture.Name)); err != nil {
+				t.Fatalf("durable intent missing before verifier: %v", err)
+			}
+			state, err := readLocalClusterState(root, fixture.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Phase != "CREATING" || env["KUBECONFIG"] != state.Kubeconfig || env["OK_CONSOLE_KEEP_CLUSTER"] != "true" || env["OK_CONSOLE_KIND_CONFIG"] == "" {
+				t.Fatalf("unsafe verifier contract: state=%+v env=%v", state, env)
+			}
+			return errors.New("simulated partial deployment")
+		},
+	}
+	err := runLocalWithRuntime(context.Background(), []string{"up"}, io.Discard, io.Discard, runtime)
+	if err == nil || !strings.Contains(err.Error(), "no retry performed") || !verified {
+		t.Fatalf("expected one failed verifier and terminal stop, got err=%v called=%v", err, verified)
+	}
+	state, err := readLocalClusterState(root, fixture.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != "INCOMPLETE" {
+		t.Fatalf("partial run not durably terminal: %s", state.Phase)
+	}
+	called := false
+	statusErr := runLocalWithRuntime(context.Background(), []string{"status", "--json"}, io.Discard, io.Discard, localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+	if statusErr != nil || called {
+		t.Fatalf("incomplete status must be local-only: err=%v contacted=%v", statusErr, called)
+	}
+	called = false
+	downErr := runLocalWithRuntime(context.Background(), []string{"down"}, io.Discard, io.Discard, localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+	if downErr == nil || called {
+		t.Fatalf("incomplete state must block deletion without contacting cluster: err=%v contacted=%v", downErr, called)
+	}
+}
+
+func TestLocalPortPreflightDetectsLoopbackConflict(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := ensureLocalPortAvailable(port); err == nil {
+		t.Fatal("occupied loopback port must fail before cluster create")
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureLocalPortAvailable(port); err != nil {
+		t.Fatalf("released port should pass local preflight: %v", err)
+	}
+}
+
+func TestLocalUpRejectsDirtyConsoleBeforeDurableIntentOrDocker(t *testing.T) {
+	root, fixture := localStateFixture(t)
+	if err := os.RemoveAll(filepath.Join(root, "clusters", fixture.Name)); err != nil {
+		t.Fatal(err)
+	}
+	console := filepath.Join(t.TempDir(), "ok-console")
+	for _, path := range []string{"deploy/kubernetes", "deploy/kubernetes/overlays/local-kind"} {
+		if err := os.MkdirAll(filepath.Join(console, path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"deploy/kubernetes/verify-local-kind.sh", "deploy/kubernetes/overlays/local-kind/kustomization.yaml"} {
+		if err := os.WriteFile(filepath.Join(console, path), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dockerCalled := false
+	runtime := localRuntime{stateRoot: root, consoleRoot: console, runVerifier: func(context.Context, string, map[string]string) error {
+		t.Fatal("dirty tree must not reach verifier")
+		return nil
+	}, run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+		if command == "git" && strings.Contains(strings.Join(args, " "), "rev-parse HEAD") {
+			return []byte("revision\n"), nil
+		}
+		if command == "git" && strings.Contains(strings.Join(args, " "), "status --porcelain") {
+			return []byte("?? user-data.txt\n"), nil
+		}
+		if command == "docker" {
+			dockerCalled = true
+		}
+		return nil, errors.New("unexpected command")
+	}}
+	err := runLocalWithRuntime(context.Background(), []string{"up"}, io.Discard, io.Discard, runtime)
+	if err == nil || !strings.Contains(err.Error(), "including untracked files") || dockerCalled {
+		t.Fatalf("dirty source tree must stop before provider contact: err=%v docker=%v", err, dockerCalled)
+	}
+	if _, err := os.Lstat(localStateFilePath(root, fixture.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dirty preflight must precede durable run intent; state err=%v", err)
 	}
 }
 
@@ -478,5 +615,19 @@ func TestLocalForwardIdentityIncludesOwnerAndArgumentDigest(t *testing.T) {
 	state.Forward.OwnerID = "ffffffffffffffffffffffffffffffff"
 	if err := validateLocalClusterState(root, state.Name, state); err == nil {
 		t.Fatal("forward bound to a different owner was accepted")
+	}
+}
+
+func TestLocalForwardCannotBeAuthorizedByPIDAlone(t *testing.T) {
+	command := "/opt/homebrew/bin/kubectl --kubeconfig /private/ok/kubeconfig --context kind-ok-local-0123456789abcdef0123456789abcdef -n openkubes-console port-forward --address 127.0.0.1 service/ok-console 18787:8787"
+	hash := sha256.Sum256([]byte(command))
+	identity := localForwardIdentity{PID: 123, OwnerID: "0123456789abcdef0123456789abcdef", StartedAt: "Wed Nov  5 10:00:00 2026", Executable: "/opt/homebrew/bin/kubectl", ArgumentsSHA256: "sha256:" + hex.EncodeToString(hash[:])}
+	if err := validateLocalForwardObservation(identity, identity.StartedAt, command); err != nil {
+		t.Fatalf("exact recorded process identity rejected: %v", err)
+	}
+	for _, observed := range []struct{ started, command string }{{"different start", command}, {identity.StartedAt, command + " --other"}, {identity.StartedAt, "/tmp/other-kubectl " + strings.TrimPrefix(command, identity.Executable+" ")}} {
+		if err := validateLocalForwardObservation(identity, observed.started, observed.command); err == nil {
+			t.Fatalf("mismatched process authorized for signal: %+v", observed)
+		}
 	}
 }
