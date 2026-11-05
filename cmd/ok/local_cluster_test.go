@@ -356,6 +356,14 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 	if first == second || !localOwnerIDPattern.MatchString(first) {
 		t.Fatalf("owner IDs must be unique 128-bit lowercase hex values: %q %q", first, second)
 	}
+	incidentName := localKindClusterName("ok-local-e2e-arash-20261105", "edd83ae5428019db1593dd56e6105916")
+	if len(incidentName) != 60 || !localKindClusterNamePattern.MatchString(incidentName) {
+		t.Fatalf("the previously rejected owner name must fit the shared Kind contract: %q length=%d", incidentName, len(incidentName))
+	}
+	maximumName := localKindClusterName(strings.Repeat("a", 30), first)
+	if len(maximumName) != 63 || !localKindClusterNamePattern.MatchString(maximumName) {
+		t.Fatalf("maximum generated owner name must be a valid 63-character DNS label: %q length=%d", maximumName, len(maximumName))
+	}
 	config, err := renderKindOwnershipConfig(localClusterDefaultName, first)
 	if err != nil {
 		t.Fatal(err)
@@ -729,6 +737,10 @@ func TestLocalVerifierDiagnosticsAreActionableAndDoNotLeakInput(t *testing.T) {
 	}
 	if got := safeLocalVerifierFailure(errors.New("Authorization: Bearer arbitrary-secret")); strings.Contains(got, "arbitrary-secret") {
 		t.Fatalf("untrusted callback error leaked: %s", got)
+	}
+	nameDiagnostic := localVerifierDiagnostic([]byte("OK_CONSOLE_KIND_CLUSTER must be a lowercase DNS label of at most 63 characters.\nBearer planted-secret\n"), exitErr)
+	if !strings.Contains(nameDiagnostic, "63-character DNS-label limit") || strings.Contains(nameDiagnostic, "planted-secret") {
+		t.Fatalf("invalid-name diagnostic must be actionable without raw output: %s", nameDiagnostic)
 	}
 }
 

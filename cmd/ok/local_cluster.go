@@ -39,6 +39,7 @@ const (
 
 var localOwnerIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var localClusterNamePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,28}[a-z0-9])?$`)
+var localKindClusterNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var localBashVersionPattern = regexp.MustCompile(`version ([0-9]+)\.([0-9]+)`)
 var localKindVersionPattern = regexp.MustCompile(`kind v([0-9]+)\.([0-9]+)\.([0-9]+)`)
 
@@ -437,6 +438,8 @@ func localVerifierDiagnostic(output []byte, err error) string {
 		return "the Console checkout is not clean; keep the source-tree check intact (verifier exit " + status + ")"
 	case strings.Contains(text, "already exists; refusing to modify an unowned cluster"):
 		return "the owner-specific Kind name already exists; verifier refused adoption (exit " + status + ")"
+	case strings.Contains(text, "OK_CONSOLE_KIND_CLUSTER must be a lowercase DNS label"):
+		return "the generated Kind cluster name is invalid or exceeds the 63-character DNS-label limit (verifier exit " + status + ")"
 	case strings.Contains(text, "Isolated kubeconfig destination already exists"):
 		return "the isolated kubeconfig path already exists; verifier refused to overwrite it (exit " + status + ")"
 	case strings.Contains(text, "must be supplied together") || strings.Contains(text, "paths must be absolute") || strings.Contains(text, "Kind config must be"):
@@ -1306,6 +1309,10 @@ func renderKindOwnershipConfig(name, ownerID string) ([]byte, error) {
 	if !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(ownerID) {
 		return nil, errors.New("invalid kind cluster name or owner identifier")
 	}
+	kindName := localKindClusterName(name, ownerID)
+	if !localKindClusterNamePattern.MatchString(kindName) {
+		return nil, errors.New("generated Kind cluster name does not fit the 63-character DNS-label contract")
+	}
 	config := fmt.Sprintf(`kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: %s
@@ -1317,7 +1324,7 @@ nodes:
     nodeRegistration:
       kubeletExtraArgs:
         node-labels: %s=%s
-`, localKindClusterName(name, ownerID), localOwnerLabel, ownerID)
+`, kindName, localOwnerLabel, ownerID)
 	return []byte(config), nil
 }
 
