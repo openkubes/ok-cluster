@@ -48,35 +48,61 @@ func localStateFixture(t *testing.T) (string, localClusterState) {
 		t.Fatal(err)
 	}
 	kubeconfig := filepath.Join(clusterDir, "kubeconfig")
-	if err := os.WriteFile(kubeconfig, []byte(localKubeconfigFixture), 0o600); err != nil {
+	kindName := localKindClusterName(localClusterDefaultName, "0123456789abcdef0123456789abcdef")
+	if err := os.WriteFile(kubeconfig, []byte(strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+kindName)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	state := localClusterState{
 		Format: localClusterStateFormat, Name: localClusterDefaultName,
-		OwnerID: "0123456789abcdef0123456789abcdef", Kubeconfig: kubeconfig,
+		OwnerID: "0123456789abcdef0123456789abcdef", KindName: kindName,
+		Provider:      localProviderIdentity{Kind: "docker", Context: "desktop-linux", Endpoint: "unix:///tmp/docker.sock", DaemonID: "daemon-123"},
+		Kubeconfig:    kubeconfig,
 		KubeSystemUID: "kube-system-uid",
-		Nodes:         []localNodeIdentity{{Name: "ok-local-control-plane", UID: "node-uid"}},
+		Nodes:         []localNodeIdentity{{Name: kindName + "-control-plane", UID: "node-uid"}},
+		Containers:    []localContainerIdentity{{ID: "container-123", Name: kindName + "-control-plane", Role: "control-plane"}},
 	}
 	return root, state
 }
 
 func localOwnershipRunner(state localClusterState, ownerID string, present bool, deleted *bool) localCommandRunner {
 	return func(_ context.Context, command string, arguments ...string) ([]byte, error) {
+		if command == "docker" {
+			joined := strings.Join(arguments, " ")
+			switch {
+			case joined == "context show":
+				return []byte(state.Provider.Context + "\n"), nil
+			case strings.Contains(joined, "context inspect"):
+				return []byte(state.Provider.Endpoint + "\n"), nil
+			case strings.Contains(joined, "info --format"):
+				return []byte(state.Provider.DaemonID + "\n"), nil
+			case strings.Contains(joined, " ps ") || strings.HasPrefix(joined, "ps "):
+				if deleted != nil && *deleted {
+					return []byte(""), nil
+				}
+				if present {
+					return []byte(state.Containers[0].ID + "|" + state.Containers[0].Name + "|" + state.Containers[0].Role + "\n"), nil
+				}
+				return []byte(""), nil
+			}
+		}
 		switch command {
 		case "kind":
 			if len(arguments) > 0 && arguments[0] == "get" {
 				if len(arguments) > 1 && arguments[1] == "kubeconfig" {
-					return []byte(localKubeconfigFixture), nil
+					return []byte(strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+state.KindName)), nil
 				}
 				if deleted != nil && *deleted {
 					return []byte(""), nil
 				}
 				if present {
-					return []byte(state.Name + "\n"), nil
+					return []byte(state.KindName + "\n"), nil
 				}
 				return []byte(""), nil
 			}
 			if len(arguments) > 0 && arguments[0] == "delete" {
+				if strings.Join(arguments, " ") != "delete cluster --name "+state.KindName+" --kubeconfig "+state.Kubeconfig {
+					return nil, errors.New("unexpected deletion target")
+				}
 				if deleted != nil {
 					*deleted = true
 				}
@@ -194,8 +220,14 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 	if !strings.Contains(string(config), "kind: Cluster") || !strings.Contains(string(config), localOwnerLabel+"="+first) {
 		t.Fatalf("kind config must bind generated owner ID to a node label: %s", config)
 	}
+	if !strings.Contains(string(config), "name: "+localKindClusterName(localClusterDefaultName, first)) || localKindClusterName(localClusterDefaultName, first) == localKindClusterName(localClusterDefaultName, second) {
+		t.Fatal("actual Kind cluster name must include the unique owner ID")
+	}
 	if _, err := renderKindOwnershipConfig("bad_name", first); err == nil {
 		t.Fatal("invalid cluster name accepted")
+	}
+	if _, err := renderKindOwnershipConfig(strings.Repeat("a", 31), first); err == nil {
+		t.Fatal("logical name that makes the actual DNS label exceed 63 characters accepted")
 	}
 }
 
@@ -290,13 +322,26 @@ func TestLocalDownRequiresConfirmationAndRechecksOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleted := false
-	runtime := localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: localOwnershipRunner(state, state.OwnerID, true, &deleted)}
+	runner := localOwnershipRunner(state, state.OwnerID, true, &deleted)
+	pinnedCalls := 0
+	runtime := localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: runner,
+		runPinned: func(ctx context.Context, provider localProviderIdentity, command string, arguments ...string) ([]byte, error) {
+			pinnedCalls++
+			if provider != state.Provider {
+				t.Fatalf("command not pinned to receipt provider: %+v", provider)
+			}
+			return runner(ctx, command, arguments...)
+		},
+	}
 	var output strings.Builder
 	if err := runLocalWithRuntime(context.Background(), []string{"down"}, &output, io.Discard, runtime); err != nil {
 		t.Fatal(err)
 	}
 	if !deleted {
 		t.Fatal("verified and confirmed local cluster was not deleted")
+	}
+	if pinnedCalls == 0 {
+		t.Fatal("Kind and Docker identity operations must use the recorded provider context")
 	}
 	if _, err := os.Lstat(localStateFilePath(root, state.Name)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state receipt was not removed after confirmed deletion: %v", err)
@@ -327,6 +372,54 @@ func TestLocalDownDoesNotDeleteIfIdentityChangesDuringConfirmation(t *testing.T)
 		localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: runner})
 	if err == nil || deleted {
 		t.Fatalf("changed identity after confirmation must fail closed: err=%v deleted=%v", err, deleted)
+	}
+}
+
+func TestLocalDownRejectsReplacementContainerAfterConfirmation(t *testing.T) {
+	root, state := localStateFixture(t)
+	if err := writeLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	deleted := false
+	psCalls := 0
+	base := localOwnershipRunner(state, state.OwnerID, true, &deleted)
+	runner := func(ctx context.Context, command string, arguments ...string) ([]byte, error) {
+		if command == "docker" && (strings.Contains(strings.Join(arguments, " "), " ps ") || strings.HasPrefix(strings.Join(arguments, " "), "ps ")) {
+			psCalls++
+			if psCalls > 1 {
+				return []byte("replacement-container|" + state.Containers[0].Name + "|control-plane\n"), nil
+			}
+		}
+		return base(ctx, command, arguments...)
+	}
+	err := runLocalWithRuntime(context.Background(), []string{"down"}, io.Discard, io.Discard,
+		localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: runner})
+	if err == nil || deleted {
+		t.Fatalf("replacement container must be rejected before deletion: err=%v deleted=%v", err, deleted)
+	}
+}
+
+func TestLocalOwnershipRejectsChangedDockerProviderIdentity(t *testing.T) {
+	root, state := localStateFixture(t)
+	if err := writeLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	base := localOwnershipRunner(state, state.OwnerID, true, nil)
+	for name, response := range map[string]string{"context": "other-context\n", "endpoint": "unix:///tmp/other.sock\n", "daemon": "other-daemon\n"} {
+		t.Run(name, func(t *testing.T) {
+			runner := func(ctx context.Context, command string, arguments ...string) ([]byte, error) {
+				joined := strings.Join(arguments, " ")
+				if command == "docker" && ((name == "context" && strings.Contains(joined, "context show")) || (name == "endpoint" && strings.Contains(joined, "context inspect")) || (name == "daemon" && strings.Contains(joined, "info --format"))) {
+					return []byte(response), nil
+				}
+				return base(ctx, command, arguments...)
+			}
+			var output strings.Builder
+			err := runLocalWithRuntime(context.Background(), []string{"status"}, &output, io.Discard, localRuntime{stateRoot: root, run: runner})
+			if err == nil || !strings.Contains(err.Error(), "provider identity differs") {
+				t.Fatalf("changed Docker %s must fail closed: %v", name, err)
+			}
+		})
 	}
 }
 

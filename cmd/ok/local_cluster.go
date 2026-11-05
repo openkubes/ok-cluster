@@ -24,31 +24,47 @@ import (
 )
 
 const (
-	localClusterStateFormat = "ok-cli-local-cluster/v1"
+	localClusterStateFormat = "ok-cli-local-cluster/v2"
 	localClusterDefaultName = "ok-local"
 	localConsoleDefaultPort = 18787
 	localOwnerLabel         = "cli.openkubes.io/local-owner"
 )
 
 var localOwnerIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
-var localClusterNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+var localClusterNamePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,28}[a-z0-9])?$`)
 
 type localNodeIdentity struct {
 	Name string `json:"name"`
 	UID  string `json:"uid"`
 }
 
+type localContainerIdentity struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+type localProviderIdentity struct {
+	Kind     string `json:"kind"`
+	Context  string `json:"context"`
+	Endpoint string `json:"endpoint"`
+	DaemonID string `json:"daemonID"`
+}
+
 // localClusterState is an ownership receipt, not an authority by itself. Every
 // destructive operation also checks OwnerID and the recorded Kubernetes
 // identities against the live kind cluster through its private kubeconfig.
 type localClusterState struct {
-	Format        string                `json:"format"`
-	Name          string                `json:"name"`
-	OwnerID       string                `json:"ownerID"`
-	Kubeconfig    string                `json:"kubeconfig"`
-	KubeSystemUID string                `json:"kubeSystemUID"`
-	Nodes         []localNodeIdentity   `json:"nodes"`
-	Forward       *localForwardIdentity `json:"forward,omitempty"`
+	Format        string                   `json:"format"`
+	Name          string                   `json:"name"`
+	OwnerID       string                   `json:"ownerID"`
+	KindName      string                   `json:"kindName"`
+	Provider      localProviderIdentity    `json:"provider"`
+	Kubeconfig    string                   `json:"kubeconfig"`
+	KubeSystemUID string                   `json:"kubeSystemUID"`
+	Nodes         []localNodeIdentity      `json:"nodes"`
+	Containers    []localContainerIdentity `json:"containers"`
+	Forward       *localForwardIdentity    `json:"forward,omitempty"`
 }
 
 // A future managed forward is only stoppable after matching this whole process
@@ -68,6 +84,7 @@ type localRuntime struct {
 	input       io.Reader
 	interactive bool
 	run         localCommandRunner
+	runPinned   func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
 }
 
 func defaultLocalRuntime() localRuntime {
@@ -84,6 +101,7 @@ func defaultLocalRuntime() localRuntime {
 		input:       os.Stdin,
 		interactive: term.IsTerminal(int(os.Stdin.Fd())),
 		run:         runLocalCommand,
+		runPinned:   runLocalCommandPinned,
 	}
 }
 
@@ -97,6 +115,33 @@ func runLocalCommand(ctx context.Context, name string, arguments ...string) ([]b
 		return output, fmt.Errorf("%s %s failed: %w: %s", name, strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
 	}
 	return output, nil
+}
+
+func runLocalCommandPinned(ctx context.Context, provider localProviderIdentity, name string, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, arguments...)
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, item := range os.Environ() {
+		if strings.HasPrefix(item, "DOCKER_CONTEXT=") || strings.HasPrefix(item, "DOCKER_HOST=") || strings.HasPrefix(item, "DOCKER_TLS_VERIFY=") || strings.HasPrefix(item, "DOCKER_CERT_PATH=") || strings.HasPrefix(item, "KIND_EXPERIMENTAL_PROVIDER=") {
+			continue
+		}
+		env = append(env, item)
+	}
+	command.Env = append(env, "DOCKER_HOST="+provider.Endpoint, "KIND_EXPERIMENTAL_PROVIDER=docker")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		if name == "kind" && len(arguments) >= 2 && arguments[0] == "get" && arguments[1] == "kubeconfig" {
+			return nil, fmt.Errorf("%s %s failed: %w", name, strings.Join(arguments, " "), err)
+		}
+		return output, fmt.Errorf("%s %s failed: %w: %s", name, strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+	}
+	return output, nil
+}
+
+func runLocalPinned(ctx context.Context, runtime localRuntime, provider localProviderIdentity, name string, arguments ...string) ([]byte, error) {
+	if runtime.runPinned != nil {
+		return runtime.runPinned(ctx, provider, name, arguments...)
+	}
+	return runtime.run(ctx, name, arguments...)
 }
 
 func runLocal(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -227,15 +272,45 @@ func runLocalDown(ctx context.Context, arguments []string, runtime localRuntime,
 		}
 		return errors.New("ownership changed after confirmation; refusing deletion")
 	}
-	if _, err := runtime.run(ctx, "kind", "delete", "cluster", "--name", state.Name, "--kubeconfig", state.Kubeconfig); err != nil {
+	// Last pre-delete checks reduce the check-to-delete window and ensure all
+	// external commands remain pinned to the inspected provider context.
+	clusters, err := runLocalPinned(ctx, runtime, state.Provider, "kind", "get", "clusters")
+	if err != nil {
+		return fmt.Errorf("recheck pinned kind provider immediately before deletion: %w", err)
+	}
+	if !containsExactLine(string(clusters), state.KindName) {
+		return errors.New("verified Kind cluster disappeared after confirmation; refusing name-based deletion")
+	}
+	containersBeforeDelete, err := observeLocalKindContainers(ctx, runtime, state.Provider, state.KindName)
+	if err != nil || !sameLocalContainers(containersBeforeDelete, state.Containers) {
+		if err != nil {
+			return fmt.Errorf("recheck exact container identities immediately before deletion: %w", err)
+		}
+		return errors.New("Kind node container identity changed immediately before deletion")
+	}
+	providerBeforeDelete, err := observeLocalDockerProvider(ctx, runtime)
+	if err != nil || providerBeforeDelete != state.Provider {
+		if err != nil {
+			return fmt.Errorf("recheck Docker provider immediately before deletion: %w", err)
+		}
+		return errors.New("Docker provider identity changed immediately before deletion")
+	}
+	if _, err := runLocalPinned(ctx, runtime, state.Provider, "kind", "delete", "cluster", "--name", state.KindName, "--kubeconfig", state.Kubeconfig); err != nil {
 		return fmt.Errorf("delete verified local kind cluster; ownership state retained for recovery: %w", err)
 	}
-	clusters, err := runtime.run(ctx, "kind", "get", "clusters")
+	clusters, err = runLocalPinned(ctx, runtime, state.Provider, "kind", "get", "clusters")
 	if err != nil {
 		return fmt.Errorf("verify local kind cluster deletion; ownership state retained: %w", err)
 	}
-	if containsExactLine(string(clusters), state.Name) {
+	if containsExactLine(string(clusters), state.KindName) {
 		return errors.New("kind still reports the cluster after deletion; ownership state retained")
+	}
+	containers, err := observeLocalKindContainers(ctx, runtime, state.Provider, state.KindName)
+	if err != nil {
+		return fmt.Errorf("verify local kind containers were removed; ownership state retained: %w", err)
+	}
+	if len(containers) != 0 {
+		return errors.New("kind cluster name is gone but owner-labeled containers remain; ownership state retained")
 	}
 	if err := removeLocalClusterState(runtime.stateRoot, *name); err != nil {
 		return fmt.Errorf("cluster is deleted but private local state cleanup is incomplete: %w", err)
@@ -311,8 +386,11 @@ func validateLocalClusterState(root, name string, state localClusterState) error
 	if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 || dirInfo.Mode().Perm()&0o077 != 0 {
 		return errors.New("cluster state directory must be private (0700 or stricter), not a symlink")
 	}
-	if state.Format != localClusterStateFormat || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) {
+	if state.Format != localClusterStateFormat || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) || state.KindName != localKindClusterName(name, state.OwnerID) {
 		return errors.New("unsupported local state format, cluster name or owner identifier")
+	}
+	if state.Provider.Kind != "docker" || state.Provider.Context == "" || !strings.HasPrefix(state.Provider.Endpoint, "unix://") || state.Provider.DaemonID == "" {
+		return errors.New("local Docker provider identity is incomplete or unsupported")
 	}
 	expectedKubeconfig := filepath.Join(clusterDir, "kubeconfig")
 	if state.Kubeconfig != expectedKubeconfig || !filepath.IsAbs(state.Kubeconfig) || filepath.Clean(state.Kubeconfig) != state.Kubeconfig {
@@ -330,6 +408,16 @@ func validateLocalClusterState(root, name string, state localClusterState) error
 			return errors.New("cluster node identity receipt is invalid")
 		}
 		seen[node.Name] = true
+	}
+	if len(state.Containers) == 0 || len(state.Containers) > 32 {
+		return errors.New("Docker container identity receipt is incomplete")
+	}
+	containerIDs := map[string]bool{}
+	for _, container := range state.Containers {
+		if container.ID == "" || container.Name == "" || (container.Role != "control-plane" && container.Role != "worker") || containerIDs[container.ID] {
+			return errors.New("Docker container identity receipt is invalid")
+		}
+		containerIDs[container.ID] = true
 	}
 	if state.Forward != nil {
 		if state.Forward.PID <= 0 || state.Forward.OwnerID != state.OwnerID || state.Forward.StartedAt == "" ||
@@ -361,14 +449,35 @@ type localNamespace struct {
 }
 
 func observeLocalOwnership(ctx context.Context, runtime localRuntime, state localClusterState) (owned, present bool, err error) {
-	clusterList, err := runtime.run(ctx, "kind", "get", "clusters")
+	provider, err := observeLocalDockerProvider(ctx, runtime)
 	if err != nil {
 		return false, false, err
 	}
-	if !containsExactLine(string(clusterList), state.Name) {
+	if provider != state.Provider {
+		return false, false, errors.New("active Docker provider identity differs from the recorded provider")
+	}
+	clusterList, err := runLocalPinned(ctx, runtime, state.Provider, "kind", "get", "clusters")
+	if err != nil {
+		return false, false, err
+	}
+	if !containsExactLine(string(clusterList), state.KindName) {
+		containers, containerErr := observeLocalKindContainers(ctx, runtime, state.Provider, state.KindName)
+		if containerErr != nil {
+			return false, false, containerErr
+		}
+		if len(containers) != 0 {
+			return false, true, errors.New("Kind cluster is absent but owner-labeled containers remain")
+		}
 		return false, false, nil
 	}
-	kindConfig, err := runtime.run(ctx, "kind", "get", "kubeconfig", "--name", state.Name)
+	containers, err := observeLocalKindContainers(ctx, runtime, state.Provider, state.KindName)
+	if err != nil {
+		return false, true, err
+	}
+	if !sameLocalContainers(containers, state.Containers) {
+		return false, len(containers) > 0, errors.New("live kind container IDs/names/roles differ from the ownership receipt")
+	}
+	kindConfig, err := runLocalPinned(ctx, runtime, state.Provider, "kind", "get", "kubeconfig", "--name", state.KindName)
 	if err != nil {
 		return false, true, err
 	}
@@ -376,10 +485,10 @@ func observeLocalOwnership(ctx context.Context, runtime localRuntime, state loca
 	if err != nil {
 		return false, true, fmt.Errorf("read isolated kubeconfig: %w", err)
 	}
-	if err := compareKindKubeconfig(kindConfig, privateConfig, "kind-"+state.Name); err != nil {
+	if err := compareKindKubeconfig(kindConfig, privateConfig, "kind-"+state.KindName); err != nil {
 		return false, true, err
 	}
-	contextName := "kind-" + state.Name
+	contextName := "kind-" + state.KindName
 	nodeJSON, err := runtime.run(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", contextName, "get", "nodes", "-o", "json")
 	if err != nil {
 		return false, true, err
@@ -415,6 +524,80 @@ func observeLocalOwnership(ctx context.Context, runtime localRuntime, state loca
 		}
 	}
 	return true, true, nil
+}
+
+func observeLocalDockerProvider(ctx context.Context, runtime localRuntime) (localProviderIdentity, error) {
+	contextOutput, err := runtime.run(ctx, "docker", "context", "show")
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	contextName := strings.TrimSpace(string(contextOutput))
+	if contextName == "" || strings.ContainsAny(contextName, "\r\n") {
+		return localProviderIdentity{}, errors.New("cannot determine active Docker context")
+	}
+	endpointOutput, err := runtime.run(ctx, "docker", "context", "inspect", contextName, "--format", "{{.Endpoints.docker.Host}}")
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	endpoint := strings.TrimSpace(string(endpointOutput))
+	if !strings.HasPrefix(endpoint, "unix://") {
+		return localProviderIdentity{}, errors.New("local workflow requires a local unix-socket Docker endpoint")
+	}
+	daemonOutput, err := runtime.run(ctx, "docker", "--context", contextName, "info", "--format", "{{.ID}}")
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	daemonID := strings.TrimSpace(string(daemonOutput))
+	if daemonID == "" || strings.ContainsAny(daemonID, "\r\n") {
+		return localProviderIdentity{}, errors.New("cannot determine Docker daemon identity")
+	}
+	return localProviderIdentity{Kind: "docker", Context: contextName, Endpoint: endpoint, DaemonID: daemonID}, nil
+}
+
+func observeLocalKindContainers(ctx context.Context, runtime localRuntime, provider localProviderIdentity, kindName string) ([]localContainerIdentity, error) {
+	format := `{{.ID}}|{{.Names}}|{{.Label "io.x-k8s.kind.role"}}`
+	output, err := runLocalPinned(ctx, runtime, provider, "docker", "ps", "-a", "--no-trunc", "--filter", "label=io.x-k8s.kind.cluster="+kindName, "--format", format)
+	if err != nil {
+		return nil, err
+	}
+	var result []localContainerIdentity
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || (parts[2] != "control-plane" && parts[2] != "worker") {
+			return nil, errors.New("Docker returned malformed kind container identity")
+		}
+		result = append(result, localContainerIdentity{ID: parts[0], Name: parts[1], Role: parts[2]})
+		if len(result) > 32 {
+			return nil, errors.New("kind container identity exceeds node limit")
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func sameLocalContainers(a, b []localContainerIdentity) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	left := append([]localContainerIdentity(nil), a...)
+	right := append([]localContainerIdentity(nil), b...)
+	sort.Slice(left, func(i, j int) bool { return left[i].ID < left[j].ID })
+	sort.Slice(right, func(i, j int) bool { return right[i].ID < right[j].ID })
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func localKindClusterName(name, ownerID string) string {
+	// The full random owner ID makes accidental same-name replacement extremely unlikely.
+	// The logical name is bounded so the resulting DNS label remains <= 63 characters.
+	return name + "-" + ownerID
 }
 
 func compareKindKubeconfig(kindRaw, privateRaw []byte, expectedContext string) error {
@@ -516,7 +699,7 @@ func renderKindOwnershipConfig(name, ownerID string) ([]byte, error) {
 	}
 	config := fmt.Sprintf(`kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-name: %s
+	name: %s
 nodes:
 - role: control-plane
   kubeadmConfigPatches:
@@ -525,7 +708,7 @@ nodes:
     nodeRegistration:
       kubeletExtraArgs:
         node-labels: %s=%s
-`, name, localOwnerLabel, ownerID)
+`, localKindClusterName(name, ownerID), localOwnerLabel, ownerID)
 	return []byte(config), nil
 }
 
