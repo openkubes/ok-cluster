@@ -34,6 +34,16 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeLocalCommandHelp(arguments[1], stdout)
 		return true
 	}
+	if len(arguments) == 2 && arguments[0] == "local" && arguments[1] == "diagnose" ||
+		len(arguments) == 3 && arguments[0] == "local" && arguments[1] == "diagnose" && isHelpArgument(arguments[2]) {
+		writeLocalCommandHelp("diagnose", stdout)
+		return true
+	}
+	if len(arguments) == 3 && arguments[0] == "local" && arguments[1] == "diagnose" && arguments[2] == "bootstrap" ||
+		len(arguments) == 4 && arguments[0] == "local" && arguments[1] == "diagnose" && arguments[2] == "bootstrap" && containsHelpArgument(arguments[3:]) {
+		writeLocalCommandHelp("diagnose bootstrap", stdout)
+		return true
+	}
 	if len(arguments) == 1 && arguments[0] == "destroy" ||
 		len(arguments) == 2 && arguments[0] == "destroy" && isHelpArgument(arguments[1]) {
 		writeDestroyHelp(stdout)

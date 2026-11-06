@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,7 +60,7 @@ func localStateFixture(t *testing.T) (string, localClusterState) {
 		t.Fatal(err)
 	}
 	state := localClusterState{
-		Format: localClusterStateFormat, Name: localClusterDefaultName,
+		Format: localClusterStateFormat, Phase: "READY", Name: localClusterDefaultName,
 		OwnerID: "0123456789abcdef0123456789abcdef", KindName: kindName,
 		Provider:      localProviderIdentity{Kind: "docker", Context: "desktop-linux", Endpoint: "unix:///tmp/docker.sock", DaemonID: "daemon-123"},
 		Kubeconfig:    kubeconfig,
@@ -137,7 +142,7 @@ func localOwnershipRunner(state localClusterState, ownerID string, present bool,
 	}
 }
 
-func TestLocalUpIsNotEnabledBeforeConsoleIntegration(t *testing.T) {
+func TestLocalUpFailsClosedWhenConsoleIntegrationIsUnavailable(t *testing.T) {
 	called := false
 	root := t.TempDir()
 	err := runLocalWithRuntime(context.Background(), []string{"up"}, io.Discard, io.Discard,
@@ -145,7 +150,7 @@ func TestLocalUpIsNotEnabledBeforeConsoleIntegration(t *testing.T) {
 			called = true
 			return nil, nil
 		}})
-	if err == nil || !strings.Contains(err.Error(), "no cluster was contacted or changed") || called {
+	if err == nil || !strings.Contains(err.Error(), "no cluster was contacted") || called {
 		t.Fatalf("up must fail closed without invoking cluster tools; err=%v called=%v", err, called)
 	}
 	err = runLocalWithRuntime(context.Background(), []string{"up", "--name", "not_valid"}, io.Discard, io.Discard,
@@ -155,6 +160,669 @@ func TestLocalUpIsNotEnabledBeforeConsoleIntegration(t *testing.T) {
 		}})
 	if err == nil || called {
 		t.Fatalf("invalid name must fail locally; err=%v called=%v", err, called)
+	}
+}
+
+func TestLocalResumeVerifiesExistingInstallationBeforeStartingForward(t *testing.T) {
+	root, state := localStateFixture(t)
+	state.Phase = "INCOMPLETE"
+	state.Nodes = nil
+	state.KubeSystemUID = ""
+	if err := writeLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	runnerState := state
+	runnerState.Nodes = []localNodeIdentity{{Name: state.KindName + "-control-plane", UID: "node-uid"}}
+	runnerState.KubeSystemUID = "kube-system-uid"
+	base := localOwnershipRunner(runnerState, state.OwnerID, true, nil)
+	var calls []string
+	runner := func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, command+" "+joined)
+		if command == "kubectl" {
+			switch {
+			case strings.Contains(joined, "get deployment ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":3},"spec":{"replicas":1},"status":{"observedGeneration":3,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}`), nil
+			case strings.Contains(joined, "get service ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}`), nil
+			case strings.Contains(joined, "get endpoints ok-console -o json"):
+				return []byte(`{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}`), nil
+			}
+		}
+		return base(ctx, command, args...)
+	}
+	forward := localForwardIdentity{PID: 321, OwnerID: state.OwnerID, StartedAt: "Mon Nov  2 10:00:00 2026", Executable: "/usr/local/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+	started, checked := false, false
+	runtime := localRuntime{
+		stateRoot: root, run: runner,
+		checkLocalPort: func(port int) error {
+			if port != localConsoleDefaultPort {
+				t.Fatalf("unexpected port check: %d", port)
+			}
+			return nil
+		},
+		startForward: func(_ context.Context, verified localClusterState) (localForwardIdentity, error) {
+			if verified.Phase != "CLUSTER_READY" || len(verified.Nodes) != 1 || verified.KubeSystemUID == "" {
+				t.Fatalf("forward started before Kubernetes identity was verified: %+v", verified)
+			}
+			if len(calls) == 0 || !strings.Contains(strings.Join(calls, "\n"), "get endpoints ok-console -o json") {
+				t.Fatal("forward started before existing Console workload verification")
+			}
+			started = true
+			return forward, nil
+		},
+		waitConsole: func(_ context.Context, port int) error {
+			checked = true
+			if port != localConsoleDefaultPort {
+				t.Fatalf("unexpected health port: %d", port)
+			}
+			return nil
+		},
+	}
+	var output strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"resume", "--name", state.Name}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if !started || !checked || !strings.Contains(output.String(), "http://127.0.0.1:18787") {
+		t.Fatalf("resume did not finish its verified path: started=%v checked=%v output=%q", started, checked, output.String())
+	}
+	got, err := readLocalClusterState(root, state.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "READY" || got.Forward == nil || *got.Forward != forward || len(got.Nodes) != 1 || got.KubeSystemUID == "" {
+		t.Fatalf("resume did not persist complete READY evidence: %+v", got)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "kubectl ") && (!strings.Contains(call, "--kubeconfig "+state.Kubeconfig) || !strings.Contains(call, "--context kind-"+state.KindName)) {
+			t.Fatalf("kubectl escaped the isolated kubeconfig/context: %s", call)
+		}
+		if strings.Contains(call, "create") || strings.Contains(call, "apply") || strings.Contains(call, "delete") || strings.Contains(call, "current-context") {
+			t.Fatalf("resume issued a create/deploy/delete or global-context command: %s", call)
+		}
+	}
+}
+
+func TestLocalResumeRejectsInvalidOrIncompleteEvidenceBeforeClusterContact(t *testing.T) {
+	t.Run("missing receipt", func(t *testing.T) {
+		called := false
+		err := runLocalWithRuntime(context.Background(), []string{"resume", "--name", "missing"}, io.Discard, io.Discard, localRuntime{stateRoot: t.TempDir(), run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+		if err == nil || called {
+			t.Fatalf("missing receipt must fail locally: err=%v contacted=%v", err, called)
+		}
+	})
+	t.Run("READY is not resumable", func(t *testing.T) {
+		root, state := localStateFixture(t)
+		if err := writeLocalClusterState(root, state.Name, state); err != nil {
+			t.Fatal(err)
+		}
+		called := false
+		err := runLocalWithRuntime(context.Background(), []string{"resume"}, io.Discard, io.Discard, localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+		if err == nil || called {
+			t.Fatalf("READY receipt must not enter resume: err=%v contacted=%v", err, called)
+		}
+	})
+	t.Run("no prior container identity", func(t *testing.T) {
+		root, state := localStateFixture(t)
+		state.Phase, state.Nodes, state.KubeSystemUID, state.Containers = "INCOMPLETE", nil, "", nil
+		if err := writeLocalClusterState(root, state.Name, state); err != nil {
+			t.Fatal(err)
+		}
+		called := false
+		err := runLocalWithRuntime(context.Background(), []string{"resume"}, io.Discard, io.Discard, localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+		if err == nil || called {
+			t.Fatalf("receipt without prior container identity must fail locally: err=%v contacted=%v", err, called)
+		}
+	})
+}
+
+func TestLocalResumeFailuresRemainFailClosed(t *testing.T) {
+	for _, scenario := range []string{"container drift", "node owner mismatch", "kubeconfig mismatch", "deployment not ready", "endpoints not ready", "health not ready"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Phase, state.Nodes, state.KubeSystemUID = "INCOMPLETE", nil, ""
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "kubeconfig mismatch" {
+				if err := os.WriteFile(state.Kubeconfig, []byte("not a kubeconfig"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			owner := state.OwnerID
+			if scenario == "node owner mismatch" {
+				owner = "ffffffffffffffffffffffffffffffff"
+			}
+			runnerState := state
+			runnerState.Nodes = []localNodeIdentity{{Name: state.KindName + "-control-plane", UID: "node-uid"}}
+			runnerState.KubeSystemUID = "kube-system-uid"
+			base := localOwnershipRunner(runnerState, owner, true, nil)
+			started := false
+			runner := func(ctx context.Context, command string, args ...string) ([]byte, error) {
+				joined := strings.Join(args, " ")
+				if scenario == "container drift" && command == "docker" && strings.HasPrefix(joined, "ps ") {
+					return []byte("different-container|" + state.Containers[0].Name + "|control-plane\n"), nil
+				}
+				if command == "kubectl" && strings.Contains(joined, "get deployment ok-console -o json") {
+					ready := 1
+					if scenario == "deployment not ready" {
+						ready = 0
+					}
+					return []byte(fmt.Sprintf(`{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":1},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":%d,"availableReplicas":%d}}`, ready, ready)), nil
+				}
+				if command == "kubectl" && strings.Contains(joined, "get service ok-console -o json") {
+					return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}`), nil
+				}
+				if command == "kubectl" && strings.Contains(joined, "get endpoints ok-console -o json") {
+					if scenario == "endpoints not ready" {
+						return []byte(`{"subsets":[]}`), nil
+					}
+					return []byte(`{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}`), nil
+				}
+				return base(ctx, command, args...)
+			}
+			runtime := localRuntime{stateRoot: root, run: runner, checkLocalPort: func(int) error { return nil }, startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+				started = true
+				return localForwardIdentity{PID: 321, OwnerID: state.OwnerID, StartedAt: "start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}, nil
+			}, waitConsole: func(context.Context, int) error {
+				if scenario == "health not ready" {
+					return errors.New("unavailable")
+				}
+				return nil
+			}, stopForward: func(localForwardIdentity) error { return nil }}
+			err := runLocalWithRuntime(context.Background(), []string{"resume"}, io.Discard, io.Discard, runtime)
+			if err == nil || started != (scenario == "health not ready") {
+				t.Fatalf("scenario did not stop at expected boundary: err=%v started=%v", err, started)
+			}
+			got, readErr := readLocalClusterState(root, state.Name)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if scenario == "health not ready" {
+				if got.Phase != "CLUSTER_READY" || got.Forward == nil {
+					t.Fatalf("post-forward health failure must preserve recoverable CLUSTER_READY receipt: %+v", got)
+				}
+			} else if got.Phase != "INCOMPLETE" || got.Forward != nil {
+				t.Fatalf("pre-forward failure must preserve original INCOMPLETE receipt: %+v", got)
+			}
+		})
+	}
+}
+
+func TestKubectlStructuredOutputSeparatesStderrAndVerifiesEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "kubectl")
+	body := `#!/bin/sh
+case "$*" in
+  *"get deployment ok-console"*) printf '%s\n' '{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":1},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}' ;;
+  *"get service ok-console"*) printf '%s\n' '{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}' ;;
+  *"get endpoints ok-console"*) printf '%s\n' 'Warning: v1 Endpoints is deprecated; sensitive-token-must-not-leak' >&2; printf '%s\n' '{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}' ;;
+  *) exit 23 ;;
+esac
+`
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	state := localClusterState{Name: "resume-test", KindName: "resume-test-0123456789abcdef0123456789abcdef", Kubeconfig: "/private/kubeconfig"}
+	runtime := localRuntime{run: func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		return runLocalCommand(ctx, command, args...)
+	}}
+	if err := verifyLocalConsoleWorkload(context.Background(), runtime, state); err != nil {
+		t.Fatalf("structured JSON must parse despite stderr warning: %v", err)
+	}
+}
+
+func TestKubectlStructuredCommandFailureDoesNotLeakEitherStream(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "kubectl")
+	body := "#!/bin/sh\nprintf '%s\\n' '{\"credential\":\"stdout-sensitive-value\"}'\nprintf '%s\\n' 'stderr-sensitive-value' >&2\nexit 19\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := runLocalCommand(context.Background(), "kubectl", "--kubeconfig", "/private/test", "--context", "kind-test", "get", "endpoints", "ok-console", "-o", "json")
+	if err == nil || output != nil || !strings.Contains(err.Error(), "exit 19") {
+		t.Fatalf("nonzero structured command must fail closed without output: output=%q err=%v", output, err)
+	}
+	if strings.Contains(err.Error(), "stdout-sensitive-value") || strings.Contains(err.Error(), "stderr-sensitive-value") {
+		t.Fatalf("structured command error leaked process output: %v", err)
+	}
+}
+
+func TestLocalStatusDistinguishesManagedForwardFailureModes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		process  localForwardProcessState
+		httpErr  error
+		want     string
+		wantHTTP bool
+	}{
+		{name: "missing process", process: localForwardAbsent, want: "FORWARD_PROCESS_MISSING"},
+		{name: "identity mismatch", process: localForwardPIDReused, want: "FORWARD_IDENTITY_MISMATCH"},
+		{name: "HTTP unavailable", process: localForwardMatches, httpErr: errors.New("unavailable"), want: "CONSOLE_HTTP_UNAVAILABLE", wantHTTP: true},
+		{name: "ready", process: localForwardMatches, want: "READY", wantHTTP: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Forward = &localForwardIdentity{PID: 4321, OwnerID: state.OwnerID, StartedAt: "started", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			base := localOwnershipRunner(state, state.OwnerID, true, nil)
+			httpCalled := false
+			runtime := localRuntime{stateRoot: root, run: base, inspectForward: func(got localForwardIdentity) (localForwardProcessState, error) {
+				if got != *state.Forward {
+					t.Fatalf("status inspected a different forward identity: %+v", got)
+				}
+				return tc.process, nil
+			}, waitConsole: func(context.Context, int) error {
+				httpCalled = true
+				return tc.httpErr
+			}}
+			var output strings.Builder
+			if err := runLocalWithRuntime(context.Background(), []string{"status", "--json"}, &output, io.Discard, runtime); err != nil {
+				t.Fatal(err)
+			}
+			var status localStatus
+			if err := json.Unmarshal([]byte(output.String()), &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.State != tc.want || status.ConsoleChecked != (tc.want == "READY") || httpCalled != tc.wantHTTP {
+				t.Fatalf("wrong status classification: status=%+v httpCalled=%v", status, httpCalled)
+			}
+		})
+	}
+}
+
+func TestDetachedLocalForwardSurvivesLauncherExit(t *testing.T) {
+	const helperEnv = "OK_LOCAL_FORWARD_PARENT_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		identity, err := startDetachedLocalProcess("/bin/sleep", []string{"60"}, os.Getenv("OK_LOCAL_FORWARD_TEST_LOG"), "0123456789abcdef0123456789abcdef")
+		if err != nil {
+			t.Fatalf("start detached child: %v", err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(identity); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	logPath := filepath.Join(t.TempDir(), "child.log")
+	command := exec.Command(os.Args[0], "-test.run=^TestDetachedLocalForwardSurvivesLauncherExit$")
+	command.Env = append(os.Environ(), helperEnv+"=1", "OK_LOCAL_FORWARD_TEST_LOG="+logPath)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("launcher helper failed: %v", err)
+	}
+	var identity localForwardIdentity
+	line := bytes.SplitN(bytes.TrimSpace(output), []byte("\n"), 2)[0]
+	if err := json.Unmarshal(line, &identity); err != nil {
+		t.Fatalf("read helper process identity: %v", err)
+	}
+	defer func() {
+		state, err := inspectLocalForwardProcess(identity)
+		if err == nil && state == localForwardMatches {
+			_ = stopLocalForward(identity)
+		}
+	}()
+	state, err := inspectLocalForwardProcess(identity)
+	if err != nil || state != localForwardMatches {
+		t.Fatalf("detached child did not survive launcher exit: state=%s err=%v", state, err)
+	}
+}
+
+func localReconnectFixture(t *testing.T) (string, localClusterState, localForwardIdentity) {
+	t.Helper()
+	root, state := localStateFixture(t)
+	old := localForwardIdentity{PID: 4321, OwnerID: state.OwnerID, StartedAt: "old-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+	state.Forward = &old
+	if err := writeLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	return root, state, old
+}
+
+func localReconnectCommandRunner(state localClusterState) localCommandRunner {
+	base := localOwnershipRunner(state, state.OwnerID, true, nil)
+	return func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if command == "kubectl" {
+			switch {
+			case strings.Contains(joined, "get deployment ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":2},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}`), nil
+			case strings.Contains(joined, "get service ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}`), nil
+			case strings.Contains(joined, "get endpoints ok-console -o json"):
+				return []byte(`{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}`), nil
+			}
+		}
+		return base(ctx, command, args...)
+	}
+}
+
+func TestLocalReconnectRestoresOneMissingForward(t *testing.T) {
+	root, state, old := localReconnectFixture(t)
+	newForward := localForwardIdentity{PID: 5678, OwnerID: state.OwnerID, StartedAt: "new-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("b", 64)}
+	startCalls, httpCalls, portCalls := 0, 0, 0
+	var commands []string
+	runtime := localRuntime{
+		stateRoot: root,
+		run: func(ctx context.Context, command string, args ...string) ([]byte, error) {
+			commands = append(commands, command+" "+strings.Join(args, " "))
+			return localReconnectCommandRunner(state)(ctx, command, args...)
+		},
+		inspectForward: func(identity localForwardIdentity) (localForwardProcessState, error) {
+			if identity == old {
+				return localForwardAbsent, nil
+			}
+			if identity == newForward {
+				return localForwardMatches, nil
+			}
+			return "", errors.New("unexpected process identity")
+		},
+		checkLocalPort: func(port int) error {
+			portCalls++
+			if port != 18787 {
+				t.Fatalf("unexpected reconnect port: %d", port)
+			}
+			return nil
+		},
+		startForward: func(_ context.Context, got localClusterState) (localForwardIdentity, error) {
+			startCalls++
+			if got.Phase != "CLUSTER_READY" || got.Forward != nil {
+				t.Fatalf("start must follow durable no-forward receipt: %+v", got)
+			}
+			if !strings.Contains(strings.Join(commands, "\n"), "get endpoints ok-console -o json") {
+				t.Fatal("forward started before provider, ownership and Console workload checks")
+			}
+			return newForward, nil
+		},
+		waitConsole: func(context.Context, int) error { httpCalls++; return nil },
+		stopForward: func(localForwardIdentity) error {
+			t.Fatal("reconnect must not stop or signal the old mismatched process")
+			return nil
+		},
+	}
+	var output strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"reconnect", "--name", state.Name}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if startCalls != 1 || httpCalls != 1 || portCalls != 1 || !strings.Contains(output.String(), "http://127.0.0.1:18787") {
+		t.Fatalf("unexpected reconnect counts/output: starts=%d http=%d port=%d output=%q", startCalls, httpCalls, portCalls, output.String())
+	}
+	got, err := readLocalClusterState(root, state.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "READY" || got.Forward == nil || *got.Forward != newForward {
+		t.Fatalf("new verified forward not persisted as READY: %+v", got)
+	}
+	for _, command := range commands {
+		if strings.Contains(command, "create") || strings.Contains(command, "apply") || strings.Contains(command, "delete") || strings.Contains(command, "current-context") {
+			t.Fatalf("reconnect attempted a resource mutation or global context lookup: %s", command)
+		}
+	}
+}
+
+func TestLocalReconnectRefusesActiveOrAmbiguousOldForward(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state localForwardProcessState
+		err   error
+	}{
+		{name: "active", state: localForwardMatches},
+		{name: "ambiguous", err: errors.New("cannot inspect process")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, state, old := localReconnectFixture(t)
+			contacted, started := false, false
+			runtime := localRuntime{stateRoot: root,
+				run:            func(context.Context, string, ...string) ([]byte, error) { contacted = true; return nil, nil },
+				inspectForward: func(localForwardIdentity) (localForwardProcessState, error) { return tc.state, tc.err },
+				startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+					started = true
+					return localForwardIdentity{}, nil
+				},
+			}
+			err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime)
+			if err == nil || contacted || started {
+				t.Fatalf("active/ambiguous old process must stop before API contact: err=%v contacted=%v started=%v", err, contacted, started)
+			}
+			got, readErr := readLocalClusterState(root, state.Name)
+			if readErr != nil || got.Phase != "READY" || got.Forward == nil || *got.Forward != old {
+				t.Fatalf("refused reconnect must preserve original state: state=%+v err=%v", got, readErr)
+			}
+		})
+	}
+}
+
+func TestLocalReconnectDoesNotSignalReusedOrMismatchedPID(t *testing.T) {
+	root, state, old := localReconnectFixture(t)
+	// Use the live test process PID but deliberately mismatched start/command
+	// identity. Classification must be PID_REUSED and reconnect must not signal it.
+	old.PID = os.Getpid()
+	old.StartedAt = "not-the-current-process-start"
+	state.Forward = &old
+	if err := updateLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	newForward := localForwardIdentity{PID: 6789, OwnerID: state.OwnerID, StartedAt: "new-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("c", 64)}
+	stopCalls, startCalls := 0, 0
+	inspect := func(identity localForwardIdentity) (localForwardProcessState, error) {
+		if identity == old {
+			return inspectLocalForwardProcess(identity)
+		}
+		if identity == newForward {
+			return localForwardMatches, nil
+		}
+		return "", errors.New("unexpected identity")
+	}
+	runtime := localRuntime{stateRoot: root, run: localReconnectCommandRunner(state), inspectForward: inspect,
+		checkLocalPort: func(int) error { return nil },
+		startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+			startCalls++
+			return newForward, nil
+		},
+		waitConsole: func(context.Context, int) error { return nil },
+		stopForward: func(localForwardIdentity) error { stopCalls++; return nil },
+	}
+	if err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if startCalls != 1 || stopCalls != 0 {
+		t.Fatalf("identity-mismatched PID must never be signaled: starts=%d stops=%d", startCalls, stopCalls)
+	}
+}
+
+func TestLocalReconnectPortConflictAndHealthFailureKeepAccurateState(t *testing.T) {
+	t.Run("port conflict", func(t *testing.T) {
+		root, state, old := localReconnectFixture(t)
+		starts := 0
+		runtime := localRuntime{stateRoot: root, run: localReconnectCommandRunner(state), inspectForward: func(localForwardIdentity) (localForwardProcessState, error) { return localForwardAbsent, nil },
+			checkLocalPort: func(int) error { return errors.New("occupied") },
+			startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+				starts++
+				return localForwardIdentity{}, nil
+			},
+		}
+		err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime)
+		if err == nil || starts != 0 {
+			t.Fatalf("occupied port must not start a forward: err=%v starts=%d", err, starts)
+		}
+		got, readErr := readLocalClusterState(root, state.Name)
+		if readErr != nil || got.Phase != "CLUSTER_READY" || got.Forward != nil || (got.Forward != nil && *got.Forward == old) {
+			t.Fatalf("port conflict must leave accurate no-forward state: %+v err=%v", got, readErr)
+		}
+	})
+	t.Run("HTTP failure", func(t *testing.T) {
+		root, state, old := localReconnectFixture(t)
+		newForward := localForwardIdentity{PID: 7890, OwnerID: state.OwnerID, StartedAt: "new-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("d", 64)}
+		starts, stops := 0, 0
+		inspect := func(identity localForwardIdentity) (localForwardProcessState, error) {
+			if identity == old {
+				return localForwardAbsent, nil
+			}
+			if identity == newForward {
+				return localForwardMatches, nil
+			}
+			return "", errors.New("unexpected identity")
+		}
+		runtime := localRuntime{stateRoot: root, run: localReconnectCommandRunner(state), inspectForward: inspect,
+			checkLocalPort: func(int) error { return nil },
+			startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+				starts++
+				return newForward, nil
+			},
+			waitConsole: func(context.Context, int) error { return errors.New("http unavailable") },
+			stopForward: func(localForwardIdentity) error { stops++; return nil },
+		}
+		err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime)
+		if err == nil || starts != 1 || stops != 0 {
+			t.Fatalf("health failure must not retry or discard verified process evidence: err=%v starts=%d stops=%d", err, starts, stops)
+		}
+		got, readErr := readLocalClusterState(root, state.Name)
+		if readErr != nil || got.Phase != "CLUSTER_READY" || got.Forward == nil || *got.Forward != newForward {
+			t.Fatalf("health failure must preserve the new process identity in recoverable state: %+v err=%v", got, readErr)
+		}
+	})
+}
+
+func TestLocalUpPersistsIntentBeforeSingleVerifierCallAndStopsIncomplete(t *testing.T) {
+	root, fixture := localStateFixture(t)
+	if err := os.RemoveAll(filepath.Join(root, "clusters", fixture.Name)); err != nil {
+		t.Fatal(err)
+	}
+	console := filepath.Join(t.TempDir(), "ok-console")
+	for _, path := range []string{"deploy/kubernetes", "deploy/kubernetes/overlays/local-kind"} {
+		if err := os.MkdirAll(filepath.Join(console, path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"deploy/kubernetes/verify-local-kind.sh", "deploy/kubernetes/overlays/local-kind/kustomization.yaml"} {
+		if err := os.WriteFile(filepath.Join(console, path), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := fixture.Provider
+	verified := false
+	runtime := localRuntime{stateRoot: root, consoleRoot: console,
+		run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			if command == "bash" && strings.Join(args, " ") == "--version" {
+				return []byte("GNU bash, version 5.3.20(1)-release\n"), nil
+			}
+			if command == "kind" && strings.Join(args, " ") == "version" {
+				return []byte("kind v0.33.0 go1.27.0 darwin/arm64\n"), nil
+			}
+			if command == "git" && strings.Contains(strings.Join(args, " "), "rev-parse HEAD") {
+				return []byte("revision\n"), nil
+			}
+			if command == "git" && strings.Contains(strings.Join(args, " "), "status --porcelain") {
+				return []byte(""), nil
+			}
+			if command == "docker" && strings.Join(args, " ") == "context show" {
+				return []byte(provider.Context), nil
+			}
+			if command == "docker" && strings.Contains(strings.Join(args, " "), "context inspect") {
+				return []byte(provider.Endpoint), nil
+			}
+			if command == "docker" && strings.Contains(strings.Join(args, " "), "info --format") {
+				return []byte(provider.DaemonID), nil
+			}
+			return nil, errors.New("unexpected external call")
+		},
+		runVerifier: func(_ context.Context, script string, env map[string]string) error {
+			verified = true
+			if _, err := os.Stat(localStateFilePath(root, fixture.Name)); err != nil {
+				t.Fatalf("durable intent missing before verifier: %v", err)
+			}
+			state, err := readLocalClusterState(root, fixture.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Phase != "CREATING" || env["KUBECONFIG"] != state.Kubeconfig || env["OK_CONSOLE_KEEP_CLUSTER"] != "true" || env["OK_CONSOLE_KIND_CONFIG"] == "" {
+				t.Fatalf("unsafe verifier contract: state=%+v env=%v", state, env)
+			}
+			return errors.New("simulated partial deployment")
+		},
+	}
+	err := runLocalWithRuntime(context.Background(), []string{"up"}, io.Discard, io.Discard, runtime)
+	if err == nil || !strings.Contains(err.Error(), "no retry performed") || strings.Contains(err.Error(), "simulated partial") || !verified {
+		t.Fatalf("expected one failed verifier and terminal stop, got err=%v called=%v", err, verified)
+	}
+	state, err := readLocalClusterState(root, fixture.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != "INCOMPLETE" {
+		t.Fatalf("partial run not durably terminal: %s", state.Phase)
+	}
+	called := false
+	statusErr := runLocalWithRuntime(context.Background(), []string{"status", "--json"}, io.Discard, io.Discard, localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+	if statusErr != nil || called {
+		t.Fatalf("incomplete status must be local-only: err=%v contacted=%v", statusErr, called)
+	}
+	called = false
+	downErr := runLocalWithRuntime(context.Background(), []string{"down"}, io.Discard, io.Discard, localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+	if downErr == nil || called {
+		t.Fatalf("incomplete state must block deletion without contacting cluster: err=%v contacted=%v", downErr, called)
+	}
+}
+
+func TestLocalPortPreflightDetectsLoopbackConflict(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := ensureLocalPortAvailable(port); err == nil {
+		t.Fatal("occupied loopback port must fail before cluster create")
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureLocalPortAvailable(port); err != nil {
+		t.Fatalf("released port should pass local preflight: %v", err)
+	}
+}
+
+func TestLocalUpRejectsDirtyConsoleBeforeDurableIntentOrDocker(t *testing.T) {
+	root, fixture := localStateFixture(t)
+	if err := os.RemoveAll(filepath.Join(root, "clusters", fixture.Name)); err != nil {
+		t.Fatal(err)
+	}
+	console := filepath.Join(t.TempDir(), "ok-console")
+	for _, path := range []string{"deploy/kubernetes", "deploy/kubernetes/overlays/local-kind"} {
+		if err := os.MkdirAll(filepath.Join(console, path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"deploy/kubernetes/verify-local-kind.sh", "deploy/kubernetes/overlays/local-kind/kustomization.yaml"} {
+		if err := os.WriteFile(filepath.Join(console, path), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dockerCalled := false
+	runtime := localRuntime{stateRoot: root, consoleRoot: console, runVerifier: func(context.Context, string, map[string]string) error {
+		t.Fatal("dirty tree must not reach verifier")
+		return nil
+	}, run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+		if command == "git" && strings.Contains(strings.Join(args, " "), "rev-parse HEAD") {
+			return []byte("revision\n"), nil
+		}
+		if command == "git" && strings.Contains(strings.Join(args, " "), "status --porcelain") {
+			return []byte("?? user-data.txt\n"), nil
+		}
+		if command == "docker" {
+			dockerCalled = true
+		}
+		return nil, errors.New("unexpected command")
+	}}
+	err := runLocalWithRuntime(context.Background(), []string{"up"}, io.Discard, io.Discard, runtime)
+	if err == nil || !strings.Contains(err.Error(), "including untracked files") || dockerCalled {
+		t.Fatalf("dirty source tree must stop before provider contact: err=%v docker=%v", err, dockerCalled)
+	}
+	if _, err := os.Lstat(localStateFilePath(root, fixture.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dirty preflight must precede durable run intent; state err=%v", err)
 	}
 }
 
@@ -215,6 +883,30 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 	if first == second || !localOwnerIDPattern.MatchString(first) {
 		t.Fatalf("owner IDs must be unique 128-bit lowercase hex values: %q %q", first, second)
 	}
+	for _, logicalName := range []string{
+		"ok-local-e2e-arash-20261105",
+		"ok-local-e2e-arash-20261105-b",
+		"ok-local-e2e-attempt3",
+		"ok-local-e2e-attempt4",
+	} {
+		generated := localKindClusterName(logicalName, first)
+		hostname := generated + localKindControlPlaneSuffix
+		if len(generated) > localKindMaxNameLength || !validLocalKindClusterName(generated) ||
+			len(hostname) > 63 || !strings.HasSuffix(generated, "-"+first) {
+			t.Fatalf("logical name %q must produce a <=49-character Kind name and <=63-character control-plane hostname with the complete owner ID: %q hostname length=%d", logicalName, generated, len(hostname))
+		}
+	}
+	maximumName := strings.Repeat("a", localKindMaxNameLength-len(first)-1) + "-" + first
+	if len(maximumName) != 49 || len(maximumName+localKindControlPlaneSuffix) != 63 || !validLocalKindClusterName(maximumName) {
+		t.Fatalf("49-character Kind name with a 63-character control-plane hostname must be accepted: %q length=%d hostname=%d", maximumName, len(maximumName), len(maximumName+localKindControlPlaneSuffix))
+	}
+	fiftyCharacterName := strings.Repeat("a", localKindMaxNameLength-len(first)) + "-" + first
+	if len(fiftyCharacterName) != 50 || validLocalKindClusterName(fiftyCharacterName) {
+		t.Fatalf("50-character Kind DNS label with a 64-character control-plane hostname must be rejected: %q length=%d", fiftyCharacterName, len(fiftyCharacterName))
+	}
+	if got := localKindClusterName("ok-local-e2e-arash-20261105", first); got == localKindClusterName("ok-local-e2e-arash-20261105-b", second) {
+		t.Fatal("truncated readable prefixes must not collapse distinct owner identities")
+	}
 	config, err := renderKindOwnershipConfig(localClusterDefaultName, first)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +948,70 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 		t.Fatal("invalid cluster name accepted")
 	}
 	if _, err := renderKindOwnershipConfig(strings.Repeat("a", 31), first); err == nil {
-		t.Fatal("logical name that makes the actual DNS label exceed 63 characters accepted")
+		t.Fatal("invalid logical cluster name accepted")
+	}
+}
+
+func TestLocalKindNameShortensOnlyReadablePrefixAndPersistsLogicalName(t *testing.T) {
+	ownerID := "edd83ae5428019db1593dd56e6105916"
+	for _, logicalName := range []string{
+		"ok-local-e2e-arash-20261105",
+		"ok-local-e2e-arash-20261105-b",
+		"ok-local-e2e-attempt3",
+		"ok-local-e2e-attempt4",
+	} {
+		t.Run(logicalName, func(t *testing.T) {
+			privateParent := filepath.Join(t.TempDir(), "private")
+			if err := os.Mkdir(privateParent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(privateParent, "ok-local")
+			clusterDir := filepath.Join(root, "clusters", logicalName)
+			if err := os.MkdirAll(clusterDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			kindName := localKindClusterName(logicalName, ownerID)
+			provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/docker.sock", DaemonID: "daemon"}
+			state := localClusterState{
+				Format: localClusterStateFormat, Phase: "CREATING", Name: logicalName, OwnerID: ownerID,
+				KindName: kindName, Provider: provider,
+				Kubeconfig: filepath.Join(clusterDir, "kubeconfig"),
+			}
+			if err := writeLocalClusterIntent(root, logicalName, state); err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := readLocalClusterState(root, logicalName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Name != logicalName || persisted.KindName != kindName || !strings.HasSuffix(persisted.KindName, "-"+ownerID) {
+				t.Fatalf("durable state must retain the complete logical name and owner binding: %+v", persisted)
+			}
+			legacy := state
+			legacy.KindName = logicalName + "-" + ownerID
+			if len(legacy.KindName) <= localKindMaxNameLength {
+				t.Fatalf("fixture must cover the prior over-50-character name: %q", legacy.KindName)
+			}
+			if err := validateLocalClusterState(root, logicalName, legacy); err != nil {
+				t.Fatalf("existing full-name receipt should remain inspectable: %v", err)
+			}
+			previousContract := state
+			previousContract.KindName = localKindClusterNameWithLimit(logicalName, ownerID, localKindPreviousMaxNameLength)
+			if len(previousContract.KindName) != 50 {
+				t.Fatalf("legacy fixture must cover the previous 50-character Kind contract: %q", previousContract.KindName)
+			}
+			if err := validateLocalClusterState(root, logicalName, previousContract); err != nil {
+				t.Fatalf("existing 50-character receipt should remain inspectable: kind=%q err=%v", previousContract.KindName, err)
+			}
+			diagnosticReceipt := localBootstrapDiagnosticReceipt{
+				Format: localBootstrapDiagnosticFormat, Name: logicalName, OwnerID: ownerID,
+				KindName: previousContract.KindName, Provider: provider,
+				ConfigSHA256: strings.Repeat("a", 64), State: "PREPARED", ResourceState: "UNKNOWN",
+			}
+			if err := validateLocalBootstrapDiagnosticReceipt(diagnosticReceipt); err != nil {
+				t.Fatalf("existing 50-character diagnostic receipt should remain inspectable: %v", err)
+			}
+		})
 	}
 }
 
@@ -277,6 +1032,76 @@ func TestCompareKindKubeconfigBindsEndpointAndCredentials(t *testing.T) {
 				t.Fatal("mismatched kubeconfig accepted")
 			}
 		})
+	}
+}
+
+func TestRunLocalCommandPinnedSeparatesKindKubeconfigStreams(t *testing.T) {
+	binDir := t.TempDir()
+	envCapture := filepath.Join(t.TempDir(), "kind-env.txt")
+	kindName := "ok-local-kubeconfig-0123456789abcdef0123456789abcdef"
+	kindOutput := strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+kindName)
+	script := `#!/bin/sh
+printf '%s\n' "$DOCKER_HOST" "$KIND_EXPERIMENTAL_PROVIDER" "$DOCKER_CONTEXT" > "$LOCAL_KIND_ENV_CAPTURE"
+printf '%s\n' 'using docker due to KIND_EXPERIMENTAL_PROVIDER' 'stderr-private-token-marker' >&2
+cat <<'LOCAL_KUBECONFIG'
+` + kindOutput + `
+LOCAL_KUBECONFIG
+`
+	writeMockKindExecutable(t, binDir, script)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DOCKER_CONTEXT", "untrusted-context")
+	t.Setenv("DOCKER_HOST", "tcp://untrusted.example:2375")
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	t.Setenv("LOCAL_KIND_ENV_CAPTURE", envCapture)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///private/colima.sock", DaemonID: "test-daemon"}
+
+	stdout, err := runLocalCommandPinned(context.Background(), provider, "kind", "get", "kubeconfig", "--name", kindName)
+	if err != nil {
+		t.Fatalf("mock Kind kubeconfig command failed: %v", err)
+	}
+	if strings.Contains(string(stdout), "using docker due to KIND_EXPERIMENTAL_PROVIDER") || strings.Contains(string(stdout), "stderr-private-token-marker") {
+		t.Fatal("stderr reached kubeconfig output")
+	}
+	privateKubeconfig := []byte(strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+kindName))
+	if err := compareKindKubeconfig(stdout, privateKubeconfig, "kind-"+kindName); err != nil {
+		t.Fatalf("stdout kubeconfig with provider notice on stderr should compare successfully: %v", err)
+	}
+	env, err := os.ReadFile(envCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(env), provider.Endpoint+"\ndocker\n\n"; got != want {
+		t.Fatalf("pinned Kind environment differs: got=%q want=%q", got, want)
+	}
+}
+
+func TestRunLocalCommandPinnedKindKubeconfigFailureDoesNotLeakStderr(t *testing.T) {
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+printf '%s\n' 'using docker due to KIND_EXPERIMENTAL_PROVIDER' 'private-token-marker' >&2
+printf '%s\n' 'private-kubeconfig-marker'
+exit 23
+`
+	writeMockKindExecutable(t, binDir, script)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///private/colima.sock", DaemonID: "test-daemon"}
+
+	stdout, err := runLocalCommandPinned(context.Background(), provider, "kind", "get", "kubeconfig", "--name", "ok-local-failed")
+	if err == nil || len(stdout) != 0 {
+		t.Fatalf("nonzero Kind exit must fail closed with no output: stdout_len=%d err=%v", len(stdout), err)
+	}
+	for _, private := range []string{"using docker due to KIND_EXPERIMENTAL_PROVIDER", "private-token-marker", "private-kubeconfig-marker"} {
+		if strings.Contains(err.Error(), private) || strings.Contains(string(stdout), private) {
+			t.Fatalf("Kind stderr/stdout leaked in failure: %v", err)
+		}
+	}
+}
+
+func writeMockKindExecutable(t *testing.T, binDir, script string) {
+	t.Helper()
+	path := filepath.Join(binDir, "kind")
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -478,5 +1303,671 @@ func TestLocalForwardIdentityIncludesOwnerAndArgumentDigest(t *testing.T) {
 	state.Forward.OwnerID = "ffffffffffffffffffffffffffffffff"
 	if err := validateLocalClusterState(root, state.Name, state); err == nil {
 		t.Fatal("forward bound to a different owner was accepted")
+	}
+}
+
+func TestLocalForwardCannotBeAuthorizedByPIDAlone(t *testing.T) {
+	command := "/opt/homebrew/bin/kubectl --kubeconfig /private/ok/kubeconfig --context kind-ok-local-0123456789abcdef0123456789abcdef -n openkubes-console port-forward --address 127.0.0.1 service/ok-console 18787:8787"
+	hash := sha256.Sum256([]byte(command))
+	identity := localForwardIdentity{PID: 123, OwnerID: "0123456789abcdef0123456789abcdef", StartedAt: "Wed Nov  5 10:00:00 2026", Executable: "/opt/homebrew/bin/kubectl", ArgumentsSHA256: "sha256:" + hex.EncodeToString(hash[:])}
+	if err := validateLocalForwardObservation(identity, identity.StartedAt, command); err != nil {
+		t.Fatalf("exact recorded process identity rejected: %v", err)
+	}
+	for _, observed := range []struct{ started, command string }{{"different start", command}, {identity.StartedAt, command + " --other"}, {identity.StartedAt, "/tmp/other-kubectl " + strings.TrimPrefix(command, identity.Executable+" ")}} {
+		if err := validateLocalForwardObservation(identity, observed.started, observed.command); err == nil {
+			t.Fatalf("mismatched process authorized for signal: %+v", observed)
+		}
+	}
+}
+
+func TestLocalForwardInspectorClassifiesUnrelatedLivePIDAsReused(t *testing.T) {
+	identity := localForwardIdentity{PID: os.Getpid(), OwnerID: "0123456789abcdef0123456789abcdef", StartedAt: "not-the-current-start-time", Executable: "/no/such/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("0", 64)}
+	state, err := inspectLocalForwardProcess(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != localForwardPIDReused {
+		t.Fatalf("current unrelated process classified as %s", state)
+	}
+}
+
+func TestLocalDownClearsStaleForwardReceiptsWithoutSignalingReusedPID(t *testing.T) {
+	for _, processState := range []localForwardProcessState{localForwardAbsent, localForwardPIDReused} {
+		t.Run(string(processState), func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Forward = &localForwardIdentity{PID: 43210, OwnerID: state.OwnerID, StartedAt: "previous boot", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			deleted := false
+			base := localOwnershipRunner(state, state.OwnerID, true, &deleted)
+			signals := 0
+			runtime := localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: base,
+				inspectForward: func(localForwardIdentity) (localForwardProcessState, error) { return processState, nil },
+				stopForward:    func(localForwardIdentity) error { signals++; return nil },
+			}
+			err := runLocalWithRuntime(context.Background(), []string{"down"}, io.Discard, io.Discard, runtime)
+			if err != nil || !deleted {
+				t.Fatalf("stale receipt blocked owned cleanup: err=%v deleted=%v", err, deleted)
+			}
+			if signals != 0 {
+				t.Fatalf("stale/reused PID was signaled %d times", signals)
+			}
+		})
+	}
+}
+
+func TestLocalDownOnlyStopsMatchingForwardAndFailsOnUnknownIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		observed   localForwardProcessState
+		inspectErr bool
+		wantSignal bool
+	}{
+		{name: "matching", observed: localForwardMatches, wantSignal: true},
+		{name: "uninspectable", inspectErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Forward = &localForwardIdentity{PID: 1234, OwnerID: state.OwnerID, StartedAt: "start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("b", 64)}
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			deleted := false
+			base := localOwnershipRunner(state, state.OwnerID, true, &deleted)
+			signals := 0
+			runtime := localRuntime{stateRoot: root, input: strings.NewReader("ok\n"), interactive: true, run: base,
+				inspectForward: func(localForwardIdentity) (localForwardProcessState, error) {
+					if test.inspectErr {
+						return "", errors.New("ps unavailable")
+					}
+					return test.observed, nil
+				},
+				stopForward: func(localForwardIdentity) error { signals++; return nil },
+			}
+			err := runLocalWithRuntime(context.Background(), []string{"down"}, io.Discard, io.Discard, runtime)
+			if test.inspectErr {
+				if err == nil || deleted || signals != 0 {
+					t.Fatalf("unknown identity must stop without signal/delete: err=%v deleted=%v signals=%d", err, deleted, signals)
+				}
+				return
+			}
+			if err != nil || !deleted || signals != 1 {
+				t.Fatalf("matching identity cleanup failed: err=%v deleted=%v signals=%d", err, deleted, signals)
+			}
+		})
+	}
+}
+
+func TestLocalVerifierDiagnosticsAreActionableAndDoNotLeakInput(t *testing.T) {
+	exitErr := exec.Command("sh", "-c", "exit 17").Run()
+	cases := []struct {
+		stage string
+		code  string
+	}{
+		{"preflight", "KIND_NAME_TOO_LONG"},
+		{"kind_inventory", "KIND_LIST_FAILED"},
+		{"kind_create", "KIND_CONFIG_OR_CREATE_FAILED"},
+		{"image_deploy", "IMAGE_OR_DEPLOY_FAILED"},
+		{"temp_file", "TEMP_FILE_PREPARATION_FAILED"},
+		{"unknown", "UNKNOWN"},
+	}
+	for _, test := range cases {
+		t.Run(test.code, func(t *testing.T) {
+			output := []byte("Authorization: Bearer planted-secret-token\nclient-certificate-data: private-kubeconfig-material\nOK_LOCAL_DIAGNOSTIC stage=" + test.stage + " code=" + test.code + "\n")
+			diagnostic := localVerifierDiagnostic(output, exitErr)
+			if !strings.Contains(diagnostic, "stage="+test.stage) || !strings.Contains(diagnostic, "code="+test.code) || !strings.Contains(diagnostic, "exit 17") {
+				t.Fatalf("structured safe category missing: %s", diagnostic)
+			}
+			for _, secret := range []string{"planted-secret-token", "private-kubeconfig-material", "Authorization", "certificate-data"} {
+				if strings.Contains(diagnostic, secret) {
+					t.Fatalf("sensitive verifier output leaked %q: %s", secret, diagnostic)
+				}
+			}
+		})
+	}
+	for _, invalid := range [][]byte{
+		[]byte("OK_LOCAL_DIAGNOSTIC stage=kind_inventory code=IMAGE_OR_DEPLOY_FAILED\n"),
+		[]byte("OK_LOCAL_DIAGNOSTIC stage=kind_inventory code=KIND_LIST_FAILED\nraw-secret-after-marker\n"),
+		[]byte("Authorization: Bearer raw-secret\n"),
+	} {
+		got := localVerifierDiagnostic(invalid, exitErr)
+		if !strings.Contains(got, "stage=unknown code=UNKNOWN") || strings.Contains(got, "raw-secret") {
+			t.Fatalf("untrusted or non-terminal diagnostic marker must map to safe UNKNOWN: %s", got)
+		}
+	}
+	if got := safeLocalVerifierFailure(errors.New("Authorization: Bearer arbitrary-secret")); strings.Contains(got, "arbitrary-secret") || !strings.Contains(got, "UNKNOWN") {
+		t.Fatalf("untrusted callback error did not map to safe UNKNOWN: %s", got)
+	}
+}
+
+func TestLocalVerifierPropagatesOnlyAllowlistedDiagnostics(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "console", "deploy", "kubernetes")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "verify-local-kind.sh")
+	contents := "#!/usr/bin/env bash\necho 'Authorization: Bearer verifier-private-token' >&2\necho 'OK_LOCAL_DIAGNOSTIC stage=kind_inventory code=KIND_LIST_FAILED' >&2\nexit 17\n"
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := runLocalConsoleVerifier(context.Background(), script, map[string]string{})
+	if err == nil {
+		t.Fatal("mock verifier failure unexpectedly succeeded")
+	}
+	diagnostic := safeLocalVerifierFailure(err)
+	if !strings.Contains(diagnostic, "stage=kind_inventory code=KIND_LIST_FAILED") || !strings.Contains(diagnostic, "exit 17") {
+		t.Fatalf("allowlisted failure was not propagated: %s", diagnostic)
+	}
+	if strings.Contains(diagnostic, "verifier-private-token") || strings.Contains(diagnostic, "Authorization") {
+		t.Fatalf("raw verifier stderr leaked into the CLI diagnostic: %s", diagnostic)
+	}
+}
+
+const localDiagnosticOwnerID = "0123456789abcdef0123456789abcdef"
+
+func newDiagnosticStateRoot(t *testing.T) string {
+	t.Helper()
+	parent := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(parent, "ok-local")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "clusters"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func diagnosticTestRuntime(t *testing.T, name string, failureOutput string, failureErr error, retainedContainers []localContainerIdentity, clusterPresent bool) (localRuntime, *int, *bool) {
+	t.Helper()
+	root := newDiagnosticStateRoot(t)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/colima/docker.sock", DaemonID: "daemon-diagnostic"}
+	kindName := localKindClusterName(name, localDiagnosticOwnerID)
+	createCalls := 0
+	verifierCalled := false
+	kindListCalls := 0
+	dockerListCalls := 0
+	kubeconfig := strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+kindName)
+	runtime := localRuntime{
+		stateRoot: root,
+		run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			joined := strings.Join(args, " ")
+			switch command {
+			case "kind":
+				if len(args) > 0 && (args[0] == "delete" || args[0] == "export") {
+					t.Fatalf("diagnostic workflow attempted Kind cleanup/export: %v", args)
+				}
+				if joined == "version" {
+					return []byte("kind v0.33.0 go1.27.0 darwin/arm64"), nil
+				}
+			case "docker":
+				if strings.HasPrefix(joined, "build ") || strings.HasPrefix(joined, "rm ") || strings.HasPrefix(joined, "stop ") || strings.HasPrefix(joined, "run ") {
+					t.Fatalf("diagnostic workflow attempted Docker mutation: %s", joined)
+				}
+				switch {
+				case joined == "context show":
+					return []byte(provider.Context), nil
+				case strings.HasPrefix(joined, "context inspect "):
+					return []byte(provider.Endpoint), nil
+				case strings.Contains(joined, "info --format"):
+					return []byte(provider.DaemonID), nil
+				}
+			case "kubectl":
+				if strings.Contains(joined, "get nodes -o json") {
+					return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":%q,"uid":"node-uid","labels":{"%s":%q}}}]}`, kindName+"-control-plane", localOwnerLabel, localDiagnosticOwnerID)), nil
+				}
+				if strings.Contains(joined, "get namespace kube-system -o json") {
+					return []byte(`{"metadata":{"uid":"kube-system-uid"}}`), nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected non-pinned diagnostic test command %s %s", command, joined)
+		},
+		runPinned: func(_ context.Context, actualProvider localProviderIdentity, command string, args ...string) ([]byte, error) {
+			if actualProvider != provider {
+				t.Fatalf("provider not pinned: got=%+v want=%+v", actualProvider, provider)
+			}
+			joined := strings.Join(args, " ")
+			switch command {
+			case "kind":
+				if len(args) > 0 && (args[0] == "delete" || args[0] == "export") {
+					t.Fatalf("diagnostic workflow attempted Kind cleanup/export: %v", args)
+				}
+				if joined == "get clusters" {
+					kindListCalls++
+					if clusterPresent && kindListCalls > 1 {
+						return []byte(kindName + "\n"), nil
+					}
+					return []byte(""), nil
+				}
+				if joined == "get kubeconfig --name "+kindName {
+					return []byte(kubeconfig), nil
+				}
+			case "docker":
+				if len(args) > 0 && (args[0] == "rm" || args[0] == "stop" || args[0] == "build" || args[0] == "run") {
+					t.Fatalf("diagnostic workflow attempted Docker mutation: %v", args)
+				}
+				if len(args) > 0 && args[0] == "ps" {
+					dockerListCalls++
+					if dockerListCalls == 1 {
+						return []byte(""), nil
+					}
+					var rows []string
+					for _, container := range retainedContainers {
+						rows = append(rows, container.ID+"|"+container.Name+"|"+container.Role)
+					}
+					return []byte(strings.Join(rows, "\n")), nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected pinned diagnostic test command %s %s", command, joined)
+		},
+		runKindCreate: func(_ context.Context, actualProvider localProviderIdentity, kubeconfigPath string, args ...string) ([]byte, bool, error) {
+			createCalls++
+			if actualProvider != provider || kubeconfigPath != filepath.Join(root, "clusters", name, "kubeconfig") {
+				t.Fatalf("wrong pinned create identity: provider=%+v kubeconfig=%q", actualProvider, kubeconfigPath)
+			}
+			expected := localKindDiagnosticCreateArguments(filepath.Join(root, "clusters", name, "kind.yaml"), kindName, kubeconfigPath)
+			if !reflect.DeepEqual(args, expected) {
+				t.Fatalf("Kind args differ\n got: %#v\nwant: %#v", args, expected)
+			}
+			if failureErr != nil {
+				return []byte(failureOutput), false, failureErr
+			}
+			if err := os.WriteFile(kubeconfigPath, []byte(kubeconfig), 0o600); err != nil {
+				return nil, false, err
+			}
+			return nil, false, nil
+		},
+		runVerifier: func(context.Context, string, map[string]string) error {
+			verifierCalled = true
+			return errors.New("Console verifier must never run from bootstrap diagnostics")
+		},
+		newOwnerID: func() (string, error) { return localDiagnosticOwnerID, nil },
+	}
+	return runtime, &createCalls, &verifierCalled
+}
+
+func TestLocalKindDiagnosticClassifierIsAllowlistedAndSecretSafe(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"config", "ERROR: failed to create cluster: failed to load config: secret-value", "KIND_CONFIG_REJECTED"},
+		{"docker", "ERROR: failed to create cluster: failed to create container: authorization bearer secret-value", "DOCKER_PROVISION_FAILED"},
+		{"kubeadm", "ERROR: failed to create cluster: failed to init node with kubeadm: exit status 1 secret-value", "NODE_BOOTSTRAP_FAILED"},
+		{"readiness", "ERROR: failed to create cluster: timed out waiting for control plane secret-value", "KIND_READINESS_TIMEOUT"},
+		{"unknown", "unexpected error secret-value", "UNKNOWN"},
+		{"unanchored", "private-config-field=failed to create container", "UNKNOWN"},
+		{"ambiguous", "ERROR: failed to create cluster: failed to create container\nERROR: failed to create cluster: failed to init node with kubeadm:", "UNKNOWN"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyLocalKindCreateFailure([]byte(test.text), false); got != test.want {
+				t.Fatalf("classification=%s want=%s", got, test.want)
+			}
+		})
+	}
+	if got := classifyLocalKindCreateFailure([]byte("ERROR: failed to create cluster: failed to init node with kubeadm:"), true); got != "UNKNOWN" {
+		t.Fatalf("truncated output must be UNKNOWN, got %s", got)
+	}
+}
+
+func TestLocalKindDiagnosticArgumentsAreExactAndRetained(t *testing.T) {
+	config := "/private/state path/kind.yaml"
+	kubeconfig := "/private/state path/kubeconfig"
+	got := localKindDiagnosticCreateArguments(config, "ok-local-diag-0123456789abcdef0123456789abcdef", kubeconfig)
+	want := []string{"create", "cluster", "--retain", "--config", config, "--name", "ok-local-diag-0123456789abcdef0123456789abcdef", "--kubeconfig", kubeconfig, "--wait", "90s"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args differ\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestRunLocalKindCreatePinsColimaAndPrivateKubeconfigWithMockExecutable(t *testing.T) {
+	binDir := t.TempDir()
+	envPath := filepath.Join(t.TempDir(), "env.txt")
+	argsPath := filepath.Join(t.TempDir(), "args.txt")
+	globalKubeconfigPath := filepath.Join(t.TempDir(), "global-kubeconfig")
+	globalKubeconfig := []byte("preserve-global-kubeconfig-marker")
+	if err := os.WriteFile(globalKubeconfigPath, globalKubeconfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	globalDigest := sha256.Sum256(globalKubeconfig)
+	script := `#!/bin/sh
+printf '%s\n' "$DOCKER_HOST" "$KIND_EXPERIMENTAL_PROVIDER" "$KUBECONFIG" > "$DIAGNOSTIC_ENV_CAPTURE"
+printf '%s\n' "$@" > "$DIAGNOSTIC_ARGS_CAPTURE"
+printf '%s\n' 'Authorization: Bearer intentionally-secret'
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(binDir, "kind"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("KUBECONFIG", globalKubeconfigPath)
+	t.Setenv("DOCKER_CONTEXT", "unrelated-context")
+	t.Setenv("DIAGNOSTIC_ENV_CAPTURE", envPath)
+	t.Setenv("DIAGNOSTIC_ARGS_CAPTURE", argsPath)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///private/colima.sock", DaemonID: "daemon-id"}
+	kubeconfig := "/private/state with spaces/kubeconfig"
+	args := localKindDiagnosticCreateArguments("/private/state with spaces/kind.yaml", "ok-local-diag-0123456789abcdef0123456789abcdef", kubeconfig)
+	output, truncated, err := runLocalKindCreatePinned(context.Background(), provider, kubeconfig, args...)
+	if err == nil || truncated || !strings.Contains(string(output), "intentionally-secret") {
+		t.Fatalf("mock executable result err=%v truncated=%v", err, truncated)
+	}
+	envBytes, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(envBytes), provider.Endpoint+"\ndocker\n"+kubeconfig+"\n"; got != want {
+		t.Fatalf("unsafe child environment: got=%q want=%q", got, want)
+	}
+	argBytes, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Split(strings.TrimSuffix(string(argBytes), "\n"), "\n"); !reflect.DeepEqual(got, args) {
+		t.Fatalf("shell argument boundaries changed: got=%#v want=%#v", got, args)
+	}
+	afterGlobal, err := os.ReadFile(globalKubeconfigPath)
+	if err != nil || sha256.Sum256(afterGlobal) != globalDigest {
+		t.Fatalf("global kubeconfig changed: err=%v", err)
+	}
+}
+
+func TestLocalDiagnoseBootstrapPersistsRetainedFailureAndNeverLeaksRawOutput(t *testing.T) {
+	name := "ok-local-e2e-diagnostic"
+	container := localContainerIdentity{ID: strings.Repeat("a", 64), Name: localKindClusterName(name, localDiagnosticOwnerID) + "-control-plane", Role: "control-plane"}
+	runtime, calls, verifierCalled := diagnosticTestRuntime(t, name, "ERROR: failed to create cluster: failed to init node with kubeadm: Authorization: Bearer planted-secret", errors.New("raw secret in wrapped error"), []localContainerIdentity{container}, true)
+	var stdout, stderr strings.Builder
+	err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, &stdout, &stderr, runtime)
+	if err == nil || !strings.Contains(err.Error(), "NODE_BOOTSTRAP_FAILED") || strings.Contains(err.Error(), "planted-secret") || strings.Contains(err.Error(), "raw secret") {
+		t.Fatalf("unsafe or missing failure result: %v", err)
+	}
+	if *calls != 1 || *verifierCalled || stdout.Len() != 0 || strings.Contains(stderr.String(), "secret") {
+		t.Fatalf("unexpected retry, Console call or output: calls=%d verifier=%v stdout=%q stderr=%q", *calls, *verifierCalled, stdout.String(), stderr.String())
+	}
+	state, err := readLocalClusterState(runtime.stateRoot, name)
+	if err != nil || state.Format != localBootstrapStateFormat || state.Phase != "INCOMPLETE" || len(state.Containers) != 1 || state.Containers[0] != container || !strings.HasSuffix(state.KindName, localDiagnosticOwnerID) || len(state.KindName) > localKindMaxNameLength {
+		t.Fatalf("bad durable failure identity: state=%+v err=%v", state, err)
+	}
+	receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+	if err != nil || receipt.State != "FAILED" || receipt.FailureCode != "NODE_BOOTSTRAP_FAILED" || receipt.ResourceState != "VERIFIED_RETAINED" || len(receipt.Containers) != 1 {
+		t.Fatalf("bad diagnostic receipt: receipt=%+v err=%v", receipt, err)
+	}
+	if receipt.Provider.Endpoint != "unix:///tmp/colima/docker.sock" || receipt.Provider.DaemonID != "daemon-diagnostic" || receipt.OwnerID != localDiagnosticOwnerID || receipt.KindName != state.KindName {
+		t.Fatalf("diagnostic receipt lost provider/owner binding: %+v", receipt)
+	}
+	rawReceipt, err := os.ReadFile(localBootstrapDiagnosticPath(runtime.stateRoot, name))
+	if err != nil || strings.Contains(string(rawReceipt), "planted-secret") || strings.Contains(string(rawReceipt), "raw secret") || strings.Contains(string(rawReceipt), "Authorization") {
+		t.Fatalf("raw failure material was persisted: err=%v", err)
+	}
+	before := *calls
+	downErr := runLocalWithRuntime(context.Background(), []string{"down", "--name", name}, io.Discard, io.Discard, runtime)
+	if downErr == nil || !strings.Contains(downErr.Error(), "separately authorized") || *calls != before {
+		t.Fatalf("diagnostic down must block before cluster contact: err=%v calls=%d/%d", downErr, *calls, before)
+	}
+	retryErr := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime)
+	if retryErr == nil || !strings.Contains(retryErr.Error(), "will not retry") || *calls != 1 {
+		t.Fatalf("existing diagnostic attempt must be terminal: err=%v createCalls=%d", retryErr, *calls)
+	}
+	var status strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"status", "--name", name, "--json"}, &status, io.Discard, runtime); err != nil || !strings.Contains(status.String(), `"state":"DIAGNOSTIC_FAILED"`) || !strings.Contains(status.String(), `"clusterContacted":false`) {
+		t.Fatalf("diagnostic status must be local and explicit: output=%s err=%v", status.String(), err)
+	}
+}
+
+func TestLocalDiagnoseBootstrapFailureCategoriesArePersistedWithoutRawOutput(t *testing.T) {
+	for _, test := range []struct{ name, output, want string }{
+		{"config", "ERROR: failed to create cluster: failed to parse config: bearer secret-value", "KIND_CONFIG_REJECTED"},
+		{"docker", "ERROR: failed to create cluster: failed to create container: credential secret-value", "DOCKER_PROVISION_FAILED"},
+		{"readiness", "ERROR: failed to create cluster: timed out waiting for control plane: private detail", "KIND_READINESS_TIMEOUT"},
+		{"unknown", "unclassified secret-value", "UNKNOWN"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			name := "ok-local-diagnostic-" + test.name
+			runtime, calls, verifierCalled := diagnosticTestRuntime(t, name, test.output, errors.New("wrapped bearer secret-value"), nil, false)
+			err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime)
+			if err == nil || !strings.Contains(err.Error(), test.want) || strings.Contains(err.Error(), "secret-value") || *calls != 1 || *verifierCalled {
+				t.Fatalf("failure was not safely recorded exactly once: err=%v calls=%d verifier=%v", err, *calls, *verifierCalled)
+			}
+			receipt, readErr := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+			if readErr != nil || receipt.FailureCode != test.want || receipt.ResourceState != "ABSENT" {
+				t.Fatalf("wrong safe terminal receipt: %+v err=%v", receipt, readErr)
+			}
+			raw, readErr := os.ReadFile(localBootstrapDiagnosticPath(runtime.stateRoot, name))
+			if readErr != nil || strings.Contains(string(raw), "secret-value") || strings.Contains(string(raw), "private detail") || strings.Contains(string(raw), "wrapped bearer") {
+				t.Fatalf("raw failure material was persisted: err=%v", readErr)
+			}
+		})
+	}
+}
+
+func TestLocalDiagnoseBootstrapSuccessRetainsVerifiedClusterAndDoesNotDeployConsole(t *testing.T) {
+	name := "ok-local-diagnostic-success"
+	container := localContainerIdentity{ID: strings.Repeat("1", 64), Name: localKindClusterName(name, localDiagnosticOwnerID) + "-control-plane", Role: "control-plane"}
+	runtime, calls, verifierCalled := diagnosticTestRuntime(t, name, "", nil, []localContainerIdentity{container}, true)
+	var output strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 1 || *verifierCalled || !strings.Contains(output.String(), "retained") || strings.Contains(output.String(), "127.0.0.1") {
+		t.Fatalf("unexpected success path: calls=%d verifier=%v output=%q", *calls, *verifierCalled, output.String())
+	}
+	state, err := readLocalClusterState(runtime.stateRoot, name)
+	if err != nil || state.Format != localBootstrapStateFormat || state.Phase != "CLUSTER_READY" || len(state.Containers) != 1 || len(state.Nodes) != 1 || state.KubeSystemUID == "" {
+		t.Fatalf("success without complete identity must not be claimed: state=%+v err=%v", state, err)
+	}
+	receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+	if err != nil || receipt.State != "SUCCEEDED_RETAINED" || receipt.ResourceState != "VERIFIED_RETAINED" || !receipt.KubeconfigSeen {
+		t.Fatalf("successful cluster not durably bound: receipt=%+v err=%v", receipt, err)
+	}
+	before := *calls
+	downErr := runLocalWithRuntime(context.Background(), []string{"down", "--name", name}, io.Discard, io.Discard, runtime)
+	if downErr == nil || *calls != before {
+		t.Fatalf("normal down must never delete a diagnostic cluster: err=%v calls=%d/%d", downErr, *calls, before)
+	}
+	var status strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"status", "--name", name, "--json"}, &status, io.Discard, runtime); err != nil || !strings.Contains(status.String(), `"state":"OWNED_CLUSTER_PRESENT"`) {
+		t.Fatalf("verified diagnostic cluster should be inspectable: output=%s err=%v", status.String(), err)
+	}
+	if err := os.Remove(localBootstrapDiagnosticPath(runtime.stateRoot, name)); err != nil {
+		t.Fatal(err)
+	}
+	before = *calls
+	downErr = runLocalWithRuntime(context.Background(), []string{"down", "--name", name}, io.Discard, io.Discard, runtime)
+	if downErr == nil || !strings.Contains(downErr.Error(), "without its required receipt") || *calls != before {
+		t.Fatalf("missing diagnostic receipt must still block deletion: err=%v calls=%d/%d", downErr, *calls, before)
+	}
+}
+
+func TestLocalDiagnoseBootstrapPreservesOtherIncompleteReceipts(t *testing.T) {
+	name := "ok-local-diagnostic-fresh"
+	runtime, calls, _ := diagnosticTestRuntime(t, name, "failure", errors.New("failure"), nil, false)
+	root := runtime.stateRoot
+	previous := []string{"ok-local-e2e-arash-20261105", "ok-local-e2e-arash-20261105-b", "ok-local-e2e-attempt3"}
+	before := map[string][2]string{}
+	for _, oldName := range previous {
+		dir := filepath.Join(root, "clusters", oldName)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for index, filename := range []string{"state.json", "kind.yaml"} {
+			contents := []byte("preserved-existing-evidence:" + oldName + ":" + filename)
+			path := filepath.Join(dir, filename)
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(contents)
+			pair := before[oldName]
+			pair[index] = hex.EncodeToString(digest[:])
+			before[oldName] = pair
+		}
+	}
+	if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime); err == nil || *calls != 1 {
+		t.Fatalf("expected one isolated diagnostic invocation, err=%v calls=%d", err, *calls)
+	}
+	for _, oldName := range previous {
+		for index, filename := range []string{"state.json", "kind.yaml"} {
+			contents, err := os.ReadFile(filepath.Join(root, "clusters", oldName, filename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(contents)
+			if got := hex.EncodeToString(digest[:]); got != before[oldName][index] {
+				t.Fatalf("existing evidence changed: %s/%s", oldName, filename)
+			}
+		}
+	}
+}
+
+func TestLocalDiagnoseBootstrapFailureResourceIdentityIsFailClosed(t *testing.T) {
+	name := "ok-local-diagnostic-identity"
+	goodName := localKindClusterName(name, localDiagnosticOwnerID) + "-control-plane"
+	cases := []struct {
+		name string
+		rows []localContainerIdentity
+		list bool
+		want string
+	}{
+		{"no resources", nil, false, "ABSENT"},
+		{"cluster without node", nil, true, "AMBIGUOUS"},
+		{"exact node", []localContainerIdentity{{ID: strings.Repeat("b", 64), Name: goodName, Role: "control-plane"}}, true, "VERIFIED_RETAINED"},
+		{"unexpected name", []localContainerIdentity{{ID: strings.Repeat("c", 64), Name: "unexpected-control-plane", Role: "control-plane"}}, true, "AMBIGUOUS"},
+		{"multiple nodes", []localContainerIdentity{{ID: strings.Repeat("d", 64), Name: goodName, Role: "control-plane"}, {ID: strings.Repeat("e", 64), Name: localKindClusterName(name, localDiagnosticOwnerID) + "-worker", Role: "worker"}}, true, "AMBIGUOUS"},
+		{"container without kind listing", []localContainerIdentity{{ID: strings.Repeat("f", 64), Name: goodName, Role: "control-plane"}}, false, "AMBIGUOUS"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, calls, _ := diagnosticTestRuntime(t, name, "unexpected failure", errors.New("failed"), test.rows, test.list)
+			if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime); err == nil {
+				t.Fatal("mock failure should produce terminal error")
+			}
+			receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+			if err != nil || receipt.ResourceState != test.want || *calls != 1 {
+				t.Fatalf("identity did not fail closed: receipt=%+v err=%v calls=%d", receipt, err, *calls)
+			}
+		})
+	}
+}
+
+func TestLocalDiagnoseBootstrapRejectsCollisionAndProviderDriftBeforeCreate(t *testing.T) {
+	name := "ok-local-diagnostic-collision"
+	root := newDiagnosticStateRoot(t)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/colima/docker.sock", DaemonID: "daemon-diagnostic"}
+	kindName := localKindClusterName(name, localDiagnosticOwnerID)
+	for _, test := range []struct {
+		name   string
+		run    localCommandRunner
+		pinned func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
+		want   string
+	}{
+		{name: "kind name collision", run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			if command == "kind" && strings.Join(args, " ") == "version" {
+				return []byte("kind v0.33.0"), nil
+			}
+			if command == "docker" {
+				joined := strings.Join(args, " ")
+				if joined == "context show" {
+					return []byte(provider.Context), nil
+				}
+				if strings.HasPrefix(joined, "context inspect ") {
+					return []byte(provider.Endpoint), nil
+				}
+				if strings.Contains(joined, "info --format") {
+					return []byte(provider.DaemonID), nil
+				}
+			}
+			return nil, errors.New("unexpected")
+		}, pinned: func(_ context.Context, _ localProviderIdentity, command string, args ...string) ([]byte, error) {
+			if command == "kind" && strings.Join(args, " ") == "get clusters" {
+				return []byte(kindName + "\n"), nil
+			}
+			return nil, errors.New("collision must stop before container lookup")
+		}, want: "already exists"},
+		{name: "provider changes before intent", run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			if command == "kind" && strings.Join(args, " ") == "version" {
+				return []byte("kind v0.33.0"), nil
+			}
+			if command == "docker" {
+				joined := strings.Join(args, " ")
+				if joined == "context show" {
+					return []byte(provider.Context), nil
+				}
+				if strings.HasPrefix(joined, "context inspect ") {
+					return []byte(provider.Endpoint), nil
+				}
+				if strings.Contains(joined, "info --format") {
+					return []byte(provider.DaemonID), nil
+				}
+			}
+			return nil, errors.New("unexpected")
+		}, pinned: func(context.Context, localProviderIdentity, string, ...string) ([]byte, error) {
+			return nil, errors.New("pinned call must not occur")
+		}, want: "identity changed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			callCount := 0
+			runtime := localRuntime{stateRoot: root, run: func(ctx context.Context, command string, args ...string) ([]byte, error) {
+				if test.name == "provider changes before intent" && command == "docker" && strings.Contains(strings.Join(args, " "), "info --format") {
+					callCount++
+					if callCount > 1 {
+						return []byte("different-daemon"), nil
+					}
+				}
+				return test.run(ctx, command, args...)
+			}, runPinned: test.pinned, newOwnerID: func() (string, error) { return localDiagnosticOwnerID, nil }, runKindCreate: func(context.Context, localProviderIdentity, string, ...string) ([]byte, bool, error) {
+				t.Fatal("Kind create must not be reached")
+				return nil, false, nil
+			}}
+			err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected preflight result: %v", err)
+			}
+			if _, statErr := os.Lstat(localStateFilePath(root, name)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("preflight failure wrote state: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestLocalDiagnosticReceiptCannotOverwriteOutcomeOrLeakTamperedConfig(t *testing.T) {
+	name := "ok-local-diagnostic-receipt"
+	runtime, _, _ := diagnosticTestRuntime(t, name, "failed", errors.New("failed"), nil, false)
+	if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime); err == nil {
+		t.Fatal("expected diagnostic failure")
+	}
+	receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.State = "SUCCEEDED_RETAINED"
+	if err := writeLocalBootstrapDiagnosticReceipt(runtime.stateRoot, receipt, true); err == nil {
+		t.Fatal("terminal receipt must not be overwritten")
+	}
+	configPath := filepath.Join(runtime.stateRoot, "clusters", name, "kind.yaml")
+	if err := os.WriteFile(configPath, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name); err == nil {
+		t.Fatal("changed config digest must invalidate diagnostic receipt")
+	}
+}
+
+func TestLocalKindMinimumVersion(t *testing.T) {
+	for _, test := range []struct {
+		output    string
+		supported bool
+	}{
+		{"kind v0.33.0 go1.27.0 darwin/arm64", true},
+		{"kind v0.34.1 go1.27.0 darwin/arm64", true},
+		{"kind v0.32.9 go1.27.0 darwin/arm64", false},
+		{"kind unknown", false},
+	} {
+		if got := localKindVersionSupported(test.output, localKindMinimumVersion); got != test.supported {
+			t.Fatalf("version %q supported=%v, want %v", test.output, got, test.supported)
+		}
 	}
 }
