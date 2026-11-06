@@ -348,6 +348,47 @@ func TestLocalResumeFailuresRemainFailClosed(t *testing.T) {
 	}
 }
 
+func TestKubectlStructuredOutputSeparatesStderrAndVerifiesEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "kubectl")
+	body := `#!/bin/sh
+case "$*" in
+  *"get deployment ok-console"*) printf '%s\n' '{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":1},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}' ;;
+  *"get service ok-console"*) printf '%s\n' '{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}' ;;
+  *"get endpoints ok-console"*) printf '%s\n' 'Warning: v1 Endpoints is deprecated; sensitive-token-must-not-leak' >&2; printf '%s\n' '{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}' ;;
+  *) exit 23 ;;
+esac
+`
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	state := localClusterState{Name: "resume-test", KindName: "resume-test-0123456789abcdef0123456789abcdef", Kubeconfig: "/private/kubeconfig"}
+	runtime := localRuntime{run: func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		return runLocalCommand(ctx, command, args...)
+	}}
+	if err := verifyLocalConsoleWorkload(context.Background(), runtime, state); err != nil {
+		t.Fatalf("structured JSON must parse despite stderr warning: %v", err)
+	}
+}
+
+func TestKubectlStructuredCommandFailureDoesNotLeakEitherStream(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "kubectl")
+	body := "#!/bin/sh\nprintf '%s\\n' '{\"credential\":\"stdout-sensitive-value\"}'\nprintf '%s\\n' 'stderr-sensitive-value' >&2\nexit 19\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := runLocalCommand(context.Background(), "kubectl", "--kubeconfig", "/private/test", "--context", "kind-test", "get", "endpoints", "ok-console", "-o", "json")
+	if err == nil || output != nil || !strings.Contains(err.Error(), "exit 19") {
+		t.Fatalf("nonzero structured command must fail closed without output: output=%q err=%v", output, err)
+	}
+	if strings.Contains(err.Error(), "stdout-sensitive-value") || strings.Contains(err.Error(), "stderr-sensitive-value") {
+		t.Fatalf("structured command error leaked process output: %v", err)
+	}
+}
+
 func TestLocalUpPersistsIntentBeforeSingleVerifierCallAndStopsIncomplete(t *testing.T) {
 	root, fixture := localStateFixture(t)
 	if err := os.RemoveAll(filepath.Join(root, "clusters", fixture.Name)); err != nil {
