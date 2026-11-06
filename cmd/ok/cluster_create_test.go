@@ -34,6 +34,7 @@ func TestHierarchicalHelp(t *testing.T) {
 		"local":                    {[]string{"local", "--help"}, []string{"ok local <command>", "fixture profile", "resume", "OK-147"}},
 		"local up":                 {[]string{"local", "up", "--help"}, []string{"ok local up [--name ok-local]", "INCOMPLETE", "no automatic retry"}},
 		"local resume":             {[]string{"local", "resume", "--help"}, []string{"ok local resume [--name ok-local]", "INCOMPLETE", "never creates or redeploys"}},
+		"local reconnect":          {[]string{"local", "reconnect", "--help"}, []string{"ok local reconnect [--name ok-local]", "READY receipt", "Refuses an active"}},
 		"local status":             {[]string{"local", "status", "--help"}, []string{"isolated kubeconfig", "Read-only"}},
 		"local down":               {[]string{"local", "down", "--help"}, []string{"ok/no confirmation", "No state file"}},
 		"local diagnose":           {[]string{"local", "diagnose", "--help"}, []string{"ok local diagnose bootstrap", "owner-controlled inspection"}},

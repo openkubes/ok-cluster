@@ -471,6 +471,222 @@ func TestDetachedLocalForwardSurvivesLauncherExit(t *testing.T) {
 	}
 }
 
+func localReconnectFixture(t *testing.T) (string, localClusterState, localForwardIdentity) {
+	t.Helper()
+	root, state := localStateFixture(t)
+	old := localForwardIdentity{PID: 4321, OwnerID: state.OwnerID, StartedAt: "old-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+	state.Forward = &old
+	if err := writeLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	return root, state, old
+}
+
+func localReconnectCommandRunner(state localClusterState) localCommandRunner {
+	base := localOwnershipRunner(state, state.OwnerID, true, nil)
+	return func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if command == "kubectl" {
+			switch {
+			case strings.Contains(joined, "get deployment ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":2},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}`), nil
+			case strings.Contains(joined, "get service ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}`), nil
+			case strings.Contains(joined, "get endpoints ok-console -o json"):
+				return []byte(`{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}`), nil
+			}
+		}
+		return base(ctx, command, args...)
+	}
+}
+
+func TestLocalReconnectRestoresOneMissingForward(t *testing.T) {
+	root, state, old := localReconnectFixture(t)
+	newForward := localForwardIdentity{PID: 5678, OwnerID: state.OwnerID, StartedAt: "new-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("b", 64)}
+	startCalls, httpCalls, portCalls := 0, 0, 0
+	var commands []string
+	runtime := localRuntime{
+		stateRoot: root,
+		run: func(ctx context.Context, command string, args ...string) ([]byte, error) {
+			commands = append(commands, command+" "+strings.Join(args, " "))
+			return localReconnectCommandRunner(state)(ctx, command, args...)
+		},
+		inspectForward: func(identity localForwardIdentity) (localForwardProcessState, error) {
+			if identity == old {
+				return localForwardAbsent, nil
+			}
+			if identity == newForward {
+				return localForwardMatches, nil
+			}
+			return "", errors.New("unexpected process identity")
+		},
+		checkLocalPort: func(port int) error {
+			portCalls++
+			if port != 18787 {
+				t.Fatalf("unexpected reconnect port: %d", port)
+			}
+			return nil
+		},
+		startForward: func(_ context.Context, got localClusterState) (localForwardIdentity, error) {
+			startCalls++
+			if got.Phase != "CLUSTER_READY" || got.Forward != nil {
+				t.Fatalf("start must follow durable no-forward receipt: %+v", got)
+			}
+			if !strings.Contains(strings.Join(commands, "\n"), "get endpoints ok-console -o json") {
+				t.Fatal("forward started before provider, ownership and Console workload checks")
+			}
+			return newForward, nil
+		},
+		waitConsole: func(context.Context, int) error { httpCalls++; return nil },
+		stopForward: func(localForwardIdentity) error {
+			t.Fatal("reconnect must not stop or signal the old mismatched process")
+			return nil
+		},
+	}
+	var output strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"reconnect", "--name", state.Name}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if startCalls != 1 || httpCalls != 1 || portCalls != 1 || !strings.Contains(output.String(), "http://127.0.0.1:18787") {
+		t.Fatalf("unexpected reconnect counts/output: starts=%d http=%d port=%d output=%q", startCalls, httpCalls, portCalls, output.String())
+	}
+	got, err := readLocalClusterState(root, state.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "READY" || got.Forward == nil || *got.Forward != newForward {
+		t.Fatalf("new verified forward not persisted as READY: %+v", got)
+	}
+	for _, command := range commands {
+		if strings.Contains(command, "create") || strings.Contains(command, "apply") || strings.Contains(command, "delete") || strings.Contains(command, "current-context") {
+			t.Fatalf("reconnect attempted a resource mutation or global context lookup: %s", command)
+		}
+	}
+}
+
+func TestLocalReconnectRefusesActiveOrAmbiguousOldForward(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state localForwardProcessState
+		err   error
+	}{
+		{name: "active", state: localForwardMatches},
+		{name: "ambiguous", err: errors.New("cannot inspect process")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, state, old := localReconnectFixture(t)
+			contacted, started := false, false
+			runtime := localRuntime{stateRoot: root,
+				run:            func(context.Context, string, ...string) ([]byte, error) { contacted = true; return nil, nil },
+				inspectForward: func(localForwardIdentity) (localForwardProcessState, error) { return tc.state, tc.err },
+				startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+					started = true
+					return localForwardIdentity{}, nil
+				},
+			}
+			err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime)
+			if err == nil || contacted || started {
+				t.Fatalf("active/ambiguous old process must stop before API contact: err=%v contacted=%v started=%v", err, contacted, started)
+			}
+			got, readErr := readLocalClusterState(root, state.Name)
+			if readErr != nil || got.Phase != "READY" || got.Forward == nil || *got.Forward != old {
+				t.Fatalf("refused reconnect must preserve original state: state=%+v err=%v", got, readErr)
+			}
+		})
+	}
+}
+
+func TestLocalReconnectDoesNotSignalReusedOrMismatchedPID(t *testing.T) {
+	root, state, old := localReconnectFixture(t)
+	// Use the live test process PID but deliberately mismatched start/command
+	// identity. Classification must be PID_REUSED and reconnect must not signal it.
+	old.PID = os.Getpid()
+	old.StartedAt = "not-the-current-process-start"
+	state.Forward = &old
+	if err := updateLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	newForward := localForwardIdentity{PID: 6789, OwnerID: state.OwnerID, StartedAt: "new-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("c", 64)}
+	stopCalls, startCalls := 0, 0
+	inspect := func(identity localForwardIdentity) (localForwardProcessState, error) {
+		if identity == old {
+			return inspectLocalForwardProcess(identity)
+		}
+		if identity == newForward {
+			return localForwardMatches, nil
+		}
+		return "", errors.New("unexpected identity")
+	}
+	runtime := localRuntime{stateRoot: root, run: localReconnectCommandRunner(state), inspectForward: inspect,
+		checkLocalPort: func(int) error { return nil },
+		startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+			startCalls++
+			return newForward, nil
+		},
+		waitConsole: func(context.Context, int) error { return nil },
+		stopForward: func(localForwardIdentity) error { stopCalls++; return nil },
+	}
+	if err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if startCalls != 1 || stopCalls != 0 {
+		t.Fatalf("identity-mismatched PID must never be signaled: starts=%d stops=%d", startCalls, stopCalls)
+	}
+}
+
+func TestLocalReconnectPortConflictAndHealthFailureKeepAccurateState(t *testing.T) {
+	t.Run("port conflict", func(t *testing.T) {
+		root, state, old := localReconnectFixture(t)
+		starts := 0
+		runtime := localRuntime{stateRoot: root, run: localReconnectCommandRunner(state), inspectForward: func(localForwardIdentity) (localForwardProcessState, error) { return localForwardAbsent, nil },
+			checkLocalPort: func(int) error { return errors.New("occupied") },
+			startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+				starts++
+				return localForwardIdentity{}, nil
+			},
+		}
+		err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime)
+		if err == nil || starts != 0 {
+			t.Fatalf("occupied port must not start a forward: err=%v starts=%d", err, starts)
+		}
+		got, readErr := readLocalClusterState(root, state.Name)
+		if readErr != nil || got.Phase != "CLUSTER_READY" || got.Forward != nil || (got.Forward != nil && *got.Forward == old) {
+			t.Fatalf("port conflict must leave accurate no-forward state: %+v err=%v", got, readErr)
+		}
+	})
+	t.Run("HTTP failure", func(t *testing.T) {
+		root, state, old := localReconnectFixture(t)
+		newForward := localForwardIdentity{PID: 7890, OwnerID: state.OwnerID, StartedAt: "new-start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("d", 64)}
+		starts, stops := 0, 0
+		inspect := func(identity localForwardIdentity) (localForwardProcessState, error) {
+			if identity == old {
+				return localForwardAbsent, nil
+			}
+			if identity == newForward {
+				return localForwardMatches, nil
+			}
+			return "", errors.New("unexpected identity")
+		}
+		runtime := localRuntime{stateRoot: root, run: localReconnectCommandRunner(state), inspectForward: inspect,
+			checkLocalPort: func(int) error { return nil },
+			startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+				starts++
+				return newForward, nil
+			},
+			waitConsole: func(context.Context, int) error { return errors.New("http unavailable") },
+			stopForward: func(localForwardIdentity) error { stops++; return nil },
+		}
+		err := runLocalWithRuntime(context.Background(), []string{"reconnect"}, io.Discard, io.Discard, runtime)
+		if err == nil || starts != 1 || stops != 0 {
+			t.Fatalf("health failure must not retry or discard verified process evidence: err=%v starts=%d stops=%d", err, starts, stops)
+		}
+		got, readErr := readLocalClusterState(root, state.Name)
+		if readErr != nil || got.Phase != "CLUSTER_READY" || got.Forward == nil || *got.Forward != newForward {
+			t.Fatalf("health failure must preserve the new process identity in recoverable state: %+v err=%v", got, readErr)
+		}
+	})
+}
+
 func TestLocalUpPersistsIntentBeforeSingleVerifierCallAndStopsIncomplete(t *testing.T) {
 	root, fixture := localStateFixture(t)
 	if err := os.RemoveAll(filepath.Join(root, "clusters", fixture.Name)); err != nil {

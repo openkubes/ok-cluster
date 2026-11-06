@@ -288,6 +288,8 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 		return runLocalUp(ctx, arguments[1:], runtime, stdout, stderr)
 	case "resume":
 		return runLocalResume(ctx, arguments[1:], runtime, stdout, stderr)
+	case "reconnect":
+		return runLocalReconnect(ctx, arguments[1:], runtime, stdout, stderr)
 	case "status":
 		return runLocalStatus(ctx, arguments[1:], runtime, stdout)
 	case "down":
@@ -298,7 +300,7 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 		}
 		return runLocalDiagnoseBootstrap(ctx, arguments[2:], runtime, stdout, stderr)
 	default:
-		return errors.New("use ok local up, ok local resume, ok local status, or ok local down; see ok local --help")
+		return errors.New("use ok local up, ok local resume, ok local reconnect, ok local status, or ok local down; see ok local --help")
 	}
 }
 
@@ -572,6 +574,114 @@ func runLocalResume(ctx context.Context, arguments []string, runtime localRuntim
 	state.Phase = "READY"
 	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
 		return fmt.Errorf("Console health passed but READY receipt could not be persisted: %w", err)
+	}
+	_, err = fmt.Fprintf(stdout, "OpenKubes Console is ready: http://127.0.0.1:%d\n", localConsoleDefaultPort)
+	return err
+}
+
+func runLocalReconnect(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok local reconnect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	name := flags.String("name", localClusterDefaultName, "Managed local kind cluster name")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) {
+		return errors.New("ok local reconnect accepts no positional arguments and requires a valid --name")
+	}
+	state, err := readLocalClusterState(runtime.stateRoot, *name)
+	if err != nil {
+		return fmt.Errorf("cannot read existing local ownership state: %w", err)
+	}
+	if state.Format != localClusterStateFormat || state.Phase != "READY" || state.Forward == nil {
+		return errors.New("ok local reconnect requires an existing v3 READY receipt with a managed forward identity")
+	}
+	if err := validateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("local ownership state is invalid; refusing reconnect: %w", err)
+	}
+	if _, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, *name); err == nil {
+		return errors.New("bootstrap diagnostic receipt exists; refusing local reconnect")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("bootstrap diagnostic receipt is invalid; refusing local reconnect")
+	}
+	inspect := runtime.inspectForward
+	if inspect == nil {
+		inspect = inspectLocalForwardProcess
+	}
+	oldForwardState, err := inspect(*state.Forward)
+	if err != nil {
+		return errors.New("could not safely classify the recorded port-forward; refusing reconnect")
+	}
+	switch oldForwardState {
+	case localForwardMatches:
+		return errors.New("recorded port-forward is still active; refusing to start a second forward")
+	case localForwardAbsent, localForwardPIDReused:
+		// Never signal an absent or identity-mismatched PID.
+	default:
+		return errors.New("recorded port-forward state is ambiguous; refusing reconnect")
+	}
+
+	// Persist that the old process is no longer managed before any later check
+	// can fail. This keeps the receipt from claiming a live forward on failure.
+	state.Phase = "CLUSTER_READY"
+	state.Forward = nil
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("could not persist the missing-forward recovery boundary: %w", err)
+	}
+
+	owned, present, err := observeLocalOwnership(ctx, runtime, state)
+	if err != nil {
+		return errors.New("could not verify the pinned provider, Kind containers, kubeconfig and Kubernetes ownership; reconnect stopped")
+	}
+	if !present || !owned {
+		return errors.New("live cluster identity does not match the READY receipt; reconnect stopped")
+	}
+	if err := verifyLocalConsoleWorkload(ctx, runtime, state); err != nil {
+		return errors.New("existing Console Deployment or Service is not healthy; reconnect stopped")
+	}
+	checkPort := runtime.checkLocalPort
+	if checkPort == nil {
+		checkPort = ensureLocalPortAvailable
+	}
+	if err := checkPort(localConsoleDefaultPort); err != nil {
+		return errors.New("loopback port 127.0.0.1:18787 is not available; no forward was started")
+	}
+	startForward := runtime.startForward
+	if startForward == nil {
+		startForward = startLocalForward
+	}
+	forward, err := startForward(ctx, state)
+	if err != nil {
+		return errors.New("could not start one detached local Console forward; receipt remains CLUSTER_READY")
+	}
+	if forward.OwnerID != state.OwnerID || forward.PID <= 0 || forward.StartedAt == "" || !filepath.IsAbs(forward.Executable) || !sha256DigestPattern.MatchString(forward.ArgumentsSHA256) {
+		return errors.New("new port-forward did not return a valid managed process identity; receipt remains CLUSTER_READY")
+	}
+	processState, inspectErr := inspect(forward)
+	if inspectErr != nil || processState != localForwardMatches {
+		return errors.New("new port-forward process identity could not be verified; receipt remains CLUSTER_READY")
+	}
+	state.Forward = &forward
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		stop := runtime.stopForward
+		if stop == nil {
+			stop = stopLocalForward
+		}
+		if stopErr := stop(forward); stopErr != nil {
+			return errors.New("could not persist or safely stop the new port-forward; inspect the CLUSTER_READY receipt and process")
+		}
+		return errors.New("could not persist the new port-forward identity; verified process was stopped and receipt remains CLUSTER_READY")
+	}
+	checkHTTP := runtime.waitConsole
+	if checkHTTP == nil {
+		checkHTTP = waitLocalConsole
+	}
+	if err := checkHTTP(ctx, localConsoleDefaultPort); err != nil {
+		return errors.New("Console HTTP health is unavailable; verified process identity is retained in CLUSTER_READY state")
+	}
+	state.Phase = "READY"
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return errors.New("Console HTTP health passed but READY state could not be persisted; verified forward remains recorded")
 	}
 	_, err = fmt.Fprintf(stdout, "OpenKubes Console is ready: http://127.0.0.1:%d\n", localConsoleDefaultPort)
 	return err
@@ -2439,6 +2549,7 @@ Usage:
 Commands:
   up       Create a dedicated kind cluster and deploy the local Console demo
   resume   Verify and resume an existing owner-bound INCOMPLETE installation
+  reconnect Restore a missing owner-bound Console port-forward without redeploying
   status   Verify local cluster ownership and Console health
   down     Confirm and delete only a cluster whose live identity matches its receipt
   diagnose Run one explicit Kind bootstrap diagnostic without deploying Console
@@ -2455,6 +2566,8 @@ func writeLocalCommandHelp(command string, output io.Writer) {
 		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n\nCreates one owner-labeled local kind cluster and deploys the Console local-kind fixture profile. Requires Docker, kind, kubectl, and an ok-console checkout. Interrupted runs stop in INCOMPLETE; no automatic retry.\n")
 	case "resume":
 		fmt.Fprint(output, "Usage: ok local resume [--name ok-local]\n\nResumes only an existing owner-bound INCOMPLETE installation. Rechecks Docker, Kind, Kubernetes identities, the isolated kubeconfig and the existing Console workload before starting the managed loopback port-forward. It never creates or redeploys resources or replaces kubeconfig.\n")
+	case "reconnect":
+		fmt.Fprint(output, "Usage: ok local reconnect [--name ok-local]\n\nRestores one missing managed Console port-forward from a valid READY receipt after rechecking provider, cluster ownership, kubeconfig, Console health and port availability. Refuses an active or ambiguous prior process. It never creates or redeploys Kubernetes resources.\n")
 	case "status":
 		fmt.Fprint(output, "Usage: ok local status [--name ok-local] [--json]\n\nRead-only ownership and Console health inspection through the isolated kubeconfig. Reports forward-process loss, identity mismatch, HTTP unavailability, or READY separately.\n")
 	case "down":
