@@ -510,6 +510,76 @@ func TestCompareKindKubeconfigBindsEndpointAndCredentials(t *testing.T) {
 	}
 }
 
+func TestRunLocalCommandPinnedSeparatesKindKubeconfigStreams(t *testing.T) {
+	binDir := t.TempDir()
+	envCapture := filepath.Join(t.TempDir(), "kind-env.txt")
+	kindName := "ok-local-kubeconfig-0123456789abcdef0123456789abcdef"
+	kindOutput := strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+kindName)
+	script := `#!/bin/sh
+printf '%s\n' "$DOCKER_HOST" "$KIND_EXPERIMENTAL_PROVIDER" "$DOCKER_CONTEXT" > "$LOCAL_KIND_ENV_CAPTURE"
+printf '%s\n' 'using docker due to KIND_EXPERIMENTAL_PROVIDER' 'stderr-private-token-marker' >&2
+cat <<'LOCAL_KUBECONFIG'
+` + kindOutput + `
+LOCAL_KUBECONFIG
+`
+	writeMockKindExecutable(t, binDir, script)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DOCKER_CONTEXT", "untrusted-context")
+	t.Setenv("DOCKER_HOST", "tcp://untrusted.example:2375")
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	t.Setenv("LOCAL_KIND_ENV_CAPTURE", envCapture)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///private/colima.sock", DaemonID: "test-daemon"}
+
+	stdout, err := runLocalCommandPinned(context.Background(), provider, "kind", "get", "kubeconfig", "--name", kindName)
+	if err != nil {
+		t.Fatalf("mock Kind kubeconfig command failed: %v", err)
+	}
+	if strings.Contains(string(stdout), "using docker due to KIND_EXPERIMENTAL_PROVIDER") || strings.Contains(string(stdout), "stderr-private-token-marker") {
+		t.Fatal("stderr reached kubeconfig output")
+	}
+	privateKubeconfig := []byte(strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+kindName))
+	if err := compareKindKubeconfig(stdout, privateKubeconfig, "kind-"+kindName); err != nil {
+		t.Fatalf("stdout kubeconfig with provider notice on stderr should compare successfully: %v", err)
+	}
+	env, err := os.ReadFile(envCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(env), provider.Endpoint+"\ndocker\n\n"; got != want {
+		t.Fatalf("pinned Kind environment differs: got=%q want=%q", got, want)
+	}
+}
+
+func TestRunLocalCommandPinnedKindKubeconfigFailureDoesNotLeakStderr(t *testing.T) {
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+printf '%s\n' 'using docker due to KIND_EXPERIMENTAL_PROVIDER' 'private-token-marker' >&2
+printf '%s\n' 'private-kubeconfig-marker'
+exit 23
+`
+	writeMockKindExecutable(t, binDir, script)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///private/colima.sock", DaemonID: "test-daemon"}
+
+	stdout, err := runLocalCommandPinned(context.Background(), provider, "kind", "get", "kubeconfig", "--name", "ok-local-failed")
+	if err == nil || len(stdout) != 0 {
+		t.Fatalf("nonzero Kind exit must fail closed with no output: stdout_len=%d err=%v", len(stdout), err)
+	}
+	for _, private := range []string{"using docker due to KIND_EXPERIMENTAL_PROVIDER", "private-token-marker", "private-kubeconfig-marker"} {
+		if strings.Contains(err.Error(), private) || strings.Contains(string(stdout), private) {
+			t.Fatalf("Kind stderr/stdout leaked in failure: %v", err)
+		}
+	}
+}
+
+func writeMockKindExecutable(t *testing.T, binDir, script string) {
+	t.Helper()
+	path := filepath.Join(binDir, "kind")
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLocalStateIsPrivateCreateOnlyAndStrict(t *testing.T) {
 	root, state := localStateFixture(t)
 	if err := writeLocalClusterState(root, state.Name, state); err != nil {

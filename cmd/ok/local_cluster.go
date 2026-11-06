@@ -166,6 +166,9 @@ func defaultLocalRuntime() localRuntime {
 
 func runLocalCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, arguments...)
+	if isLocalKindKubeconfigCommand(name, arguments) {
+		return runLocalStdoutOnly(command, name, arguments...)
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		if name == "kind" && len(arguments) >= 2 && arguments[0] == "get" && arguments[1] == "kubeconfig" {
@@ -186,12 +189,31 @@ func runLocalCommandPinned(ctx context.Context, provider localProviderIdentity, 
 		env = append(env, item)
 	}
 	command.Env = append(env, "DOCKER_HOST="+provider.Endpoint, "KIND_EXPERIMENTAL_PROVIDER=docker")
+	if isLocalKindKubeconfigCommand(name, arguments) {
+		return runLocalStdoutOnly(command, name, arguments...)
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		if name == "kind" && len(arguments) >= 2 && arguments[0] == "get" && arguments[1] == "kubeconfig" {
 			return nil, fmt.Errorf("%s %s failed: %w", name, strings.Join(arguments, " "), err)
 		}
 		return output, fmt.Errorf("%s %s failed: %w: %s", name, strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+	}
+	return output, nil
+}
+
+func isLocalKindKubeconfigCommand(name string, arguments []string) bool {
+	return name == "kind" && len(arguments) >= 2 && arguments[0] == "get" && arguments[1] == "kubeconfig"
+}
+
+func runLocalStdoutOnly(command *exec.Cmd, name string, arguments ...string) ([]byte, error) {
+	// Kind may write provider-selection notices to stderr. Keep that stream
+	// separate so only kubeconfig YAML on stdout reaches the parser.
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("%s %s failed: %w", name, strings.Join(arguments, " "), err)
 	}
 	return output, nil
 }
