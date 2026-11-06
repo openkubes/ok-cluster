@@ -35,6 +35,7 @@ const (
 	localConsoleDefaultPort = 18787
 	localOwnerLabel         = "cli.openkubes.io/local-owner"
 	localKindMinimumVersion = "0.33.0"
+	localKindMaxNameLength  = 50
 )
 
 var localOwnerIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -102,9 +103,13 @@ type localRuntime struct {
 	stopForward    func(localForwardIdentity) error
 }
 
-type localVerifierFailure struct{ diagnostic string }
+type localVerifierFailure struct {
+	stage    string
+	code     string
+	exitCode string
+}
 
-func (failure localVerifierFailure) Error() string { return failure.diagnostic }
+func (failure localVerifierFailure) Error() string { return formatLocalVerifierFailure(failure) }
 
 type localForwardProcessState string
 
@@ -407,7 +412,7 @@ func runLocalConsoleVerifier(ctx context.Context, script string, env map[string]
 	command.Env = childEnv
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return localVerifierFailure{diagnostic: localVerifierDiagnostic(output, err)}
+		return classifyLocalVerifierFailure(output, err)
 	}
 	return nil
 }
@@ -415,44 +420,60 @@ func runLocalConsoleVerifier(ctx context.Context, script string, env map[string]
 func safeLocalVerifierFailure(err error) string {
 	var failure localVerifierFailure
 	if errors.As(err, &failure) {
-		return failure.diagnostic
+		return formatLocalVerifierFailure(failure)
 	}
-	return "verifier failed; raw command output was suppressed to protect credentials and private configuration"
+	return "local verifier failed [stage=unknown code=UNKNOWN]; raw output suppressed"
 }
 
 func localVerifierDiagnostic(output []byte, err error) string {
+	return formatLocalVerifierFailure(classifyLocalVerifierFailure(output, err))
+}
+
+var localVerifierDiagnosticCodes = map[string]string{
+	"KIND_NAME_TOO_LONG":           "preflight",
+	"KIND_LIST_FAILED":             "kind_inventory",
+	"KIND_CONFIG_OR_CREATE_FAILED": "kind_create",
+	"IMAGE_OR_DEPLOY_FAILED":       "image_deploy",
+	"TEMP_FILE_PREPARATION_FAILED": "temp_file",
+	"UNKNOWN":                      "unknown",
+}
+
+var localVerifierDiagnosticPattern = regexp.MustCompile(`^OK_LOCAL_DIAGNOSTIC stage=([a-z_]+) code=([A-Z_]+)$`)
+
+func classifyLocalVerifierFailure(output []byte, err error) localVerifierFailure {
 	status := "unknown"
 	var exitError *exec.ExitError
 	if errors.As(err, &exitError) {
 		status = strconv.Itoa(exitError.ExitCode())
 	}
-	text := string(output)
-	switch {
-	case strings.Contains(text, "Required command not found:"):
-		matches := regexp.MustCompile(`Required command not found: ([A-Za-z0-9._-]+)`).FindStringSubmatch(text)
-		if len(matches) == 2 && (matches[1] == "docker" || matches[1] == "kind" || matches[1] == "kubectl" || matches[1] == "curl" || matches[1] == "git") {
-			return fmt.Sprintf("required local tool %q is missing (verifier exit %s)", matches[1], status)
-		}
-		return "a required local tool is missing (verifier exit " + status + ")"
-	case strings.Contains(text, "dirty worktree") || strings.Contains(text, "source tree is dirty"):
-		return "the Console checkout is not clean; keep the source-tree check intact (verifier exit " + status + ")"
-	case strings.Contains(text, "already exists; refusing to modify an unowned cluster"):
-		return "the owner-specific Kind name already exists; verifier refused adoption (exit " + status + ")"
-	case strings.Contains(text, "OK_CONSOLE_KIND_CLUSTER must be a lowercase DNS label"):
-		return "the generated Kind cluster name is invalid or exceeds the 63-character DNS-label limit (verifier exit " + status + ")"
-	case strings.Contains(text, "Isolated kubeconfig destination already exists"):
-		return "the isolated kubeconfig path already exists; verifier refused to overwrite it (exit " + status + ")"
-	case strings.Contains(text, "must be supplied together") || strings.Contains(text, "paths must be absolute") || strings.Contains(text, "Kind config must be"):
-		return "isolated Kind config/kubeconfig inputs failed validation (verifier exit " + status + ")"
-	case strings.Contains(text, "port-forward") || strings.Contains(text, "Live health probe failed"):
-		return "Console loopback forwarding or health verification failed (verifier exit " + status + ")"
-	case strings.Contains(text, "Deployment ok-console") || strings.Contains(text, "ReplicaSet") || strings.Contains(text, "Current ReplicaSet"):
-		return "Console deployment readiness verification failed (verifier exit " + status + ")"
-	case strings.Contains(text, "Image revision") || strings.Contains(text, "Rendered local manifest"):
-		return "Console image or rendered-manifest verification failed (verifier exit " + status + ")"
-	default:
-		return "Console verifier stopped before successful deployment verification (exit " + status + "); raw output was suppressed"
+	failure := localVerifierFailure{stage: "unknown", code: "UNKNOWN", exitCode: status}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 {
+		return failure
 	}
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	matches := localVerifierDiagnosticPattern.FindStringSubmatch(lastLine)
+	if len(matches) != 3 {
+		return failure
+	}
+	wantStage, allowed := localVerifierDiagnosticCodes[matches[2]]
+	if !allowed || matches[1] != wantStage {
+		return failure
+	}
+	failure.stage = matches[1]
+	failure.code = matches[2]
+	return failure
+}
+
+func formatLocalVerifierFailure(failure localVerifierFailure) string {
+	wantStage, allowed := localVerifierDiagnosticCodes[failure.code]
+	if !allowed || failure.stage != wantStage {
+		failure.stage, failure.code = "unknown", "UNKNOWN"
+	}
+	if failure.exitCode != "" && regexp.MustCompile(`^[0-9]+$`).MatchString(failure.exitCode) {
+		return fmt.Sprintf("local verifier failed [stage=%s code=%s] (exit %s); raw output suppressed", failure.stage, failure.code, failure.exitCode)
+	}
+	return fmt.Sprintf("local verifier failed [stage=%s code=%s]; raw output suppressed", failure.stage, failure.code)
 }
 
 func writePrivateNewFile(path string, contents []byte) error {
@@ -989,7 +1010,7 @@ func validateLocalClusterState(root, name string, state localClusterState) error
 	if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 || dirInfo.Mode().Perm()&0o077 != 0 {
 		return errors.New("cluster state directory must be private (0700 or stricter), not a symlink")
 	}
-	if (state.Format != localClusterStateFormat && state.Format != "ok-cli-local-cluster/v2") || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) || state.KindName != localKindClusterName(name, state.OwnerID) {
+	if (state.Format != localClusterStateFormat && state.Format != "ok-cli-local-cluster/v2") || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) || !localKindClusterNameMatchesReceipt(name, state.OwnerID, state.KindName) {
 		return errors.New("unsupported local state format, cluster name or owner identifier")
 	}
 	if state.Format == localClusterStateFormat && (state.Phase == "CREATING" || state.Phase == "INCOMPLETE") {
@@ -1207,9 +1228,36 @@ func sameLocalContainers(a, b []localContainerIdentity) bool {
 }
 
 func localKindClusterName(name, ownerID string) string {
-	// The full random owner ID makes accidental same-name replacement extremely unlikely.
-	// The logical name is bounded so the resulting DNS label remains <= 63 characters.
-	return name + "-" + ownerID
+	// Keep the full random owner ID as the collision-resistant suffix and shorten
+	// only the readable prefix to fit the shared 50-character Kind contract.
+	prefixLimit := localKindMaxNameLength - len(ownerID) - 1
+	if prefixLimit < 1 {
+		return ""
+	}
+	prefix := name
+	if len(prefix) > prefixLimit {
+		prefix = prefix[:prefixLimit]
+	}
+	prefix = strings.TrimRight(prefix, "-")
+	if prefix == "" {
+		return ""
+	}
+	return prefix + "-" + ownerID
+}
+
+func validLocalKindClusterName(name string) bool {
+	return len(name) <= localKindMaxNameLength && localKindClusterNamePattern.MatchString(name)
+}
+
+func localKindClusterNameMatchesReceipt(name, ownerID, kindName string) bool {
+	if kindName == localKindClusterName(name, ownerID) {
+		return true
+	}
+	// Existing v3 receipts used the full logical name before the verifier's
+	// 50-character contract. Continue to read those owner-bound receipts so a
+	// prior installation can still be inspected or cleaned up safely.
+	legacyName := name + "-" + ownerID
+	return len(legacyName) <= 63 && localKindClusterNamePattern.MatchString(legacyName) && kindName == legacyName
 }
 
 func compareKindKubeconfig(kindRaw, privateRaw []byte, expectedContext string) error {
@@ -1310,8 +1358,8 @@ func renderKindOwnershipConfig(name, ownerID string) ([]byte, error) {
 		return nil, errors.New("invalid kind cluster name or owner identifier")
 	}
 	kindName := localKindClusterName(name, ownerID)
-	if !localKindClusterNamePattern.MatchString(kindName) {
-		return nil, errors.New("generated Kind cluster name does not fit the 63-character DNS-label contract")
+	if !validLocalKindClusterName(kindName) {
+		return nil, errors.New("generated Kind cluster name does not fit the 50-character DNS-label contract")
 	}
 	config := fmt.Sprintf(`kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4

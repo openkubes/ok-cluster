@@ -356,13 +356,21 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 	if first == second || !localOwnerIDPattern.MatchString(first) {
 		t.Fatalf("owner IDs must be unique 128-bit lowercase hex values: %q %q", first, second)
 	}
-	incidentName := localKindClusterName("ok-local-e2e-arash-20261105", "edd83ae5428019db1593dd56e6105916")
-	if len(incidentName) != 60 || !localKindClusterNamePattern.MatchString(incidentName) {
-		t.Fatalf("the previously rejected owner name must fit the shared Kind contract: %q length=%d", incidentName, len(incidentName))
+	for _, logicalName := range []string{"ok-local-e2e-arash-20261105", "ok-local-e2e-arash-20261105-b"} {
+		generated := localKindClusterName(logicalName, first)
+		if len(generated) > localKindMaxNameLength || !validLocalKindClusterName(generated) || !strings.HasSuffix(generated, "-"+first) {
+			t.Fatalf("logical name %q must produce a <=50-character Kind name with the complete owner ID: %q length=%d", logicalName, generated, len(generated))
+		}
 	}
-	maximumName := localKindClusterName(strings.Repeat("a", 30), first)
-	if len(maximumName) != 63 || !localKindClusterNamePattern.MatchString(maximumName) {
-		t.Fatalf("maximum generated owner name must be a valid 63-character DNS label: %q length=%d", maximumName, len(maximumName))
+	maximumName := strings.Repeat("a", localKindMaxNameLength-len(first)-1) + "-" + first
+	if len(maximumName) != 50 || !validLocalKindClusterName(maximumName) {
+		t.Fatalf("50-character Kind DNS label must be accepted: %q length=%d", maximumName, len(maximumName))
+	}
+	if validLocalKindClusterName(maximumName + "a") {
+		t.Fatal("51-character Kind DNS label must be rejected")
+	}
+	if got := localKindClusterName("ok-local-e2e-arash-20261105", first); got == localKindClusterName("ok-local-e2e-arash-20261105-b", second) {
+		t.Fatal("truncated readable prefixes must not collapse distinct owner identities")
 	}
 	config, err := renderKindOwnershipConfig(localClusterDefaultName, first)
 	if err != nil {
@@ -405,7 +413,48 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 		t.Fatal("invalid cluster name accepted")
 	}
 	if _, err := renderKindOwnershipConfig(strings.Repeat("a", 31), first); err == nil {
-		t.Fatal("logical name that makes the actual DNS label exceed 63 characters accepted")
+		t.Fatal("invalid logical cluster name accepted")
+	}
+}
+
+func TestLocalKindNameShortensOnlyReadablePrefixAndPersistsLogicalName(t *testing.T) {
+	ownerID := "edd83ae5428019db1593dd56e6105916"
+	for _, logicalName := range []string{"ok-local-e2e-arash-20261105", "ok-local-e2e-arash-20261105-b"} {
+		t.Run(logicalName, func(t *testing.T) {
+			privateParent := filepath.Join(t.TempDir(), "private")
+			if err := os.Mkdir(privateParent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(privateParent, "ok-local")
+			clusterDir := filepath.Join(root, "clusters", logicalName)
+			if err := os.MkdirAll(clusterDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			kindName := localKindClusterName(logicalName, ownerID)
+			state := localClusterState{
+				Format: localClusterStateFormat, Phase: "CREATING", Name: logicalName, OwnerID: ownerID,
+				KindName: kindName, Provider: localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/docker.sock", DaemonID: "daemon"},
+				Kubeconfig: filepath.Join(clusterDir, "kubeconfig"),
+			}
+			if err := writeLocalClusterIntent(root, logicalName, state); err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := readLocalClusterState(root, logicalName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Name != logicalName || persisted.KindName != kindName || !strings.HasSuffix(persisted.KindName, "-"+ownerID) {
+				t.Fatalf("durable state must retain the complete logical name and owner binding: %+v", persisted)
+			}
+			legacy := state
+			legacy.KindName = logicalName + "-" + ownerID
+			if len(legacy.KindName) <= localKindMaxNameLength {
+				t.Fatalf("fixture must cover the prior over-50-character name: %q", legacy.KindName)
+			}
+			if err := validateLocalClusterState(root, logicalName, legacy); err != nil {
+				t.Fatalf("existing full-name receipt should remain inspectable: %v", err)
+			}
+		})
 	}
 }
 
@@ -724,23 +773,67 @@ func TestLocalDownOnlyStopsMatchingForwardAndFailsOnUnknownIdentity(t *testing.T
 }
 
 func TestLocalVerifierDiagnosticsAreActionableAndDoNotLeakInput(t *testing.T) {
-	output := []byte("Required command not found: kubectl\nAuthorization: Bearer planted-secret-token\nclient-certificate-data: private-kubeconfig-material\n")
 	exitErr := exec.Command("sh", "-c", "exit 17").Run()
-	diagnostic := localVerifierDiagnostic(output, exitErr)
-	if !strings.Contains(diagnostic, "kubectl") || !strings.Contains(diagnostic, "exit 17") {
-		t.Fatalf("actionable safe category missing: %s", diagnostic)
+	cases := []struct {
+		stage string
+		code  string
+	}{
+		{"preflight", "KIND_NAME_TOO_LONG"},
+		{"kind_inventory", "KIND_LIST_FAILED"},
+		{"kind_create", "KIND_CONFIG_OR_CREATE_FAILED"},
+		{"image_deploy", "IMAGE_OR_DEPLOY_FAILED"},
+		{"temp_file", "TEMP_FILE_PREPARATION_FAILED"},
+		{"unknown", "UNKNOWN"},
 	}
-	for _, secret := range []string{"planted-secret-token", "private-kubeconfig-material", "Authorization", "certificate-data"} {
-		if strings.Contains(diagnostic, secret) {
-			t.Fatalf("sensitive verifier output leaked %q: %s", secret, diagnostic)
+	for _, test := range cases {
+		t.Run(test.code, func(t *testing.T) {
+			output := []byte("Authorization: Bearer planted-secret-token\nclient-certificate-data: private-kubeconfig-material\nOK_LOCAL_DIAGNOSTIC stage=" + test.stage + " code=" + test.code + "\n")
+			diagnostic := localVerifierDiagnostic(output, exitErr)
+			if !strings.Contains(diagnostic, "stage="+test.stage) || !strings.Contains(diagnostic, "code="+test.code) || !strings.Contains(diagnostic, "exit 17") {
+				t.Fatalf("structured safe category missing: %s", diagnostic)
+			}
+			for _, secret := range []string{"planted-secret-token", "private-kubeconfig-material", "Authorization", "certificate-data"} {
+				if strings.Contains(diagnostic, secret) {
+					t.Fatalf("sensitive verifier output leaked %q: %s", secret, diagnostic)
+				}
+			}
+		})
+	}
+	for _, invalid := range [][]byte{
+		[]byte("OK_LOCAL_DIAGNOSTIC stage=kind_inventory code=IMAGE_OR_DEPLOY_FAILED\n"),
+		[]byte("OK_LOCAL_DIAGNOSTIC stage=kind_inventory code=KIND_LIST_FAILED\nraw-secret-after-marker\n"),
+		[]byte("Authorization: Bearer raw-secret\n"),
+	} {
+		got := localVerifierDiagnostic(invalid, exitErr)
+		if !strings.Contains(got, "stage=unknown code=UNKNOWN") || strings.Contains(got, "raw-secret") {
+			t.Fatalf("untrusted or non-terminal diagnostic marker must map to safe UNKNOWN: %s", got)
 		}
 	}
-	if got := safeLocalVerifierFailure(errors.New("Authorization: Bearer arbitrary-secret")); strings.Contains(got, "arbitrary-secret") {
-		t.Fatalf("untrusted callback error leaked: %s", got)
+	if got := safeLocalVerifierFailure(errors.New("Authorization: Bearer arbitrary-secret")); strings.Contains(got, "arbitrary-secret") || !strings.Contains(got, "UNKNOWN") {
+		t.Fatalf("untrusted callback error did not map to safe UNKNOWN: %s", got)
 	}
-	nameDiagnostic := localVerifierDiagnostic([]byte("OK_CONSOLE_KIND_CLUSTER must be a lowercase DNS label of at most 63 characters.\nBearer planted-secret\n"), exitErr)
-	if !strings.Contains(nameDiagnostic, "63-character DNS-label limit") || strings.Contains(nameDiagnostic, "planted-secret") {
-		t.Fatalf("invalid-name diagnostic must be actionable without raw output: %s", nameDiagnostic)
+}
+
+func TestLocalVerifierPropagatesOnlyAllowlistedDiagnostics(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "console", "deploy", "kubernetes")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "verify-local-kind.sh")
+	contents := "#!/usr/bin/env bash\necho 'Authorization: Bearer verifier-private-token' >&2\necho 'OK_LOCAL_DIAGNOSTIC stage=kind_inventory code=KIND_LIST_FAILED' >&2\nexit 17\n"
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := runLocalConsoleVerifier(context.Background(), script, map[string]string{})
+	if err == nil {
+		t.Fatal("mock verifier failure unexpectedly succeeded")
+	}
+	diagnostic := safeLocalVerifierFailure(err)
+	if !strings.Contains(diagnostic, "stage=kind_inventory code=KIND_LIST_FAILED") || !strings.Contains(diagnostic, "exit 17") {
+		t.Fatalf("allowlisted failure was not propagated: %s", diagnostic)
+	}
+	if strings.Contains(diagnostic, "verifier-private-token") || strings.Contains(diagnostic, "Authorization") {
+		t.Fatalf("raw verifier stderr leaked into the CLI diagnostic: %s", diagnostic)
 	}
 }
 

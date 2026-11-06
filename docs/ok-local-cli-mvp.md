@@ -12,8 +12,8 @@ path. Local status and cleanup must pass both `--kubeconfig` and the exact
 `kind-<name>` context; the user's global/current context is never used.
 
 The ownership receipt contains a fresh 128-bit random owner identifier, a
-Kind cluster name derived from the logical name and full owner ID, the Docker
-context/Unix endpoint/daemon ID, exact Kind node container IDs/names/roles, the
+Kind cluster name with a readable logical-name prefix and the full owner ID,
+the Docker context/Unix endpoint/daemon ID, exact Kind node container IDs/names/roles, the
 `kube-system` namespace UID, and exact Kubernetes node names/UIDs. The owner ID
 is injected as `cli.openkubes.io/local-owner` in the Kind node configuration.
 The receipt alone never authorizes deletion: status/down recheck provider
@@ -24,8 +24,12 @@ local Unix socket and force Kind's Docker provider, avoiding a mutable Docker
 context-name lookup. A changed context, daemon, endpoint, container ID, or
 Kubernetes identity fails closed.
 
-The full random ID in the actual Kind name makes accidental reuse of a logical
-name target a different cluster name. The final deletion still uses
+The generated Kind DNS label is capped at 50 characters to fit the Console
+verifier contract. Only the readable prefix is shortened; the complete logical
+name remains in durable state, and the full random owner ID remains in the Kind
+name and node label. Existing receipts with the prior full logical name remain
+readable. The full random ID in the actual Kind name makes accidental reuse of
+a logical name target a different cluster name. The final deletion still uses
 `kind delete cluster --name <owner-derived-name>`: Kind offers no compare-and-
 delete API accepting the expected node container IDs. There remains a narrow
 race if an external actor with access to the same Docker daemon deletes and
