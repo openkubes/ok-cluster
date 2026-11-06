@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -834,6 +836,498 @@ func TestLocalVerifierPropagatesOnlyAllowlistedDiagnostics(t *testing.T) {
 	}
 	if strings.Contains(diagnostic, "verifier-private-token") || strings.Contains(diagnostic, "Authorization") {
 		t.Fatalf("raw verifier stderr leaked into the CLI diagnostic: %s", diagnostic)
+	}
+}
+
+const localDiagnosticOwnerID = "0123456789abcdef0123456789abcdef"
+
+func newDiagnosticStateRoot(t *testing.T) string {
+	t.Helper()
+	parent := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(parent, "ok-local")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "clusters"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func diagnosticTestRuntime(t *testing.T, name string, failureOutput string, failureErr error, retainedContainers []localContainerIdentity, clusterPresent bool) (localRuntime, *int, *bool) {
+	t.Helper()
+	root := newDiagnosticStateRoot(t)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/colima/docker.sock", DaemonID: "daemon-diagnostic"}
+	kindName := localKindClusterName(name, localDiagnosticOwnerID)
+	createCalls := 0
+	verifierCalled := false
+	kindListCalls := 0
+	dockerListCalls := 0
+	kubeconfig := strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+kindName)
+	runtime := localRuntime{
+		stateRoot: root,
+		run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			joined := strings.Join(args, " ")
+			switch command {
+			case "kind":
+				if len(args) > 0 && (args[0] == "delete" || args[0] == "export") {
+					t.Fatalf("diagnostic workflow attempted Kind cleanup/export: %v", args)
+				}
+				if joined == "version" {
+					return []byte("kind v0.33.0 go1.27.0 darwin/arm64"), nil
+				}
+			case "docker":
+				if strings.HasPrefix(joined, "build ") || strings.HasPrefix(joined, "rm ") || strings.HasPrefix(joined, "stop ") || strings.HasPrefix(joined, "run ") {
+					t.Fatalf("diagnostic workflow attempted Docker mutation: %s", joined)
+				}
+				switch {
+				case joined == "context show":
+					return []byte(provider.Context), nil
+				case strings.HasPrefix(joined, "context inspect "):
+					return []byte(provider.Endpoint), nil
+				case strings.Contains(joined, "info --format"):
+					return []byte(provider.DaemonID), nil
+				}
+			case "kubectl":
+				if strings.Contains(joined, "get nodes -o json") {
+					return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":%q,"uid":"node-uid","labels":{"%s":%q}}}]}`, kindName+"-control-plane", localOwnerLabel, localDiagnosticOwnerID)), nil
+				}
+				if strings.Contains(joined, "get namespace kube-system -o json") {
+					return []byte(`{"metadata":{"uid":"kube-system-uid"}}`), nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected non-pinned diagnostic test command %s %s", command, joined)
+		},
+		runPinned: func(_ context.Context, actualProvider localProviderIdentity, command string, args ...string) ([]byte, error) {
+			if actualProvider != provider {
+				t.Fatalf("provider not pinned: got=%+v want=%+v", actualProvider, provider)
+			}
+			joined := strings.Join(args, " ")
+			switch command {
+			case "kind":
+				if len(args) > 0 && (args[0] == "delete" || args[0] == "export") {
+					t.Fatalf("diagnostic workflow attempted Kind cleanup/export: %v", args)
+				}
+				if joined == "get clusters" {
+					kindListCalls++
+					if clusterPresent && kindListCalls > 1 {
+						return []byte(kindName + "\n"), nil
+					}
+					return []byte(""), nil
+				}
+				if joined == "get kubeconfig --name "+kindName {
+					return []byte(kubeconfig), nil
+				}
+			case "docker":
+				if len(args) > 0 && (args[0] == "rm" || args[0] == "stop" || args[0] == "build" || args[0] == "run") {
+					t.Fatalf("diagnostic workflow attempted Docker mutation: %v", args)
+				}
+				if len(args) > 0 && args[0] == "ps" {
+					dockerListCalls++
+					if dockerListCalls == 1 {
+						return []byte(""), nil
+					}
+					var rows []string
+					for _, container := range retainedContainers {
+						rows = append(rows, container.ID+"|"+container.Name+"|"+container.Role)
+					}
+					return []byte(strings.Join(rows, "\n")), nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected pinned diagnostic test command %s %s", command, joined)
+		},
+		runKindCreate: func(_ context.Context, actualProvider localProviderIdentity, kubeconfigPath string, args ...string) ([]byte, bool, error) {
+			createCalls++
+			if actualProvider != provider || kubeconfigPath != filepath.Join(root, "clusters", name, "kubeconfig") {
+				t.Fatalf("wrong pinned create identity: provider=%+v kubeconfig=%q", actualProvider, kubeconfigPath)
+			}
+			expected := localKindDiagnosticCreateArguments(filepath.Join(root, "clusters", name, "kind.yaml"), kindName, kubeconfigPath)
+			if !reflect.DeepEqual(args, expected) {
+				t.Fatalf("Kind args differ\n got: %#v\nwant: %#v", args, expected)
+			}
+			if failureErr != nil {
+				return []byte(failureOutput), false, failureErr
+			}
+			if err := os.WriteFile(kubeconfigPath, []byte(kubeconfig), 0o600); err != nil {
+				return nil, false, err
+			}
+			return nil, false, nil
+		},
+		runVerifier: func(context.Context, string, map[string]string) error {
+			verifierCalled = true
+			return errors.New("Console verifier must never run from bootstrap diagnostics")
+		},
+		newOwnerID: func() (string, error) { return localDiagnosticOwnerID, nil },
+	}
+	return runtime, &createCalls, &verifierCalled
+}
+
+func TestLocalKindDiagnosticClassifierIsAllowlistedAndSecretSafe(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"config", "ERROR: failed to create cluster: failed to load config: secret-value", "KIND_CONFIG_REJECTED"},
+		{"docker", "ERROR: failed to create cluster: failed to create container: authorization bearer secret-value", "DOCKER_PROVISION_FAILED"},
+		{"kubeadm", "ERROR: failed to create cluster: failed to init node with kubeadm: exit status 1 secret-value", "NODE_BOOTSTRAP_FAILED"},
+		{"readiness", "ERROR: failed to create cluster: timed out waiting for control plane secret-value", "KIND_READINESS_TIMEOUT"},
+		{"unknown", "unexpected error secret-value", "UNKNOWN"},
+		{"unanchored", "private-config-field=failed to create container", "UNKNOWN"},
+		{"ambiguous", "ERROR: failed to create cluster: failed to create container\nERROR: failed to create cluster: failed to init node with kubeadm:", "UNKNOWN"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyLocalKindCreateFailure([]byte(test.text), false); got != test.want {
+				t.Fatalf("classification=%s want=%s", got, test.want)
+			}
+		})
+	}
+	if got := classifyLocalKindCreateFailure([]byte("ERROR: failed to create cluster: failed to init node with kubeadm:"), true); got != "UNKNOWN" {
+		t.Fatalf("truncated output must be UNKNOWN, got %s", got)
+	}
+}
+
+func TestLocalKindDiagnosticArgumentsAreExactAndRetained(t *testing.T) {
+	config := "/private/state path/kind.yaml"
+	kubeconfig := "/private/state path/kubeconfig"
+	got := localKindDiagnosticCreateArguments(config, "ok-local-diag-0123456789abcdef0123456789abcdef", kubeconfig)
+	want := []string{"create", "cluster", "--retain", "--config", config, "--name", "ok-local-diag-0123456789abcdef0123456789abcdef", "--kubeconfig", kubeconfig, "--wait", "90s"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args differ\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestRunLocalKindCreatePinsColimaAndPrivateKubeconfigWithMockExecutable(t *testing.T) {
+	binDir := t.TempDir()
+	envPath := filepath.Join(t.TempDir(), "env.txt")
+	argsPath := filepath.Join(t.TempDir(), "args.txt")
+	globalKubeconfigPath := filepath.Join(t.TempDir(), "global-kubeconfig")
+	globalKubeconfig := []byte("preserve-global-kubeconfig-marker")
+	if err := os.WriteFile(globalKubeconfigPath, globalKubeconfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	globalDigest := sha256.Sum256(globalKubeconfig)
+	script := `#!/bin/sh
+printf '%s\n' "$DOCKER_HOST" "$KIND_EXPERIMENTAL_PROVIDER" "$KUBECONFIG" > "$DIAGNOSTIC_ENV_CAPTURE"
+printf '%s\n' "$@" > "$DIAGNOSTIC_ARGS_CAPTURE"
+printf '%s\n' 'Authorization: Bearer intentionally-secret'
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(binDir, "kind"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("KUBECONFIG", globalKubeconfigPath)
+	t.Setenv("DOCKER_CONTEXT", "unrelated-context")
+	t.Setenv("DIAGNOSTIC_ENV_CAPTURE", envPath)
+	t.Setenv("DIAGNOSTIC_ARGS_CAPTURE", argsPath)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///private/colima.sock", DaemonID: "daemon-id"}
+	kubeconfig := "/private/state with spaces/kubeconfig"
+	args := localKindDiagnosticCreateArguments("/private/state with spaces/kind.yaml", "ok-local-diag-0123456789abcdef0123456789abcdef", kubeconfig)
+	output, truncated, err := runLocalKindCreatePinned(context.Background(), provider, kubeconfig, args...)
+	if err == nil || truncated || !strings.Contains(string(output), "intentionally-secret") {
+		t.Fatalf("mock executable result err=%v truncated=%v", err, truncated)
+	}
+	envBytes, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(envBytes), provider.Endpoint+"\ndocker\n"+kubeconfig+"\n"; got != want {
+		t.Fatalf("unsafe child environment: got=%q want=%q", got, want)
+	}
+	argBytes, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Split(strings.TrimSuffix(string(argBytes), "\n"), "\n"); !reflect.DeepEqual(got, args) {
+		t.Fatalf("shell argument boundaries changed: got=%#v want=%#v", got, args)
+	}
+	afterGlobal, err := os.ReadFile(globalKubeconfigPath)
+	if err != nil || sha256.Sum256(afterGlobal) != globalDigest {
+		t.Fatalf("global kubeconfig changed: err=%v", err)
+	}
+}
+
+func TestLocalDiagnoseBootstrapPersistsRetainedFailureAndNeverLeaksRawOutput(t *testing.T) {
+	name := "ok-local-e2e-diagnostic"
+	container := localContainerIdentity{ID: strings.Repeat("a", 64), Name: localKindClusterName(name, localDiagnosticOwnerID) + "-control-plane", Role: "control-plane"}
+	runtime, calls, verifierCalled := diagnosticTestRuntime(t, name, "ERROR: failed to create cluster: failed to init node with kubeadm: Authorization: Bearer planted-secret", errors.New("raw secret in wrapped error"), []localContainerIdentity{container}, true)
+	var stdout, stderr strings.Builder
+	err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, &stdout, &stderr, runtime)
+	if err == nil || !strings.Contains(err.Error(), "NODE_BOOTSTRAP_FAILED") || strings.Contains(err.Error(), "planted-secret") || strings.Contains(err.Error(), "raw secret") {
+		t.Fatalf("unsafe or missing failure result: %v", err)
+	}
+	if *calls != 1 || *verifierCalled || stdout.Len() != 0 || strings.Contains(stderr.String(), "secret") {
+		t.Fatalf("unexpected retry, Console call or output: calls=%d verifier=%v stdout=%q stderr=%q", *calls, *verifierCalled, stdout.String(), stderr.String())
+	}
+	state, err := readLocalClusterState(runtime.stateRoot, name)
+	if err != nil || state.Format != localBootstrapStateFormat || state.Phase != "INCOMPLETE" || len(state.Containers) != 1 || state.Containers[0] != container || !strings.HasSuffix(state.KindName, localDiagnosticOwnerID) || len(state.KindName) > localKindMaxNameLength {
+		t.Fatalf("bad durable failure identity: state=%+v err=%v", state, err)
+	}
+	receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+	if err != nil || receipt.State != "FAILED" || receipt.FailureCode != "NODE_BOOTSTRAP_FAILED" || receipt.ResourceState != "VERIFIED_RETAINED" || len(receipt.Containers) != 1 {
+		t.Fatalf("bad diagnostic receipt: receipt=%+v err=%v", receipt, err)
+	}
+	if receipt.Provider.Endpoint != "unix:///tmp/colima/docker.sock" || receipt.Provider.DaemonID != "daemon-diagnostic" || receipt.OwnerID != localDiagnosticOwnerID || receipt.KindName != state.KindName {
+		t.Fatalf("diagnostic receipt lost provider/owner binding: %+v", receipt)
+	}
+	rawReceipt, err := os.ReadFile(localBootstrapDiagnosticPath(runtime.stateRoot, name))
+	if err != nil || strings.Contains(string(rawReceipt), "planted-secret") || strings.Contains(string(rawReceipt), "raw secret") || strings.Contains(string(rawReceipt), "Authorization") {
+		t.Fatalf("raw failure material was persisted: err=%v", err)
+	}
+	before := *calls
+	downErr := runLocalWithRuntime(context.Background(), []string{"down", "--name", name}, io.Discard, io.Discard, runtime)
+	if downErr == nil || !strings.Contains(downErr.Error(), "separately authorized") || *calls != before {
+		t.Fatalf("diagnostic down must block before cluster contact: err=%v calls=%d/%d", downErr, *calls, before)
+	}
+	retryErr := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime)
+	if retryErr == nil || !strings.Contains(retryErr.Error(), "will not retry") || *calls != 1 {
+		t.Fatalf("existing diagnostic attempt must be terminal: err=%v createCalls=%d", retryErr, *calls)
+	}
+	var status strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"status", "--name", name, "--json"}, &status, io.Discard, runtime); err != nil || !strings.Contains(status.String(), `"state":"DIAGNOSTIC_FAILED"`) || !strings.Contains(status.String(), `"clusterContacted":false`) {
+		t.Fatalf("diagnostic status must be local and explicit: output=%s err=%v", status.String(), err)
+	}
+}
+
+func TestLocalDiagnoseBootstrapFailureCategoriesArePersistedWithoutRawOutput(t *testing.T) {
+	for _, test := range []struct{ name, output, want string }{
+		{"config", "ERROR: failed to create cluster: failed to parse config: bearer secret-value", "KIND_CONFIG_REJECTED"},
+		{"docker", "ERROR: failed to create cluster: failed to create container: credential secret-value", "DOCKER_PROVISION_FAILED"},
+		{"readiness", "ERROR: failed to create cluster: timed out waiting for control plane: private detail", "KIND_READINESS_TIMEOUT"},
+		{"unknown", "unclassified secret-value", "UNKNOWN"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			name := "ok-local-diagnostic-" + test.name
+			runtime, calls, verifierCalled := diagnosticTestRuntime(t, name, test.output, errors.New("wrapped bearer secret-value"), nil, false)
+			err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime)
+			if err == nil || !strings.Contains(err.Error(), test.want) || strings.Contains(err.Error(), "secret-value") || *calls != 1 || *verifierCalled {
+				t.Fatalf("failure was not safely recorded exactly once: err=%v calls=%d verifier=%v", err, *calls, *verifierCalled)
+			}
+			receipt, readErr := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+			if readErr != nil || receipt.FailureCode != test.want || receipt.ResourceState != "ABSENT" {
+				t.Fatalf("wrong safe terminal receipt: %+v err=%v", receipt, readErr)
+			}
+			raw, readErr := os.ReadFile(localBootstrapDiagnosticPath(runtime.stateRoot, name))
+			if readErr != nil || strings.Contains(string(raw), "secret-value") || strings.Contains(string(raw), "private detail") || strings.Contains(string(raw), "wrapped bearer") {
+				t.Fatalf("raw failure material was persisted: err=%v", readErr)
+			}
+		})
+	}
+}
+
+func TestLocalDiagnoseBootstrapSuccessRetainsVerifiedClusterAndDoesNotDeployConsole(t *testing.T) {
+	name := "ok-local-diagnostic-success"
+	container := localContainerIdentity{ID: strings.Repeat("1", 64), Name: localKindClusterName(name, localDiagnosticOwnerID) + "-control-plane", Role: "control-plane"}
+	runtime, calls, verifierCalled := diagnosticTestRuntime(t, name, "", nil, []localContainerIdentity{container}, true)
+	var output strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 1 || *verifierCalled || !strings.Contains(output.String(), "retained") || strings.Contains(output.String(), "127.0.0.1") {
+		t.Fatalf("unexpected success path: calls=%d verifier=%v output=%q", *calls, *verifierCalled, output.String())
+	}
+	state, err := readLocalClusterState(runtime.stateRoot, name)
+	if err != nil || state.Format != localBootstrapStateFormat || state.Phase != "CLUSTER_READY" || len(state.Containers) != 1 || len(state.Nodes) != 1 || state.KubeSystemUID == "" {
+		t.Fatalf("success without complete identity must not be claimed: state=%+v err=%v", state, err)
+	}
+	receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+	if err != nil || receipt.State != "SUCCEEDED_RETAINED" || receipt.ResourceState != "VERIFIED_RETAINED" || !receipt.KubeconfigSeen {
+		t.Fatalf("successful cluster not durably bound: receipt=%+v err=%v", receipt, err)
+	}
+	before := *calls
+	downErr := runLocalWithRuntime(context.Background(), []string{"down", "--name", name}, io.Discard, io.Discard, runtime)
+	if downErr == nil || *calls != before {
+		t.Fatalf("normal down must never delete a diagnostic cluster: err=%v calls=%d/%d", downErr, *calls, before)
+	}
+	var status strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"status", "--name", name, "--json"}, &status, io.Discard, runtime); err != nil || !strings.Contains(status.String(), `"state":"OWNED_CLUSTER_PRESENT"`) {
+		t.Fatalf("verified diagnostic cluster should be inspectable: output=%s err=%v", status.String(), err)
+	}
+	if err := os.Remove(localBootstrapDiagnosticPath(runtime.stateRoot, name)); err != nil {
+		t.Fatal(err)
+	}
+	before = *calls
+	downErr = runLocalWithRuntime(context.Background(), []string{"down", "--name", name}, io.Discard, io.Discard, runtime)
+	if downErr == nil || !strings.Contains(downErr.Error(), "without its required receipt") || *calls != before {
+		t.Fatalf("missing diagnostic receipt must still block deletion: err=%v calls=%d/%d", downErr, *calls, before)
+	}
+}
+
+func TestLocalDiagnoseBootstrapPreservesOtherIncompleteReceipts(t *testing.T) {
+	name := "ok-local-diagnostic-fresh"
+	runtime, calls, _ := diagnosticTestRuntime(t, name, "failure", errors.New("failure"), nil, false)
+	root := runtime.stateRoot
+	previous := []string{"ok-local-e2e-arash-20261105", "ok-local-e2e-arash-20261105-b", "ok-local-e2e-attempt3"}
+	before := map[string][2]string{}
+	for _, oldName := range previous {
+		dir := filepath.Join(root, "clusters", oldName)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for index, filename := range []string{"state.json", "kind.yaml"} {
+			contents := []byte("preserved-existing-evidence:" + oldName + ":" + filename)
+			path := filepath.Join(dir, filename)
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(contents)
+			pair := before[oldName]
+			pair[index] = hex.EncodeToString(digest[:])
+			before[oldName] = pair
+		}
+	}
+	if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime); err == nil || *calls != 1 {
+		t.Fatalf("expected one isolated diagnostic invocation, err=%v calls=%d", err, *calls)
+	}
+	for _, oldName := range previous {
+		for index, filename := range []string{"state.json", "kind.yaml"} {
+			contents, err := os.ReadFile(filepath.Join(root, "clusters", oldName, filename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(contents)
+			if got := hex.EncodeToString(digest[:]); got != before[oldName][index] {
+				t.Fatalf("existing evidence changed: %s/%s", oldName, filename)
+			}
+		}
+	}
+}
+
+func TestLocalDiagnoseBootstrapFailureResourceIdentityIsFailClosed(t *testing.T) {
+	name := "ok-local-diagnostic-identity"
+	goodName := localKindClusterName(name, localDiagnosticOwnerID) + "-control-plane"
+	cases := []struct {
+		name string
+		rows []localContainerIdentity
+		list bool
+		want string
+	}{
+		{"no resources", nil, false, "ABSENT"},
+		{"cluster without node", nil, true, "AMBIGUOUS"},
+		{"exact node", []localContainerIdentity{{ID: strings.Repeat("b", 64), Name: goodName, Role: "control-plane"}}, true, "VERIFIED_RETAINED"},
+		{"unexpected name", []localContainerIdentity{{ID: strings.Repeat("c", 64), Name: "unexpected-control-plane", Role: "control-plane"}}, true, "AMBIGUOUS"},
+		{"multiple nodes", []localContainerIdentity{{ID: strings.Repeat("d", 64), Name: goodName, Role: "control-plane"}, {ID: strings.Repeat("e", 64), Name: localKindClusterName(name, localDiagnosticOwnerID) + "-worker", Role: "worker"}}, true, "AMBIGUOUS"},
+		{"container without kind listing", []localContainerIdentity{{ID: strings.Repeat("f", 64), Name: goodName, Role: "control-plane"}}, false, "AMBIGUOUS"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, calls, _ := diagnosticTestRuntime(t, name, "unexpected failure", errors.New("failed"), test.rows, test.list)
+			if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime); err == nil {
+				t.Fatal("mock failure should produce terminal error")
+			}
+			receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+			if err != nil || receipt.ResourceState != test.want || *calls != 1 {
+				t.Fatalf("identity did not fail closed: receipt=%+v err=%v calls=%d", receipt, err, *calls)
+			}
+		})
+	}
+}
+
+func TestLocalDiagnoseBootstrapRejectsCollisionAndProviderDriftBeforeCreate(t *testing.T) {
+	name := "ok-local-diagnostic-collision"
+	root := newDiagnosticStateRoot(t)
+	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/colima/docker.sock", DaemonID: "daemon-diagnostic"}
+	kindName := localKindClusterName(name, localDiagnosticOwnerID)
+	for _, test := range []struct {
+		name   string
+		run    localCommandRunner
+		pinned func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
+		want   string
+	}{
+		{name: "kind name collision", run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			if command == "kind" && strings.Join(args, " ") == "version" {
+				return []byte("kind v0.33.0"), nil
+			}
+			if command == "docker" {
+				joined := strings.Join(args, " ")
+				if joined == "context show" {
+					return []byte(provider.Context), nil
+				}
+				if strings.HasPrefix(joined, "context inspect ") {
+					return []byte(provider.Endpoint), nil
+				}
+				if strings.Contains(joined, "info --format") {
+					return []byte(provider.DaemonID), nil
+				}
+			}
+			return nil, errors.New("unexpected")
+		}, pinned: func(_ context.Context, _ localProviderIdentity, command string, args ...string) ([]byte, error) {
+			if command == "kind" && strings.Join(args, " ") == "get clusters" {
+				return []byte(kindName + "\n"), nil
+			}
+			return nil, errors.New("collision must stop before container lookup")
+		}, want: "already exists"},
+		{name: "provider changes before intent", run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+			if command == "kind" && strings.Join(args, " ") == "version" {
+				return []byte("kind v0.33.0"), nil
+			}
+			if command == "docker" {
+				joined := strings.Join(args, " ")
+				if joined == "context show" {
+					return []byte(provider.Context), nil
+				}
+				if strings.HasPrefix(joined, "context inspect ") {
+					return []byte(provider.Endpoint), nil
+				}
+				if strings.Contains(joined, "info --format") {
+					return []byte(provider.DaemonID), nil
+				}
+			}
+			return nil, errors.New("unexpected")
+		}, pinned: func(context.Context, localProviderIdentity, string, ...string) ([]byte, error) {
+			return nil, errors.New("pinned call must not occur")
+		}, want: "identity changed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			callCount := 0
+			runtime := localRuntime{stateRoot: root, run: func(ctx context.Context, command string, args ...string) ([]byte, error) {
+				if test.name == "provider changes before intent" && command == "docker" && strings.Contains(strings.Join(args, " "), "info --format") {
+					callCount++
+					if callCount > 1 {
+						return []byte("different-daemon"), nil
+					}
+				}
+				return test.run(ctx, command, args...)
+			}, runPinned: test.pinned, newOwnerID: func() (string, error) { return localDiagnosticOwnerID, nil }, runKindCreate: func(context.Context, localProviderIdentity, string, ...string) ([]byte, bool, error) {
+				t.Fatal("Kind create must not be reached")
+				return nil, false, nil
+			}}
+			err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected preflight result: %v", err)
+			}
+			if _, statErr := os.Lstat(localStateFilePath(root, name)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("preflight failure wrote state: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestLocalDiagnosticReceiptCannotOverwriteOutcomeOrLeakTamperedConfig(t *testing.T) {
+	name := "ok-local-diagnostic-receipt"
+	runtime, _, _ := diagnosticTestRuntime(t, name, "failed", errors.New("failed"), nil, false)
+	if err := runLocalWithRuntime(context.Background(), []string{"diagnose", "bootstrap", "--name", name}, io.Discard, io.Discard, runtime); err == nil {
+		t.Fatal("expected diagnostic failure")
+	}
+	receipt, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.State = "SUCCEEDED_RETAINED"
+	if err := writeLocalBootstrapDiagnosticReceipt(runtime.stateRoot, receipt, true); err == nil {
+		t.Fatal("terminal receipt must not be overwritten")
+	}
+	configPath := filepath.Join(runtime.stateRoot, "clusters", name, "kind.yaml")
+	if err := os.WriteFile(configPath, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, name); err == nil {
+		t.Fatal("changed config digest must invalidate diagnostic receipt")
 	}
 }
 

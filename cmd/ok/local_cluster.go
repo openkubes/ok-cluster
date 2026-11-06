@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -21,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,12 +32,14 @@ import (
 )
 
 const (
-	localClusterStateFormat = "ok-cli-local-cluster/v3"
-	localClusterDefaultName = "ok-local"
-	localConsoleDefaultPort = 18787
-	localOwnerLabel         = "cli.openkubes.io/local-owner"
-	localKindMinimumVersion = "0.33.0"
-	localKindMaxNameLength  = 50
+	localClusterStateFormat        = "ok-cli-local-cluster/v3"
+	localBootstrapStateFormat      = "ok-cli-local-bootstrap-cluster/v1"
+	localClusterDefaultName        = "ok-local"
+	localConsoleDefaultPort        = 18787
+	localOwnerLabel                = "cli.openkubes.io/local-owner"
+	localKindMinimumVersion        = "0.33.0"
+	localKindMaxNameLength         = 50
+	localKindDiagnosticOutputLimit = 1 << 20
 )
 
 var localOwnerIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -79,6 +83,22 @@ type localClusterState struct {
 	Forward       *localForwardIdentity    `json:"forward,omitempty"`
 }
 
+type localBootstrapDiagnosticReceipt struct {
+	Format         string                   `json:"format"`
+	Name           string                   `json:"name"`
+	OwnerID        string                   `json:"ownerID"`
+	KindName       string                   `json:"kindName"`
+	Provider       localProviderIdentity    `json:"provider"`
+	ConfigSHA256   string                   `json:"configSHA256"`
+	State          string                   `json:"state"`
+	FailureCode    string                   `json:"failureCode,omitempty"`
+	ResourceState  string                   `json:"resourceState"`
+	Containers     []localContainerIdentity `json:"containers,omitempty"`
+	KubeconfigSeen bool                     `json:"kubeconfigSeen"`
+}
+
+type localKindCreateRunner func(context.Context, localProviderIdentity, string, ...string) ([]byte, bool, error)
+
 // A future managed forward is only stoppable after matching this whole process
 // identity; PID is retained for lookup, never used as the authorization check.
 type localForwardIdentity struct {
@@ -97,7 +117,9 @@ type localRuntime struct {
 	input          io.Reader
 	interactive    bool
 	run            localCommandRunner
+	newOwnerID     func() (string, error)
 	runPinned      func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
+	runKindCreate  localKindCreateRunner
 	runVerifier    func(context.Context, string, map[string]string) error
 	inspectForward func(localForwardIdentity) (localForwardProcessState, error)
 	stopForward    func(localForwardIdentity) error
@@ -129,13 +151,14 @@ func defaultLocalRuntime() localRuntime {
 		stateRoot = filepath.Join(root, "ok", "local")
 	}
 	return localRuntime{
-		stateRoot:   stateRoot,
-		consoleRoot: findLocalConsoleRoot(),
-		input:       os.Stdin,
-		interactive: term.IsTerminal(int(os.Stdin.Fd())),
-		run:         runLocalCommand,
-		runPinned:   runLocalCommandPinned,
-		runVerifier: runLocalConsoleVerifier,
+		stateRoot:     stateRoot,
+		consoleRoot:   findLocalConsoleRoot(),
+		input:         os.Stdin,
+		interactive:   term.IsTerminal(int(os.Stdin.Fd())),
+		run:           runLocalCommand,
+		runPinned:     runLocalCommandPinned,
+		runKindCreate: runLocalKindCreatePinned,
+		runVerifier:   runLocalConsoleVerifier,
 	}
 }
 
@@ -197,9 +220,62 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 		return runLocalStatus(ctx, arguments[1:], runtime, stdout)
 	case "down":
 		return runLocalDown(ctx, arguments[1:], runtime, stdout, stderr)
+	case "diagnose":
+		if len(arguments) < 2 || arguments[1] != "bootstrap" {
+			return errors.New("use ok local diagnose bootstrap --name <fresh-logical-name>; see ok local diagnose --help")
+		}
+		return runLocalDiagnoseBootstrap(ctx, arguments[2:], runtime, stdout, stderr)
 	default:
 		return errors.New("use ok local up, ok local status, or ok local down; see ok local --help")
 	}
+}
+
+func runLocalKindCreatePinned(ctx context.Context, provider localProviderIdentity, kubeconfig string, arguments ...string) ([]byte, bool, error) {
+	command := exec.CommandContext(ctx, "kind", arguments...)
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, item := range os.Environ() {
+		key := strings.SplitN(item, "=", 2)[0]
+		if key == "DOCKER_CONTEXT" || key == "DOCKER_HOST" || key == "DOCKER_TLS_VERIFY" || key == "DOCKER_CERT_PATH" || key == "KIND_EXPERIMENTAL_PROVIDER" || key == "KUBECONFIG" {
+			continue
+		}
+		env = append(env, item)
+	}
+	command.Env = append(env, "DOCKER_HOST="+provider.Endpoint, "KIND_EXPERIMENTAL_PROVIDER=docker", "KUBECONFIG="+kubeconfig)
+	output := &boundedDiagnosticOutput{limit: localKindDiagnosticOutputLimit}
+	command.Stdout = output
+	command.Stderr = output
+	err := command.Run()
+	return output.Bytes(), output.truncated, err
+}
+
+type boundedDiagnosticOutput struct {
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (output *boundedDiagnosticOutput) Write(data []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	original := len(data)
+	remaining := output.limit - output.buffer.Len()
+	if remaining <= 0 {
+		output.truncated = true
+		return original, nil
+	}
+	if len(data) > remaining {
+		data = data[:remaining]
+		output.truncated = true
+	}
+	_, err := output.buffer.Write(data)
+	return original, err
+}
+
+func (output *boundedDiagnosticOutput) Bytes() []byte {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return append([]byte(nil), output.buffer.Bytes()...)
 }
 
 func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
@@ -222,6 +298,9 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 		return errors.New("local ownership state already exists; inspect with ok local status; automatic retries are disabled")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("cannot inspect existing local state: %w", err)
+	}
+	if _, err := os.Lstat(localBootstrapDiagnosticPath(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("local bootstrap diagnostic receipt already exists; normal up will not adopt or retry it")
 	}
 	revision, err := runtime.run(ctx, "git", "-C", runtime.consoleRoot, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(string(revision)) == "" {
@@ -326,6 +405,248 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 	}
 	_, err = fmt.Fprintf(stdout, "OpenKubes Console is ready: http://127.0.0.1:%d\n", localConsoleDefaultPort)
 	return err
+}
+
+const localBootstrapDiagnosticFormat = "ok-cli-local-bootstrap-diagnostic/v1"
+
+var localBootstrapDiagnosticCodes = map[string]bool{
+	"KIND_CONFIG_REJECTED":    true,
+	"DOCKER_PROVISION_FAILED": true,
+	"NODE_BOOTSTRAP_FAILED":   true,
+	"KIND_READINESS_TIMEOUT":  true,
+	"UNKNOWN":                 true,
+}
+
+func runLocalDiagnoseBootstrap(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok local diagnose bootstrap", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	name := flags.String("name", "", "Fresh logical name for one diagnostic Kind bootstrap attempt")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) {
+		return errors.New("ok local diagnose bootstrap requires a fresh valid --name and accepts no positional arguments")
+	}
+	if runtime.run == nil || runtime.runPinned == nil || runtime.runKindCreate == nil {
+		return errors.New("diagnostic bootstrap requires pinned Docker/Kind command runners; no cluster was contacted")
+	}
+	if _, err := os.Lstat(localStateFilePath(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("local state already exists or cannot be checked; diagnostic bootstrap will not retry or adopt")
+	}
+	if _, err := os.Lstat(localBootstrapDiagnosticPath(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("local diagnostic receipt already exists or cannot be checked; diagnostic bootstrap will not retry or adopt")
+	}
+	clusterDir := filepath.Join(runtime.stateRoot, "clusters", *name)
+	if _, err := os.Lstat(clusterDir); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("local state directory already exists or cannot be checked; diagnostic bootstrap requires a fresh name")
+	}
+	kindVersion, err := runtime.run(ctx, "kind", "version")
+	if err != nil || !localKindVersionSupported(string(kindVersion), localKindMinimumVersion) {
+		return fmt.Errorf("kind %s or newer is required; no local state or cluster change was made", localKindMinimumVersion)
+	}
+	provider, err := observeLocalDockerProvider(ctx, runtime)
+	if err != nil {
+		return errors.New("could not verify Docker endpoint and daemon identity; no local state or cluster change was made")
+	}
+	if provider.Kind != "docker" || !strings.HasPrefix(provider.Endpoint, "unix://") || provider.DaemonID == "" {
+		return errors.New("diagnostic bootstrap requires a verified local Docker socket and daemon identity")
+	}
+	// Verify the active provider one more time immediately before writing intent.
+	verifiedProvider, err := observeLocalDockerProvider(ctx, runtime)
+	if err != nil || verifiedProvider != provider {
+		return errors.New("Docker provider identity changed during preflight; no diagnostic create was attempted")
+	}
+	newOwnerID := runtime.newOwnerID
+	if newOwnerID == nil {
+		newOwnerID = newLocalOwnerID
+	}
+	ownerID, err := newOwnerID()
+	if err != nil {
+		return err
+	}
+	kindName := localKindClusterName(*name, ownerID)
+	if !validLocalKindClusterName(kindName) {
+		return errors.New("generated Kind name is outside the 50-character ownership contract")
+	}
+	// The final random name must itself be checked against both inventories.
+	clusters, err := runLocalPinned(ctx, runtime, provider, "kind", "get", "clusters")
+	if err != nil {
+		return errors.New("could not prove the generated Kind name is unused; no diagnostic create was attempted")
+	}
+	if containsExactLine(string(clusters), kindName) {
+		return errors.New("generated Kind name already exists; refusing to adopt or modify it")
+	}
+	containers, err := observeLocalKindContainers(ctx, runtime, provider, kindName)
+	if err != nil || len(containers) != 0 {
+		return errors.New("could not prove the generated Kind container identity is unused; no diagnostic create was attempted")
+	}
+	clusterDir, err = initLocalStateDirectory(runtime.stateRoot, *name)
+	if err != nil {
+		return err
+	}
+	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
+	configPath := filepath.Join(clusterDir, "kind.yaml")
+	receiptPath := localBootstrapDiagnosticPath(runtime.stateRoot, *name)
+	for _, path := range []string{kubeconfigPath, configPath, receiptPath} {
+		if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return errors.New("diagnostic output path already exists or cannot be checked; refusing to overwrite it")
+		}
+	}
+	config, err := renderKindOwnershipConfig(*name, ownerID)
+	if err != nil {
+		return err
+	}
+	if err := writePrivateNewFile(configPath, config); err != nil {
+		return fmt.Errorf("prepare private Kind config: %w", err)
+	}
+	state := localClusterState{Format: localBootstrapStateFormat, Phase: "CREATING", Name: *name, OwnerID: ownerID,
+		KindName: kindName, Provider: provider, Kubeconfig: kubeconfigPath}
+	if err := writeLocalClusterIntent(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("persist diagnostic intent before Kind create: %w", err)
+	}
+	receipt := localBootstrapDiagnosticReceipt{Format: localBootstrapDiagnosticFormat, Name: *name, OwnerID: ownerID,
+		KindName: kindName, Provider: provider, ConfigSHA256: sha256Hex(config), State: "PREPARED", ResourceState: "UNKNOWN"}
+	if err := writeLocalBootstrapDiagnosticReceipt(runtime.stateRoot, receipt, false); err != nil {
+		state.Phase = "INCOMPLETE"
+		_ = updateLocalClusterState(runtime.stateRoot, *name, state)
+		return errors.New("could not persist private diagnostic receipt; Kind create was not attempted")
+	}
+	argumentsForKind := localKindDiagnosticCreateArguments(configPath, kindName, kubeconfigPath)
+	output, truncated, createErr := runtime.runKindCreate(ctx, provider, kubeconfigPath, argumentsForKind...)
+	if createErr != nil {
+		receipt.FailureCode = classifyLocalKindCreateFailure(output, truncated)
+		state.Phase = "INCOMPLETE"
+		resourceState, observedContainers, kubeconfigSeen := observeLocalBootstrapResources(ctx, runtime, state)
+		receipt.State = "FAILED"
+		receipt.ResourceState = resourceState
+		receipt.Containers = observedContainers
+		receipt.KubeconfigSeen = kubeconfigSeen
+		state.Containers = observedContainers
+		if err := writeLocalBootstrapDiagnosticReceipt(runtime.stateRoot, receipt, true); err != nil {
+			return fmt.Errorf("Kind diagnostic failed [code=%s]; CREATING intent retained and diagnostic receipt update failed; no retry was performed", receipt.FailureCode)
+		}
+		if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+			return fmt.Errorf("Kind diagnostic failed [code=%s]; diagnostic outcome retained but state remains CREATING; no retry was performed", receipt.FailureCode)
+		}
+		return fmt.Errorf("Kind bootstrap diagnostic stopped [code=%s resources=%s]; INCOMPLETE state retained, no retry or cleanup performed", receipt.FailureCode, receipt.ResourceState)
+	}
+	// A successful Kind command is not enough: verify provider, Kind name,
+	// exact containers, isolated kubeconfig, owner-labeled node and API identity.
+	if err := captureLocalClusterIdentity(ctx, &runtime, &state); err != nil {
+		state.Phase = "INCOMPLETE"
+		resourceState, observedContainers, kubeconfigSeen := observeLocalBootstrapResources(ctx, runtime, state)
+		state.Containers = observedContainers
+		receipt.State = "FAILED"
+		receipt.FailureCode = "UNKNOWN"
+		receipt.ResourceState = resourceState
+		receipt.Containers = observedContainers
+		receipt.KubeconfigSeen = kubeconfigSeen
+		if err := writeLocalBootstrapDiagnosticReceipt(runtime.stateRoot, receipt, true); err != nil {
+			return errors.New("Kind returned success but ownership evidence is incomplete; CREATING intent retained and diagnostic receipt update failed")
+		}
+		if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+			return errors.New("Kind returned success but identity evidence is incomplete; CREATING intent and diagnostic receipt retained, no retry or cleanup performed")
+		}
+		return errors.New("Kind returned success but exact cluster ownership evidence is incomplete; INCOMPLETE state retained, no retry or cleanup performed")
+	}
+	state.Phase = "CLUSTER_READY"
+	receipt.State = "SUCCEEDED_RETAINED"
+	receipt.ResourceState = "VERIFIED_RETAINED"
+	receipt.Containers = append([]localContainerIdentity(nil), state.Containers...)
+	receipt.KubeconfigSeen = true
+	if err := writeLocalBootstrapDiagnosticReceipt(runtime.stateRoot, receipt, true); err != nil {
+		return fmt.Errorf("Kind bootstrap succeeded and identity was verified, but diagnostic receipt update failed; CREATING intent retained and no cleanup performed: %w", err)
+	}
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("Kind bootstrap succeeded and diagnostic receipt records verified retained resources, but state remains CREATING; no cleanup or retry performed: %w", err)
+	}
+	_, err = fmt.Fprintf(stdout, "Kind bootstrap verified and retained as %s; no Console was built or deployed. Separate owner approval is required for diagnostic export or cleanup.\n", state.KindName)
+	return err
+}
+
+func localKindDiagnosticCreateArguments(configPath, kindName, kubeconfig string) []string {
+	return []string{"create", "cluster", "--retain", "--config", configPath, "--name", kindName, "--kubeconfig", kubeconfig, "--wait", "90s"}
+}
+
+func classifyLocalKindCreateFailure(output []byte, truncated bool) string {
+	if truncated {
+		return "UNKNOWN"
+	}
+	const failurePrefix = "error: failed to create cluster: "
+	patterns := map[string][]string{
+		"KIND_CONFIG_REJECTED":    {"failed to load config:", "failed to read config:", "failed to parse config:", "invalid kind config:", "invalid configuration:"},
+		"DOCKER_PROVISION_FAILED": {"failed to create container", "failed to create network", "failed to get docker info:", "cannot connect to the docker daemon", "error during connect"},
+		"NODE_BOOTSTRAP_FAILED":   {"failed to init node with kubeadm:", "failed to run kubeadm init:"},
+		"KIND_READINESS_TIMEOUT":  {"timed out waiting for control plane", "timed out waiting for control-plane", "timeout waiting for control plane", "timed out waiting for kubernetes", "failed to wait for control-plane", "could not find a log line that matches"},
+	}
+	matched := ""
+	for _, line := range strings.Split(strings.ToLower(string(output)), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, failurePrefix) {
+			continue
+		}
+		detail := strings.TrimPrefix(line, failurePrefix)
+		lineMatch := ""
+		for code, needles := range patterns {
+			for _, needle := range needles {
+				if strings.Contains(detail, needle) {
+					if lineMatch != "" && lineMatch != code {
+						return "UNKNOWN"
+					}
+					lineMatch = code
+				}
+			}
+		}
+		if lineMatch == "" || matched != "" && matched != lineMatch {
+			return "UNKNOWN"
+		}
+		matched = lineMatch
+	}
+	if localBootstrapDiagnosticCodes[matched] {
+		return matched
+	}
+	return "UNKNOWN"
+}
+
+func observeLocalBootstrapResources(ctx context.Context, runtime localRuntime, state localClusterState) (string, []localContainerIdentity, bool) {
+	provider, providerErr := observeLocalDockerProvider(ctx, runtime)
+	if providerErr != nil || provider != state.Provider {
+		seen, _ := diagnosticKubeconfigState(state.Kubeconfig)
+		return "AMBIGUOUS", nil, seen
+	}
+	clusters, clusterErr := runLocalPinned(ctx, runtime, state.Provider, "kind", "get", "clusters")
+	containers, containerErr := observeLocalKindContainers(ctx, runtime, state.Provider, state.KindName)
+	kubeconfigSeen, kubeconfigValid := diagnosticKubeconfigState(state.Kubeconfig)
+	if !kubeconfigValid {
+		return "AMBIGUOUS", containers, kubeconfigSeen
+	}
+	if clusterErr != nil || containerErr != nil {
+		return "AMBIGUOUS", containers, kubeconfigSeen
+	}
+	clusterPresent := containsExactLine(string(clusters), state.KindName)
+	if !clusterPresent && len(containers) == 0 && !kubeconfigSeen {
+		return "ABSENT", nil, false
+	}
+	if clusterPresent && len(containers) == 1 && containers[0].Name == state.KindName+"-control-plane" && containers[0].Role == "control-plane" && regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(containers[0].ID) {
+		return "VERIFIED_RETAINED", containers, kubeconfigSeen
+	}
+	return "AMBIGUOUS", containers, kubeconfigSeen
+}
+
+func diagnosticKubeconfigState(path string) (seen, valid bool) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, true
+	}
+	if err != nil {
+		return true, false
+	}
+	return true, info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0o077 == 0
+}
+
+func sha256Hex(data []byte) string {
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }
 
 func localKindVersionSupported(output, minimum string) bool {
@@ -764,6 +1085,11 @@ func runLocalStatus(ctx context.Context, arguments []string, runtime localRuntim
 	}
 	state, err := readLocalClusterState(runtime.stateRoot, *name)
 	if errors.Is(err, os.ErrNotExist) {
+		if _, diagnosticErr := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, *name); diagnosticErr == nil {
+			return errors.New("bootstrap diagnostic receipt exists without its state; refusing NOT_INSTALLED claim")
+		} else if !errors.Is(diagnosticErr, os.ErrNotExist) {
+			return errors.New("bootstrap diagnostic receipt is invalid; refusing cluster access")
+		}
 		return writeLocalStatus(stdout, *jsonOutput, localStatus{Format: "ok-cli-local-status/v1", State: "NOT_INSTALLED", Name: *name, ClusterContacted: false, ConsoleChecked: false})
 	}
 	if err != nil {
@@ -773,7 +1099,27 @@ func runLocalStatus(ctx context.Context, arguments []string, runtime localRuntim
 		if err := validateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
 			return fmt.Errorf("local recovery state is invalid: %w", err)
 		}
-		return writeLocalStatus(stdout, *jsonOutput, localStatus{Format: "ok-cli-local-status/v1", State: state.Phase, Name: *name, ClusterContacted: false, ConsoleChecked: false})
+		statusName := state.Phase
+		if receipt, receiptErr := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, *name); receiptErr == nil {
+			if receipt.OwnerID != state.OwnerID || receipt.Provider != state.Provider || receipt.KindName != state.KindName || !sameLocalContainers(receipt.Containers, state.Containers) {
+				return errors.New("bootstrap diagnostic receipt identity differs from durable local intent")
+			}
+			statusName = "DIAGNOSTIC_" + receipt.State
+		} else if !errors.Is(receiptErr, os.ErrNotExist) {
+			return errors.New("bootstrap diagnostic receipt is invalid; refusing cluster access")
+		} else if state.Format == localBootstrapStateFormat {
+			return errors.New("diagnostic state exists without its required receipt; refusing cluster access")
+		}
+		return writeLocalStatus(stdout, *jsonOutput, localStatus{Format: "ok-cli-local-status/v1", State: statusName, Name: *name, ClusterContacted: false, ConsoleChecked: false})
+	}
+	if receipt, receiptErr := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, *name); receiptErr == nil {
+		if receipt.OwnerID != state.OwnerID || receipt.Provider != state.Provider || receipt.KindName != state.KindName || receipt.State != "SUCCEEDED_RETAINED" || !sameLocalContainers(receipt.Containers, state.Containers) {
+			return errors.New("bootstrap diagnostic receipt differs from the retained cluster receipt; refusing cluster access")
+		}
+	} else if !errors.Is(receiptErr, os.ErrNotExist) {
+		return errors.New("bootstrap diagnostic receipt is invalid; refusing cluster access")
+	} else if state.Format == localBootstrapStateFormat {
+		return errors.New("diagnostic state exists without its required receipt; refusing cluster access")
 	}
 	if err := validateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
 		return fmt.Errorf("local ownership state is invalid; refusing cluster access: %w", err)
@@ -818,15 +1164,25 @@ func runLocalDown(ctx context.Context, arguments []string, runtime localRuntime,
 	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) {
 		return errors.New("ok local down accepts no positional arguments and requires a valid --name")
 	}
-	if !runtime.interactive || runtime.input == nil {
-		return errors.New("ok local down requires a terminal and explicit ok/no confirmation")
-	}
 	state, err := readLocalClusterState(runtime.stateRoot, *name)
 	if errors.Is(err, os.ErrNotExist) {
 		return errors.New("no local ownership receipt exists; refusing to inspect or delete a cluster by name")
 	}
 	if err != nil {
 		return fmt.Errorf("local ownership state is invalid; refusing deletion: %w", err)
+	}
+	if receipt, receiptErr := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, *name); receiptErr == nil {
+		if receipt.OwnerID != state.OwnerID || receipt.Provider != state.Provider || receipt.KindName != state.KindName || !sameLocalContainers(receipt.Containers, state.Containers) {
+			return errors.New("bootstrap diagnostic identity is inconsistent; refusing deletion")
+		}
+		return errors.New("bootstrap diagnostic resources require separately authorized, identity-bound cleanup; ok local down will not delete them")
+	} else if !errors.Is(receiptErr, os.ErrNotExist) {
+		return errors.New("bootstrap diagnostic receipt is invalid; refusing deletion")
+	} else if state.Format == localBootstrapStateFormat {
+		return errors.New("diagnostic state exists without its required receipt; refusing deletion")
+	}
+	if !runtime.interactive || runtime.input == nil {
+		return errors.New("ok local down requires a terminal and explicit ok/no confirmation")
 	}
 	if state.Phase == "CREATING" || state.Phase == "INCOMPLETE" {
 		return errors.New("local installation is incomplete; automatic cleanup is disabled because ownership evidence is not complete")
@@ -1010,14 +1366,21 @@ func validateLocalClusterState(root, name string, state localClusterState) error
 	if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 || dirInfo.Mode().Perm()&0o077 != 0 {
 		return errors.New("cluster state directory must be private (0700 or stricter), not a symlink")
 	}
-	if (state.Format != localClusterStateFormat && state.Format != "ok-cli-local-cluster/v2") || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) || !localKindClusterNameMatchesReceipt(name, state.OwnerID, state.KindName) {
+	bootstrapState := state.Format == localBootstrapStateFormat
+	if (state.Format != localClusterStateFormat && state.Format != localBootstrapStateFormat && state.Format != "ok-cli-local-cluster/v2") || state.Name != name || !localClusterNamePattern.MatchString(name) || !localOwnerIDPattern.MatchString(state.OwnerID) || !localKindClusterNameMatchesReceipt(name, state.OwnerID, state.KindName) {
 		return errors.New("unsupported local state format, cluster name or owner identifier")
 	}
-	if state.Format == localClusterStateFormat && (state.Phase == "CREATING" || state.Phase == "INCOMPLETE") {
+	if bootstrapState && state.Phase != "CREATING" && state.Phase != "INCOMPLETE" && state.Phase != "CLUSTER_READY" {
+		return errors.New("unsupported diagnostic cluster state phase")
+	}
+	if (state.Format == localClusterStateFormat || bootstrapState) && (state.Phase == "CREATING" || state.Phase == "INCOMPLETE") {
 		if state.Provider.Kind != "docker" || state.Provider.Context == "" || !strings.HasPrefix(state.Provider.Endpoint, "unix://") || state.Provider.DaemonID == "" || state.Kubeconfig != filepath.Join(clusterDir, "kubeconfig") {
 			return errors.New("partial local intent is not bound to a valid private Docker provider and kubeconfig path")
 		}
 		return nil
+	}
+	if bootstrapState && state.Phase != "CLUSTER_READY" {
+		return errors.New("diagnostic local state is not a verified retained cluster")
 	}
 	if state.Format == localClusterStateFormat && state.Phase != "READY" && state.Phase != "CLUSTER_READY" {
 		return errors.New("local state phase is not a complete installation receipt")
@@ -1459,6 +1822,165 @@ func writeLocalClusterIntent(root, name string, state localClusterState) error {
 	return dir.Sync()
 }
 
+func localBootstrapDiagnosticPath(root, name string) string {
+	return filepath.Join(root, "clusters", name, "bootstrap-diagnostic.json")
+}
+
+func validateLocalBootstrapDiagnosticReceipt(receipt localBootstrapDiagnosticReceipt) error {
+	if receipt.Format != localBootstrapDiagnosticFormat || !localClusterNamePattern.MatchString(receipt.Name) ||
+		!localOwnerIDPattern.MatchString(receipt.OwnerID) || !localKindClusterNameMatchesReceipt(receipt.Name, receipt.OwnerID, receipt.KindName) ||
+		receipt.Provider.Kind != "docker" || receipt.Provider.Context == "" || !strings.HasPrefix(receipt.Provider.Endpoint, "unix://") || receipt.Provider.DaemonID == "" ||
+		!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(receipt.ConfigSHA256) {
+		return errors.New("invalid local bootstrap diagnostic identity receipt")
+	}
+	if receipt.State != "PREPARED" && receipt.State != "FAILED" && receipt.State != "SUCCEEDED_RETAINED" {
+		return errors.New("unsupported local bootstrap diagnostic state")
+	}
+	if receipt.ResourceState != "UNKNOWN" && receipt.ResourceState != "ABSENT" && receipt.ResourceState != "VERIFIED_RETAINED" && receipt.ResourceState != "AMBIGUOUS" {
+		return errors.New("unsupported local bootstrap diagnostic resource state")
+	}
+	if receipt.State == "PREPARED" && (receipt.FailureCode != "" || receipt.ResourceState != "UNKNOWN" || len(receipt.Containers) != 0 || receipt.KubeconfigSeen) {
+		return errors.New("prepared diagnostic receipt contains outcome data")
+	}
+	if receipt.State == "FAILED" && !localBootstrapDiagnosticCodes[receipt.FailureCode] {
+		return errors.New("failed diagnostic receipt has an unapproved failure code")
+	}
+	if receipt.State == "SUCCEEDED_RETAINED" && (receipt.FailureCode != "" || receipt.ResourceState != "VERIFIED_RETAINED" || len(receipt.Containers) != 1 || !receipt.KubeconfigSeen) {
+		return errors.New("successful diagnostic receipt lacks exact retained-resource evidence")
+	}
+	if receipt.ResourceState == "ABSENT" && (len(receipt.Containers) != 0 || receipt.KubeconfigSeen) {
+		return errors.New("absent diagnostic resource receipt contains resource evidence")
+	}
+	if receipt.ResourceState == "VERIFIED_RETAINED" && len(receipt.Containers) != 1 {
+		return errors.New("retained diagnostic resource receipt must contain exactly one node")
+	}
+	if len(receipt.Containers) > 32 {
+		return errors.New("diagnostic container inventory exceeds the node limit")
+	}
+	seen := map[string]bool{}
+	for _, container := range receipt.Containers {
+		if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(container.ID) || container.Name == "" || strings.ContainsAny(container.Name, " \t\r\n") ||
+			(container.Role != "control-plane" && container.Role != "worker") || seen[container.ID] {
+			return errors.New("diagnostic container identity is invalid or duplicated")
+		}
+		seen[container.ID] = true
+	}
+	if receipt.ResourceState == "VERIFIED_RETAINED" {
+		container := receipt.Containers[0]
+		if container.Name != receipt.KindName+"-control-plane" || container.Role != "control-plane" {
+			return errors.New("retained diagnostic container does not match the owner-specific control plane")
+		}
+	}
+	return nil
+}
+
+func writeLocalBootstrapDiagnosticReceipt(root string, receipt localBootstrapDiagnosticReceipt, replace bool) error {
+	if err := validateLocalBootstrapDiagnosticReceipt(receipt); err != nil {
+		return err
+	}
+	path := localBootstrapDiagnosticPath(root, receipt.Name)
+	raw, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		return errors.New("could not encode local bootstrap diagnostic receipt")
+	}
+	raw = append(raw, '\n')
+	if !replace {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		if _, err := file.Write(raw); err != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return err
+		}
+		if err := file.Sync(); err != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return err
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(path)
+			return err
+		}
+		directory, err := os.Open(filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		defer directory.Close()
+		return directory.Sync()
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("existing bootstrap diagnostic receipt is not a private regular file")
+	}
+	previous, err := readLocalBootstrapDiagnosticReceipt(root, receipt.Name)
+	if err != nil || previous.State != "PREPARED" || previous.OwnerID != receipt.OwnerID || previous.Provider != receipt.Provider || previous.KindName != receipt.KindName {
+		return errors.New("bootstrap diagnostic receipt identity changed; refusing replacement")
+	}
+	temporary := path + ".tmp-" + receipt.OwnerID
+	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(raw); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+func readLocalBootstrapDiagnosticReceipt(root, name string) (localBootstrapDiagnosticReceipt, error) {
+	var receipt localBootstrapDiagnosticReceipt
+	path := localBootstrapDiagnosticPath(root, name)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return receipt, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || info.Size() <= 0 || info.Size() > 64*1024 {
+		return receipt, errors.New("bootstrap diagnostic receipt must be a private regular file at most 64 KiB")
+	}
+	raw, err := readBoundedLocalFile(path, 64*1024)
+	if err != nil {
+		return receipt, err
+	}
+	if err := jsonstrict.Decode(raw, &receipt); err != nil {
+		return receipt, errors.New("invalid bootstrap diagnostic receipt")
+	}
+	if err := validateLocalBootstrapDiagnosticReceipt(receipt); err != nil || receipt.Name != name {
+		return receipt, errors.New("bootstrap diagnostic receipt does not match its state path")
+	}
+	configPath := filepath.Join(filepath.Dir(path), "kind.yaml")
+	configInfo, err := os.Lstat(configPath)
+	if err != nil || !configInfo.Mode().IsRegular() || configInfo.Mode()&os.ModeSymlink != 0 || configInfo.Mode().Perm()&0o077 != 0 {
+		return receipt, errors.New("bootstrap diagnostic Kind config is not private and regular")
+	}
+	config, err := readBoundedLocalFile(configPath, 64*1024)
+	if err != nil || sha256Hex(config) != receipt.ConfigSHA256 {
+		return receipt, errors.New("bootstrap diagnostic config digest does not match its private config")
+	}
+	return receipt, nil
+}
+
 func updateLocalClusterState(root, name string, state localClusterState) error {
 	if err := validateLocalClusterState(root, name, state); err != nil {
 		return err
@@ -1542,6 +2064,7 @@ Commands:
   up       Create a dedicated kind cluster and deploy the local Console demo
   status   Verify local cluster ownership and Console health
   down     Confirm and delete only a cluster whose live identity matches its receipt
+  diagnose Run one explicit Kind bootstrap diagnostic without deploying Console
 
 The local workflow is independent of OK-147 CreateCluster. It never selects the
 global/current Kubernetes context. The first MVP uses the Console local-kind
@@ -1557,6 +2080,10 @@ func writeLocalCommandHelp(command string, output io.Writer) {
 		fmt.Fprint(output, "Usage: ok local status [--name ok-local] [--json]\n\nRead-only ownership and Console health inspection through the isolated kubeconfig.\n")
 	case "down":
 		fmt.Fprint(output, "Usage: ok local down [--name ok-local]\n\nRequires an interactive ok/no confirmation and a live ownership match. No state file or cluster name alone authorizes deletion.\n")
+	case "diagnose":
+		fmt.Fprint(output, "Usage: ok local diagnose bootstrap --name <fresh-logical-name>\n\nExplicit E2E diagnostic only. Uses Kind --retain, never builds or deploys Console, and leaves every result for owner-controlled inspection. No automatic retry or cleanup.\n")
+	case "diagnose bootstrap":
+		fmt.Fprint(output, "Usage: ok local diagnose bootstrap --name <fresh-logical-name>\n\nCreates one owner-bound Kind cluster with --retain for failure forensics. It does not deploy Console, export logs, retry, adopt or delete resources. A retained result blocks ok local up/down until separately authorized cleanup is implemented.\n")
 	default:
 		writeLocalHelp(output)
 	}
