@@ -162,6 +162,192 @@ func TestLocalUpFailsClosedWhenConsoleIntegrationIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestLocalResumeVerifiesExistingInstallationBeforeStartingForward(t *testing.T) {
+	root, state := localStateFixture(t)
+	state.Phase = "INCOMPLETE"
+	state.Nodes = nil
+	state.KubeSystemUID = ""
+	if err := writeLocalClusterState(root, state.Name, state); err != nil {
+		t.Fatal(err)
+	}
+	runnerState := state
+	runnerState.Nodes = []localNodeIdentity{{Name: state.KindName + "-control-plane", UID: "node-uid"}}
+	runnerState.KubeSystemUID = "kube-system-uid"
+	base := localOwnershipRunner(runnerState, state.OwnerID, true, nil)
+	var calls []string
+	runner := func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, command+" "+joined)
+		if command == "kubectl" {
+			switch {
+			case strings.Contains(joined, "get deployment ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":3},"spec":{"replicas":1},"status":{"observedGeneration":3,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}`), nil
+			case strings.Contains(joined, "get service ok-console -o json"):
+				return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}`), nil
+			case strings.Contains(joined, "get endpoints ok-console -o json"):
+				return []byte(`{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}`), nil
+			}
+		}
+		return base(ctx, command, args...)
+	}
+	forward := localForwardIdentity{PID: 321, OwnerID: state.OwnerID, StartedAt: "Mon Nov  2 10:00:00 2026", Executable: "/usr/local/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+	started, checked := false, false
+	runtime := localRuntime{
+		stateRoot: root, run: runner,
+		checkLocalPort: func(port int) error {
+			if port != localConsoleDefaultPort {
+				t.Fatalf("unexpected port check: %d", port)
+			}
+			return nil
+		},
+		startForward: func(_ context.Context, verified localClusterState) (localForwardIdentity, error) {
+			if verified.Phase != "CLUSTER_READY" || len(verified.Nodes) != 1 || verified.KubeSystemUID == "" {
+				t.Fatalf("forward started before Kubernetes identity was verified: %+v", verified)
+			}
+			if len(calls) == 0 || !strings.Contains(strings.Join(calls, "\n"), "get endpoints ok-console -o json") {
+				t.Fatal("forward started before existing Console workload verification")
+			}
+			started = true
+			return forward, nil
+		},
+		waitConsole: func(_ context.Context, port int) error {
+			checked = true
+			if port != localConsoleDefaultPort {
+				t.Fatalf("unexpected health port: %d", port)
+			}
+			return nil
+		},
+	}
+	var output strings.Builder
+	if err := runLocalWithRuntime(context.Background(), []string{"resume", "--name", state.Name}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if !started || !checked || !strings.Contains(output.String(), "http://127.0.0.1:18787") {
+		t.Fatalf("resume did not finish its verified path: started=%v checked=%v output=%q", started, checked, output.String())
+	}
+	got, err := readLocalClusterState(root, state.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "READY" || got.Forward == nil || *got.Forward != forward || len(got.Nodes) != 1 || got.KubeSystemUID == "" {
+		t.Fatalf("resume did not persist complete READY evidence: %+v", got)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "kubectl ") && (!strings.Contains(call, "--kubeconfig "+state.Kubeconfig) || !strings.Contains(call, "--context kind-"+state.KindName)) {
+			t.Fatalf("kubectl escaped the isolated kubeconfig/context: %s", call)
+		}
+		if strings.Contains(call, "create") || strings.Contains(call, "apply") || strings.Contains(call, "delete") || strings.Contains(call, "current-context") {
+			t.Fatalf("resume issued a create/deploy/delete or global-context command: %s", call)
+		}
+	}
+}
+
+func TestLocalResumeRejectsInvalidOrIncompleteEvidenceBeforeClusterContact(t *testing.T) {
+	t.Run("missing receipt", func(t *testing.T) {
+		called := false
+		err := runLocalWithRuntime(context.Background(), []string{"resume", "--name", "missing"}, io.Discard, io.Discard, localRuntime{stateRoot: t.TempDir(), run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+		if err == nil || called {
+			t.Fatalf("missing receipt must fail locally: err=%v contacted=%v", err, called)
+		}
+	})
+	t.Run("READY is not resumable", func(t *testing.T) {
+		root, state := localStateFixture(t)
+		if err := writeLocalClusterState(root, state.Name, state); err != nil {
+			t.Fatal(err)
+		}
+		called := false
+		err := runLocalWithRuntime(context.Background(), []string{"resume"}, io.Discard, io.Discard, localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+		if err == nil || called {
+			t.Fatalf("READY receipt must not enter resume: err=%v contacted=%v", err, called)
+		}
+	})
+	t.Run("no prior container identity", func(t *testing.T) {
+		root, state := localStateFixture(t)
+		state.Phase, state.Nodes, state.KubeSystemUID, state.Containers = "INCOMPLETE", nil, "", nil
+		if err := writeLocalClusterState(root, state.Name, state); err != nil {
+			t.Fatal(err)
+		}
+		called := false
+		err := runLocalWithRuntime(context.Background(), []string{"resume"}, io.Discard, io.Discard, localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }})
+		if err == nil || called {
+			t.Fatalf("receipt without prior container identity must fail locally: err=%v contacted=%v", err, called)
+		}
+	})
+}
+
+func TestLocalResumeFailuresRemainFailClosed(t *testing.T) {
+	for _, scenario := range []string{"container drift", "node owner mismatch", "kubeconfig mismatch", "deployment not ready", "endpoints not ready", "health not ready"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Phase, state.Nodes, state.KubeSystemUID = "INCOMPLETE", nil, ""
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "kubeconfig mismatch" {
+				if err := os.WriteFile(state.Kubeconfig, []byte("not a kubeconfig"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			owner := state.OwnerID
+			if scenario == "node owner mismatch" {
+				owner = "ffffffffffffffffffffffffffffffff"
+			}
+			runnerState := state
+			runnerState.Nodes = []localNodeIdentity{{Name: state.KindName + "-control-plane", UID: "node-uid"}}
+			runnerState.KubeSystemUID = "kube-system-uid"
+			base := localOwnershipRunner(runnerState, owner, true, nil)
+			started := false
+			runner := func(ctx context.Context, command string, args ...string) ([]byte, error) {
+				joined := strings.Join(args, " ")
+				if scenario == "container drift" && command == "docker" && strings.HasPrefix(joined, "ps ") {
+					return []byte("different-container|" + state.Containers[0].Name + "|control-plane\n"), nil
+				}
+				if command == "kubectl" && strings.Contains(joined, "get deployment ok-console -o json") {
+					ready := 1
+					if scenario == "deployment not ready" {
+						ready = 0
+					}
+					return []byte(fmt.Sprintf(`{"metadata":{"name":"ok-console","namespace":"openkubes-console","generation":1},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":%d,"availableReplicas":%d}}`, ready, ready)), nil
+				}
+				if command == "kubectl" && strings.Contains(joined, "get service ok-console -o json") {
+					return []byte(`{"metadata":{"name":"ok-console","namespace":"openkubes-console"},"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"ok-console"},"ports":[{"port":8787,"protocol":"TCP"}]}}`), nil
+				}
+				if command == "kubectl" && strings.Contains(joined, "get endpoints ok-console -o json") {
+					if scenario == "endpoints not ready" {
+						return []byte(`{"subsets":[]}`), nil
+					}
+					return []byte(`{"subsets":[{"addresses":[{"ip":"10.244.0.4"}],"ports":[{"port":8787,"protocol":"TCP"}]}]}`), nil
+				}
+				return base(ctx, command, args...)
+			}
+			runtime := localRuntime{stateRoot: root, run: runner, checkLocalPort: func(int) error { return nil }, startForward: func(context.Context, localClusterState) (localForwardIdentity, error) {
+				started = true
+				return localForwardIdentity{PID: 321, OwnerID: state.OwnerID, StartedAt: "start", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}, nil
+			}, waitConsole: func(context.Context, int) error {
+				if scenario == "health not ready" {
+					return errors.New("unavailable")
+				}
+				return nil
+			}, stopForward: func(localForwardIdentity) error { return nil }}
+			err := runLocalWithRuntime(context.Background(), []string{"resume"}, io.Discard, io.Discard, runtime)
+			if err == nil || started != (scenario == "health not ready") {
+				t.Fatalf("scenario did not stop at expected boundary: err=%v started=%v", err, started)
+			}
+			got, readErr := readLocalClusterState(root, state.Name)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if scenario == "health not ready" {
+				if got.Phase != "CLUSTER_READY" || got.Forward == nil {
+					t.Fatalf("post-forward health failure must preserve recoverable CLUSTER_READY receipt: %+v", got)
+				}
+			} else if got.Phase != "INCOMPLETE" || got.Forward != nil {
+				t.Fatalf("pre-forward failure must preserve original INCOMPLETE receipt: %+v", got)
+			}
+		})
+	}
+}
+
 func TestLocalUpPersistsIntentBeforeSingleVerifierCallAndStopsIncomplete(t *testing.T) {
 	root, fixture := localStateFixture(t)
 	if err := os.RemoveAll(filepath.Join(root, "clusters", fixture.Name)); err != nil {

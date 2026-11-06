@@ -125,6 +125,9 @@ type localRuntime struct {
 	runVerifier    func(context.Context, string, map[string]string) error
 	inspectForward func(localForwardIdentity) (localForwardProcessState, error)
 	stopForward    func(localForwardIdentity) error
+	checkLocalPort func(int) error
+	startForward   func(context.Context, localClusterState) (localForwardIdentity, error)
+	waitConsole    func(context.Context, int) error
 }
 
 type localVerifierFailure struct {
@@ -153,14 +156,18 @@ func defaultLocalRuntime() localRuntime {
 		stateRoot = filepath.Join(root, "ok", "local")
 	}
 	return localRuntime{
-		stateRoot:     stateRoot,
-		consoleRoot:   findLocalConsoleRoot(),
-		input:         os.Stdin,
-		interactive:   term.IsTerminal(int(os.Stdin.Fd())),
-		run:           runLocalCommand,
-		runPinned:     runLocalCommandPinned,
-		runKindCreate: runLocalKindCreatePinned,
-		runVerifier:   runLocalConsoleVerifier,
+		stateRoot:      stateRoot,
+		consoleRoot:    findLocalConsoleRoot(),
+		input:          os.Stdin,
+		interactive:    term.IsTerminal(int(os.Stdin.Fd())),
+		run:            runLocalCommand,
+		runPinned:      runLocalCommandPinned,
+		runKindCreate:  runLocalKindCreatePinned,
+		runVerifier:    runLocalConsoleVerifier,
+		checkLocalPort: ensureLocalPortAvailable,
+		startForward:   startLocalForward,
+		stopForward:    stopLocalForward,
+		waitConsole:    waitLocalConsole,
 	}
 }
 
@@ -240,6 +247,8 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 	switch arguments[0] {
 	case "up":
 		return runLocalUp(ctx, arguments[1:], runtime, stdout, stderr)
+	case "resume":
+		return runLocalResume(ctx, arguments[1:], runtime, stdout, stderr)
 	case "status":
 		return runLocalStatus(ctx, arguments[1:], runtime, stdout)
 	case "down":
@@ -250,7 +259,7 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 		}
 		return runLocalDiagnoseBootstrap(ctx, arguments[2:], runtime, stdout, stderr)
 	default:
-		return errors.New("use ok local up, ok local status, or ok local down; see ok local --help")
+		return errors.New("use ok local up, ok local resume, ok local status, or ok local down; see ok local --help")
 	}
 }
 
@@ -426,6 +435,104 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 	state.Phase = "READY"
 	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
 		return err
+	}
+	_, err = fmt.Fprintf(stdout, "OpenKubes Console is ready: http://127.0.0.1:%d\n", localConsoleDefaultPort)
+	return err
+}
+
+// runLocalResume continues only an installation whose durable intent and live
+// ownership can be independently matched. It never creates Kubernetes
+// resources, deploys Console, or replaces the private kubeconfig.
+func runLocalResume(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ok local resume", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	name := flags.String("name", localClusterDefaultName, "Managed local kind cluster name")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) {
+		return errors.New("ok local resume accepts no positional arguments and requires a valid --name")
+	}
+	state, err := readLocalClusterState(runtime.stateRoot, *name)
+	if err != nil {
+		return fmt.Errorf("cannot read existing local recovery state: %w", err)
+	}
+	if state.Format != localClusterStateFormat || state.Phase != "INCOMPLETE" {
+		return errors.New("ok local resume accepts only an existing v3 INCOMPLETE installation")
+	}
+	if err := validateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("local recovery state is invalid; refusing resume: %w", err)
+	}
+	if _, err := readLocalBootstrapDiagnosticReceipt(runtime.stateRoot, *name); err == nil {
+		return errors.New("bootstrap diagnostic receipt exists; refusing normal local resume")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("bootstrap diagnostic receipt is invalid; refusing local resume")
+	}
+	if len(state.Containers) == 0 || state.Forward != nil {
+		return errors.New("recovery state lacks prior container identity or contains an ambiguous port-forward receipt")
+	}
+	checkPort := runtime.checkLocalPort
+	if checkPort == nil {
+		checkPort = ensureLocalPortAvailable
+	}
+	if err := checkPort(localConsoleDefaultPort); err != nil {
+		return fmt.Errorf("local Console port is not safely available: %w", err)
+	}
+
+	// Capture rechecks provider, Kind name, exact Docker IDs, the existing
+	// isolated kubeconfig, Kubernetes owner labels/UIDs, and kube-system UID.
+	// The read-only mode deliberately does not chmod or rewrite user data.
+	if err := captureLocalClusterIdentityReadOnly(ctx, &runtime, &state); err != nil {
+		return errors.New("live ownership or kubeconfig verification failed; INCOMPLETE state preserved")
+	}
+	if err := verifyLocalConsoleWorkload(ctx, runtime, state); err != nil {
+		return fmt.Errorf("existing Console workload is not verified healthy; INCOMPLETE state preserved: %w", err)
+	}
+
+	state.Phase = "CLUSTER_READY"
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("persist verified cluster identity before forwarding: %w", err)
+	}
+	startForward := runtime.startForward
+	if startForward == nil {
+		startForward = startLocalForward
+	}
+	forward, err := startForward(ctx, state)
+	if err != nil {
+		return fmt.Errorf("verified cluster and Console remain CLUSTER_READY; port-forward was not established: %w", err)
+	}
+	if forward.OwnerID != state.OwnerID || forward.PID <= 0 || forward.StartedAt == "" || !filepath.IsAbs(forward.Executable) || !regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(forward.ArgumentsSHA256) {
+		stop := runtime.stopForward
+		if stop == nil {
+			stop = stopLocalForward
+		}
+		stopErr := stop(forward)
+		if stopErr != nil {
+			return fmt.Errorf("port-forward identity is invalid and safe stop failed; state remains CLUSTER_READY: %w", stopErr)
+		}
+		return errors.New("port-forward returned an invalid process identity; state remains CLUSTER_READY")
+	}
+	state.Forward = &forward
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		stop := runtime.stopForward
+		if stop == nil {
+			stop = stopLocalForward
+		}
+		if stopErr := stop(forward); stopErr != nil {
+			return fmt.Errorf("forward receipt update failed and verified forward could not be stopped; state remains CLUSTER_READY: %w", stopErr)
+		}
+		return fmt.Errorf("forward receipt update failed; verified forward stopped and state remains CLUSTER_READY: %w", err)
+	}
+	waitConsole := runtime.waitConsole
+	if waitConsole == nil {
+		waitConsole = waitLocalConsole
+	}
+	if err := waitConsole(ctx, localConsoleDefaultPort); err != nil {
+		return fmt.Errorf("Console loopback health is not verified; durable CLUSTER_READY state retained: %w", err)
+	}
+	state.Phase = "READY"
+	if err := updateLocalClusterState(runtime.stateRoot, *name, state); err != nil {
+		return fmt.Errorf("Console health passed but READY receipt could not be persisted: %w", err)
 	}
 	_, err = fmt.Fprintf(stdout, "OpenKubes Console is ready: http://127.0.0.1:%d\n", localConsoleDefaultPort)
 	return err
@@ -844,6 +951,14 @@ func writePrivateNewFile(path string, contents []byte) error {
 }
 
 func captureLocalClusterIdentity(ctx context.Context, runtime *localRuntime, state *localClusterState) error {
+	return captureLocalClusterIdentityWithKubeconfigMode(ctx, runtime, state, true)
+}
+
+func captureLocalClusterIdentityReadOnly(ctx context.Context, runtime *localRuntime, state *localClusterState) error {
+	return captureLocalClusterIdentityWithKubeconfigMode(ctx, runtime, state, false)
+}
+
+func captureLocalClusterIdentityWithKubeconfigMode(ctx context.Context, runtime *localRuntime, state *localClusterState, normalizeKubeconfigMode bool) error {
 	provider, err := observeLocalDockerProvider(ctx, *runtime)
 	if err != nil {
 		return err
@@ -865,9 +980,15 @@ func captureLocalClusterIdentity(ctx context.Context, runtime *localRuntime, sta
 	if len(containers) == 0 {
 		return errors.New("owner-specific Kind node containers are absent")
 	}
+	previousContainers := append([]localContainerIdentity(nil), state.Containers...)
+	if len(previousContainers) > 0 && !sameLocalContainers(containers, previousContainers) {
+		return errors.New("live Kind container identities differ from the existing incomplete receipt")
+	}
 	state.Containers = containers
-	if err := os.Chmod(state.Kubeconfig, 0o600); err != nil {
-		return err
+	if normalizeKubeconfigMode {
+		if err := os.Chmod(state.Kubeconfig, 0o600); err != nil {
+			return err
+		}
 	}
 	info, err := os.Lstat(state.Kubeconfig)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
@@ -893,12 +1014,16 @@ func captureLocalClusterIdentity(ctx context.Context, runtime *localRuntime, sta
 	if err := json.Unmarshal(nodeJSON, &nodes); err != nil || len(nodes.Items) != len(containers) || len(nodes.Items) == 0 {
 		return errors.New("Kubernetes node set does not match owner-labeled Kind containers")
 	}
+	previousNodes := append([]localNodeIdentity(nil), state.Nodes...)
 	state.Nodes = nil
 	for _, node := range nodes.Items {
-		if node.Metadata.Labels[localOwnerLabel] != state.OwnerID || node.Metadata.UID == "" {
+		if node.Metadata.Labels[localOwnerLabel] != state.OwnerID || node.Metadata.UID == "" || !containsLocalContainerName(containers, node.Metadata.Name) {
 			return errors.New("Kubernetes node owner label or UID does not match durable intent")
 		}
 		state.Nodes = append(state.Nodes, localNodeIdentity{Name: node.Metadata.Name, UID: node.Metadata.UID})
+	}
+	if len(previousNodes) > 0 && !sameLocalNodes(state.Nodes, previousNodes) {
+		return errors.New("live Kubernetes node names or UIDs differ from the existing incomplete receipt")
 	}
 	namespaceJSON, err := runtime.run(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", ctxName, "get", "namespace", "kube-system", "-o", "json")
 	if err != nil {
@@ -908,8 +1033,146 @@ func captureLocalClusterIdentity(ctx context.Context, runtime *localRuntime, sta
 	if err := json.Unmarshal(namespaceJSON, &ns); err != nil || ns.Metadata.UID == "" {
 		return errors.New("missing kube-system identity")
 	}
+	if state.KubeSystemUID != "" && state.KubeSystemUID != ns.Metadata.UID {
+		return errors.New("live kube-system UID differs from the existing incomplete receipt")
+	}
 	state.KubeSystemUID = ns.Metadata.UID
 	return nil
+}
+
+func containsLocalContainerName(containers []localContainerIdentity, name string) bool {
+	for _, container := range containers {
+		if container.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func sameLocalNodes(a, b []localNodeIdentity) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	left := append([]localNodeIdentity(nil), a...)
+	right := append([]localNodeIdentity(nil), b...)
+	sort.Slice(left, func(i, j int) bool { return left[i].Name < left[j].Name })
+	sort.Slice(right, func(i, j int) bool { return right[i].Name < right[j].Name })
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+type localConsoleDeploymentObservation struct {
+	Metadata struct {
+		Name       string `json:"name"`
+		Namespace  string `json:"namespace"`
+		Generation int64  `json:"generation"`
+	} `json:"metadata"`
+	Spec struct {
+		Replicas *int32 `json:"replicas"`
+	} `json:"spec"`
+	Status struct {
+		ObservedGeneration int64 `json:"observedGeneration"`
+		UpdatedReplicas    int32 `json:"updatedReplicas"`
+		ReadyReplicas      int32 `json:"readyReplicas"`
+		AvailableReplicas  int32 `json:"availableReplicas"`
+	} `json:"status"`
+}
+
+type localConsoleServiceObservation struct {
+	Metadata struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"metadata"`
+	Spec struct {
+		Type      string            `json:"type"`
+		ClusterIP string            `json:"clusterIP"`
+		Selector  map[string]string `json:"selector"`
+		Ports     []struct {
+			Port     int32  `json:"port"`
+			Protocol string `json:"protocol"`
+			NodePort int32  `json:"nodePort"`
+		} `json:"ports"`
+	} `json:"spec"`
+}
+
+type localConsoleEndpointsObservation struct {
+	Subsets []struct {
+		Addresses []struct {
+			IP string `json:"ip"`
+		} `json:"addresses"`
+		Ports []struct {
+			Port     int32  `json:"port"`
+			Protocol string `json:"protocol"`
+		} `json:"ports"`
+	} `json:"subsets"`
+}
+
+func verifyLocalConsoleWorkload(ctx context.Context, runtime localRuntime, state localClusterState) error {
+	contextName := "kind-" + state.KindName
+	base := []string{"--kubeconfig", state.Kubeconfig, "--context", contextName, "--request-timeout=10s", "-n", "openkubes-console"}
+	deploymentJSON, err := runtime.run(ctx, "kubectl", append(append([]string(nil), base...), "get", "deployment", "ok-console", "-o", "json")...)
+	if err != nil {
+		return errors.New("could not read the existing Console deployment through the isolated kubeconfig")
+	}
+	var deployment localConsoleDeploymentObservation
+	if err := json.Unmarshal(deploymentJSON, &deployment); err != nil {
+		return errors.New("existing Console deployment response is invalid")
+	}
+	desired := int32(1)
+	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != desired ||
+		deployment.Metadata.Name != "ok-console" || deployment.Metadata.Namespace != "openkubes-console" ||
+		deployment.Status.ObservedGeneration < deployment.Metadata.Generation ||
+		deployment.Status.UpdatedReplicas != desired || deployment.Status.ReadyReplicas != desired || deployment.Status.AvailableReplicas != desired {
+		return errors.New("existing Console deployment is not fully observed and Ready")
+	}
+	serviceJSON, err := runtime.run(ctx, "kubectl", append(append([]string(nil), base...), "get", "service", "ok-console", "-o", "json")...)
+	if err != nil {
+		return errors.New("could not read the existing Console service through the isolated kubeconfig")
+	}
+	var service localConsoleServiceObservation
+	if err := json.Unmarshal(serviceJSON, &service); err != nil {
+		return errors.New("existing Console service response is invalid")
+	}
+	portReady := false
+	for _, port := range service.Spec.Ports {
+		if port.Port == 8787 && (port.Protocol == "" || port.Protocol == "TCP") && port.NodePort == 0 {
+			portReady = true
+		}
+	}
+	if service.Metadata.Name != "ok-console" || service.Metadata.Namespace != "openkubes-console" ||
+		service.Spec.Type != "ClusterIP" || service.Spec.ClusterIP == "" || service.Spec.ClusterIP == "None" || len(service.Spec.Selector) == 0 || !portReady {
+		return errors.New("existing Console service is not the expected internal 8787/TCP service")
+	}
+	endpointsJSON, err := runtime.run(ctx, "kubectl", append(append([]string(nil), base...), "get", "endpoints", "ok-console", "-o", "json")...)
+	if err != nil {
+		return errors.New("could not read the existing Console service endpoints through the isolated kubeconfig")
+	}
+	var endpoints localConsoleEndpointsObservation
+	if err := json.Unmarshal(endpointsJSON, &endpoints); err != nil {
+		return errors.New("existing Console service endpoints response is invalid")
+	}
+	for _, subset := range endpoints.Subsets {
+		addressReady := false
+		for _, address := range subset.Addresses {
+			if net.ParseIP(address.IP) != nil {
+				addressReady = true
+			}
+		}
+		endpointPortReady := false
+		for _, port := range subset.Ports {
+			if port.Port == 8787 && (port.Protocol == "" || port.Protocol == "TCP") {
+				endpointPortReady = true
+			}
+		}
+		if addressReady && endpointPortReady {
+			return nil
+		}
+	}
+	return errors.New("existing Console service has no Ready endpoint on 8787/TCP")
 }
 
 func startLocalForward(_ context.Context, state localClusterState) (localForwardIdentity, error) {
@@ -2097,6 +2360,7 @@ Usage:
 
 Commands:
   up       Create a dedicated kind cluster and deploy the local Console demo
+  resume   Verify and resume an existing owner-bound INCOMPLETE installation
   status   Verify local cluster ownership and Console health
   down     Confirm and delete only a cluster whose live identity matches its receipt
   diagnose Run one explicit Kind bootstrap diagnostic without deploying Console
@@ -2111,6 +2375,8 @@ func writeLocalCommandHelp(command string, output io.Writer) {
 	switch command {
 	case "up":
 		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n\nCreates one owner-labeled local kind cluster and deploys the Console local-kind fixture profile. Requires Docker, kind, kubectl, and an ok-console checkout. Interrupted runs stop in INCOMPLETE; no automatic retry.\n")
+	case "resume":
+		fmt.Fprint(output, "Usage: ok local resume [--name ok-local]\n\nResumes only an existing owner-bound INCOMPLETE installation. Rechecks Docker, Kind, Kubernetes identities, the isolated kubeconfig and the existing Console workload before starting the managed loopback port-forward. It never creates or redeploys resources or replaces kubeconfig.\n")
 	case "status":
 		fmt.Fprint(output, "Usage: ok local status [--name ok-local] [--json]\n\nRead-only ownership and Console health inspection through the isolated kubeconfig.\n")
 	case "down":
