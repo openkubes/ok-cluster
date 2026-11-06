@@ -24,17 +24,19 @@ local Unix socket and force Kind's Docker provider, avoiding a mutable Docker
 context-name lookup. A changed context, daemon, endpoint, container ID, or
 Kubernetes identity fails closed.
 
-The generated Kind DNS label is capped at 50 characters to fit the Console
-verifier contract. Only the readable prefix is shortened; the complete logical
+The generated Kind DNS label is capped at 49 characters so the derived
+`<kind-name>-control-plane` hostname stays within Kubernetes' 63-character
+label-value limit. Only the readable prefix is shortened; the complete logical
 name remains in durable state, and the full random owner ID remains in the Kind
-name and node label. Existing receipts with the prior full logical name remain
-readable. The full random ID in the actual Kind name makes accidental reuse of
-a logical name target a different cluster name. The final deletion still uses
-`kind delete cluster --name <owner-derived-name>`: Kind offers no compare-and-
-delete API accepting the expected node container IDs. There remains a narrow
-race if an external actor with access to the same Docker daemon deletes and
-recreates that exact owner-derived Kind name after the last identity check but
-before Kind selects containers. Pinning the context, checking daemon and
+name and node label. Existing receipts using the prior 50-character or full
+logical-name forms remain readable. The full random ID in the actual Kind name
+makes accidental reuse of a logical name target a different cluster name.
+The final deletion still uses `kind delete cluster --name <owner-derived-name>`.
+Kind offers no compare-and-delete API accepting the expected node container
+IDs. There remains a narrow race if an external actor with access to the same
+Docker daemon deletes and recreates that exact owner-derived Kind name after
+the last identity check but before Kind selects containers. Pinning the
+context, checking daemon and
 container IDs immediately before delete, and using a 128-bit random name make
 this an unlikely out-of-band race; the Kind CLI cannot eliminate it. The CLI
 does not bypass Kind with direct `docker rm`, since that would duplicate

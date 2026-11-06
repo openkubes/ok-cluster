@@ -358,18 +358,26 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 	if first == second || !localOwnerIDPattern.MatchString(first) {
 		t.Fatalf("owner IDs must be unique 128-bit lowercase hex values: %q %q", first, second)
 	}
-	for _, logicalName := range []string{"ok-local-e2e-arash-20261105", "ok-local-e2e-arash-20261105-b"} {
+	for _, logicalName := range []string{
+		"ok-local-e2e-arash-20261105",
+		"ok-local-e2e-arash-20261105-b",
+		"ok-local-e2e-attempt3",
+		"ok-local-e2e-attempt4",
+	} {
 		generated := localKindClusterName(logicalName, first)
-		if len(generated) > localKindMaxNameLength || !validLocalKindClusterName(generated) || !strings.HasSuffix(generated, "-"+first) {
-			t.Fatalf("logical name %q must produce a <=50-character Kind name with the complete owner ID: %q length=%d", logicalName, generated, len(generated))
+		hostname := generated + localKindControlPlaneSuffix
+		if len(generated) > localKindMaxNameLength || !validLocalKindClusterName(generated) ||
+			len(hostname) > 63 || !strings.HasSuffix(generated, "-"+first) {
+			t.Fatalf("logical name %q must produce a <=49-character Kind name and <=63-character control-plane hostname with the complete owner ID: %q hostname length=%d", logicalName, generated, len(hostname))
 		}
 	}
 	maximumName := strings.Repeat("a", localKindMaxNameLength-len(first)-1) + "-" + first
-	if len(maximumName) != 50 || !validLocalKindClusterName(maximumName) {
-		t.Fatalf("50-character Kind DNS label must be accepted: %q length=%d", maximumName, len(maximumName))
+	if len(maximumName) != 49 || len(maximumName+localKindControlPlaneSuffix) != 63 || !validLocalKindClusterName(maximumName) {
+		t.Fatalf("49-character Kind name with a 63-character control-plane hostname must be accepted: %q length=%d hostname=%d", maximumName, len(maximumName), len(maximumName+localKindControlPlaneSuffix))
 	}
-	if validLocalKindClusterName(maximumName + "a") {
-		t.Fatal("51-character Kind DNS label must be rejected")
+	fiftyCharacterName := strings.Repeat("a", localKindMaxNameLength-len(first)) + "-" + first
+	if len(fiftyCharacterName) != 50 || validLocalKindClusterName(fiftyCharacterName) {
+		t.Fatalf("50-character Kind DNS label with a 64-character control-plane hostname must be rejected: %q length=%d", fiftyCharacterName, len(fiftyCharacterName))
 	}
 	if got := localKindClusterName("ok-local-e2e-arash-20261105", first); got == localKindClusterName("ok-local-e2e-arash-20261105-b", second) {
 		t.Fatal("truncated readable prefixes must not collapse distinct owner identities")
@@ -421,7 +429,12 @@ func TestLocalOwnerIDAndKindConfig(t *testing.T) {
 
 func TestLocalKindNameShortensOnlyReadablePrefixAndPersistsLogicalName(t *testing.T) {
 	ownerID := "edd83ae5428019db1593dd56e6105916"
-	for _, logicalName := range []string{"ok-local-e2e-arash-20261105", "ok-local-e2e-arash-20261105-b"} {
+	for _, logicalName := range []string{
+		"ok-local-e2e-arash-20261105",
+		"ok-local-e2e-arash-20261105-b",
+		"ok-local-e2e-attempt3",
+		"ok-local-e2e-attempt4",
+	} {
 		t.Run(logicalName, func(t *testing.T) {
 			privateParent := filepath.Join(t.TempDir(), "private")
 			if err := os.Mkdir(privateParent, 0o700); err != nil {
@@ -433,9 +446,10 @@ func TestLocalKindNameShortensOnlyReadablePrefixAndPersistsLogicalName(t *testin
 				t.Fatal(err)
 			}
 			kindName := localKindClusterName(logicalName, ownerID)
+			provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/docker.sock", DaemonID: "daemon"}
 			state := localClusterState{
 				Format: localClusterStateFormat, Phase: "CREATING", Name: logicalName, OwnerID: ownerID,
-				KindName: kindName, Provider: localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: "unix:///tmp/docker.sock", DaemonID: "daemon"},
+				KindName: kindName, Provider: provider,
 				Kubeconfig: filepath.Join(clusterDir, "kubeconfig"),
 			}
 			if err := writeLocalClusterIntent(root, logicalName, state); err != nil {
@@ -455,6 +469,22 @@ func TestLocalKindNameShortensOnlyReadablePrefixAndPersistsLogicalName(t *testin
 			}
 			if err := validateLocalClusterState(root, logicalName, legacy); err != nil {
 				t.Fatalf("existing full-name receipt should remain inspectable: %v", err)
+			}
+			previousContract := state
+			previousContract.KindName = localKindClusterNameWithLimit(logicalName, ownerID, localKindPreviousMaxNameLength)
+			if len(previousContract.KindName) != 50 {
+				t.Fatalf("legacy fixture must cover the previous 50-character Kind contract: %q", previousContract.KindName)
+			}
+			if err := validateLocalClusterState(root, logicalName, previousContract); err != nil {
+				t.Fatalf("existing 50-character receipt should remain inspectable: kind=%q err=%v", previousContract.KindName, err)
+			}
+			diagnosticReceipt := localBootstrapDiagnosticReceipt{
+				Format: localBootstrapDiagnosticFormat, Name: logicalName, OwnerID: ownerID,
+				KindName: previousContract.KindName, Provider: provider,
+				ConfigSHA256: strings.Repeat("a", 64), State: "PREPARED", ResourceState: "UNKNOWN",
+			}
+			if err := validateLocalBootstrapDiagnosticReceipt(diagnosticReceipt); err != nil {
+				t.Fatalf("existing 50-character diagnostic receipt should remain inspectable: %v", err)
 			}
 		})
 	}

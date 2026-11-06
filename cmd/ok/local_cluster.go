@@ -38,7 +38,9 @@ const (
 	localConsoleDefaultPort        = 18787
 	localOwnerLabel                = "cli.openkubes.io/local-owner"
 	localKindMinimumVersion        = "0.33.0"
-	localKindMaxNameLength         = 50
+	localKindMaxNameLength         = 49
+	localKindPreviousMaxNameLength = 50
+	localKindControlPlaneSuffix    = "-control-plane"
 	localKindDiagnosticOutputLimit = 1 << 20
 )
 
@@ -466,7 +468,7 @@ func runLocalDiagnoseBootstrap(ctx context.Context, arguments []string, runtime 
 	}
 	kindName := localKindClusterName(*name, ownerID)
 	if !validLocalKindClusterName(kindName) {
-		return errors.New("generated Kind name is outside the 50-character ownership contract")
+		return errors.New("generated Kind name must be at most 49 characters and its control-plane hostname at most 63 characters")
 	}
 	// The final random name must itself be checked against both inventories.
 	clusters, err := runLocalPinned(ctx, runtime, provider, "kind", "get", "clusters")
@@ -1591,9 +1593,13 @@ func sameLocalContainers(a, b []localContainerIdentity) bool {
 }
 
 func localKindClusterName(name, ownerID string) string {
+	return localKindClusterNameWithLimit(name, ownerID, localKindMaxNameLength)
+}
+
+func localKindClusterNameWithLimit(name, ownerID string, maxLength int) string {
 	// Keep the full random owner ID as the collision-resistant suffix and shorten
-	// only the readable prefix to fit the shared 50-character Kind contract.
-	prefixLimit := localKindMaxNameLength - len(ownerID) - 1
+	// only the readable prefix to fit the Kind and derived-hostname contracts.
+	prefixLimit := maxLength - len(ownerID) - 1
 	if prefixLimit < 1 {
 		return ""
 	}
@@ -1609,15 +1615,22 @@ func localKindClusterName(name, ownerID string) string {
 }
 
 func validLocalKindClusterName(name string) bool {
-	return len(name) <= localKindMaxNameLength && localKindClusterNamePattern.MatchString(name)
+	hostname := name + localKindControlPlaneSuffix
+	return len(name) <= localKindMaxNameLength && localKindClusterNamePattern.MatchString(name) &&
+		len(hostname) <= 63 && localKindClusterNamePattern.MatchString(hostname)
 }
 
 func localKindClusterNameMatchesReceipt(name, ownerID, kindName string) bool {
 	if kindName == localKindClusterName(name, ownerID) {
 		return true
 	}
+	// Receipts from the previous 50-character Kind-name contract remain valid.
+	previousName := localKindClusterNameWithLimit(name, ownerID, localKindPreviousMaxNameLength)
+	if kindName == previousName && len(previousName) <= localKindPreviousMaxNameLength && localKindClusterNamePattern.MatchString(previousName) {
+		return true
+	}
 	// Existing v3 receipts used the full logical name before the verifier's
-	// 50-character contract. Continue to read those owner-bound receipts so a
+	// bounded-name contract. Continue to read those owner-bound receipts so a
 	// prior installation can still be inspected or cleaned up safely.
 	legacyName := name + "-" + ownerID
 	return len(legacyName) <= 63 && localKindClusterNamePattern.MatchString(legacyName) && kindName == legacyName
@@ -1722,7 +1735,7 @@ func renderKindOwnershipConfig(name, ownerID string) ([]byte, error) {
 	}
 	kindName := localKindClusterName(name, ownerID)
 	if !validLocalKindClusterName(kindName) {
-		return nil, errors.New("generated Kind cluster name does not fit the 50-character DNS-label contract")
+		return nil, errors.New("generated Kind name must be at most 49 characters and its control-plane hostname at most 63 characters")
 	}
 	config := fmt.Sprintf(`kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
