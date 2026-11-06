@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -386,6 +387,87 @@ func TestKubectlStructuredCommandFailureDoesNotLeakEitherStream(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "stdout-sensitive-value") || strings.Contains(err.Error(), "stderr-sensitive-value") {
 		t.Fatalf("structured command error leaked process output: %v", err)
+	}
+}
+
+func TestLocalStatusDistinguishesManagedForwardFailureModes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		process  localForwardProcessState
+		httpErr  error
+		want     string
+		wantHTTP bool
+	}{
+		{name: "missing process", process: localForwardAbsent, want: "FORWARD_PROCESS_MISSING"},
+		{name: "identity mismatch", process: localForwardPIDReused, want: "FORWARD_IDENTITY_MISMATCH"},
+		{name: "HTTP unavailable", process: localForwardMatches, httpErr: errors.New("unavailable"), want: "CONSOLE_HTTP_UNAVAILABLE", wantHTTP: true},
+		{name: "ready", process: localForwardMatches, want: "READY", wantHTTP: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, state := localStateFixture(t)
+			state.Forward = &localForwardIdentity{PID: 4321, OwnerID: state.OwnerID, StartedAt: "started", Executable: "/usr/bin/kubectl", ArgumentsSHA256: "sha256:" + strings.Repeat("a", 64)}
+			if err := writeLocalClusterState(root, state.Name, state); err != nil {
+				t.Fatal(err)
+			}
+			base := localOwnershipRunner(state, state.OwnerID, true, nil)
+			httpCalled := false
+			runtime := localRuntime{stateRoot: root, run: base, inspectForward: func(got localForwardIdentity) (localForwardProcessState, error) {
+				if got != *state.Forward {
+					t.Fatalf("status inspected a different forward identity: %+v", got)
+				}
+				return tc.process, nil
+			}, waitConsole: func(context.Context, int) error {
+				httpCalled = true
+				return tc.httpErr
+			}}
+			var output strings.Builder
+			if err := runLocalWithRuntime(context.Background(), []string{"status", "--json"}, &output, io.Discard, runtime); err != nil {
+				t.Fatal(err)
+			}
+			var status localStatus
+			if err := json.Unmarshal([]byte(output.String()), &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.State != tc.want || status.ConsoleChecked != (tc.want == "READY") || httpCalled != tc.wantHTTP {
+				t.Fatalf("wrong status classification: status=%+v httpCalled=%v", status, httpCalled)
+			}
+		})
+	}
+}
+
+func TestDetachedLocalForwardSurvivesLauncherExit(t *testing.T) {
+	const helperEnv = "OK_LOCAL_FORWARD_PARENT_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		identity, err := startDetachedLocalProcess("/bin/sleep", []string{"60"}, os.Getenv("OK_LOCAL_FORWARD_TEST_LOG"), "0123456789abcdef0123456789abcdef")
+		if err != nil {
+			t.Fatalf("start detached child: %v", err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(identity); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	logPath := filepath.Join(t.TempDir(), "child.log")
+	command := exec.Command(os.Args[0], "-test.run=^TestDetachedLocalForwardSurvivesLauncherExit$")
+	command.Env = append(os.Environ(), helperEnv+"=1", "OK_LOCAL_FORWARD_TEST_LOG="+logPath)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("launcher helper failed: %v", err)
+	}
+	var identity localForwardIdentity
+	line := bytes.SplitN(bytes.TrimSpace(output), []byte("\n"), 2)[0]
+	if err := json.Unmarshal(line, &identity); err != nil {
+		t.Fatalf("read helper process identity: %v", err)
+	}
+	defer func() {
+		state, err := inspectLocalForwardProcess(identity)
+		if err == nil && state == localForwardMatches {
+			_ = stopLocalForward(identity)
+		}
+	}()
+	state, err := inspectLocalForwardProcess(identity)
+	if err != nil || state != localForwardMatches {
+		t.Fatalf("detached child did not survive launcher exit: state=%s err=%v", state, err)
 	}
 }
 

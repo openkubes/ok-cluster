@@ -1225,17 +1225,32 @@ func startLocalForward(_ context.Context, state localClusterState) (localForward
 	}
 	args := []string{"--kubeconfig", state.Kubeconfig, "--context", "kind-" + state.KindName, "-n", "openkubes-console", "port-forward", "--address", "127.0.0.1", "service/ok-console", fmt.Sprintf("%d:8787", localConsoleDefaultPort)}
 	logPath := filepath.Join(filepath.Dir(state.Kubeconfig), "port-forward.log")
+	return startDetachedLocalProcess(kubectl, args, logPath, state.OwnerID)
+}
+
+func startDetachedLocalProcess(executable string, arguments []string, logPath, ownerID string) (localForwardIdentity, error) {
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return localForwardIdentity{}, err
 	}
-	command := exec.Command(kubectl, args...)
-	command.Stdout = log
-	command.Stderr = log
-	if err := command.Start(); err != nil {
+	stdin, err := os.Open(os.DevNull)
+	if err != nil {
 		_ = log.Close()
 		return localForwardIdentity{}, err
 	}
+	command := exec.Command(executable, arguments...)
+	command.Stdin = stdin
+	command.Stdout = log
+	command.Stderr = log
+	// A dedicated session prevents terminal hangup and foreground process-group
+	// signals from taking down the managed local forward when the CLI exits.
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		_ = log.Close()
+		return localForwardIdentity{}, err
+	}
+	_ = stdin.Close()
 	_ = log.Close()
 	started, err := localProcessField(command.Process.Pid, "lstart")
 	if err != nil {
@@ -1248,12 +1263,15 @@ func startLocalForward(_ context.Context, state localClusterState) (localForward
 		return localForwardIdentity{}, err
 	}
 	digest := sha256.Sum256([]byte(strings.TrimSpace(commandLine)))
-	identity := localForwardIdentity{PID: command.Process.Pid, OwnerID: state.OwnerID, StartedAt: strings.TrimSpace(started), Executable: kubectl, ArgumentsSHA256: "sha256:" + hex.EncodeToString(digest[:])}
+	identity := localForwardIdentity{PID: command.Process.Pid, OwnerID: ownerID, StartedAt: strings.TrimSpace(started), Executable: executable, ArgumentsSHA256: "sha256:" + hex.EncodeToString(digest[:])}
 	if err := verifyLocalForward(identity); err != nil {
 		_ = command.Process.Kill()
 		return localForwardIdentity{}, err
 	}
-	_ = command.Process.Release()
+	if err := command.Process.Release(); err != nil {
+		_ = stopLocalForward(identity)
+		return localForwardIdentity{}, errors.New("could not release verified managed port-forward process handle")
+	}
 	return identity, nil
 }
 
@@ -1462,12 +1480,33 @@ func runLocalStatus(ctx context.Context, arguments []string, runtime localRuntim
 	} else {
 		status.State = "OWNED_CLUSTER_PRESENT"
 		if state.Phase == "READY" && state.Forward != nil {
-			if err := verifyLocalForward(*state.Forward); err == nil && waitLocalConsole(ctx, localConsoleDefaultPort) == nil {
-				status.State = "READY"
-				status.ConsoleChecked = true
-				status.URL = fmt.Sprintf("http://127.0.0.1:%d", localConsoleDefaultPort)
-			} else {
-				status.State = "CONSOLE_UNAVAILABLE"
+			inspect := runtime.inspectForward
+			if inspect == nil {
+				inspect = inspectLocalForwardProcess
+			}
+			processState, inspectErr := inspect(*state.Forward)
+			if inspectErr != nil {
+				return errors.New("could not safely inspect the recorded port-forward process identity")
+			}
+			switch processState {
+			case localForwardAbsent:
+				status.State = "FORWARD_PROCESS_MISSING"
+			case localForwardPIDReused:
+				status.State = "FORWARD_IDENTITY_MISMATCH"
+			case localForwardMatches:
+				checkHTTP := runtime.waitConsole
+				if checkHTTP == nil {
+					checkHTTP = waitLocalConsole
+				}
+				if err := checkHTTP(ctx, localConsoleDefaultPort); err == nil {
+					status.State = "READY"
+					status.ConsoleChecked = true
+					status.URL = fmt.Sprintf("http://127.0.0.1:%d", localConsoleDefaultPort)
+				} else {
+					status.State = "CONSOLE_HTTP_UNAVAILABLE"
+				}
+			default:
+				return errors.New("could not safely classify the recorded port-forward process")
 			}
 		}
 	}
@@ -2417,7 +2456,7 @@ func writeLocalCommandHelp(command string, output io.Writer) {
 	case "resume":
 		fmt.Fprint(output, "Usage: ok local resume [--name ok-local]\n\nResumes only an existing owner-bound INCOMPLETE installation. Rechecks Docker, Kind, Kubernetes identities, the isolated kubeconfig and the existing Console workload before starting the managed loopback port-forward. It never creates or redeploys resources or replaces kubeconfig.\n")
 	case "status":
-		fmt.Fprint(output, "Usage: ok local status [--name ok-local] [--json]\n\nRead-only ownership and Console health inspection through the isolated kubeconfig.\n")
+		fmt.Fprint(output, "Usage: ok local status [--name ok-local] [--json]\n\nRead-only ownership and Console health inspection through the isolated kubeconfig. Reports forward-process loss, identity mismatch, HTTP unavailability, or READY separately.\n")
 	case "down":
 		fmt.Fprint(output, "Usage: ok local down [--name ok-local]\n\nRequires an interactive ok/no confirmation and a live ownership match. No state file or cluster name alone authorizes deletion.\n")
 	case "diagnose":
