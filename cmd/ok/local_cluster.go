@@ -128,6 +128,8 @@ type localRuntime struct {
 	checkLocalPort func(int) error
 	startForward   func(context.Context, localClusterState) (localForwardIdentity, error)
 	waitConsole    func(context.Context, int) error
+	lookPath       func(string) (string, error)
+	runCAPI        localCAPICommandRunner
 }
 
 type localVerifierFailure struct {
@@ -168,6 +170,8 @@ func defaultLocalRuntime() localRuntime {
 		startForward:   startLocalForward,
 		stopForward:    stopLocalForward,
 		waitConsole:    waitLocalConsole,
+		lookPath:       exec.LookPath,
+		runCAPI:        runLocalCAPICommand,
 	}
 }
 
@@ -352,15 +356,37 @@ func (output *boundedDiagnosticOutput) Bytes() []byte {
 	return append([]byte(nil), output.buffer.Bytes()...)
 }
 
-func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
+func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) (result error) {
 	flags := flag.NewFlagSet("ok local up", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	name := flags.String("name", localClusterDefaultName, "Dedicated local kind cluster name")
+	bootstrap := flags.String("bootstrap", "", "Experimental bootstrap mode (currently: capi)")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) {
 		return errors.New("ok local up accepts no positional arguments and requires a valid --name")
+	}
+	bootstrapSet := false
+	flags.Visit(func(parsed *flag.Flag) {
+		if parsed.Name == "bootstrap" {
+			bootstrapSet = true
+		}
+	})
+	if bootstrapSet {
+		if *bootstrap != "capi" {
+			return errors.New("unsupported --bootstrap mode; the only recognized experimental value is capi")
+		}
+		if err := runLocalCAPIUpContext(ctx, *name, runtime); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(stdout, "Temporary CAPI bootstrap %q is ready; lifecycle phase CAPI_READY. No workload cluster was provisioned or moved.\n", *name)
+		return err
+	}
+	if _, err := os.Lstat(localCAPIStateDirectory(runtime.stateRoot, *name)); err == nil {
+		return errors.New("CAPI lifecycle ownership exists for this name; the Console workflow will not adopt or overwrite it")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("cannot safely inspect CAPI lifecycle ownership; the Console workflow stopped")
 	}
 	if runtime.consoleRoot == "" || runtime.runVerifier == nil {
 		return errors.New("cannot find the ok-console checkout and local-kind verifier; set OK_CONSOLE_DIR; no cluster was contacted")
@@ -403,6 +429,21 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 	kindVersion, err := runtime.run(ctx, "kind", "version")
 	if err != nil || !localKindVersionSupported(string(kindVersion), localKindMinimumVersion) {
 		return fmt.Errorf("kind %s or newer is required for isolated kubeconfig creation; no local state or cluster change was made", localKindMinimumVersion)
+	}
+	releaseOperation, err := acquireLocalLifecycleOperationLock(runtime.stateRoot, *name)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := releaseOperation(); err != nil {
+			result = errors.Join(result, errors.New("local lifecycle lock could not be safely released; inspect it before another up"))
+		}
+	}()
+	if _, err := os.Lstat(localCAPIStateDirectory(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("CAPI lifecycle ownership exists or cannot be inspected; the Console workflow will not adopt it")
+	}
+	if _, err := os.Lstat(localStateFilePath(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("local ownership state appeared during preparation; automatic retries are disabled")
 	}
 	provider, err := observeLocalDockerProvider(ctx, runtime)
 	if err != nil {
@@ -2547,7 +2588,7 @@ Usage:
   ok local <command> [flags]
 
 Commands:
-  up       Create a dedicated kind cluster and deploy the local Console demo
+  up       Create a dedicated kind cluster and deploy the local Console demo, or explicitly select temporary CAPI bootstrap
   resume   Verify and resume an existing owner-bound INCOMPLETE installation
   reconnect Restore a missing owner-bound Console port-forward without redeploying
   status   Verify local cluster ownership and Console health
@@ -2563,7 +2604,7 @@ fixture profile; no production identity or database is installed.
 func writeLocalCommandHelp(command string, output io.Writer) {
 	switch command {
 	case "up":
-		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n\nCreates one owner-labeled local kind cluster and deploys the Console local-kind fixture profile. Requires Docker, kind, kubectl, and an ok-console checkout. Interrupted runs stop in INCOMPLETE; no automatic retry.\n")
+		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n       ok local up [--name ok-local] --bootstrap capi\n\nWithout --bootstrap, creates one owner-labeled local Kind cluster and deploys the Console local-kind fixture profile.\n--bootstrap capi creates a temporary owner-bound Colima/Kind management cluster, installs pinned CAPI/CAPD providers and stops at CAPI_READY. It does not create ok-mgmt-local, move cluster ownership, or deploy Console.\nRequires Docker, Kind, kubectl, clusterctl v1.14.4 and Colima. Failures after durable intent remain INCOMPLETE; no automatic retry or cleanup.\n")
 	case "resume":
 		fmt.Fprint(output, "Usage: ok local resume [--name ok-local]\n\nResumes only an existing owner-bound INCOMPLETE installation. Rechecks Docker, Kind, Kubernetes identities, the isolated kubeconfig and the existing Console workload before starting the managed loopback port-forward. It never creates or redeploys resources or replaces kubeconfig.\n")
 	case "reconnect":
