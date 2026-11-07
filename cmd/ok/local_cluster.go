@@ -373,6 +373,8 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 	switch arguments[0] {
 	case "up":
 		return runLocalUp(ctx, arguments[1:], runtime, stdout, stderr)
+	case "verify":
+		return runLocalVerify(ctx, arguments[1:], runtime, stdout, stderr)
 	case "resume":
 		return runLocalResume(ctx, arguments[1:], runtime, stdout, stderr)
 	case "reconnect":
@@ -387,7 +389,7 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 		}
 		return runLocalDiagnoseBootstrap(ctx, arguments[2:], runtime, stdout, stderr)
 	default:
-		return errors.New("use ok local up, ok local resume, ok local reconnect, ok local status, or ok local down; see ok local --help")
+		return errors.New("use ok local up, verify, resume, reconnect, status, or down; see ok local --help")
 	}
 }
 
@@ -2683,6 +2685,7 @@ Usage:
 
 Commands:
   up       Create a dedicated kind cluster and deploy the local Console demo, or explicitly select temporary CAPI bootstrap
+  verify   Read-only verification of an existing owner-bound CAPI bootstrap
   resume   Verify and resume an existing owner-bound INCOMPLETE installation
   reconnect Restore a missing owner-bound Console port-forward without redeploying
   status   Verify local cluster ownership and Console health
@@ -2697,6 +2700,8 @@ fixture profile; no production identity or database is installed.
 
 func writeLocalCommandHelp(command string, output io.Writer) {
 	switch command {
+	case "verify":
+		fmt.Fprint(output, "Usage: ok local verify --name <name> --bootstrap capi\n\nRead-only verification of an existing private CAPI receipt and live bootstrap. Reports current observed health separately from the historical lifecycle phase. Never changes the receipt or infrastructure.\n")
 	case "up":
 		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n       ok local up [--name ok-local] --bootstrap capi\n\nWithout --bootstrap, creates one owner-labeled local Kind cluster and deploys the Console local-kind fixture profile.\n--bootstrap capi creates a temporary owner-bound Colima/Kind management cluster, installs pinned CAPI/CAPD providers and stops at CAPI_READY. It does not create ok-mgmt-local, move cluster ownership, or deploy Console.\nRequires Docker, Kind, kubectl, clusterctl v1.14.4 and Colima. Failures after durable intent remain INCOMPLETE; no automatic retry or cleanup.\n")
 	case "resume":

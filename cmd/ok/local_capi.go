@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,30 +88,30 @@ type localCAPIDeploymentObservation struct {
 	} `json:"metadata"`
 	Spec struct {
 		Replicas *int32 `json:"replicas"`
+		Template struct {
+			Spec struct {
+				Containers []struct {
+					Name         string   `json:"name"`
+					Image        string   `json:"image"`
+					Args         []string `json:"args"`
+					VolumeMounts []struct {
+						Name      string `json:"name"`
+						MountPath string `json:"mountPath"`
+					} `json:"volumeMounts"`
+				} `json:"containers"`
+				Volumes []struct {
+					Name     string `json:"name"`
+					HostPath *struct {
+						Path string `json:"path"`
+					} `json:"hostPath"`
+				} `json:"volumes"`
+			} `json:"spec"`
+		} `json:"template"`
 	} `json:"spec"`
 	Status struct {
 		ObservedGeneration int64 `json:"observedGeneration"`
 		AvailableReplicas  int32 `json:"availableReplicas"`
 	} `json:"status"`
-	Template struct {
-		Spec struct {
-			Containers []struct {
-				Name         string   `json:"name"`
-				Image        string   `json:"image"`
-				Args         []string `json:"args"`
-				VolumeMounts []struct {
-					Name      string `json:"name"`
-					MountPath string `json:"mountPath"`
-				} `json:"volumeMounts"`
-			} `json:"containers"`
-			Volumes []struct {
-				Name     string `json:"name"`
-				HostPath *struct {
-					Path string `json:"path"`
-				} `json:"hostPath"`
-			} `json:"volumes"`
-		} `json:"spec"`
-	} `json:"template"`
 }
 
 // localCAPIInitEvidence is a bounded, secret-free snapshot of resources that
@@ -134,7 +137,9 @@ type localCAPIProviderList struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
 	Items      []struct {
-		Metadata struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Metadata   struct {
 			Name      string `json:"name"`
 			Namespace string `json:"namespace"`
 		} `json:"metadata"`
@@ -184,6 +189,175 @@ type localCAPIState struct {
 	InitEvidence              *localCAPIInitEvidence        `json:"initEvidence,omitempty"`
 	FailureStage              string                        `json:"failureStage,omitempty"`
 	FailureCode               string                        `json:"failureCode,omitempty"`
+}
+
+type localCAPIVerificationReport struct {
+	Format                   string `json:"format"`
+	Result                   string `json:"result"`
+	Observation              string `json:"observation"`
+	HistoricalLifecyclePhase string `json:"historicalLifecyclePhase,omitempty"`
+	ReasonCode               string `json:"reasonCode,omitempty"`
+	ObservedAt               string `json:"observedAt"`
+}
+
+const localCAPIVerificationFormat = "ok-cli-local-capi-verification/v1"
+
+func runLocalVerify(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
+	if len(arguments) > 0 && isHelpArgument(arguments[0]) {
+		writeLocalCommandHelp("verify", stdout)
+		return nil
+	}
+	flags := flag.NewFlagSet("ok local verify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	name := flags.String("name", "", "Logical CAPI bootstrap name")
+	bootstrap := flags.String("bootstrap", "", "Bootstrap lifecycle to verify (capi)")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	bootstrapSet := false
+	flags.Visit(func(parsed *flag.Flag) {
+		if parsed.Name == "bootstrap" {
+			bootstrapSet = true
+		}
+	})
+	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) || !bootstrapSet || *bootstrap != "capi" {
+		return errors.New("usage: ok local verify --name <name> --bootstrap capi")
+	}
+	report := verifyLocalCAPIBootstrap(ctx, runtime, *name)
+	raw, err := json.Marshal(report)
+	if err != nil {
+		return errors.New("could not encode CAPI verification result")
+	}
+	_, err = fmt.Fprintln(stdout, string(raw))
+	return err
+}
+
+func verifyLocalCAPIBootstrap(ctx context.Context, runtime localRuntime, name string) localCAPIVerificationReport {
+	report := localCAPIVerificationReport{
+		Format: localCAPIVerificationFormat, Result: "UNVERIFIABLE", Observation: "CURRENT_READ_ONLY",
+		ObservedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	finish := func(result, reason string) localCAPIVerificationReport {
+		report.Result, report.ReasonCode = result, reason
+		return report
+	}
+	state, err := readLocalCAPIState(runtime.stateRoot, name)
+	if err != nil {
+		return finish("UNVERIFIABLE", "STATE_UNREADABLE")
+	}
+	report.HistoricalLifecyclePhase = string(state.Phase)
+	if state.Phase != localCAPIPhaseIncomplete && state.Phase != localCAPIPhaseCAPIReady {
+		return finish("UNVERIFIABLE", "STATE_PHASE_UNSUPPORTED")
+	}
+	for _, conflictPath := range []string{localStateFilePath(runtime.stateRoot, name), localBootstrapDiagnosticPath(runtime.stateRoot, name)} {
+		if _, err := os.Lstat(conflictPath); err == nil {
+			return finish("IDENTITY_MISMATCH", "OWNERSHIP_CONFLICT")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return finish("UNVERIFIABLE", "OWNERSHIP_CONFLICT_UNVERIFIABLE")
+		}
+	}
+	// Keep the exact receipt bytes as the observation baseline. Verification
+	// operates on copies and refuses to report a result if another actor changes
+	// the receipt while the live checks are running.
+	statePath := localCAPIStateFilePath(runtime.stateRoot, name)
+	stateBytes, err := os.ReadFile(statePath)
+	if err != nil {
+		return finish("UNVERIFIABLE", "STATE_UNREADABLE")
+	}
+	if err := verifyLocalCAPIPreflightProfile(ctx, runtime, localCAPIStateProfile(state), state.Provider); err != nil {
+		if strings.Contains(err.Error(), "changed") || strings.Contains(err.Error(), "does not match") {
+			return finish("IDENTITY_MISMATCH", "PROVIDER_IDENTITY_MISMATCH")
+		}
+		return finish("UNVERIFIABLE", "PROVIDER_UNVERIFIABLE")
+	}
+	if err := verifyLocalCAPIRecordedIdentity(ctx, runtime, state); err != nil {
+		result, reason := classifyLocalCAPIIdentityFailure(err)
+		return finish(result, reason)
+	}
+	observed := state
+	if err := verifyLocalCAPIReady(ctx, runtime, state.Provider, &observed); err != nil {
+		result, reason := classifyLocalCAPIReadinessFailure(err)
+		return finish(result, reason)
+	}
+	if _, err := readLocalCAPIState(runtime.stateRoot, name); err != nil {
+		return finish("UNVERIFIABLE", "STATE_CHANGED_DURING_OBSERVATION")
+	}
+	stateBytesAfter, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(stateBytes, stateBytesAfter) {
+		return finish("UNVERIFIABLE", "STATE_CHANGED_DURING_OBSERVATION")
+	}
+	return finish("VERIFIED", "")
+}
+
+// verifyLocalCAPIRecordedIdentity checks the live bootstrap against the
+// identities already recorded in the receipt. captureLocalCAPIIdentity alone
+// observes and replaces those fields on its argument, so it is performed only
+// on a copy and compared before any readiness result can be reported.
+func verifyLocalCAPIRecordedIdentity(ctx context.Context, runtime localRuntime, state localCAPIState) error {
+	clustersRaw, err := runLocalPinned(ctx, runtime, state.Provider, "kind", "get", "clusters")
+	if err != nil {
+		return errors.New("cannot enumerate bootstrap Kind clusters")
+	}
+	clusters, err := parseLocalKindClusterNames(clustersRaw)
+	if err != nil {
+		return errors.New("bootstrap Kind cluster inventory is ambiguous")
+	}
+	found := false
+	for _, name := range clusters {
+		if name == state.BootstrapKindName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("owner-bound Kind cluster is absent")
+	}
+	info, err := os.Lstat(state.BootstrapKubeconfig)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
+		return errors.New("private bootstrap kubeconfig is unavailable or unsafe")
+	}
+	if !localCAPIConfigMatches(state.KindConfigPath, state.KindConfigSHA256) || !localCAPIConfigMatches(state.ClusterctlConfigPath, state.ClusterctlConfigSHA256) {
+		return errors.New("owner-bound bootstrap configuration differs from the receipt")
+	}
+	observed := state
+	if err := captureLocalCAPIIdentity(ctx, runtime, &observed); err != nil {
+		return err
+	}
+	if len(observed.Containers) != 1 || (len(state.Containers) > 0 && (len(state.Containers) != 1 || state.Containers[0] != observed.Containers[0])) {
+		return errors.New("bootstrap container identity differs from the receipt")
+	}
+	if observed.Node == nil || (state.Node != nil && *state.Node != *observed.Node) || (state.NodeOwnerID != "" && state.NodeOwnerID != observed.NodeOwnerID) || (state.KubeSystemUID != "" && state.KubeSystemUID != observed.KubeSystemUID) {
+		return errors.New("bootstrap Kubernetes identity differs from the receipt")
+	}
+	return nil
+}
+
+func classifyLocalCAPIIdentityFailure(err error) (string, string) {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "differs from the receipt"), strings.Contains(message, "does not match the owner-bound bootstrap cluster"), strings.Contains(message, "is absent"), strings.Contains(message, "identity changed"), strings.Contains(message, "not unique and owner-bound"), strings.Contains(message, "owner identity does not match"):
+		return "IDENTITY_MISMATCH", "BOOTSTRAP_IDENTITY_MISMATCH"
+	case strings.Contains(message, "is not Ready"):
+		return "NOT_READY", "BOOTSTRAP_NODE_NOT_READY"
+	default:
+		return "UNVERIFIABLE", "BOOTSTRAP_IDENTITY_UNVERIFIABLE"
+	}
+}
+
+func classifyLocalCAPIReadinessFailure(err error) (string, string) {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "Docker provider identity changed"), strings.Contains(message, "identity changed during"):
+		return "IDENTITY_MISMATCH", "PROVIDER_IDENTITY_MISMATCH"
+	case strings.Contains(message, "not fully Available"):
+		return "NOT_READY", "CONTROLLER_NOT_READY"
+	case strings.Contains(message, "feature gate"), strings.Contains(message, "image version"), strings.Contains(message, "image or ClusterTopology"), strings.Contains(message, "does not mount"), strings.Contains(message, "provider inventory does not exactly"), strings.Contains(message, "CRD is missing"):
+		return "NOT_READY", "CAPI_COMPONENT_MISMATCH"
+	case strings.Contains(message, "bootstrap node is not Ready"):
+		return "NOT_READY", "BOOTSTRAP_NODE_NOT_READY"
+	default:
+		return "UNVERIFIABLE", "CAPI_OBSERVATION_UNAVAILABLE"
+	}
 }
 
 type localCAPICommandRunner func(context.Context, localProviderIdentity, string, map[string]string, string, ...string) ([]byte, error)
@@ -1420,8 +1594,11 @@ func captureLocalCAPIIdentity(ctx context.Context, runtime localRuntime, state *
 			ready = true
 		}
 	}
-	if node.Metadata.Name != containers[0].Name || node.Metadata.UID == "" || node.Metadata.Labels[localOwnerLabel] != state.OwnerID || !ready {
-		return errors.New("bootstrap node is not Ready or its owner identity does not match")
+	if node.Metadata.Name != containers[0].Name || node.Metadata.UID == "" || node.Metadata.Labels[localOwnerLabel] != state.OwnerID {
+		return errors.New("bootstrap node owner identity does not match")
+	}
+	if !ready {
+		return errors.New("bootstrap node is not Ready")
 	}
 	namespaceRaw, err := runLocalCAPIRaw(ctx, runtime, state.Provider, state.BootstrapKubeconfig, nil, "kubectl", "--kubeconfig", state.BootstrapKubeconfig, "--context", "kind-"+state.BootstrapKindName, "get", "namespace", "kube-system", "-o", "json")
 	if err != nil {
@@ -1605,13 +1782,18 @@ func expectedLocalCAPIProviders() map[string]localCAPIExpectedProvider {
 // observed entry must match the exact type, name, version, and namespace.
 func parseLocalCAPIProviderInventory(raw []byte, allowPartial bool) ([]localCAPIProviderEvidence, error) {
 	var list localCAPIProviderList
-	if err := json.Unmarshal(raw, &list); err != nil || list.APIVersion != "clusterctl.cluster.x-k8s.io/v1alpha3" || list.Kind != "ProviderList" || list.Items == nil || len(list.Items) > 8 {
-		return nil, errors.New("Kubernetes ProviderList is malformed or unsupported")
+	// kubectl get ... -o json wraps custom resources in the generic core/v1
+	// List envelope; it does not return clusterctl's ProviderList type.
+	if err := json.Unmarshal(raw, &list); err != nil || list.APIVersion != "v1" || list.Kind != "List" || list.Items == nil || len(list.Items) > 8 {
+		return nil, errors.New("Kubernetes provider inventory List is malformed or unsupported")
 	}
 	want := expectedLocalCAPIProviders()
 	seen := make(map[string]bool, len(want))
 	providers := make([]localCAPIProviderEvidence, 0, len(list.Items))
 	for _, item := range list.Items {
+		if item.APIVersion != "clusterctl.cluster.x-k8s.io/v1alpha3" || item.Kind != "Provider" {
+			return nil, errors.New("Kubernetes provider inventory contains an unexpected resource type")
+		}
 		provider := localCAPIProviderEvidence{
 			Namespace: item.Metadata.Namespace,
 			Type:      item.Type,
@@ -1621,13 +1803,13 @@ func parseLocalCAPIProviderInventory(raw []byte, allowPartial bool) ([]localCAPI
 		key := provider.Type + "/" + provider.Name
 		expected, ok := want[key]
 		if !ok || item.Metadata.Name != expected.ObjectName || provider.Namespace != expected.Namespace || provider.Version != expected.Version || seen[key] {
-			return nil, errors.New("Kubernetes ProviderList contains an unexpected or conflicting provider")
+			return nil, errors.New("Kubernetes provider inventory contains an unexpected or conflicting provider")
 		}
 		seen[key] = true
 		providers = append(providers, provider)
 	}
 	if !allowPartial && len(providers) != len(want) {
-		return nil, errors.New("Kubernetes ProviderList is missing required providers")
+		return nil, errors.New("Kubernetes provider inventory is missing required providers")
 	}
 	return providers, nil
 }
@@ -1674,7 +1856,7 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 		managerFound := false
 		managerSocketVolume := ""
 		managerImage := ""
-		for _, container := range found.Template.Spec.Containers {
+		for _, container := range found.Spec.Template.Spec.Containers {
 			evidence.Images = append(evidence.Images, container.Image)
 			if container.Name == "manager" {
 				managerImage = container.Image
@@ -1703,7 +1885,7 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 			}
 		}
 		if want.namespace == "capd-system" {
-			for _, volume := range found.Template.Spec.Volumes {
+			for _, volume := range found.Spec.Template.Spec.Volumes {
 				if volume.Name == managerSocketVolume && volume.HostPath != nil && volume.HostPath.Path == "/var/run/docker.sock" {
 					evidence.DockerSocketMounted = true
 				}

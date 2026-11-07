@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -148,11 +149,11 @@ exit 2
 }
 
 func TestParseLocalCAPIProviderInventoryFromKubernetesList(t *testing.T) {
-	valid := `{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"ProviderList","metadata":{"resourceVersion":"7"},"items":[{"metadata":{"name":"cluster-api","namespace":"capi-system","uid":"uid-core"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4","contract":"v1beta1"},{"metadata":{"name":"bootstrap-kubeadm","namespace":"capi-kubeadm-bootstrap-system","uid":"uid-bootstrap"},"providerName":"kubeadm","type":"BootstrapProvider","version":"v1.14.4"},{"metadata":{"name":"control-plane-kubeadm","namespace":"capi-kubeadm-control-plane-system","uid":"uid-control-plane"},"providerName":"kubeadm","type":"ControlPlaneProvider","version":"v1.14.4"},{"metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}]}`
-	infra := `{"metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}`
+	valid := string(capiProviderListFixture())
+	infra := `{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"Provider","metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}`
 	providers, err := parseLocalCAPIProviderInventory([]byte(valid), false)
 	if err != nil || len(providers) != 4 {
-		t.Fatalf("realistic ProviderList rejected: providers=%+v err=%v", providers, err)
+		t.Fatalf("realistic Kubernetes List rejected: providers=%+v err=%v", providers, err)
 	}
 	for _, test := range []struct {
 		name string
@@ -165,7 +166,8 @@ func TestParseLocalCAPIProviderInventoryFromKubernetesList(t *testing.T) {
 		{"wrong namespace", strings.Replace(valid, `"namespace":"capd-system"`, `"namespace":"wrong-system"`, 1), false, true},
 		{"wrong version", strings.Replace(valid, `"version":"v1.14.4"`, `"version":"v1.14.40"`, 1), false, true},
 		{"unexpected provider", strings.Replace(valid, `"providerName":"docker"`, `"providerName":"other"`, 1), false, true},
-		{"wrong list kind", strings.Replace(valid, `"kind":"ProviderList"`, `"kind":"List"`, 1), false, true},
+		{"wrong list kind", strings.Replace(valid, `"kind":"List"`, `"kind":"ProviderList"`, 1), false, true},
+		{"wrong item kind", strings.Replace(valid, `"kind":"Provider"`, `"kind":"Deployment"`, 1), false, true},
 		{"partial valid inventory", strings.Replace(valid, ","+infra, "", 1), true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -562,18 +564,24 @@ func capiDeploymentFixture() []byte {
 		Metadata map[string]any `json:"metadata"`
 		Spec     map[string]any `json:"spec"`
 		Status   map[string]any `json:"status"`
-		Template map[string]any `json:"template"`
 	}
 	names := [][2]string{{"capi-system", "capi-controller-manager"}, {"capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager"}, {"capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager"}, {"capd-system", "capd-controller-manager"}, {"cert-manager", "cert-manager"}, {"cert-manager", "cert-manager-cainjector"}, {"cert-manager", "cert-manager-webhook"}}
 	items := make([]item, 0, len(names))
 	for i, pair := range names {
 		args := []string{}
-		image := "controller:v1.14.4"
+		image := "registry.k8s.io/cluster-api/cluster-api-controller:v1.14.4"
+		if i == 1 {
+			image = "registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.14.4"
+		} else if i == 2 {
+			image = "registry.k8s.io/cluster-api/kubeadm-control-plane-controller:v1.14.4"
+		} else if i == 3 {
+			image = "gcr.io/k8s-staging-cluster-api/capd-manager:v1.14.4"
+		}
 		if i == 0 || i == 2 || i == 3 {
 			args = []string{"--feature-gates=ClusterTopology=true"}
 		}
 		if i >= 4 {
-			image = "controller:" + localCAPICertManagerVersion
+			image = []string{"quay.io/jetstack/cert-manager-controller", "quay.io/jetstack/cert-manager-cainjector", "quay.io/jetstack/cert-manager-webhook"}[i-4] + ":" + localCAPICertManagerVersion
 		}
 		container := map[string]any{"name": "manager", "image": image, "args": args}
 		templateSpec := map[string]any{"containers": []map[string]any{container}}
@@ -581,10 +589,31 @@ func capiDeploymentFixture() []byte {
 			container["volumeMounts"] = []map[string]any{{"name": "dockersock", "mountPath": "/var/run/docker.sock"}}
 			templateSpec["volumes"] = []map[string]any{{"name": "dockersock", "hostPath": map[string]any{"path": "/var/run/docker.sock"}}}
 		}
-		items = append(items, item{Metadata: map[string]any{"name": pair[1], "namespace": pair[0], "uid": "uid-" + pair[1], "generation": 1}, Spec: map[string]any{"replicas": 1}, Status: map[string]any{"observedGeneration": 1, "availableReplicas": 1}, Template: map[string]any{"spec": templateSpec}})
+		items = append(items, item{Metadata: map[string]any{"name": pair[1], "namespace": pair[0], "uid": "uid-" + pair[1], "generation": 1}, Spec: map[string]any{"replicas": 1, "template": map[string]any{"spec": templateSpec}}, Status: map[string]any{"observedGeneration": 1, "availableReplicas": 1}})
 	}
 	data, _ := json.Marshal(map[string]any{"items": items})
 	return data
+}
+
+func TestLocalCAPIDeploymentObservationUsesKubernetesSpecTemplatePath(t *testing.T) {
+	var inventory struct {
+		Items []localCAPIDeploymentObservation `json:"items"`
+	}
+	if err := json.Unmarshal(capiDeploymentFixture(), &inventory); err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Items) != 7 {
+		t.Fatalf("observed %d deployments, want 7", len(inventory.Items))
+	}
+	for _, item := range inventory.Items {
+		if len(item.Spec.Template.Spec.Containers) == 0 {
+			t.Fatalf("Kubernetes Deployment %s/%s lost spec.template.spec.containers during decoding", item.Metadata.Namespace, item.Metadata.Name)
+		}
+	}
+	capd := inventory.Items[3]
+	if capd.Spec.Template.Spec.Containers[0].Image != "gcr.io/k8s-staging-cluster-api/capd-manager:v1.14.4" || len(capd.Spec.Template.Spec.Volumes) != 1 || capd.Spec.Template.Spec.Volumes[0].HostPath == nil || capd.Spec.Template.Spec.Volumes[0].HostPath.Path != "/var/run/docker.sock" {
+		t.Fatalf("observed CAPD template data did not decode: %+v", capd.Spec.Template.Spec)
+	}
 }
 
 func TestLocalCAPIReadyRequiresClusterTopologyOnlyOnSupportingControllers(t *testing.T) {
@@ -615,7 +644,8 @@ func TestLocalCAPIReadyRequiresClusterTopologyOnlyOnSupportingControllers(t *tes
 						if metadata["namespace"] != test.namespace || metadata["name"] != test.deploy {
 							continue
 						}
-						spec := item["template"].(map[string]any)["spec"].(map[string]any)
+						deploymentSpec := item["spec"].(map[string]any)
+						spec := deploymentSpec["template"].(map[string]any)["spec"].(map[string]any)
 						container := spec["containers"].([]any)[0].(map[string]any)
 						container["args"] = test.args
 						break
@@ -639,7 +669,7 @@ func TestLocalCAPIReadyRequiresClusterTopologyOnlyOnSupportingControllers(t *tes
 }
 
 func capiProviderListFixture() []byte {
-	return []byte(`{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"ProviderList","metadata":{"resourceVersion":"7"},"items":[{"metadata":{"name":"cluster-api","namespace":"capi-system","uid":"uid-core"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4","contract":"v1beta1"},{"metadata":{"name":"bootstrap-kubeadm","namespace":"capi-kubeadm-bootstrap-system","uid":"uid-bootstrap"},"providerName":"kubeadm","type":"BootstrapProvider","version":"v1.14.4"},{"metadata":{"name":"control-plane-kubeadm","namespace":"capi-kubeadm-control-plane-system","uid":"uid-control-plane"},"providerName":"kubeadm","type":"ControlPlaneProvider","version":"v1.14.4"},{"metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}]}`)
+	return []byte(`{"apiVersion":"v1","kind":"List","metadata":{"resourceVersion":"7"},"items":[{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"Provider","metadata":{"name":"cluster-api","namespace":"capi-system","uid":"uid-core"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4","contract":"v1beta1"},{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"Provider","metadata":{"name":"bootstrap-kubeadm","namespace":"capi-kubeadm-bootstrap-system","uid":"uid-bootstrap"},"providerName":"kubeadm","type":"BootstrapProvider","version":"v1.14.4"},{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"Provider","metadata":{"name":"control-plane-kubeadm","namespace":"capi-kubeadm-control-plane-system","uid":"uid-control-plane"},"providerName":"kubeadm","type":"ControlPlaneProvider","version":"v1.14.4"},{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"Provider","metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}]}`)
 }
 
 func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
@@ -737,7 +767,7 @@ func TestLocalCAPIClusterctlFailureLeavesVerifiedBootstrapAndNoCAPIReady(t *test
 			return []byte("secret-token must not be shown"), errors.New("failed after partial install")
 		}
 		if initFailed && command == "kubectl" && strings.Contains(strings.Join(args, " "), "get providers.clusterctl.cluster.x-k8s.io") {
-			return []byte(`{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"ProviderList","metadata":{"resourceVersion":"8"},"items":[{"metadata":{"name":"cluster-api","namespace":"capi-system","uid":"partial-provider"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4"}]}`), nil
+			return []byte(`{"apiVersion":"v1","kind":"List","metadata":{"resourceVersion":"8"},"items":[{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"Provider","metadata":{"name":"cluster-api","namespace":"capi-system","uid":"partial-provider"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4"}]}`), nil
 		}
 		if initFailed && command == "kubectl" && strings.Contains(strings.Join(args, " "), "get deployments") {
 			return []byte(`{"items":[{"metadata":{"name":"capi-controller-manager","namespace":"capi-system","uid":"partial-deploy-uid","generation":2},"spec":{"replicas":1,"template":{"spec":{"containers":[{"env":[{"name":"TOKEN","value":"do-not-persist"}]}]}}},"status":{"observedGeneration":1,"availableReplicas":0}}]}`), nil
@@ -825,7 +855,8 @@ func TestLocalCAPIReadyRequiresCAPDDockerSocketMount(t *testing.T) {
 			}
 			items := inventory["items"].([]any)
 			capd := items[3].(map[string]any)
-			templateSpec := capd["template"].(map[string]any)["spec"].(map[string]any)
+			deploymentSpec := capd["spec"].(map[string]any)
+			templateSpec := deploymentSpec["template"].(map[string]any)["spec"].(map[string]any)
 			delete(templateSpec, "volumes")
 			containers := templateSpec["containers"].([]any)
 			delete(containers[0].(map[string]any), "volumeMounts")
@@ -1028,6 +1059,160 @@ func TestLocalCAPIStateFileIsPrivateAndStrict(t *testing.T) {
 	if _, err := readLocalCAPIState(root, state.Name); err == nil {
 		t.Fatal("unknown receipt fields accepted")
 	}
+}
+
+func localCAPIVerificationFixture(t *testing.T) (localRuntime, localCAPIState) {
+	t.Helper()
+	runtime := capiMockRuntime(t, nil)
+	if err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime); err != nil {
+		t.Fatalf("prepare mocked CAPI_READY receipt: %v", err)
+	}
+	state, err := readLocalCAPIState(runtime.stateRoot, "ok-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := runtime.runPinned
+	runtime.runPinned = func(ctx context.Context, provider localProviderIdentity, command string, args ...string) ([]byte, error) {
+		if command == "kind" && strings.Join(args, " ") == "get clusters" {
+			return []byte(state.BootstrapKindName + "\n"), nil
+		}
+		return base(ctx, provider, command, args...)
+	}
+	return runtime, state
+}
+
+func TestLocalCAPIReadOnlyVerifyReportsCurrentHealthAndPreservesReceipt(t *testing.T) {
+	runtime, state := localCAPIVerificationFixture(t)
+	path := localCAPIStateFilePath(runtime.stateRoot, state.Name)
+	if data, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else {
+		// A healthy current observation must not promote or rewrite an
+		// INCOMPLETE historical receipt.
+		state.Phase = localCAPIPhaseIncomplete
+		state.FailureStage, state.FailureCode = "capi-verify", "CAPI_VERIFY_FAILED"
+		data, err = json.MarshalIndent(state, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, '\n')
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runLocalWithRuntime(context.Background(), []string{"verify", "--name", state.Name, "--bootstrap", "capi"}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	var report localCAPIVerificationReport
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("invalid verify report: %v; output=%s", err, output.String())
+	}
+	if report.Result != "VERIFIED" || report.HistoricalLifecyclePhase != string(localCAPIPhaseIncomplete) || report.Observation != "CURRENT_READ_ONLY" {
+		t.Fatalf("current health and historical phase were conflated: %+v", report)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("verify changed the receipt: err=%v", err)
+	}
+}
+
+func TestLocalCAPIReadOnlyVerifySupportsCAPIReadyReceipt(t *testing.T) {
+	runtime, state := localCAPIVerificationFixture(t)
+	var output bytes.Buffer
+	if err := runLocalWithRuntime(context.Background(), []string{"verify", "--name", state.Name, "--bootstrap", "capi"}, &output, io.Discard, runtime); err != nil {
+		t.Fatal(err)
+	}
+	var report localCAPIVerificationReport
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Result != "VERIFIED" || report.HistoricalLifecyclePhase != string(localCAPIPhaseCAPIReady) {
+		t.Fatalf("unexpected CAPI_READY verification: %+v", report)
+	}
+}
+
+func TestLocalCAPIReadOnlyVerifyClassifiesNotReadyComponents(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *localRuntime)
+	}{
+		{"missing controller", func(t *testing.T, runtime *localRuntime) {
+			base := runtime.runCAPI
+			runtime.runCAPI = func(ctx context.Context, provider localProviderIdentity, kubeconfig string, env map[string]string, command string, args ...string) ([]byte, error) {
+				if command == "kubectl" && strings.Contains(strings.Join(args, " "), "get deployments") {
+					var inventory map[string]any
+					if err := json.Unmarshal(capiDeploymentFixture(), &inventory); err != nil {
+						t.Fatal(err)
+					}
+					inventory["items"] = inventory["items"].([]any)[:6]
+					return json.Marshal(inventory)
+				}
+				return base(ctx, provider, kubeconfig, env, command, args...)
+			}
+		}},
+		{"provider version mismatch", func(t *testing.T, runtime *localRuntime) {
+			base := runtime.runCAPI
+			runtime.runCAPI = func(ctx context.Context, provider localProviderIdentity, kubeconfig string, env map[string]string, command string, args ...string) ([]byte, error) {
+				if command == "kubectl" && strings.Contains(strings.Join(args, " "), "get providers.clusterctl.cluster.x-k8s.io") {
+					return []byte(strings.Replace(string(capiProviderListFixture()), `"version":"v1.14.4"`, `"version":"v1.14.3"`, 1)), nil
+				}
+				return base(ctx, provider, kubeconfig, env, command, args...)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, state := localCAPIVerificationFixture(t)
+			test.mutate(t, &runtime)
+			report := verifyLocalCAPIBootstrap(context.Background(), runtime, state.Name)
+			if report.Result != "NOT_READY" {
+				t.Fatalf("expected NOT_READY, got %+v", report)
+			}
+		})
+	}
+}
+
+func TestLocalCAPIReadOnlyVerifyIdentityMismatchAndUnreadableReceipt(t *testing.T) {
+	t.Run("cluster identity mismatch", func(t *testing.T) {
+		runtime, state := localCAPIVerificationFixture(t)
+		base := runtime.runPinned
+		runtime.runPinned = func(ctx context.Context, provider localProviderIdentity, command string, args ...string) ([]byte, error) {
+			if command == "kind" && strings.Join(args, " ") == "get clusters" {
+				return []byte("different-cluster\n"), nil
+			}
+			return base(ctx, provider, command, args...)
+		}
+		report := verifyLocalCAPIBootstrap(context.Background(), runtime, state.Name)
+		if report.Result != "IDENTITY_MISMATCH" {
+			t.Fatalf("expected identity mismatch, got %+v", report)
+		}
+	})
+	t.Run("unreadable receipt", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Chmod(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		state := validLocalCAPIState(root)
+		if err := createLocalCAPILifecycleDirectory(root, state.Name); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(localCAPIStateFilePath(root, state.Name), []byte(`{"format":"broken"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runtime := localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("unreadable state must stop before external observation")
+			return nil, nil
+		}}
+		report := verifyLocalCAPIBootstrap(context.Background(), runtime, state.Name)
+		if report.Result != "UNVERIFIABLE" || report.ReasonCode != "STATE_UNREADABLE" {
+			t.Fatalf("unexpected unreadable state result: %+v", report)
+		}
+	})
 }
 
 func TestLocalCAPIStateTransitionsAreOneWayAndBoundToIntent(t *testing.T) {
