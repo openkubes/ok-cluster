@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +20,7 @@ func validLocalCAPIState(root string) localCAPIState {
 	dir := localCAPIStateDirectory(root, name)
 	return localCAPIState{
 		Format: localCAPIStateFormat, Phase: localCAPIPhaseCreating, Name: name, OwnerID: ownerID,
-		Provider:          localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: testColimaEndpoint(), DaemonID: "daemon-123"},
+		ColimaProfile: "ok-capi", Provider: localProviderIdentity{Kind: "docker", Context: "profile-context-7", Endpoint: testColimaEndpoint("ok-capi"), DaemonID: "daemon-123"},
 		BootstrapKindName: localKindClusterName(name, ownerID), BootstrapKubeconfig: filepath.Join(dir, "bootstrap.kubeconfig"),
 		KindConfigPath: filepath.Join(dir, "kind.yaml"), KindConfigSHA256: strings.Repeat("a", 64),
 		ClusterctlConfigPath: filepath.Join(dir, "clusterctl.yaml"), ClusterctlConfigSHA256: strings.Repeat("b", 64),
@@ -27,9 +28,9 @@ func validLocalCAPIState(root string) localCAPIState {
 	}
 }
 
-func testColimaEndpoint() string {
+func testColimaEndpoint(profile string) string {
 	home, _ := os.UserHomeDir()
-	return "unix://" + filepath.Join(home, ".colima", "default", "docker.sock")
+	return "unix://" + filepath.Join(home, ".colima", profile, "docker.sock")
 }
 
 func TestLocalCAPIStateValidationAndIsolation(t *testing.T) {
@@ -58,7 +59,7 @@ func TestLocalCAPIStateValidationAndIsolation(t *testing.T) {
 		func(s *localCAPIState) { s.BootstrapKindName = "other" },
 		func(s *localCAPIState) { s.BootstrapKubeconfig = "/tmp/other" },
 		func(s *localCAPIState) { s.Provider.Kind = "kubernetes" },
-		func(s *localCAPIState) { s.Provider.Context = "default" },
+		func(s *localCAPIState) { s.Provider.Context = "bad context" },
 		func(s *localCAPIState) { s.Provider.DaemonID = "" },
 		func(s *localCAPIState) { s.Provider.Endpoint = "tcp://example" },
 		func(s *localCAPIState) { s.FailureCode = "raw secret" },
@@ -71,6 +72,12 @@ func TestLocalCAPIStateValidationAndIsolation(t *testing.T) {
 	}
 	if err := validateLocalCAPIState("relative", state); err == nil {
 		t.Fatal("relative root accepted")
+	}
+	legacy := state
+	legacy.ColimaProfile = ""
+	legacy.Provider = localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: testColimaEndpoint("default"), DaemonID: "daemon-123"}
+	if err := validateLocalCAPIState(root, legacy); err != nil {
+		t.Fatalf("legacy v1 default-profile receipt rejected: %v", err)
 	}
 }
 
@@ -131,7 +138,7 @@ func TestLocalCAPIKindConfigIsOwnerBoundAndMountsColimaSocket(t *testing.T) {
 }
 
 func TestLocalUpCAPIArgumentsAndStateConflictAreFailClosed(t *testing.T) {
-	for _, args := range [][]string{{"up", "--bootstrap", "kubeadm"}, {"up", "--bootstrap="}, {"up", "--bootstrap", "capi", "extra"}, {"up", "--name", "BAD", "--bootstrap", "capi"}} {
+	for _, args := range [][]string{{"up", "--bootstrap", "kubeadm"}, {"up", "--bootstrap="}, {"up", "--bootstrap", "capi", "extra"}, {"up", "--bootstrap", "capi"}, {"up", "--bootstrap", "capi", "--colima-profile", "default"}, {"up", "--colima-profile", "ok-capi"}, {"up", "--name", "BAD", "--bootstrap", "capi", "--colima-profile", "ok-capi"}} {
 		calls := 0
 		runtime := localRuntime{stateRoot: t.TempDir(), run: func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil }}
 		if err := runLocalWithRuntime(context.Background(), args, io.Discard, io.Discard, runtime); err == nil || calls != 0 {
@@ -151,7 +158,7 @@ func TestLocalUpCAPIArgumentsAndStateConflictAreFailClosed(t *testing.T) {
 		}
 		calls := 0
 		runtime := localRuntime{stateRoot: root, run: func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil }}
-		err := runLocalWithRuntime(context.Background(), []string{"up", "--name", "ok-local", "--bootstrap", "capi"}, io.Discard, io.Discard, runtime)
+		err := runLocalWithRuntime(context.Background(), []string{"up", "--name", "ok-local", "--bootstrap", "capi", "--colima-profile", "ok-capi"}, io.Discard, io.Discard, runtime)
 		if err == nil || !strings.Contains(err.Error(), "will not overwrite") || calls != 0 {
 			t.Fatalf("ownership conflict not rejected: %v calls=%d", err, calls)
 		}
@@ -162,6 +169,142 @@ func TestLocalUpCAPIArgumentsAndStateConflictAreFailClosed(t *testing.T) {
 	}
 }
 
+func TestLocalCAPIDedicatedProfileEndpointAndContextBinding(t *testing.T) {
+	runtime := capiMockRuntime(t, nil)
+	provider, err := observeLocalColimaDockerProvider(context.Background(), runtime, "ok-capi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "custom-context-name" || provider.DaemonID != "daemon-id" {
+		t.Fatalf("profile was not bound to discovered socket/context/daemon: %+v", provider)
+	}
+	if provider.Endpoint == testColimaEndpoint("default") {
+		t.Fatal("dedicated profile fell back to default daemon")
+	}
+	if !localCAPIColimaEndpoint(provider.Endpoint, "ok-capi") || localCAPIColimaEndpoint(testColimaEndpoint("default"), "ok-capi") || localCAPIColimaEndpoint("unix:///tmp/../unsafe/docker.sock", "ok-capi") {
+		t.Fatal("profile socket mapping accepted an unsafe or cross-profile endpoint")
+	}
+}
+
+func TestLocalCAPIHostSocketRejectsProfileSymlinkToOtherDaemon(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "capi-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	defaultDir := filepath.Join(home, ".colima", "default")
+	if err := os.MkdirAll(defaultDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", filepath.Join(defaultDir, "docker.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Symlink(defaultDir, filepath.Join(home, ".colima", "ok-capi")); err != nil {
+		t.Fatal(err)
+	}
+	if localCAPIHostSocketSafeAt(home, "ok-capi", filepath.Join(home, ".colima", "ok-capi", "docker.sock")) {
+		t.Fatal("profile socket path followed a symlink into the default daemon")
+	}
+}
+
+func TestLocalCAPIProfileDiscoveryRejectsMissingAmbiguousAndWrongRuntime(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		instances string
+		contexts  string
+		status    string
+	}{
+		{"missing profile", `{"name":"other","status":"Running","runtime":"docker"}`, "custom-context-name", `{"runtime":"docker","docker_socket":"` + testColimaEndpoint("ok-capi") + `"}`},
+		{"wrong runtime", `{"name":"ok-capi","status":"Running","runtime":"containerd"}`, "custom-context-name", `{"runtime":"containerd"}`},
+		{"missing Docker context", `{"name":"ok-capi","status":"Running","runtime":"docker"}`, "other-context", `{"runtime":"docker","docker_socket":"` + testColimaEndpoint("ok-capi") + `"}`},
+		{"ambiguous Docker contexts", `{"name":"ok-capi","status":"Running","runtime":"docker"}`, "ctx-a\nctx-b", `{"runtime":"docker","docker_socket":"` + testColimaEndpoint("ok-capi") + `"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := capiMockRuntime(t, nil)
+			base := rt.run
+			rt.run = func(ctx context.Context, command string, args ...string) ([]byte, error) {
+				joined := strings.Join(args, " ")
+				switch {
+				case command == "colima" && joined == "list --json":
+					return []byte(tc.instances + "\n"), nil
+				case command == "colima" && joined == "status ok-capi --json":
+					return []byte(tc.status), nil
+				case command == "docker" && joined == "context ls --format {{.Name}}":
+					return []byte(tc.contexts + "\n"), nil
+				case command == "docker" && strings.Contains(joined, "context inspect"):
+					if tc.name == "missing Docker context" {
+						return []byte("unix:///unrelated/docker.sock\n"), nil
+					}
+					return []byte(testColimaEndpoint("ok-capi") + "\n"), nil
+				}
+				return base(ctx, command, args...)
+			}
+			if _, err := observeLocalColimaDockerProvider(context.Background(), rt, "ok-capi"); err == nil {
+				t.Fatal("invalid profile or context binding accepted")
+			}
+		})
+	}
+	if validLocalColimaProfileName("default") || validLocalColimaProfileName("../ok-capi") || validLocalColimaProfileName("OK-CAPI") {
+		t.Fatal("unsafe, default, or noncanonical profile name accepted")
+	}
+}
+
+func TestLocalCAPIDedicatedDaemonRejectsForeignResourcesBeforeIntent(t *testing.T) {
+	for _, target := range []string{"container", "volume", "image", "cache", "network", "kind"} {
+		t.Run(target, func(t *testing.T) {
+			rt := capiMockRuntime(t, nil)
+			base := rt.runPinned
+			creates := 0
+			rt.runKindCreate = func(context.Context, localProviderIdentity, string, ...string) ([]byte, bool, error) {
+				creates++
+				return nil, false, nil
+			}
+			rt.runPinned = func(ctx context.Context, p localProviderIdentity, command string, args ...string) ([]byte, error) {
+				joined := strings.Join(args, " ")
+				if (target == "container" && command == "docker" && strings.HasPrefix(joined, "container ls -aq")) ||
+					(target == "volume" && command == "docker" && strings.HasPrefix(joined, "volume ls -q")) ||
+					(target == "image" && command == "docker" && strings.HasPrefix(joined, "image ls -q")) ||
+					(target == "network" && command == "docker" && strings.HasPrefix(joined, "network ls --format")) {
+					return []byte("foreign-resource\n"), nil
+				}
+				if target == "cache" && command == "docker" && joined == "system df --format {{.Type}}|{{.TotalCount}}" {
+					return []byte("Images|0\nContainers|0\nLocal Volumes|0\nBuild Cache|1\n"), nil
+				}
+				if target == "kind" && command == "kind" && joined == "get clusters" {
+					return []byte("foreign-kind\n"), nil
+				}
+				return base(ctx, p, command, args...)
+			}
+			err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", rt)
+			if err == nil || creates != 0 {
+				t.Fatalf("foreign %s resource did not fail before mutation: err=%v creates=%d", target, err, creates)
+			}
+			if _, statErr := os.Lstat(rt.stateRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("foreign resource caused intent write: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestLocalCAPIRejectsDockerEnvironmentOverridesBeforeMutation(t *testing.T) {
+	rt := capiMockRuntime(t, nil)
+	rt.environ = func() []string { return []string{"DOCKER_CONTEXT=default"} }
+	creates := 0
+	rt.runKindCreate = func(context.Context, localProviderIdentity, string, ...string) ([]byte, bool, error) {
+		creates++
+		return nil, false, nil
+	}
+	err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", rt)
+	if err == nil || creates != 0 {
+		t.Fatalf("Docker environment override did not fail closed: err=%v creates=%d", err, creates)
+	}
+	if _, statErr := os.Lstat(rt.stateRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("environment rejection wrote intent: %v", statErr)
+	}
+}
+
 func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "local-state")
@@ -169,13 +312,13 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint := "unix://" + filepath.Join(home, ".colima", "default", "docker.sock")
-	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: endpoint, DaemonID: "daemon-id"}
+	endpoint := "unix://" + filepath.Join(home, ".colima", "ok-capi", "docker.sock")
+	provider := localProviderIdentity{Kind: "docker", Context: "custom-context-name", Endpoint: endpoint, DaemonID: "daemon-id"}
 	kubeconfig := strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+localKindClusterName("ok-local", "0123456789abcdef0123456789abcdef"))
 	owner := "0123456789abcdef0123456789abcdef"
 	kindName := localKindClusterName("ok-local", owner)
 	created := false
-	runtime := localRuntime{stateRoot: root, run: func(_ context.Context, command string, args ...string) ([]byte, error) {
+	runtime := localRuntime{stateRoot: root, environ: func() []string { return nil }, verifySocket: func(string) bool { return true }, run: func(_ context.Context, command string, args ...string) ([]byte, error) {
 		switch command {
 		case "kind":
 			return []byte("kind v0.33.0 go1.25.0 darwin/arm64\n"), nil
@@ -185,17 +328,21 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 			return []byte(`{"clientVersion":{"gitVersion":"v1.35.8"}}`), nil
 		case "docker":
 			joined := strings.Join(args, " ")
-			if joined == "context show" {
-				return []byte("colima\n"), nil
+			if joined == "context ls --format {{.Name}}" {
+				return []byte("custom-context-name\n"), nil
 			}
 			if strings.Contains(joined, "context inspect") {
 				return []byte(endpoint + "\n"), nil
 			}
-			if strings.Contains(joined, "info --format {{.ID}}") {
-				return []byte(provider.DaemonID + "\n"), nil
-			}
 			return []byte(`{"cpus":8,"memory":12500000000,"root":"/var/lib/docker"}`), nil
 		case "colima":
+			joined := strings.Join(args, " ")
+			if joined == "list --json" {
+				return []byte(`{"name":"ok-capi","status":"Running","runtime":"docker"}` + "\n"), nil
+			}
+			if joined == "status ok-capi --json" {
+				return []byte(`{"runtime":"docker","docker_socket":"` + endpoint + `"}`), nil
+			}
 			if strings.Contains(strings.Join(args, " "), "docker info") {
 				return []byte(provider.DaemonID + "\n"), nil
 			}
@@ -221,8 +368,17 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 			}
 			return nil, nil
 		}
+		if command == "docker" && strings.Join(args, " ") == "info --format {{.ID}}" {
+			return []byte(provider.DaemonID + "\n"), nil
+		}
 		if command == "docker" && strings.Contains(strings.Join(args, " "), "info --format") {
 			return []byte(`{"cpus":8,"memory":12500000000,"root":"/var/lib/docker"}`), nil
+		}
+		if command == "docker" && strings.Join(args, " ") == "system df --format {{.Type}}|{{.TotalCount}}" {
+			return []byte("Images|0\nContainers|0\nLocal Volumes|0\nBuild Cache|0\n"), nil
+		}
+		if command == "docker" && (strings.HasPrefix(strings.Join(args, " "), "container ls -aq") || strings.HasPrefix(strings.Join(args, " "), "volume ls -q") || strings.HasPrefix(strings.Join(args, " "), "image ls -q") || strings.HasPrefix(strings.Join(args, " "), "network ls --format")) {
+			return nil, nil
 		}
 		return nil, errors.New("unexpected pinned command")
 	}, lookPath: func(string) (string, error) { return "/mock/tool", nil },
@@ -302,7 +458,24 @@ func capiDeploymentFixture() []byte {
 func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
 	runtime := capiMockRuntime(t, nil)
 	baseRunner := runtime.runCAPI
+	basePinned := runtime.runPinned
+	runtime.runPinned = func(ctx context.Context, provider localProviderIdentity, command string, args ...string) ([]byte, error) {
+		if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "custom-context-name" {
+			t.Fatalf("Docker/Kind operation was not pinned to the selected Colima daemon: %+v %s %v", provider, command, args)
+		}
+		return basePinned(ctx, provider, command, args...)
+	}
+	baseKindCreate := runtime.runKindCreate
+	runtime.runKindCreate = func(ctx context.Context, provider localProviderIdentity, kubeconfig string, args ...string) ([]byte, bool, error) {
+		if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "custom-context-name" {
+			t.Fatalf("Kind create not pinned to selected Colima daemon: %+v", provider)
+		}
+		return baseKindCreate(ctx, provider, kubeconfig, args...)
+	}
 	runtime.runCAPI = func(ctx context.Context, provider localProviderIdentity, kubeconfig string, env map[string]string, command string, args ...string) ([]byte, error) {
+		if provider.Endpoint != testColimaEndpoint("ok-capi") {
+			t.Fatalf("CAPI command not pinned to selected Colima daemon: %+v", provider)
+		}
 		if kubeconfig != filepath.Join(runtime.stateRoot, "capi", "clusters", "ok-local", "bootstrap.kubeconfig") {
 			t.Fatalf("non-private kubeconfig passed to %s", command)
 		}
@@ -325,7 +498,7 @@ func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
 		}
 		return baseRunner(ctx, provider, kubeconfig, env, command, args...)
 	}
-	if err := runLocalWithRuntime(context.Background(), []string{"up", "--bootstrap", "capi"}, io.Discard, io.Discard, runtime); err != nil {
+	if err := runLocalWithRuntime(context.Background(), []string{"up", "--bootstrap", "capi", "--colima-profile", "ok-capi"}, io.Discard, io.Discard, runtime); err != nil {
 		t.Fatal(err)
 	}
 	state, err := readLocalCAPIState(runtime.stateRoot, "ok-local")
@@ -342,7 +515,7 @@ func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
 
 func TestLocalCAPIFailurePersistsIncompleteAndDoesNotRetryOrLeakOutput(t *testing.T) {
 	runtime := capiMockRuntime(t, errors.New("mock secret token failure"))
-	err := runLocalWithRuntime(context.Background(), []string{"up", "--bootstrap", "capi"}, io.Discard, io.Discard, runtime)
+	err := runLocalWithRuntime(context.Background(), []string{"up", "--bootstrap", "capi", "--colima-profile", "ok-capi"}, io.Discard, io.Discard, runtime)
 	if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "raw output") {
 		t.Fatalf("unsafe or missing failure: %v", err)
 	}
@@ -355,7 +528,7 @@ func TestLocalCAPIFailurePersistsIncompleteAndDoesNotRetryOrLeakOutput(t *testin
 	}
 	calls := 0
 	runtime.run = func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil }
-	if err := runLocalCAPIUpContext(context.Background(), "ok-local", runtime); err == nil || calls != 0 {
+	if err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime); err == nil || calls != 0 {
 		t.Fatalf("existing CAPI intent was retried: err=%v calls=%d", err, calls)
 	}
 }
@@ -380,7 +553,7 @@ func TestLocalCAPIClusterctlFailureLeavesVerifiedBootstrapAndNoCAPIReady(t *test
 		}
 		return base(ctx, provider, kubeconfig, env, command, args...)
 	}
-	err := runLocalCAPIUpContext(context.Background(), "ok-local", runtime)
+	err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime)
 	if err == nil || strings.Contains(err.Error(), "secret-token") {
 		t.Fatalf("unsafe or missing failure: %v", err)
 	}
@@ -412,7 +585,7 @@ func TestLocalCAPIReadinessTimeoutNeverClaimsCAPIReady(t *testing.T) {
 		}
 		return base(ctx, provider, kubeconfig, env, command, args...)
 	}
-	err := runLocalCAPIUpContext(context.Background(), "ok-local", runtime)
+	err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime)
 	if err == nil {
 		t.Fatal("controller timeout was reported as success")
 	}
@@ -444,7 +617,7 @@ func TestLocalCAPIReadyRequiresCAPDDockerSocketMount(t *testing.T) {
 		}
 		return base(ctx, provider, kubeconfig, env, command, args...)
 	}
-	if err := runLocalCAPIUpContext(context.Background(), "ok-local", runtime); err == nil {
+	if err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime); err == nil {
 		t.Fatal("CAPI_READY accepted a CAPD deployment without the Docker socket mount")
 	}
 	state, err := readLocalCAPIState(runtime.stateRoot, "ok-local")
@@ -485,8 +658,11 @@ func TestLocalCAPIPreflightDriftAndCollisionDoNotCreateIntent(t *testing.T) {
 		{"wrong Docker context", func(_ *testing.T, rt *localRuntime) {
 			base := rt.run
 			rt.run = func(ctx context.Context, cmd string, args ...string) ([]byte, error) {
-				if cmd == "docker" && strings.Join(args, " ") == "context show" {
-					return []byte("default"), nil
+				if cmd == "docker" && strings.Join(args, " ") == "context ls --format {{.Name}}" {
+					return []byte("unrelated-context\n"), nil
+				}
+				if cmd == "docker" && strings.Contains(strings.Join(args, " "), "context inspect") {
+					return []byte("unix:///unrelated/docker.sock\n"), nil
 				}
 				return base(ctx, cmd, args...)
 			}
@@ -527,6 +703,15 @@ func TestLocalCAPIPreflightDriftAndCollisionDoNotCreateIntent(t *testing.T) {
 				return base(ctx, cmd, args...)
 			}
 		}},
+		{"selected daemon identity drift", func(_ *testing.T, rt *localRuntime) {
+			base := rt.runPinned
+			rt.runPinned = func(ctx context.Context, provider localProviderIdentity, command string, args ...string) ([]byte, error) {
+				if command == "docker" && strings.Join(args, " ") == "info --format {{.ID}}" {
+					return []byte("different-daemon-id\n"), nil
+				}
+				return base(ctx, provider, command, args...)
+			}
+		}},
 		{"existing generated kind name", func(_ *testing.T, rt *localRuntime) {
 			owner := "0123456789abcdef0123456789abcdef"
 			kindName := localKindClusterName("ok-local", owner)
@@ -552,7 +737,7 @@ func TestLocalCAPIPreflightDriftAndCollisionDoNotCreateIntent(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			rt := capiMockRuntime(t, nil)
 			test.alter(t, &rt)
-			if err := runLocalCAPIUpContext(context.Background(), "ok-local", rt); err == nil {
+			if err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", rt); err == nil {
 				t.Fatal("preflight discrepancy accepted")
 			}
 			if _, err := os.Lstat(rt.stateRoot); !os.IsNotExist(err) {
@@ -564,14 +749,16 @@ func TestLocalCAPIPreflightDriftAndCollisionDoNotCreateIntent(t *testing.T) {
 
 func TestLocalCAPICommandRunnerUsesOnlyPrivateKubeconfig(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/global/kubeconfig-must-not-be-used")
+	t.Setenv("DOCKER_CONTEXT", "default")
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("shell unavailable for environment isolation check")
 	}
 	private := filepath.Join(t.TempDir(), "bootstrap.kubeconfig")
-	provider := localProviderIdentity{Kind: "docker", Context: "colima", Endpoint: testColimaEndpoint(), DaemonID: "daemon-123"}
-	output, err := runLocalCAPICommand(context.Background(), provider, private, nil, "sh", "-c", "printf %s \"$KUBECONFIG\"")
-	if err != nil || string(output) != private {
-		t.Fatalf("isolated KUBECONFIG not enforced: output=%q err=%v", output, err)
+	provider := localProviderIdentity{Kind: "docker", Context: "profile-context-7", Endpoint: testColimaEndpoint("ok-capi"), DaemonID: "daemon-123"}
+	output, err := runLocalCAPICommand(context.Background(), provider, private, nil, "sh", "-c", "printf '%s|%s' \"$KUBECONFIG\" \"$DOCKER_HOST\"")
+	want := private + "|" + provider.Endpoint
+	if err != nil || string(output) != want {
+		t.Fatalf("private kubeconfig and selected daemon endpoint not enforced: output=%q err=%v", output, err)
 	}
 }
 
@@ -585,7 +772,7 @@ func TestLocalCAPIPreflightFailureHasNoStateOrKindMutation(t *testing.T) {
 		}
 		return "/mock/" + name, nil
 	}
-	err := runLocalCAPIUpContext(context.Background(), "ok-local", runtime)
+	err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime)
 	if err == nil || !strings.Contains(err.Error(), "clusterctl") {
 		t.Fatalf("missing tool not rejected: %v", err)
 	}

@@ -130,6 +130,9 @@ type localRuntime struct {
 	waitConsole    func(context.Context, int) error
 	lookPath       func(string) (string, error)
 	runCAPI        localCAPICommandRunner
+	environ        func() []string
+	homeDir        func() (string, error)
+	verifySocket   func(string) bool
 }
 
 type localVerifierFailure struct {
@@ -172,6 +175,9 @@ func defaultLocalRuntime() localRuntime {
 		waitConsole:    waitLocalConsole,
 		lookPath:       exec.LookPath,
 		runCAPI:        runLocalCAPICommand,
+		environ:        os.Environ,
+		homeDir:        os.UserHomeDir,
+		verifySocket:   localCAPIHostSocketExists,
 	}
 }
 
@@ -361,6 +367,7 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 	flags.SetOutput(stderr)
 	name := flags.String("name", localClusterDefaultName, "Dedicated local kind cluster name")
 	bootstrap := flags.String("bootstrap", "", "Experimental bootstrap mode (currently: capi)")
+	colimaProfile := flags.String("colima-profile", "", "Existing dedicated Colima profile for experimental CAPI bootstrap")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -368,20 +375,30 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 		return errors.New("ok local up accepts no positional arguments and requires a valid --name")
 	}
 	bootstrapSet := false
+	profileSet := false
 	flags.Visit(func(parsed *flag.Flag) {
 		if parsed.Name == "bootstrap" {
 			bootstrapSet = true
+		}
+		if parsed.Name == "colima-profile" {
+			profileSet = true
 		}
 	})
 	if bootstrapSet {
 		if *bootstrap != "capi" {
 			return errors.New("unsupported --bootstrap mode; the only recognized experimental value is capi")
 		}
-		if err := runLocalCAPIUpContext(ctx, *name, runtime); err != nil {
+		if !profileSet || !validLocalColimaProfileName(*colimaProfile) {
+			return errors.New("experimental CAPI bootstrap requires an explicit valid --colima-profile")
+		}
+		if err := runLocalCAPIUpContext(ctx, *name, *colimaProfile, runtime); err != nil {
 			return err
 		}
 		_, err := fmt.Fprintf(stdout, "Temporary CAPI bootstrap %q is ready; lifecycle phase CAPI_READY. No workload cluster was provisioned or moved.\n", *name)
 		return err
+	}
+	if profileSet {
+		return errors.New("--colima-profile is only valid with --bootstrap capi")
 	}
 	if _, err := os.Lstat(localCAPIStateDirectory(runtime.stateRoot, *name)); err == nil {
 		return errors.New("CAPI lifecycle ownership exists for this name; the Console workflow will not adopt or overwrite it")

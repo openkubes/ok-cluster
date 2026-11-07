@@ -142,6 +142,7 @@ type localCAPIState struct {
 	Phase                     localCAPIPhase                `json:"phase"`
 	Name                      string                        `json:"name"`
 	OwnerID                   string                        `json:"ownerID"`
+	ColimaProfile             string                        `json:"colimaProfile,omitempty"`
 	Provider                  localProviderIdentity         `json:"provider"`
 	BootstrapKindName         string                        `json:"bootstrapKindName"`
 	BootstrapKubeconfig       string                        `json:"bootstrapKubeconfig"`
@@ -187,8 +188,9 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 	default:
 		return errors.New("unsupported CAPI lifecycle phase")
 	}
-	if state.Provider.Kind != "docker" || state.Provider.Context != "colima" ||
-		!localCAPIColimaEndpoint(state.Provider.Endpoint) || len(state.Provider.DaemonID) < 3 || len(state.Provider.DaemonID) > 128 ||
+	profile := localCAPIStateProfile(state)
+	if !validLocalColimaProfileSyntax(profile) || state.Provider.Kind != "docker" || !validLocalDockerContextName(state.Provider.Context) ||
+		(profile == "default" && state.Provider.Context != "colima") || !localCAPIColimaEndpoint(state.Provider.Endpoint, profile) || len(state.Provider.DaemonID) < 3 || len(state.Provider.DaemonID) > 128 ||
 		!regexp.MustCompile(`^[A-Za-z0-9._:-]+$`).MatchString(state.Provider.DaemonID) {
 		return errors.New("CAPI lifecycle requires a complete pinned Colima Docker identity")
 	}
@@ -338,15 +340,18 @@ type localCAPIKubectlVersion struct {
 
 // runLocalCAPIUp is an isolated lifecycle. It never invokes the normal Console
 // verifier and never deletes/retries resources after intent is persisted.
-func runLocalCAPIUp(name string, runtime localRuntime) error {
-	return runLocalCAPIUpContext(context.Background(), name, runtime)
+func runLocalCAPIUp(name, profile string, runtime localRuntime) error {
+	return runLocalCAPIUpContext(context.Background(), name, profile, runtime)
 }
 
-func runLocalCAPIUpContext(ctx context.Context, name string, runtime localRuntime) (result error) {
+func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime localRuntime) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	if !localClusterNamePattern.MatchString(name) {
 		return errors.New("CAPI bootstrap requires a valid logical cluster name")
+	}
+	if !validLocalColimaProfileName(profile) {
+		return errors.New("CAPI bootstrap requires an explicit valid Colima profile")
 	}
 	if runtime.stateRoot == "" || !filepath.IsAbs(runtime.stateRoot) || filepath.Clean(runtime.stateRoot) != runtime.stateRoot {
 		return errors.New("cannot safely inspect the private local CAPI state root")
@@ -386,12 +391,18 @@ func runLocalCAPIUpContext(ctx context.Context, name string, runtime localRuntim
 	if err != nil || validateLocalCAPIKubectlVersion(kubectlVersion) != nil {
 		return errors.New("kubectl client compatible with Kubernetes 1.35 is required; no state or infrastructure was changed")
 	}
-	provider, err := observeLocalDockerProvider(ctx, runtime)
-	if err != nil || provider.Context != "colima" || !localCAPIColimaEndpoint(provider.Endpoint) {
-		return errors.New("CAPI bootstrap supports only the verified local Colima Docker socket; no state or infrastructure was changed")
+	if err := rejectUnexpectedLocalDockerEnvironment(runtime); err != nil {
+		return fmt.Errorf("CAPI provider preflight rejected the environment: %s; no state or infrastructure was changed", err)
 	}
-	if err := verifyLocalCAPIPrequisites(ctx, runtime, provider); err != nil {
+	provider, err := observeLocalColimaDockerProvider(ctx, runtime, profile)
+	if err != nil {
+		return errors.New("selected Colima profile does not have one verified Docker endpoint, matching context, and daemon identity; no state or infrastructure was changed")
+	}
+	if err := verifyLocalCAPIPrequisites(ctx, runtime, profile, provider); err != nil {
 		return fmt.Errorf("CAPI preflight failed: %s; no state or infrastructure was changed", err.Error())
+	}
+	if err := verifyLocalCAPIDedicatedDaemon(ctx, runtime, provider); err != nil {
+		return fmt.Errorf("selected Colima daemon is not empty and dedicated: %s; no state or infrastructure was changed", err)
 	}
 	newOwner := runtime.newOwnerID
 	if newOwner == nil {
@@ -460,7 +471,7 @@ func runLocalCAPIUpContext(ctx context.Context, name string, runtime localRuntim
 	}
 	kindHash, clusterctlHash := sha256.Sum256(kindConfig), sha256.Sum256(clusterctlConfig)
 	state := localCAPIState{
-		Format: localCAPIStateFormat, Phase: localCAPIPhaseCreating, Name: name, OwnerID: ownerID, Provider: provider,
+		Format: localCAPIStateFormat, Phase: localCAPIPhaseCreating, Name: name, OwnerID: ownerID, ColimaProfile: profile, Provider: provider,
 		BootstrapKindName: kindName, BootstrapKubeconfig: kubeconfigPath, KindConfigPath: kindPath,
 		KindConfigSHA256: hex.EncodeToString(kindHash[:]), ClusterctlConfigPath: clusterctlPath,
 		ClusterctlConfigSHA256: hex.EncodeToString(clusterctlHash[:]), KubernetesVersion: localCAPIKubernetesVersion,
@@ -478,8 +489,17 @@ func runLocalCAPIUpContext(ctx context.Context, name string, runtime localRuntim
 	}
 	// Rebind the just-persisted intent to the same provider and empty Kind name
 	// immediately before the first infrastructure mutation.
-	providerBeforeCreate, providerErr := observeLocalDockerProvider(ctx, runtime)
+	providerBeforeCreate, providerErr := observeLocalColimaDockerProvider(ctx, runtime, profile)
 	if providerErr != nil || providerBeforeCreate != state.Provider {
+		return fail("preflight", "PREFLIGHT_FAILED")
+	}
+	if envErr := rejectUnexpectedLocalDockerEnvironment(runtime); envErr != nil {
+		return fail("preflight", "PREFLIGHT_FAILED")
+	}
+	if err := verifyLocalCAPIPreflightProfile(ctx, runtime, profile, state.Provider); err != nil {
+		return fail("preflight", "PREFLIGHT_FAILED")
+	}
+	if err := verifyLocalCAPIDedicatedDaemon(ctx, runtime, provider); err != nil {
 		return fail("preflight", "PREFLIGHT_FAILED")
 	}
 	clustersBeforeCreate, listErr := runLocalPinned(ctx, runtime, provider, "kind", "get", "clusters")
@@ -499,6 +519,9 @@ func runLocalCAPIUpContext(ctx context.Context, name string, runtime localRuntim
 		return fail("preflight", "PREFLIGHT_FAILED")
 	}
 	if !localCAPIConfigMatches(kindPath, state.KindConfigSHA256) || !localCAPIConfigMatches(clusterctlPath, state.ClusterctlConfigSHA256) {
+		return fail("preflight", "PREFLIGHT_FAILED")
+	}
+	if err := verifyLocalCAPIProviderStillPinned(ctx, runtime, state); err != nil {
 		return fail("preflight", "PREFLIGHT_FAILED")
 	}
 
@@ -521,6 +544,10 @@ func runLocalCAPIUpContext(ctx context.Context, name string, runtime localRuntim
 		inspectLocalCAPIResidual(ctx, runtime, &state)
 		return fail("bootstrap-verify", "BOOTSTRAP_VERIFY_FAILED")
 	}
+	if err := verifyLocalCAPIProviderStillPinned(ctx, runtime, state); err != nil {
+		inspectLocalCAPIResidual(ctx, runtime, &state)
+		return fail("bootstrap-verify", "BOOTSTRAP_VERIFY_FAILED")
+	}
 	if err := captureLocalCAPIIdentity(ctx, runtime, &state); err != nil {
 		inspectLocalCAPIResidual(ctx, runtime, &state)
 		return fail("bootstrap-verify", "BOOTSTRAP_VERIFY_FAILED")
@@ -540,6 +567,9 @@ func runLocalCAPIUpContext(ctx context.Context, name string, runtime localRuntim
 	state.Phase = localCAPIPhaseInitializing
 	if err := writeLocalCAPIState(runtime.stateRoot, state, true); err != nil {
 		return fail("state", "STATE_PERSIST_FAILED")
+	}
+	if err := verifyLocalCAPIProviderStillPinned(ctx, runtime, state); err != nil {
+		return fail("capi-init", "PREFLIGHT_FAILED")
 	}
 	if _, err := runLocalCAPIRaw(ctx, runtime, provider, kubeconfigPath, map[string]string{"CLUSTER_TOPOLOGY": "true"}, "clusterctl", initArgs...); err != nil {
 		state.InitEvidence = captureLocalCAPIInitEvidence(runtime, provider, state)
@@ -655,13 +685,257 @@ func waitLocalCAPIReadiness(ctx context.Context, runtime localRuntime, provider 
 	return nil
 }
 
-func localCAPIColimaEndpoint(endpoint string) bool {
+func validLocalColimaProfileName(profile string) bool {
+	return profile != "default" && validLocalColimaProfileSyntax(profile)
+}
+
+func validLocalColimaProfileSyntax(profile string) bool {
+	return (profile == "default" || regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`).MatchString(profile))
+}
+
+func localCAPIStateProfile(state localCAPIState) string {
+	if state.ColimaProfile == "" {
+		return "default" // v1 receipts created before profile selection were pinned to default.
+	}
+	return state.ColimaProfile
+}
+
+func validLocalDockerContextName(name string) bool {
+	return len(name) > 0 && len(name) <= 128 && regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`).MatchString(name)
+}
+
+func localCAPIColimaEndpoint(endpoint, profile string) bool {
+	if !validLocalColimaProfileSyntax(profile) || !strings.HasPrefix(endpoint, "unix://") || strings.ContainsAny(endpoint, "\\\r\n\x00") {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return false
+	}
+	path := strings.TrimPrefix(endpoint, "unix://")
+	if filepath.Clean(path) != path || !filepath.IsAbs(path) {
+		return false
+	}
+	want := filepath.Join(home, ".colima", profile, "docker.sock")
+	return path == want && !strings.Contains(path, string(filepath.Separator)+".."+string(filepath.Separator))
+}
+
+func localCAPIHostSocketExists(endpoint string) bool {
+	path := strings.TrimPrefix(endpoint, "unix://")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
 	}
-	want := "unix://" + filepath.Join(home, ".colima", "default", "docker.sock")
-	return filepath.Clean(strings.TrimPrefix(endpoint, "unix://")) == strings.TrimPrefix(want, "unix://")
+	relative, err := filepath.Rel(home, path)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	if len(parts) != 3 || parts[0] != ".colima" || parts[2] != "docker.sock" {
+		return false
+	}
+	return localCAPIHostSocketSafeAt(home, parts[1], path)
+}
+
+func localCAPIHostSocketSafeAt(home, profile, path string) bool {
+	if !filepath.IsAbs(home) || filepath.Clean(home) != home || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return false
+	}
+	homeInfo, err := os.Lstat(home)
+	if err != nil || !homeInfo.IsDir() || homeInfo.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	if !validLocalColimaProfileSyntax(profile) || path != filepath.Join(home, ".colima", profile, "docker.sock") {
+		return false
+	}
+	relative, err := filepath.Rel(home, path)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	current := home
+	parts := strings.Split(relative, string(filepath.Separator))
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+		if i == len(parts)-1 {
+			return info.Mode()&os.ModeSocket != 0
+		}
+		if !info.IsDir() {
+			return false
+		}
+	}
+	return false
+}
+
+type localColimaInstance struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Runtime string `json:"runtime"`
+}
+
+type localColimaStatus struct {
+	Runtime      string `json:"runtime"`
+	DockerSocket string `json:"docker_socket"`
+}
+
+func rejectUnexpectedLocalDockerEnvironment(runtime localRuntime) error {
+	environ := runtime.environ
+	if environ == nil {
+		environ = os.Environ
+	}
+	for _, item := range environ() {
+		key, _, _ := strings.Cut(item, "=")
+		if strings.HasPrefix(key, "DOCKER_") || key == "COLIMA_HOME" || key == "COLIMA_PROFILE" || key == "KIND_EXPERIMENTAL_PROVIDER" || key == "KUBECONFIG" || key == "LIMA_HOME" {
+			return errors.New("Docker or Colima environment override is set")
+		}
+	}
+	return nil
+}
+
+func observeLocalCAPIStateProvider(ctx context.Context, runtime localRuntime, state localCAPIState) (localProviderIdentity, error) {
+	return observeLocalColimaDockerProvider(ctx, runtime, localCAPIStateProfile(state))
+}
+
+// observeLocalColimaDockerProvider derives the selected profile's socket from
+// Colima status, finds the unique Docker context that references that exact
+// endpoint, and obtains the daemon ID through the endpoint-pinned runner.
+func observeLocalColimaDockerProvider(ctx context.Context, runtime localRuntime, profile string) (localProviderIdentity, error) {
+	if !validLocalColimaProfileSyntax(profile) {
+		return localProviderIdentity{}, errors.New("invalid Colima profile")
+	}
+	instancesRaw, err := runtime.run(ctx, "colima", "list", "--json")
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	instances, err := parseLocalColimaInstances(instancesRaw)
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	var selected *localColimaInstance
+	for i := range instances {
+		if instances[i].Name == profile {
+			if selected != nil {
+				return localProviderIdentity{}, errors.New("ambiguous Colima profile")
+			}
+			selected = &instances[i]
+		}
+	}
+	if selected == nil || selected.Status != "Running" || (selected.Runtime != "docker" && selected.Runtime != "docker+k3s") {
+		return localProviderIdentity{}, errors.New("selected Colima profile is missing, stopped, or not using Docker")
+	}
+	statusRaw, err := runtime.run(ctx, "colima", "status", profile, "--json")
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	var status localColimaStatus
+	if err := json.Unmarshal(statusRaw, &status); err != nil || status.Runtime != "docker" || !localCAPIColimaEndpoint(status.DockerSocket, profile) {
+		return localProviderIdentity{}, errors.New("Colima profile returned an invalid Docker endpoint")
+	}
+	verifySocket := runtime.verifySocket
+	if verifySocket == nil {
+		verifySocket = localCAPIHostSocketExists
+	}
+	if !verifySocket(status.DockerSocket) {
+		return localProviderIdentity{}, errors.New("Colima profile Docker socket is not a verified Unix socket")
+	}
+	contextsRaw, err := runtime.run(ctx, "docker", "context", "ls", "--format", "{{.Name}}")
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	var matches []string
+	for _, contextName := range strings.Fields(string(contextsRaw)) {
+		if !validLocalDockerContextName(contextName) {
+			return localProviderIdentity{}, errors.New("Docker returned an invalid context name")
+		}
+		endpointRaw, inspectErr := runtime.run(ctx, "docker", "context", "inspect", contextName, "--format", "{{.Endpoints.docker.Host}}")
+		if inspectErr == nil && strings.TrimSpace(string(endpointRaw)) == status.DockerSocket {
+			matches = append(matches, contextName)
+		}
+	}
+	if len(matches) != 1 {
+		return localProviderIdentity{}, errors.New("selected Colima endpoint must match exactly one configured Docker context")
+	}
+	provider := localProviderIdentity{Kind: "docker", Context: matches[0], Endpoint: status.DockerSocket}
+	identityRaw, err := runLocalPinned(ctx, runtime, provider, "docker", "info", "--format", "{{.ID}}")
+	if err != nil {
+		return localProviderIdentity{}, err
+	}
+	provider.DaemonID = strings.TrimSpace(string(identityRaw))
+	if len(provider.DaemonID) < 3 || len(provider.DaemonID) > 128 || !regexp.MustCompile(`^[A-Za-z0-9._:-]+$`).MatchString(provider.DaemonID) {
+		return localProviderIdentity{}, errors.New("selected Docker daemon identity is invalid")
+	}
+	return provider, nil
+}
+
+func parseLocalColimaInstances(raw []byte) ([]localColimaInstance, error) {
+	var result []localColimaInstance
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var item localColimaInstance
+		if err := json.Unmarshal([]byte(line), &item); err != nil || item.Name == "" || item.Status == "" || item.Runtime == "" {
+			return nil, errors.New("Colima profile inventory is malformed")
+		}
+		result = append(result, item)
+		if len(result) > 128 {
+			return nil, errors.New("Colima profile inventory exceeds the safe limit")
+		}
+	}
+	return result, nil
+}
+
+func verifyLocalCAPIDedicatedDaemon(ctx context.Context, runtime localRuntime, provider localProviderIdentity) error {
+	checks := [][]string{
+		{"container", "ls", "-aq", "--no-trunc"},
+		{"volume", "ls", "-q"},
+		{"image", "ls", "-q", "--no-trunc"},
+	}
+	for _, args := range checks {
+		output, err := runLocalPinned(ctx, runtime, provider, "docker", args...)
+		if err != nil || len(strings.Fields(string(output))) != 0 {
+			return errors.New("selected daemon contains existing containers, volumes, or images")
+		}
+	}
+	usage, err := runLocalPinned(ctx, runtime, provider, "docker", "system", "df", "--format", "{{.Type}}|{{.TotalCount}}")
+	if err != nil {
+		return errors.New("could not verify selected daemon build-cache inventory")
+	}
+	seenUsage := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(usage)), "\n") {
+		parts := strings.Split(line, "|")
+		if len(parts) != 2 {
+			return errors.New("selected daemon resource inventory is malformed")
+		}
+		count, parseErr := strconv.Atoi(parts[1])
+		if parseErr != nil || count < 0 || seenUsage[parts[0]] {
+			return errors.New("selected daemon resource inventory is malformed")
+		}
+		seenUsage[parts[0]] = true
+		if count != 0 {
+			return errors.New("selected daemon contains existing images, containers, volumes, or build cache")
+		}
+	}
+	if len(seenUsage) != 4 || !seenUsage["Images"] || !seenUsage["Containers"] || !seenUsage["Local Volumes"] || !seenUsage["Build Cache"] {
+		return errors.New("selected daemon resource inventory is incomplete")
+	}
+	networks, err := runLocalPinned(ctx, runtime, provider, "docker", "network", "ls", "--format", "{{.Name}}")
+	if err != nil {
+		return errors.New("could not verify selected daemon networks")
+	}
+	for _, network := range strings.Fields(string(networks)) {
+		if network != "bridge" && network != "host" && network != "none" {
+			return errors.New("selected daemon contains a non-default network")
+		}
+	}
+	kindClusters, err := runLocalPinned(ctx, runtime, provider, "kind", "get", "clusters")
+	if err != nil || len(strings.Fields(string(kindClusters))) != 0 {
+		return errors.New("selected daemon contains existing Kind clusters")
+	}
+	return nil
 }
 
 func validateLocalCAPIKubectlVersion(raw []byte) error {
@@ -680,18 +954,39 @@ func validateLocalCAPIKubectlVersion(raw []byte) error {
 	return nil
 }
 
-func verifyLocalCAPIPrequisites(ctx context.Context, runtime localRuntime, provider localProviderIdentity) error {
-	if provider.Context != "colima" || !localCAPIColimaEndpoint(provider.Endpoint) {
+func verifyLocalCAPIPreflightProfile(ctx context.Context, runtime localRuntime, profile string, provider localProviderIdentity) error {
+	if err := rejectUnexpectedLocalDockerEnvironment(runtime); err != nil {
+		return err
+	}
+	observed, err := observeLocalColimaDockerProvider(ctx, runtime, profile)
+	if err != nil || observed != provider {
+		return errors.New("selected Colima profile identity changed")
+	}
+	if runtime.run == nil {
+		return errors.New("Colima inspection command runner is unavailable")
+	}
+	if _, err := runtime.run(ctx, "colima", "ssh", profile, "--", "sh", "-c", "test -S /var/run/docker.sock"); err != nil {
+		return errors.New("selected Colima VM Docker socket is unavailable")
+	}
+	vmDaemon, err := runtime.run(ctx, "colima", "ssh", profile, "--", "docker", "info", "--format", "{{.ID}}")
+	if err != nil || strings.TrimSpace(string(vmDaemon)) != provider.DaemonID {
+		return errors.New("selected Colima VM Docker socket does not identify the pinned daemon")
+	}
+	return nil
+}
+
+func verifyLocalCAPIProviderStillPinned(ctx context.Context, runtime localRuntime, state localCAPIState) error {
+	if err := verifyLocalCAPIPreflightProfile(ctx, runtime, localCAPIStateProfile(state), state.Provider); err != nil {
+		return errors.New("selected Colima Docker identity changed")
+	}
+	return nil
+}
+
+func verifyLocalCAPIPrequisites(ctx context.Context, runtime localRuntime, profile string, provider localProviderIdentity) error {
+	if err := verifyLocalCAPIPreflightProfile(ctx, runtime, profile, provider); err != nil {
 		return errors.New("unsupported Docker provider")
 	}
-	if _, err := runtime.run(ctx, "colima", "ssh", "--profile", "default", "--", "sh", "-c", "test -S /var/run/docker.sock"); err != nil {
-		return errors.New("Colima VM Docker socket is unavailable")
-	}
-	vmDaemon, err := runtime.run(ctx, "colima", "ssh", "--profile", "default", "--", "docker", "info", "--format", "{{.ID}}")
-	if err != nil || strings.TrimSpace(string(vmDaemon)) != provider.DaemonID {
-		return errors.New("Colima VM Docker socket does not identify the pinned Docker daemon")
-	}
-	sysctl, err := runtime.run(ctx, "colima", "ssh", "--profile", "default", "--", "sysctl", "-n", "fs.inotify.max_user_instances")
+	sysctl, err := runtime.run(ctx, "colima", "ssh", profile, "--", "sysctl", "-n", "fs.inotify.max_user_instances")
 	if err != nil {
 		return errors.New("cannot verify Colima inotify limit")
 	}
@@ -707,7 +1002,7 @@ func verifyLocalCAPIPrequisites(ctx context.Context, runtime localRuntime, provi
 	if json.Unmarshal(info, &resources) != nil || resources.CPUs < localCAPIMinCPUs || resources.Memory < localCAPIMinMemoryBytes || resources.Root == "" {
 		return errors.New("Docker provider needs at least 2 CPUs and 6 GiB memory for the temporary CAPI bootstrap")
 	}
-	disk, err := runtime.run(ctx, "colima", "ssh", "--profile", "default", "--", "df", "-Pk", resources.Root)
+	disk, err := runtime.run(ctx, "colima", "ssh", profile, "--", "df", "-Pk", resources.Root)
 	if err != nil || !localCAPIHasDiskHeadroom(disk, 15*1024*1024) {
 		return errors.New("Colima Docker disk needs at least 15 GiB free for the temporary CAPI bootstrap")
 	}
@@ -997,7 +1292,7 @@ func runLocalCAPICommand(ctx context.Context, provider localProviderIdentity, ku
 }
 
 func captureLocalCAPIIdentity(ctx context.Context, runtime localRuntime, state *localCAPIState) error {
-	observed, err := observeLocalDockerProvider(ctx, runtime)
+	observed, err := observeLocalCAPIStateProvider(ctx, runtime, *state)
 	if err != nil || observed != state.Provider {
 		return errors.New("pinned Docker provider identity changed")
 	}
@@ -1070,7 +1365,7 @@ func captureLocalCAPIIdentity(ctx context.Context, runtime localRuntime, state *
 // after a failed Kind create. It does not call kubeadm, adopt, repair, or delete.
 func inspectLocalCAPIResidual(ctx context.Context, runtime localRuntime, state *localCAPIState) {
 	state.BootstrapResourceState = localCAPIResourceUnknown
-	provider, err := observeLocalDockerProvider(ctx, runtime)
+	provider, err := observeLocalCAPIStateProvider(ctx, runtime, *state)
 	if err != nil || provider != state.Provider {
 		return
 	}
@@ -1351,7 +1646,7 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 		state.CRDs = append(state.CRDs, required)
 	}
 	sort.Strings(state.CRDs)
-	observed, err := observeLocalDockerProvider(ctx, runtime)
+	observed, err := observeLocalCAPIStateProvider(ctx, runtime, *state)
 	if err != nil || observed != state.Provider {
 		return errors.New("Docker provider identity changed during CAPI initialization")
 	}
