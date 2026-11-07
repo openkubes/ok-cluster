@@ -124,9 +124,24 @@ type localCAPIInitEvidence struct {
 }
 
 type localCAPIProviderEvidence struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Namespace string `json:"namespace"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+}
+
+type localCAPIProviderList struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Items      []struct {
+		Metadata struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"metadata"`
+		ProviderName string `json:"providerName"`
+		Type         string `json:"type"`
+		Version      string `json:"version"`
+	} `json:"items"`
 }
 
 type localCAPIWorkloadEvidence struct {
@@ -251,9 +266,10 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 			if !wantDeployments[key] || deployment.UID == "" || deployment.Replicas < 1 || deployment.AvailableReplicas != deployment.Replicas || len(deployment.Images) == 0 {
 				return errors.New("CAPI_READY receipt has incomplete controller evidence")
 			}
-			if deployment.Namespace == "capi-system" || strings.HasPrefix(deployment.Namespace, "capi-kubeadm-") || deployment.Namespace == "capd-system" {
-				if !deployment.ClusterTopology || !strings.HasSuffix(deployment.ManagerImage, ":"+localCAPIVersion) {
-					return errors.New("CAPI_READY receipt lacks pinned controller image or ClusterTopology evidence")
+			if localCAPIDeploymentIsCAPIController(deployment.Namespace) {
+				if !strings.HasSuffix(deployment.ManagerImage, ":"+localCAPIVersion) ||
+					(localCAPIControllerRequiresClusterTopology(deployment.Namespace, deployment.Name) && !deployment.ClusterTopology) {
+					return errors.New("CAPI_READY receipt lacks pinned controller image or required ClusterTopology evidence")
 				}
 			}
 			if deployment.Namespace == "capd-system" && !deployment.DockerSocketMounted {
@@ -290,9 +306,8 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 		providerSeen := map[string]bool{}
 		for _, provider := range state.InitEvidence.Providers {
 			key := provider.Type + "/" + provider.Name
-			if !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.-]{0,63}$`).MatchString(provider.Type) ||
-				!regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.-]{0,63}$`).MatchString(provider.Name) ||
-				!localCAPIProviderVersionPattern.MatchString(provider.Version) || providerSeen[key] {
+			want, ok := expectedLocalCAPIProviders()[key]
+			if !ok || provider.Namespace != want.Namespace || provider.Version != want.Version || providerSeen[key] {
 				return errors.New("CAPI partial provider inventory contains invalid metadata")
 			}
 			providerSeen[key] = true
@@ -1481,13 +1496,11 @@ func captureLocalCAPIInitEvidence(runtime localRuntime, provider localProviderId
 	evidence := &localCAPIInitEvidence{}
 	contextName := "kind-" + state.BootstrapKindName
 	if raw, err := runLocalCAPIRaw(inspectCtx, runtime, provider, state.BootstrapKubeconfig, nil,
-		"clusterctl", "get", "providers", "--kubeconfig", state.BootstrapKubeconfig, "--kubeconfig-context", contextName, "-o", "json"); err == nil {
-		var inventory struct {
-			Providers []localCAPIProviderEvidence `json:"providers"`
-		}
-		if json.Unmarshal(raw, &inventory) == nil && len(inventory.Providers) <= 8 {
+		"kubectl", "--kubeconfig", state.BootstrapKubeconfig, "--context", contextName,
+		"get", "providers.clusterctl.cluster.x-k8s.io", "-A", "-o", "json"); err == nil {
+		if providers, parseErr := parseLocalCAPIProviderInventory(raw, true); parseErr == nil {
 			evidence.ProvidersObserved = true
-			evidence.Providers = inventory.Providers
+			evidence.Providers = providers
 		}
 	}
 	if raw, err := runLocalCAPIRaw(inspectCtx, runtime, provider, state.BootstrapKubeconfig, nil,
@@ -1572,6 +1585,53 @@ func expectedLocalCAPIDeployment(namespace, name string) bool {
 	}
 }
 
+type localCAPIExpectedProvider struct {
+	ObjectName string
+	Namespace  string
+	Version    string
+}
+
+func expectedLocalCAPIProviders() map[string]localCAPIExpectedProvider {
+	return map[string]localCAPIExpectedProvider{
+		"CoreProvider/cluster-api":      {ObjectName: "cluster-api", Namespace: "capi-system", Version: localCAPIVersion},
+		"BootstrapProvider/kubeadm":     {ObjectName: "bootstrap-kubeadm", Namespace: "capi-kubeadm-bootstrap-system", Version: localCAPIVersion},
+		"ControlPlaneProvider/kubeadm":  {ObjectName: "control-plane-kubeadm", Namespace: "capi-kubeadm-control-plane-system", Version: localCAPIVersion},
+		"InfrastructureProvider/docker": {ObjectName: "infrastructure-docker", Namespace: "capd-system", Version: localCAPIVersion},
+	}
+}
+
+// parseLocalCAPIProviderInventory reads the Kubernetes ProviderList returned by
+// kubectl. Missing entries are allowed only for partial-init evidence; every
+// observed entry must match the exact type, name, version, and namespace.
+func parseLocalCAPIProviderInventory(raw []byte, allowPartial bool) ([]localCAPIProviderEvidence, error) {
+	var list localCAPIProviderList
+	if err := json.Unmarshal(raw, &list); err != nil || list.APIVersion != "clusterctl.cluster.x-k8s.io/v1alpha3" || list.Kind != "ProviderList" || list.Items == nil || len(list.Items) > 8 {
+		return nil, errors.New("Kubernetes ProviderList is malformed or unsupported")
+	}
+	want := expectedLocalCAPIProviders()
+	seen := make(map[string]bool, len(want))
+	providers := make([]localCAPIProviderEvidence, 0, len(list.Items))
+	for _, item := range list.Items {
+		provider := localCAPIProviderEvidence{
+			Namespace: item.Metadata.Namespace,
+			Type:      item.Type,
+			Name:      item.ProviderName,
+			Version:   item.Version,
+		}
+		key := provider.Type + "/" + provider.Name
+		expected, ok := want[key]
+		if !ok || item.Metadata.Name != expected.ObjectName || provider.Namespace != expected.Namespace || provider.Version != expected.Version || seen[key] {
+			return nil, errors.New("Kubernetes ProviderList contains an unexpected or conflicting provider")
+		}
+		seen[key] = true
+		providers = append(providers, provider)
+	}
+	if !allowPartial && len(providers) != len(want) {
+		return nil, errors.New("Kubernetes ProviderList is missing required providers")
+	}
+	return providers, nil
+}
+
 func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider localProviderIdentity, state *localCAPIState) error {
 	if err := captureLocalCAPIIdentity(ctx, runtime, state); err != nil {
 		return err
@@ -1588,13 +1648,14 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 	}
 	expected := []struct {
 		namespace, name string
+		capiController  bool
 		topology        bool
 	}{
-		{"capi-system", "capi-controller-manager", true},
-		{"capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager", true},
-		{"capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager", true},
-		{"capd-system", "capd-controller-manager", true},
-		{"cert-manager", "cert-manager", false}, {"cert-manager", "cert-manager-cainjector", false}, {"cert-manager", "cert-manager-webhook", false},
+		{"capi-system", "capi-controller-manager", true, true},
+		{"capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager", true, false},
+		{"capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager", true, true},
+		{"capd-system", "capd-controller-manager", true, true},
+		{"cert-manager", "cert-manager", false, false}, {"cert-manager", "cert-manager-cainjector", false, false}, {"cert-manager", "cert-manager-webhook", false, false},
 	}
 	state.Deployments = nil
 	for _, want := range expected {
@@ -1619,8 +1680,10 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 				managerImage = container.Image
 				evidence.ManagerImage = container.Image
 			}
-			if want.topology && container.Name == "manager" {
+			if want.capiController && container.Name == "manager" {
 				managerFound = true
+			}
+			if want.topology && container.Name == "manager" {
 				gate := false
 				for _, arg := range container.Args {
 					for _, setting := range strings.Split(strings.TrimPrefix(arg, "--feature-gates="), ",") {
@@ -1646,7 +1709,7 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 				}
 			}
 		}
-		if len(evidence.Images) == 0 || (want.topology && (!managerFound || !evidence.ClusterTopology || !strings.HasSuffix(managerImage, ":"+localCAPIVersion))) {
+		if len(evidence.Images) == 0 || (want.capiController && (!managerFound || !strings.HasSuffix(managerImage, ":"+localCAPIVersion))) || (want.topology && !evidence.ClusterTopology) {
 			return errors.New("required controller image or ClusterTopology feature gate evidence is missing")
 		}
 		if want.namespace == "capd-system" && !evidence.DockerSocketMounted {
@@ -1661,33 +1724,15 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 		}
 		state.Deployments = append(state.Deployments, evidence)
 	}
-	providersRaw, err := runLocalCAPIRaw(ctx, runtime, provider, state.BootstrapKubeconfig, nil, "clusterctl", "get", "providers", "--kubeconfig", state.BootstrapKubeconfig, "--kubeconfig-context", "kind-"+state.BootstrapKindName, "-o", "json")
+	providersRaw, err := runLocalCAPIRaw(ctx, runtime, provider, state.BootstrapKubeconfig, nil,
+		"kubectl", "--kubeconfig", state.BootstrapKubeconfig, "--context", "kind-"+state.BootstrapKindName,
+		"get", "providers.clusterctl.cluster.x-k8s.io", "-A", "-o", "json")
 	if err != nil {
 		return errors.New("cannot verify installed CAPI provider versions")
 	}
-	var providers struct {
-		Providers []struct {
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			Version string `json:"version"`
-		} `json:"providers"`
-	}
-	if json.Unmarshal(providersRaw, &providers) != nil {
-		return errors.New("CAPI provider inventory is malformed")
-	}
-	wantProviders := map[string]string{"CoreProvider/cluster-api": localCAPIVersion, "BootstrapProvider/kubeadm": localCAPIVersion,
-		"ControlPlaneProvider/kubeadm": localCAPIVersion, "InfrastructureProvider/docker": localCAPIVersion}
-	for _, p := range providers.Providers {
-		key := p.Type + "/" + p.Name
-		if want, ok := wantProviders[key]; ok && p.Version == want {
-			delete(wantProviders, key)
-		}
-	}
-	if len(wantProviders) != 0 {
-		return errors.New("installed CAPI provider versions do not match the pinned set")
-	}
-	if len(providers.Providers) != 4 {
-		return errors.New("unexpected CAPI provider inventory")
+	providers, err := parseLocalCAPIProviderInventory(providersRaw, false)
+	if err != nil || len(providers) != len(expectedLocalCAPIProviders()) {
+		return errors.New("installed CAPI provider inventory does not exactly match the pinned set")
 	}
 	state.InstalledProviderVersions = map[string]string{"cluster-api": localCAPIVersion, "kubeadm-bootstrap": localCAPIVersion,
 		"kubeadm-control-plane": localCAPIVersion, "docker-infrastructure": localCAPIVersion}
@@ -1722,4 +1767,19 @@ func verifyLocalCAPIReady(ctx context.Context, runtime localRuntime, provider lo
 		return errors.New("Docker provider identity changed during CAPI initialization")
 	}
 	return nil
+}
+
+func localCAPIDeploymentIsCAPIController(namespace string) bool {
+	return namespace == "capi-system" || strings.HasPrefix(namespace, "capi-kubeadm-") || namespace == "capd-system"
+}
+
+func localCAPIControllerRequiresClusterTopology(namespace, name string) bool {
+	switch namespace + "/" + name {
+	case "capi-system/capi-controller-manager",
+		"capi-kubeadm-control-plane-system/capi-kubeadm-control-plane-controller-manager",
+		"capd-system/capd-controller-manager":
+		return true
+	default:
+		return false
+	}
 }

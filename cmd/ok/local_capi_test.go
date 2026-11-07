@@ -147,6 +147,36 @@ exit 2
 	}
 }
 
+func TestParseLocalCAPIProviderInventoryFromKubernetesList(t *testing.T) {
+	valid := `{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"ProviderList","metadata":{"resourceVersion":"7"},"items":[{"metadata":{"name":"cluster-api","namespace":"capi-system","uid":"uid-core"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4","contract":"v1beta1"},{"metadata":{"name":"bootstrap-kubeadm","namespace":"capi-kubeadm-bootstrap-system","uid":"uid-bootstrap"},"providerName":"kubeadm","type":"BootstrapProvider","version":"v1.14.4"},{"metadata":{"name":"control-plane-kubeadm","namespace":"capi-kubeadm-control-plane-system","uid":"uid-control-plane"},"providerName":"kubeadm","type":"ControlPlaneProvider","version":"v1.14.4"},{"metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}]}`
+	infra := `{"metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}`
+	providers, err := parseLocalCAPIProviderInventory([]byte(valid), false)
+	if err != nil || len(providers) != 4 {
+		t.Fatalf("realistic ProviderList rejected: providers=%+v err=%v", providers, err)
+	}
+	for _, test := range []struct {
+		name string
+		raw  string
+		part bool
+		bad  bool
+	}{
+		{"missing required provider", strings.Replace(valid, ","+infra, "", 1), false, true},
+		{"duplicate provider", strings.TrimSuffix(valid, "]}") + "," + infra + "]}", false, true},
+		{"wrong namespace", strings.Replace(valid, `"namespace":"capd-system"`, `"namespace":"wrong-system"`, 1), false, true},
+		{"wrong version", strings.Replace(valid, `"version":"v1.14.4"`, `"version":"v1.14.40"`, 1), false, true},
+		{"unexpected provider", strings.Replace(valid, `"providerName":"docker"`, `"providerName":"other"`, 1), false, true},
+		{"wrong list kind", strings.Replace(valid, `"kind":"ProviderList"`, `"kind":"List"`, 1), false, true},
+		{"partial valid inventory", strings.Replace(valid, ","+infra, "", 1), true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseLocalCAPIProviderInventory([]byte(test.raw), test.part)
+			if (err != nil) != test.bad {
+				t.Fatalf("parse error = %v, want error %t", err, test.bad)
+			}
+		})
+	}
+}
+
 func TestLocalCAPIKindConfigIsOwnerBoundAndMountsColimaSocket(t *testing.T) {
 	owner := "0123456789abcdef0123456789abcdef"
 	raw, err := renderLocalCAPIKindConfig("ok-local", owner)
@@ -512,8 +542,8 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 				return capiDeploymentFixture(), nil
 			case command == "kubectl" && strings.Contains(joined, "get crds"):
 				return []byte(`{"items":[{"metadata":{"name":"clusters.cluster.x-k8s.io"}},{"metadata":{"name":"kubeadmconfigs.bootstrap.cluster.x-k8s.io"}},{"metadata":{"name":"kubeadmcontrolplanes.controlplane.cluster.x-k8s.io"}},{"metadata":{"name":"dockerclusters.infrastructure.cluster.x-k8s.io"}}]}`), nil
-			case command == "clusterctl" && strings.Contains(joined, "get providers"):
-				return []byte(`{"providers":[{"name":"cluster-api","type":"CoreProvider","version":"v1.14.4"},{"name":"kubeadm","type":"BootstrapProvider","version":"v1.14.4"},{"name":"kubeadm","type":"ControlPlaneProvider","version":"v1.14.4"},{"name":"docker","type":"InfrastructureProvider","version":"v1.14.4"}]}`), nil
+			case command == "kubectl" && strings.Contains(joined, "get providers.clusterctl.cluster.x-k8s.io"):
+				return capiProviderListFixture(), nil
 			case command == "clusterctl" && len(args) > 0 && args[0] == "init":
 				if env["CLUSTER_TOPOLOGY"] != "true" || private == "" {
 					t.Fatal("clusterctl init missing isolated bootstrap settings")
@@ -539,7 +569,7 @@ func capiDeploymentFixture() []byte {
 	for i, pair := range names {
 		args := []string{}
 		image := "controller:v1.14.4"
-		if i < 4 {
+		if i == 0 || i == 2 || i == 3 {
 			args = []string{"--feature-gates=ClusterTopology=true"}
 		}
 		if i >= 4 {
@@ -555,6 +585,61 @@ func capiDeploymentFixture() []byte {
 	}
 	data, _ := json.Marshal(map[string]any{"items": items})
 	return data
+}
+
+func TestLocalCAPIReadyRequiresClusterTopologyOnlyOnSupportingControllers(t *testing.T) {
+	tests := []struct {
+		name      string
+		namespace string
+		deploy    string
+		args      []string
+	}{
+		{"core missing gate", "capi-system", "capi-controller-manager", nil},
+		{"control plane disabled gate", "capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager", []string{"--feature-gates=ClusterTopology=false"}},
+		{"CAPD missing gate", "capd-system", "capd-controller-manager", nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := capiMockRuntime(t, nil)
+			base := runtime.runCAPI
+			runtime.runCAPI = func(ctx context.Context, provider localProviderIdentity, kubeconfig string, env map[string]string, command string, args ...string) ([]byte, error) {
+				if command == "kubectl" && strings.Contains(strings.Join(args, " "), "get deployments") {
+					var inventory map[string]any
+					if err := json.Unmarshal(capiDeploymentFixture(), &inventory); err != nil {
+						t.Fatal(err)
+					}
+					items := inventory["items"].([]any)
+					for _, raw := range items {
+						item := raw.(map[string]any)
+						metadata := item["metadata"].(map[string]any)
+						if metadata["namespace"] != test.namespace || metadata["name"] != test.deploy {
+							continue
+						}
+						spec := item["template"].(map[string]any)["spec"].(map[string]any)
+						container := spec["containers"].([]any)[0].(map[string]any)
+						container["args"] = test.args
+						break
+					}
+					return json.Marshal(inventory)
+				}
+				return base(ctx, provider, kubeconfig, env, command, args...)
+			}
+			if err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime); err == nil {
+				t.Fatal("CAPI_READY accepted a required controller without ClusterTopology=true")
+			}
+			state, err := readLocalCAPIState(runtime.stateRoot, "ok-local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Phase != localCAPIPhaseIncomplete || state.FailureCode != "CAPI_VERIFY_FAILED" {
+				t.Fatalf("missing required gate did not fail closed: %+v", state)
+			}
+		})
+	}
+}
+
+func capiProviderListFixture() []byte {
+	return []byte(`{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"ProviderList","metadata":{"resourceVersion":"7"},"items":[{"metadata":{"name":"cluster-api","namespace":"capi-system","uid":"uid-core"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4","contract":"v1beta1"},{"metadata":{"name":"bootstrap-kubeadm","namespace":"capi-kubeadm-bootstrap-system","uid":"uid-bootstrap"},"providerName":"kubeadm","type":"BootstrapProvider","version":"v1.14.4"},{"metadata":{"name":"control-plane-kubeadm","namespace":"capi-kubeadm-control-plane-system","uid":"uid-control-plane"},"providerName":"kubeadm","type":"ControlPlaneProvider","version":"v1.14.4"},{"metadata":{"name":"infrastructure-docker","namespace":"capd-system","uid":"uid-infra"},"providerName":"docker","type":"InfrastructureProvider","version":"v1.14.4"}]}`)
 }
 
 func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
@@ -590,6 +675,13 @@ func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
 			}
 			if !found {
 				t.Fatalf("%s command lacks an explicit isolated kubeconfig: %q", command, args)
+			}
+		}
+		if command == "kubectl" && strings.Contains(strings.Join(args, " "), "providers.clusterctl.cluster.x-k8s.io") {
+			want := []string{"--kubeconfig", kubeconfig, "--context", "kind-" + localKindClusterName("ok-local", "0123456789abcdef0123456789abcdef"),
+				"get", "providers.clusterctl.cluster.x-k8s.io", "-A", "-o", "json"}
+			if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+				t.Fatalf("provider inventory query = %#v, want %#v", args, want)
 			}
 		}
 		if command == "clusterctl" && len(args) > 0 && args[0] == "init" {
@@ -644,8 +736,8 @@ func TestLocalCAPIClusterctlFailureLeavesVerifiedBootstrapAndNoCAPIReady(t *test
 			initFailed = true
 			return []byte("secret-token must not be shown"), errors.New("failed after partial install")
 		}
-		if initFailed && command == "clusterctl" && strings.Contains(strings.Join(args, " "), "get providers") {
-			return []byte(`{"providers":[{"name":"cluster-api","type":"CoreProvider","version":"v1.14.4"}]}`), nil
+		if initFailed && command == "kubectl" && strings.Contains(strings.Join(args, " "), "get providers.clusterctl.cluster.x-k8s.io") {
+			return []byte(`{"apiVersion":"clusterctl.cluster.x-k8s.io/v1alpha3","kind":"ProviderList","metadata":{"resourceVersion":"8"},"items":[{"metadata":{"name":"cluster-api","namespace":"capi-system","uid":"partial-provider"},"providerName":"cluster-api","type":"CoreProvider","version":"v1.14.4"}]}`), nil
 		}
 		if initFailed && command == "kubectl" && strings.Contains(strings.Join(args, " "), "get deployments") {
 			return []byte(`{"items":[{"metadata":{"name":"capi-controller-manager","namespace":"capi-system","uid":"partial-deploy-uid","generation":2},"spec":{"replicas":1,"template":{"spec":{"containers":[{"env":[{"name":"TOKEN","value":"do-not-persist"}]}]}}},"status":{"observedGeneration":1,"availableReplicas":0}}]}`), nil
