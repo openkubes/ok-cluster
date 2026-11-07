@@ -183,6 +183,9 @@ func defaultLocalRuntime() localRuntime {
 
 func runLocalCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, arguments...)
+	if isLocalKindClusterListCommand(name, arguments) {
+		return runLocalKindClusterListStdout(command)
+	}
 	if isLocalKindKubeconfigCommand(name, arguments) {
 		return runLocalStdoutOnly(command, name, arguments...)
 	}
@@ -209,6 +212,9 @@ func runLocalCommandPinned(ctx context.Context, provider localProviderIdentity, 
 		env = append(env, item)
 	}
 	command.Env = append(env, "DOCKER_HOST="+provider.Endpoint, "KIND_EXPERIMENTAL_PROVIDER=docker")
+	if isLocalKindClusterListCommand(name, arguments) {
+		return runLocalKindClusterListStdout(command)
+	}
 	if isLocalKindKubeconfigCommand(name, arguments) {
 		return runLocalStdoutOnly(command, name, arguments...)
 	}
@@ -223,6 +229,77 @@ func runLocalCommandPinned(ctx context.Context, provider localProviderIdentity, 
 		return output, fmt.Errorf("%s %s failed: %w: %s", name, strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
 	}
 	return output, nil
+}
+
+func isLocalKindClusterListCommand(name string, arguments []string) bool {
+	return name == "kind" && len(arguments) == 2 && arguments[0] == "get" && arguments[1] == "clusters"
+}
+
+// runLocalKindClusterListStdout keeps Kind's informational stderr separate
+// from the machine-readable cluster-name list. Only known informational
+// messages are accepted; errors and unexpected diagnostics fail closed.
+func runLocalKindClusterListStdout(command *exec.Cmd) ([]byte, error) {
+	stdout := &boundedDiagnosticOutput{limit: 1 << 20}
+	var stderr boundedDiagnosticOutput
+	stderr.limit = 64 * 1024
+	command.Stdout, command.Stderr = stdout, &stderr
+	if err := command.Run(); err != nil {
+		return nil, errors.New("kind cluster listing command failed")
+	}
+	if stdout.truncated || stderr.truncated {
+		return nil, errors.New("kind cluster listing output exceeded the safe limit")
+	}
+	names, err := parseLocalKindClusterNames(stdout.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	noClustersMessage := false
+	for _, line := range strings.Split(strings.TrimSpace(string(stderr.Bytes())), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch line {
+		case "No kind clusters found.":
+			noClustersMessage = true
+		case "using docker due to KIND_EXPERIMENTAL_PROVIDER":
+			// Kind reports this provider-selection notice on stderr on some versions.
+		default:
+			return nil, errors.New("kind cluster listing emitted an unexpected diagnostic")
+		}
+	}
+	if noClustersMessage && len(names) != 0 {
+		return nil, errors.New("kind cluster listing output is contradictory")
+	}
+	return stdout.Bytes(), nil
+}
+
+func parseLocalKindClusterNames(output []byte) ([]string, error) {
+	if len(output) == 0 {
+		return nil, nil
+	}
+	text := string(output)
+	if strings.HasSuffix(text, "\n") {
+		text = strings.TrimSuffix(text, "\n")
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > 1024 {
+		return nil, errors.New("kind cluster listing contains too many names")
+	}
+	names := make([]string, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" || strings.TrimSpace(line) != line || !localKindClusterNamePattern.MatchString(line) {
+			return nil, errors.New("kind cluster listing contains malformed output")
+		}
+		if _, exists := seen[line]; exists {
+			return nil, errors.New("kind cluster listing contains duplicate names")
+		}
+		seen[line] = struct{}{}
+		names = append(names, line)
+	}
+	return names, nil
 }
 
 func isLocalKubectlStructuredCommand(name string, arguments []string) bool {

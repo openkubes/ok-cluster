@@ -21,19 +21,23 @@ import (
 )
 
 const (
-	localCAPIStateFormat        = "ok-cli-local-capi/v1"
-	localCAPIVersion            = "v1.14.4"
-	localCAPIKubernetesVersion  = "v1.35.8"
-	localCAPINodeImage          = "kindest/node:v1.35.8"
-	localCAPICertManagerVersion = "v1.21.3"
-	localCAPIMinMemoryBytes     = uint64(6 * 1024 * 1024 * 1024)
-	localCAPIMinCPUs            = 2
-	localCAPIMaxOutput          = 8 << 20
+	localCAPIStateFormat         = "ok-cli-local-capi/v1"
+	localCAPIVersion             = "v1.14.4"
+	localCAPIKubernetesVersion   = "v1.35.8"
+	localCAPINodeImage           = "kindest/node:v1.35.8"
+	localCAPICertManagerVersion  = "v1.21.3"
+	localCAPIMinMemoryBytes      = uint64(6 * 1024 * 1024 * 1024)
+	localCAPIMinCPUs             = 2
+	localCAPIMaxOutput           = 8 << 20
+	localCAPIProviderWaitTimeout = 15 * time.Minute
 )
+
+var errLocalCAPIInitArgumentsRejected = errors.New("clusterctl rejected init arguments")
 
 var localCAPIProviderVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
 var localCAPISHA256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var localCAPIClusterctlVersionPattern = regexp.MustCompile(`(?m)^clusterctl version: (v[0-9]+\.[0-9]+\.[0-9]+)\s*$`)
+var localCAPIClusterctlSimpleVersionPattern = regexp.MustCompile(`^clusterctl version: (v[0-9]+\.[0-9]+\.[0-9]+)$`)
+var localCAPIClusterctlInfoVersionPattern = regexp.MustCompile(`^clusterctl version: &version\.Info\{Major:"([0-9]+)", Minor:"([0-9]+)", GitVersion:"(v[0-9]+\.[0-9]+\.[0-9]+)", GitCommit:"[^"\\]*", GitTreeState:"[^"\\]*", BuildDate:"[^"\\]*", GoVersion:"[^"\\]*", Compiler:"[^"\\]*", Platform:"[^"\\]*"\}$`)
 
 type localCAPIPhase string
 
@@ -314,7 +318,7 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 	if state.Phase != localCAPIPhaseIncomplete && (state.FailureCode != "" || state.FailureStage != "") {
 		return errors.New("non-INCOMPLETE CAPI receipt cannot contain failure classification")
 	}
-	wantFailureStage := map[string]string{"PREFLIGHT_FAILED": "preflight", "KIND_CREATE_FAILED": "kind-create", "BOOTSTRAP_VERIFY_FAILED": "bootstrap-verify", "CAPI_INIT_FAILED": "capi-init", "CAPI_VERIFY_FAILED": "capi-verify", "STATE_PERSIST_FAILED": "state"}
+	wantFailureStage := map[string]string{"PREFLIGHT_FAILED": "preflight", "KIND_CREATE_FAILED": "kind-create", "BOOTSTRAP_VERIFY_FAILED": "bootstrap-verify", "CAPI_INIT_FAILED": "capi-init", "CAPI_INIT_ARGUMENTS_REJECTED": "capi-init", "CAPI_VERIFY_FAILED": "capi-verify", "STATE_PERSIST_FAILED": "state"}
 	if state.FailureCode != "" && wantFailureStage[state.FailureCode] != state.FailureStage {
 		return errors.New("CAPI failure code and stage do not match")
 	}
@@ -323,7 +327,7 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 
 var localCAPIFailureCodes = map[string]bool{
 	"PREFLIGHT_FAILED": true, "KIND_CREATE_FAILED": true, "BOOTSTRAP_VERIFY_FAILED": true,
-	"CAPI_INIT_FAILED": true, "CAPI_VERIFY_FAILED": true, "STATE_PERSIST_FAILED": true,
+	"CAPI_INIT_FAILED": true, "CAPI_INIT_ARGUMENTS_REJECTED": true, "CAPI_VERIFY_FAILED": true, "STATE_PERSIST_FAILED": true,
 }
 var localCAPIFailureStages = map[string]bool{"preflight": true, "kind-create": true, "bootstrap-verify": true, "capi-init": true, "capi-verify": true, "state": true}
 
@@ -396,7 +400,7 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 	}
 	provider, err := observeLocalColimaDockerProvider(ctx, runtime, profile)
 	if err != nil {
-		return errors.New("selected Colima profile does not have one verified Docker endpoint, matching context, and daemon identity; no state or infrastructure was changed")
+		return fmt.Errorf("CAPI provider discovery failed: %s; no state or infrastructure was changed", err)
 	}
 	if err := verifyLocalCAPIPrequisites(ctx, runtime, profile, provider); err != nil {
 		return fmt.Errorf("CAPI preflight failed: %s; no state or infrastructure was changed", err.Error())
@@ -420,7 +424,11 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 	if err != nil {
 		return errors.New("could not safely list Kind clusters; no state or infrastructure was changed")
 	}
-	for _, existing := range strings.Fields(string(clusters)) {
+	clusterNames, err := parseLocalKindClusterNames(clusters)
+	if err != nil {
+		return errors.New("could not safely parse Kind cluster inventory; no state or infrastructure was changed")
+	}
+	for _, existing := range clusterNames {
 		if existing == kindName {
 			return errors.New("generated CAPI Kind name already exists; no state or infrastructure was changed")
 		}
@@ -506,7 +514,11 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 	if listErr != nil {
 		return fail("preflight", "PREFLIGHT_FAILED")
 	}
-	for _, existing := range strings.Fields(string(clustersBeforeCreate)) {
+	clusterNamesBeforeCreate, parseErr := parseLocalKindClusterNames(clustersBeforeCreate)
+	if parseErr != nil {
+		return fail("preflight", "PREFLIGHT_FAILED")
+	}
+	for _, existing := range clusterNamesBeforeCreate {
 		if existing == kindName {
 			return fail("preflight", "PREFLIGHT_FAILED")
 		}
@@ -557,10 +569,10 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 		return fail("state", "STATE_PERSIST_FAILED")
 	}
 
-	initArgs := []string{"init", "--core", "cluster-api:" + localCAPIVersion, "--bootstrap", "kubeadm:" + localCAPIVersion,
-		"--control-plane", "kubeadm:" + localCAPIVersion, "--infrastructure", "docker:" + localCAPIVersion,
-		"--kubeconfig", kubeconfigPath, "--kubeconfig-context", "kind-" + kindName,
-		"--config", clusterctlPath, "--wait-providers", "--wait-provider-timeout", "15m"}
+	initArgs, err := buildLocalCAPIInitArgs(kindName, kubeconfigPath, clusterctlPath, localCAPIProviderWaitTimeout)
+	if err != nil {
+		return fail("capi-init", "CAPI_INIT_FAILED")
+	}
 	if !localCAPIConfigMatches(kindPath, state.KindConfigSHA256) || !localCAPIConfigMatches(clusterctlPath, state.ClusterctlConfigSHA256) {
 		return fail("capi-init", "CAPI_INIT_FAILED")
 	}
@@ -573,7 +585,11 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 	}
 	if _, err := runLocalCAPIRaw(ctx, runtime, provider, kubeconfigPath, map[string]string{"CLUSTER_TOPOLOGY": "true"}, "clusterctl", initArgs...); err != nil {
 		state.InitEvidence = captureLocalCAPIInitEvidence(runtime, provider, state)
-		return fail("capi-init", "CAPI_INIT_FAILED")
+		failureCode := "CAPI_INIT_FAILED"
+		if errors.Is(err, errLocalCAPIInitArgumentsRejected) {
+			failureCode = "CAPI_INIT_ARGUMENTS_REJECTED"
+		}
+		return fail("capi-init", failureCode)
 	}
 	if err := waitLocalCAPIReadiness(ctx, runtime, provider, state); err != nil {
 		return fail("capi-verify", "CAPI_VERIFY_FAILED")
@@ -589,8 +605,16 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 }
 
 func validateLocalCAPIClusterctlVersion(raw []byte) bool {
-	matches := localCAPIClusterctlVersionPattern.FindAllSubmatch(raw, -1)
-	return len(matches) == 1 && string(matches[0][1]) == localCAPIVersion
+	output := strings.TrimSpace(string(raw))
+	if matches := localCAPIClusterctlSimpleVersionPattern.FindStringSubmatch(output); len(matches) == 2 {
+		return matches[1] == localCAPIVersion
+	}
+	matches := localCAPIClusterctlInfoVersionPattern.FindStringSubmatch(output)
+	if len(matches) != 4 || matches[3] != localCAPIVersion {
+		return false
+	}
+	versionParts := strings.Split(strings.TrimPrefix(matches[3], "v"), ".")
+	return len(versionParts) == 3 && matches[1] == versionParts[0] && matches[2] == versionParts[1]
 }
 
 // acquireLocalLifecycleOperationLock serializes the normal Console and
@@ -808,7 +832,7 @@ func observeLocalColimaDockerProvider(ctx context.Context, runtime localRuntime,
 	}
 	instancesRaw, err := runtime.run(ctx, "colima", "list", "--json")
 	if err != nil {
-		return localProviderIdentity{}, err
+		return localProviderIdentity{}, errors.New("cannot read the Colima profile inventory")
 	}
 	instances, err := parseLocalColimaInstances(instancesRaw)
 	if err != nil {
@@ -824,11 +848,11 @@ func observeLocalColimaDockerProvider(ctx context.Context, runtime localRuntime,
 		}
 	}
 	if selected == nil || selected.Status != "Running" || (selected.Runtime != "docker" && selected.Runtime != "docker+k3s") {
-		return localProviderIdentity{}, errors.New("selected Colima profile is missing, stopped, or not using Docker")
+		return localProviderIdentity{}, errors.New("selected Colima profile is missing, stopped, or not using the Docker runtime")
 	}
 	statusRaw, err := runtime.run(ctx, "colima", "status", profile, "--json")
 	if err != nil {
-		return localProviderIdentity{}, err
+		return localProviderIdentity{}, errors.New("cannot read status for the selected Colima profile")
 	}
 	var status localColimaStatus
 	if err := json.Unmarshal(statusRaw, &status); err != nil || status.Runtime != "docker" || !localCAPIColimaEndpoint(status.DockerSocket, profile) {
@@ -839,11 +863,11 @@ func observeLocalColimaDockerProvider(ctx context.Context, runtime localRuntime,
 		verifySocket = localCAPIHostSocketExists
 	}
 	if !verifySocket(status.DockerSocket) {
-		return localProviderIdentity{}, errors.New("Colima profile Docker socket is not a verified Unix socket")
+		return localProviderIdentity{}, errors.New("selected Colima Docker endpoint is not a safe profile-owned Unix socket")
 	}
 	contextsRaw, err := runtime.run(ctx, "docker", "context", "ls", "--format", "{{.Name}}")
 	if err != nil {
-		return localProviderIdentity{}, err
+		return localProviderIdentity{}, errors.New("cannot enumerate configured Docker contexts")
 	}
 	var matches []string
 	for _, contextName := range strings.Fields(string(contextsRaw)) {
@@ -856,12 +880,12 @@ func observeLocalColimaDockerProvider(ctx context.Context, runtime localRuntime,
 		}
 	}
 	if len(matches) != 1 {
-		return localProviderIdentity{}, errors.New("selected Colima endpoint must match exactly one configured Docker context")
+		return localProviderIdentity{}, errors.New("selected Colima socket must match exactly one Docker context; check for a missing or duplicate context")
 	}
 	provider := localProviderIdentity{Kind: "docker", Context: matches[0], Endpoint: status.DockerSocket}
 	identityRaw, err := runLocalPinned(ctx, runtime, provider, "docker", "info", "--format", "{{.ID}}")
 	if err != nil {
-		return localProviderIdentity{}, err
+		return localProviderIdentity{}, errors.New("cannot query Docker through the selected Colima socket")
 	}
 	provider.DaemonID = strings.TrimSpace(string(identityRaw))
 	if len(provider.DaemonID) < 3 || len(provider.DaemonID) > 128 || !regexp.MustCompile(`^[A-Za-z0-9._:-]+$`).MatchString(provider.DaemonID) {
@@ -932,7 +956,14 @@ func verifyLocalCAPIDedicatedDaemon(ctx context.Context, runtime localRuntime, p
 		}
 	}
 	kindClusters, err := runLocalPinned(ctx, runtime, provider, "kind", "get", "clusters")
-	if err != nil || len(strings.Fields(string(kindClusters))) != 0 {
+	if err != nil {
+		return errors.New("could not safely read selected daemon Kind cluster inventory")
+	}
+	kindClusterNames, parseErr := parseLocalKindClusterNames(kindClusters)
+	if parseErr != nil {
+		return errors.New("selected daemon Kind cluster inventory is malformed")
+	}
+	if len(kindClusterNames) != 0 {
 		return errors.New("selected daemon contains existing Kind clusters")
 	}
 	return nil
@@ -956,21 +987,27 @@ func validateLocalCAPIKubectlVersion(raw []byte) error {
 
 func verifyLocalCAPIPreflightProfile(ctx context.Context, runtime localRuntime, profile string, provider localProviderIdentity) error {
 	if err := rejectUnexpectedLocalDockerEnvironment(runtime); err != nil {
-		return err
+		return errors.New("unexpected Docker, Colima, Kind, or kubeconfig environment override is set")
 	}
 	observed, err := observeLocalColimaDockerProvider(ctx, runtime, profile)
-	if err != nil || observed != provider {
-		return errors.New("selected Colima profile identity changed")
+	if err != nil {
+		return fmt.Errorf("cannot revalidate selected Colima profile: %w", err)
+	}
+	if observed != provider {
+		return errors.New("selected Colima profile context, socket, or Docker daemon identity changed")
 	}
 	if runtime.run == nil {
 		return errors.New("Colima inspection command runner is unavailable")
 	}
-	if _, err := runtime.run(ctx, "colima", "ssh", profile, "--", "sh", "-c", "test -S /var/run/docker.sock"); err != nil {
-		return errors.New("selected Colima VM Docker socket is unavailable")
+	if _, err := runtime.run(ctx, "colima", "ssh", "--profile", profile, "--", "sh", "-c", "test -S /var/run/docker.sock"); err != nil {
+		return errors.New("Colima SSH could not verify the Docker socket in the selected VM; confirm that the named profile is running")
 	}
-	vmDaemon, err := runtime.run(ctx, "colima", "ssh", profile, "--", "docker", "info", "--format", "{{.ID}}")
-	if err != nil || strings.TrimSpace(string(vmDaemon)) != provider.DaemonID {
-		return errors.New("selected Colima VM Docker socket does not identify the pinned daemon")
+	vmDaemon, err := runtime.run(ctx, "colima", "ssh", "--profile", profile, "--", "docker", "info", "--format", "{{.ID}}")
+	if err != nil {
+		return errors.New("Colima SSH could not query Docker through the selected VM socket")
+	}
+	if strings.TrimSpace(string(vmDaemon)) != provider.DaemonID {
+		return errors.New("Docker daemon ID from the selected VM socket does not match the host Colima socket")
 	}
 	return nil
 }
@@ -984,11 +1021,11 @@ func verifyLocalCAPIProviderStillPinned(ctx context.Context, runtime localRuntim
 
 func verifyLocalCAPIPrequisites(ctx context.Context, runtime localRuntime, profile string, provider localProviderIdentity) error {
 	if err := verifyLocalCAPIPreflightProfile(ctx, runtime, profile, provider); err != nil {
-		return errors.New("unsupported Docker provider")
+		return fmt.Errorf("selected Colima provider verification failed: %w", err)
 	}
-	sysctl, err := runtime.run(ctx, "colima", "ssh", profile, "--", "sysctl", "-n", "fs.inotify.max_user_instances")
+	sysctl, err := runtime.run(ctx, "colima", "ssh", "--profile", profile, "--", "sysctl", "-n", "fs.inotify.max_user_instances")
 	if err != nil {
-		return errors.New("cannot verify Colima inotify limit")
+		return errors.New("cannot read the inotify limit from the selected Colima VM")
 	}
 	limit, err := strconv.Atoi(strings.TrimSpace(string(sysctl)))
 	if err != nil || limit < 8192 {
@@ -1002,7 +1039,7 @@ func verifyLocalCAPIPrequisites(ctx context.Context, runtime localRuntime, profi
 	if json.Unmarshal(info, &resources) != nil || resources.CPUs < localCAPIMinCPUs || resources.Memory < localCAPIMinMemoryBytes || resources.Root == "" {
 		return errors.New("Docker provider needs at least 2 CPUs and 6 GiB memory for the temporary CAPI bootstrap")
 	}
-	disk, err := runtime.run(ctx, "colima", "ssh", profile, "--", "df", "-Pk", resources.Root)
+	disk, err := runtime.run(ctx, "colima", "ssh", "--profile", profile, "--", "df", "-Pk", resources.Root)
 	if err != nil || !localCAPIHasDiskHeadroom(disk, 15*1024*1024) {
 		return errors.New("Colima Docker disk needs at least 15 GiB free for the temporary CAPI bootstrap")
 	}
@@ -1260,6 +1297,32 @@ func runLocalCAPIRaw(ctx context.Context, runtime localRuntime, provider localPr
 	return runner(ctx, provider, kubeconfig, extraEnv, executable, args...)
 }
 
+func buildLocalCAPIInitArgs(kindName, kubeconfig, clusterctlConfig string, providerWait time.Duration) ([]string, error) {
+	if providerWait <= 0 {
+		return nil, errors.New("provider wait timeout must be positive")
+	}
+	// clusterctl's --wait-provider-timeout is an integer number of seconds.
+	// Round fractional seconds up so conversion never shortens the requested wait.
+	seconds := int64(1 + (providerWait-1)/time.Second)
+	return []string{"init", "--core", "cluster-api:" + localCAPIVersion, "--bootstrap", "kubeadm:" + localCAPIVersion,
+		"--control-plane", "kubeadm:" + localCAPIVersion, "--infrastructure", "docker:" + localCAPIVersion,
+		"--kubeconfig", kubeconfig, "--kubeconfig-context", "kind-" + kindName,
+		"--config", clusterctlConfig, "--wait-providers", "--wait-provider-timeout", strconv.FormatInt(seconds, 10)}, nil
+}
+
+func isLocalCAPIArgumentUsageFailure(output []byte) bool {
+	if len(output) > 128<<10 {
+		output = output[:128<<10]
+	}
+	text := strings.ToLower(string(output))
+	for _, marker := range []string{"unknown flag", "unknown shorthand flag", "flag provided but not defined", "flag needs an argument", "unknown command", "invalid argument", "usage:"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func runLocalCAPICommand(ctx context.Context, provider localProviderIdentity, kubeconfig string, extraEnv map[string]string, executable string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, executable, args...)
 	env := make([]string, 0, len(os.Environ())+5+len(extraEnv))
@@ -1283,6 +1346,10 @@ func runLocalCAPICommand(ctx context.Context, provider localProviderIdentity, ku
 	stderr.limit = 64 * 1024
 	command.Stdout, command.Stderr = stdout, &stderr
 	if err := command.Run(); err != nil {
+		if filepath.Base(executable) == "clusterctl" && len(args) > 0 && args[0] == "init" && !stdout.truncated && !stderr.truncated &&
+			isLocalCAPIArgumentUsageFailure(append(stdout.Bytes(), stderr.Bytes()...)) {
+			return nil, errLocalCAPIInitArgumentsRejected
+		}
 		return nil, errors.New("CAPI command failed; command output suppressed")
 	}
 	if stdout.truncated {
@@ -1373,8 +1440,12 @@ func inspectLocalCAPIResidual(ctx context.Context, runtime localRuntime, state *
 	if err != nil {
 		return
 	}
+	clusterNames, err := parseLocalKindClusterNames(clusters)
+	if err != nil {
+		return
+	}
 	clusterFound := false
-	for _, name := range strings.Fields(string(clusters)) {
+	for _, name := range clusterNames {
 		if name == state.BootstrapKindName {
 			clusterFound = true
 		}

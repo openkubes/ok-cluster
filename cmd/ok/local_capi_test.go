@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -82,19 +83,67 @@ func TestLocalCAPIStateValidationAndIsolation(t *testing.T) {
 }
 
 func TestLocalCAPIClusterctlVersionPinIsExact(t *testing.T) {
+	brewOutput := `clusterctl version: &version.Info{Major:"1", Minor:"14", GitVersion:"v1.14.4", GitCommit:"Homebrew", GitTreeState:"clean", BuildDate:"2026-11-03T08:29:50Z", GoVersion:"go1.27.3", Compiler:"gc", Platform:"darwin/arm64"}`
 	for _, test := range []struct {
 		output string
 		want   bool
 	}{
 		{"clusterctl version: v1.14.4\n", true},
+		{brewOutput, true},
 		{"clusterctl version: v1.14.40\n", false},
 		{"clusterctl version: v1.14.3\n", false},
 		{"diagnostic v1.14.4, clusterctl version: v1.14.5\n", false},
 		{"clusterctl version: v1.14.4\nclusterctl version: v1.14.4\n", false},
+		{strings.Replace(brewOutput, `GitVersion:"v1.14.4"`, `GitVersion:"v1.14.40"`, 1), false},
+		{strings.Replace(brewOutput, `GitVersion:"v1.14.4"`, `GitVersion:"v1.14.3"`, 1), false},
+		{strings.Replace(brewOutput, `Minor:"14"`, `Minor:"13"`, 1), false},
+		{brewOutput + " unexpected", false},
+		{strings.Replace(brewOutput, `GitVersion:"v1.14.4"`, `GitVersion:"v1.14.4", Extra:"v1.14.5"`, 1), false},
+		{"clusterctl version: &version.Info{Major:\"1\", Minor:\"14\", GitVersion:\"v1.14.4\"}\n", false},
 	} {
 		if got := validateLocalCAPIClusterctlVersion([]byte(test.output)); got != test.want {
 			t.Errorf("validateLocalCAPIClusterctlVersion(%q)=%v, want %v", test.output, got, test.want)
 		}
+	}
+}
+
+func TestBuildLocalCAPIInitArgsUsesIntegerSecondsAndExactV1144Contract(t *testing.T) {
+	args, err := buildLocalCAPIInitArgs("ok-local-owner", "/private/bootstrap.kubeconfig", "/private/clusterctl.yaml", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"init", "--core", "cluster-api:v1.14.4", "--bootstrap", "kubeadm:v1.14.4",
+		"--control-plane", "kubeadm:v1.14.4", "--infrastructure", "docker:v1.14.4",
+		"--kubeconfig", "/private/bootstrap.kubeconfig", "--kubeconfig-context", "kind-ok-local-owner",
+		"--config", "/private/clusterctl.yaml", "--wait-providers", "--wait-provider-timeout", "900"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("clusterctl init args = %#v, want %#v", args, want)
+	}
+	fractional, err := buildLocalCAPIInitArgs("x", "k", "c", 1500*time.Millisecond)
+	if err != nil || fractional[len(fractional)-1] != "2" {
+		t.Fatalf("fractional duration must round up to integer seconds: args=%v err=%v", fractional, err)
+	}
+	if _, err := buildLocalCAPIInitArgs("x", "k", "c", 0); err == nil {
+		t.Fatal("zero provider wait timeout was accepted")
+	}
+}
+
+func TestLocalCAPICommandRunnerClassifiesUsageFailureWithoutLeakingOutput(t *testing.T) {
+	binDir := t.TempDir()
+	clusterctl := filepath.Join(binDir, "clusterctl")
+	if err := os.WriteFile(clusterctl, []byte(`#!/bin/sh
+printf '%s\n' 'Error: unknown flag: --bad PRIVATE_TOKEN=do-not-leak' >&2
+exit 2
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	provider := localProviderIdentity{Kind: "docker", Context: "colima-ok-capi", Endpoint: testColimaEndpoint("ok-capi"), DaemonID: "daemon-123"}
+	output, err := runLocalCAPICommand(context.Background(), provider, filepath.Join(t.TempDir(), "private.kubeconfig"), map[string]string{"CLUSTER_TOPOLOGY": "true"}, clusterctl, "init", "--wait-provider-timeout", "900")
+	if !errors.Is(err, errLocalCAPIInitArgumentsRejected) || len(output) != 0 {
+		t.Fatalf("usage error classification = output %q, err %v", output, err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_TOKEN") || strings.Contains(err.Error(), "--bad") {
+		t.Fatalf("raw command output leaked: %v", err)
 	}
 }
 
@@ -175,7 +224,7 @@ func TestLocalCAPIDedicatedProfileEndpointAndContextBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "custom-context-name" || provider.DaemonID != "daemon-id" {
+	if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "colima-ok-capi" || provider.DaemonID != "daemon-id" {
 		t.Fatalf("profile was not bound to discovered socket/context/daemon: %+v", provider)
 	}
 	if provider.Endpoint == testColimaEndpoint("default") {
@@ -206,6 +255,53 @@ func TestLocalCAPIHostSocketRejectsProfileSymlinkToOtherDaemon(t *testing.T) {
 	}
 	if localCAPIHostSocketSafeAt(home, "ok-capi", filepath.Join(home, ".colima", "ok-capi", "docker.sock")) {
 		t.Fatal("profile socket path followed a symlink into the default daemon")
+	}
+}
+
+func TestLocalCAPISSHPassesProfileAsGlobalFlag(t *testing.T) {
+	runtime := capiMockRuntime(t, nil)
+	base := runtime.run
+	var sshArgs [][]string
+	runtime.run = func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		if command == "colima" && len(args) > 0 && args[0] == "ssh" {
+			sshArgs = append(sshArgs, append([]string(nil), args...))
+		}
+		return base(ctx, command, args...)
+	}
+	provider, err := observeLocalColimaDockerProvider(context.Background(), runtime, "ok-capi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyLocalCAPIPreflightProfile(context.Background(), runtime, "ok-capi", provider); err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := []string{"ssh", "--profile", "ok-capi", "--"}
+	if len(sshArgs) != 2 {
+		t.Fatalf("expected two selected-profile SSH checks, got %d", len(sshArgs))
+	}
+	for _, args := range sshArgs {
+		if len(args) < len(wantPrefix) || strings.Join(args[:len(wantPrefix)], " ") != strings.Join(wantPrefix, " ") {
+			t.Errorf("profile was not passed using Colima's global flag syntax: %q", args)
+		}
+	}
+}
+
+func TestLocalCAPIPreflightReportsSafeColimaSSHFailure(t *testing.T) {
+	runtime := capiMockRuntime(t, nil)
+	base := runtime.run
+	runtime.run = func(ctx context.Context, command string, args ...string) ([]byte, error) {
+		if command == "colima" && len(args) > 0 && args[0] == "ssh" && strings.Contains(strings.Join(args, " "), "test -S") {
+			return nil, errors.New("secret-token /private/sensitive/path")
+		}
+		return base(ctx, command, args...)
+	}
+	provider, err := observeLocalColimaDockerProvider(context.Background(), runtime, "ok-capi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = verifyLocalCAPIPrequisites(context.Background(), runtime, "ok-capi", provider)
+	if err == nil || !strings.Contains(err.Error(), "Colima SSH could not verify the Docker socket") || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "/private/sensitive/path") {
+		t.Fatalf("preflight failure was missing or unsafe: %v", err)
 	}
 }
 
@@ -313,7 +409,7 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 		t.Fatal(err)
 	}
 	endpoint := "unix://" + filepath.Join(home, ".colima", "ok-capi", "docker.sock")
-	provider := localProviderIdentity{Kind: "docker", Context: "custom-context-name", Endpoint: endpoint, DaemonID: "daemon-id"}
+	provider := localProviderIdentity{Kind: "docker", Context: "colima-ok-capi", Endpoint: endpoint, DaemonID: "daemon-id"}
 	kubeconfig := strings.ReplaceAll(localKubeconfigFixture, "kind-ok-local", "kind-"+localKindClusterName("ok-local", "0123456789abcdef0123456789abcdef"))
 	owner := "0123456789abcdef0123456789abcdef"
 	kindName := localKindClusterName("ok-local", owner)
@@ -329,16 +425,22 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 		case "docker":
 			joined := strings.Join(args, " ")
 			if joined == "context ls --format {{.Name}}" {
-				return []byte("custom-context-name\n"), nil
+				return []byte("colima\ndefault\ncolima-ok-capi\n"), nil
 			}
 			if strings.Contains(joined, "context inspect") {
-				return []byte(endpoint + "\n"), nil
+				if len(args) > 2 && args[2] == "colima-ok-capi" {
+					return []byte(endpoint + "\n"), nil
+				}
+				if len(args) > 2 && args[2] == "colima" {
+					return []byte(testColimaEndpoint("default") + "\n"), nil
+				}
+				return []byte("unix:///var/run/docker.sock\n"), nil
 			}
 			return []byte(`{"cpus":8,"memory":12500000000,"root":"/var/lib/docker"}`), nil
 		case "colima":
 			joined := strings.Join(args, " ")
 			if joined == "list --json" {
-				return []byte(`{"name":"ok-capi","status":"Running","runtime":"docker"}` + "\n"), nil
+				return []byte(`{"name":"default","status":"Running","runtime":"docker"}` + "\n" + `{"name":"ok-capi","status":"Running","runtime":"docker"}` + "\n"), nil
 			}
 			if joined == "status ok-capi --json" {
 				return []byte(`{"runtime":"docker","docker_socket":"` + endpoint + `"}`), nil
@@ -460,14 +562,14 @@ func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
 	baseRunner := runtime.runCAPI
 	basePinned := runtime.runPinned
 	runtime.runPinned = func(ctx context.Context, provider localProviderIdentity, command string, args ...string) ([]byte, error) {
-		if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "custom-context-name" {
+		if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "colima-ok-capi" {
 			t.Fatalf("Docker/Kind operation was not pinned to the selected Colima daemon: %+v %s %v", provider, command, args)
 		}
 		return basePinned(ctx, provider, command, args...)
 	}
 	baseKindCreate := runtime.runKindCreate
 	runtime.runKindCreate = func(ctx context.Context, provider localProviderIdentity, kubeconfig string, args ...string) ([]byte, bool, error) {
-		if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "custom-context-name" {
+		if provider.Endpoint != testColimaEndpoint("ok-capi") || provider.Context != "colima-ok-capi" {
 			t.Fatalf("Kind create not pinned to selected Colima daemon: %+v", provider)
 		}
 		return baseKindCreate(ctx, provider, kubeconfig, args...)
@@ -573,6 +675,28 @@ func TestLocalCAPIClusterctlFailureLeavesVerifiedBootstrapAndNoCAPIReady(t *test
 	}
 	if strings.Contains(string(receipt), "do-not-persist") || strings.Contains(string(receipt), "secret-token") {
 		t.Fatal("partial CAPI receipt leaked command or environment secrets")
+	}
+}
+
+func TestLocalCAPIClusterctlUsageFailurePersistsBoundedClassification(t *testing.T) {
+	runtime := capiMockRuntime(t, nil)
+	base := runtime.runCAPI
+	runtime.runCAPI = func(ctx context.Context, provider localProviderIdentity, kubeconfig string, env map[string]string, command string, args ...string) ([]byte, error) {
+		if command == "clusterctl" && len(args) > 0 && args[0] == "init" {
+			return nil, errLocalCAPIInitArgumentsRejected
+		}
+		return base(ctx, provider, kubeconfig, env, command, args...)
+	}
+	err := runLocalCAPIUpContext(context.Background(), "ok-local", "ok-capi", runtime)
+	if err == nil || strings.Contains(err.Error(), "clusterctl rejected init arguments") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("raw command error escaped: %v", err)
+	}
+	state, readErr := readLocalCAPIState(runtime.stateRoot, "ok-local")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if state.Phase != localCAPIPhaseIncomplete || state.FailureStage != "capi-init" || state.FailureCode != "CAPI_INIT_ARGUMENTS_REJECTED" {
+		t.Fatalf("bounded argument failure classification not persisted: %+v", state)
 	}
 }
 
