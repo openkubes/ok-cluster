@@ -434,6 +434,20 @@ func TestLocalCAPIRejectsDockerEnvironmentOverridesBeforeMutation(t *testing.T) 
 }
 
 func capiMockRuntime(t *testing.T, createErr error) localRuntime {
+	return capiMockRuntimeWithTemplateOptions(t, capiMockTemplateOptions{kindCreateErr: createErr, templateCreateLimit: len(localCAPIWorkloadExpectedManifestObjects("")) - 1})
+}
+
+type capiMockTemplateOptions struct {
+	kindCreateErr       error
+	templateCreateErr   error
+	templateCreateLimit int
+	existingTemplate    string
+	readErrorTemplate   string
+	mutateTemplate      func(string, map[string]any)
+	readMutateTemplate  func(string, map[string]any)
+}
+
+func capiMockRuntimeWithTemplateOptions(t *testing.T, options capiMockTemplateOptions) localRuntime {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "local-state")
 	home, err := os.UserHomeDir()
@@ -446,6 +460,8 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 	owner := "0123456789abcdef0123456789abcdef"
 	kindName := localKindClusterName("ok-local", owner)
 	created := false
+	templateCreateCalls := 0
+	templateObjects := map[string]map[string]any{}
 	runtime := localRuntime{stateRoot: root, environ: func() []string { return nil }, verifySocket: func(string) bool { return true }, run: func(_ context.Context, command string, args ...string) ([]byte, error) {
 		switch command {
 		case "kind":
@@ -517,8 +533,8 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 		return nil, errors.New("unexpected pinned command")
 	}, lookPath: func(string) (string, error) { return "/mock/tool", nil },
 		runKindCreate: func(_ context.Context, _ localProviderIdentity, _ string, args ...string) ([]byte, bool, error) {
-			if createErr != nil {
-				return []byte("secret-bearing raw output"), false, createErr
+			if options.kindCreateErr != nil {
+				return []byte("secret-bearing raw output"), false, options.kindCreateErr
 			}
 			created = true
 			for i, arg := range args {
@@ -532,6 +548,83 @@ func capiMockRuntime(t *testing.T, createErr error) localRuntime {
 		},
 		runCAPI: func(_ context.Context, _ localProviderIdentity, private string, env map[string]string, command string, args ...string) ([]byte, error) {
 			joined := strings.Join(args, " ")
+			if command == "kubectl" && strings.Contains(joined, " create -f ") {
+				templateCreateCalls++
+				if templateCreateCalls != 1 {
+					t.Fatal("management templates were created more than once")
+				}
+				state, err := readLocalCAPIState(root, "ok-local")
+				if err != nil || !state.DevelopmentTemplatesAttempted || state.DevelopmentTemplatesSHA256 == "" {
+					t.Fatalf("template create ran without durable intent: state=%+v err=%v", state, err)
+				}
+				path := args[len(args)-1]
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoder := yaml.NewDecoder(bytes.NewReader(raw))
+				objectIndex := 0
+				for {
+					var node yaml.Node
+					if err := decoder.Decode(&node); err != nil {
+						if errors.Is(err, io.EOF) {
+							break
+						}
+						t.Fatal(err)
+					}
+					if len(node.Content) == 0 {
+						continue
+					}
+					var object map[string]any
+					if err := node.Decode(&object); err != nil {
+						t.Fatal(err)
+					}
+					if object["kind"] == "Cluster" {
+						t.Fatal("management template create included a workload Cluster")
+					}
+					if objectIndex >= options.templateCreateLimit {
+						objectIndex++
+						continue
+					}
+					metadata := object["metadata"].(map[string]any)
+					metadata["uid"] = "template-" + metadata["name"].(string)
+					key := object["apiVersion"].(string) + "/" + object["kind"].(string) + "/" + metadata["name"].(string)
+					if options.mutateTemplate != nil {
+						options.mutateTemplate(key, object)
+					}
+					templateObjects[key] = object
+					objectIndex++
+				}
+				return nil, options.templateCreateErr
+			}
+			if command == "kubectl" && strings.Contains(joined, " get ") {
+				for _, identity := range localCAPIWorkloadExpectedManifestObjects("") {
+					if identity.kind == "Cluster" {
+						continue
+					}
+					for i := 0; i+2 < len(args); i++ {
+						if args[i] == "get" && args[i+1] == identity.resource && args[i+2] == identity.name {
+							key := identity.apiVersion + "/" + identity.kind + "/" + identity.name
+							if options.readErrorTemplate == key {
+								return nil, errors.New("mock template read failed")
+							}
+							if object, exists := templateObjects[key]; exists {
+								if options.readMutateTemplate != nil {
+									options.readMutateTemplate(key, object)
+								}
+								return json.Marshal(object)
+							}
+							if options.existingTemplate == key {
+								return []byte(`{"existing":true}`), nil
+							}
+							if strings.Contains(joined, "--ignore-not-found") {
+								return nil, nil
+							}
+							return nil, errors.New("expected management template was not created")
+						}
+					}
+				}
+			}
 			if command == "kubectl" && strings.Contains(joined, " wait ") {
 				return nil, nil
 			}
@@ -729,7 +822,7 @@ func TestLocalCAPIBootstrapSuccessIsMockedOwnerBoundAndCAPIReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Phase != localCAPIPhaseCAPIReady || state.Node == nil || state.Node.UID != "node-uid" || state.KubeSystemUID != "kube-system-uid" || len(state.Containers) != 1 || len(state.Deployments) != 7 || len(state.CRDs) != 4 {
+	if state.Phase != localCAPIPhaseCAPIReady || state.Node == nil || state.Node.UID != "node-uid" || state.KubeSystemUID != "kube-system-uid" || len(state.Containers) != 1 || len(state.Deployments) != 7 || len(state.CRDs) != 4 || !state.DevelopmentTemplatesAttempted || !state.DevelopmentTemplatesComplete || !localCAPITemplateInventoryComplete(state.DevelopmentTemplates) {
 		t.Fatalf("CAPI_READY evidence incomplete: %+v", state)
 	}
 	if _, err := os.Stat(localStateFilePath(runtime.stateRoot, "ok-local")); !os.IsNotExist(err) {

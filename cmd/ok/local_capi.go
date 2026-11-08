@@ -162,33 +162,53 @@ type localCAPIWorkloadEvidence struct {
 // localCAPIState is separate from the existing local Kind/Console receipt. It
 // describes only the temporary CAPI bootstrap and never claims handover.
 type localCAPIState struct {
-	Format                    string                        `json:"format"`
-	Phase                     localCAPIPhase                `json:"phase"`
-	Name                      string                        `json:"name"`
-	OwnerID                   string                        `json:"ownerID"`
-	ColimaProfile             string                        `json:"colimaProfile,omitempty"`
-	Provider                  localProviderIdentity         `json:"provider"`
-	BootstrapKindName         string                        `json:"bootstrapKindName"`
-	BootstrapKubeconfig       string                        `json:"bootstrapKubeconfig"`
-	KindConfigPath            string                        `json:"kindConfigPath"`
-	KindConfigSHA256          string                        `json:"kindConfigSHA256"`
-	ClusterctlConfigPath      string                        `json:"clusterctlConfigPath"`
-	ClusterctlConfigSHA256    string                        `json:"clusterctlConfigSHA256"`
-	KubernetesVersion         string                        `json:"kubernetesVersion"`
-	NodeImage                 string                        `json:"nodeImage"`
-	ProviderVersions          map[string]string             `json:"providerVersions"`
-	Containers                []localCAPIContainerEvidence  `json:"containers,omitempty"`
-	BootstrapResourceState    localCAPIResourceState        `json:"bootstrapResourceState"`
-	BootstrapKubeconfigSeen   bool                          `json:"bootstrapKubeconfigSeen"`
-	Node                      *localNodeIdentity            `json:"node,omitempty"`
-	NodeOwnerID               string                        `json:"nodeOwnerID,omitempty"`
-	KubeSystemUID             string                        `json:"kubeSystemUID,omitempty"`
-	Deployments               []localCAPIDeploymentEvidence `json:"deployments,omitempty"`
-	CRDs                      []string                      `json:"crds,omitempty"`
-	InstalledProviderVersions map[string]string             `json:"installedProviderVersions,omitempty"`
-	InitEvidence              *localCAPIInitEvidence        `json:"initEvidence,omitempty"`
-	FailureStage              string                        `json:"failureStage,omitempty"`
-	FailureCode               string                        `json:"failureCode,omitempty"`
+	Format                        string                        `json:"format"`
+	Phase                         localCAPIPhase                `json:"phase"`
+	Name                          string                        `json:"name"`
+	OwnerID                       string                        `json:"ownerID"`
+	ColimaProfile                 string                        `json:"colimaProfile,omitempty"`
+	Provider                      localProviderIdentity         `json:"provider"`
+	BootstrapKindName             string                        `json:"bootstrapKindName"`
+	BootstrapKubeconfig           string                        `json:"bootstrapKubeconfig"`
+	KindConfigPath                string                        `json:"kindConfigPath"`
+	KindConfigSHA256              string                        `json:"kindConfigSHA256"`
+	ClusterctlConfigPath          string                        `json:"clusterctlConfigPath"`
+	ClusterctlConfigSHA256        string                        `json:"clusterctlConfigSHA256"`
+	KubernetesVersion             string                        `json:"kubernetesVersion"`
+	NodeImage                     string                        `json:"nodeImage"`
+	ProviderVersions              map[string]string             `json:"providerVersions"`
+	Containers                    []localCAPIContainerEvidence  `json:"containers,omitempty"`
+	BootstrapResourceState        localCAPIResourceState        `json:"bootstrapResourceState"`
+	BootstrapKubeconfigSeen       bool                          `json:"bootstrapKubeconfigSeen"`
+	Node                          *localNodeIdentity            `json:"node,omitempty"`
+	NodeOwnerID                   string                        `json:"nodeOwnerID,omitempty"`
+	KubeSystemUID                 string                        `json:"kubeSystemUID,omitempty"`
+	Deployments                   []localCAPIDeploymentEvidence `json:"deployments,omitempty"`
+	CRDs                          []string                      `json:"crds,omitempty"`
+	InstalledProviderVersions     map[string]string             `json:"installedProviderVersions,omitempty"`
+	InitEvidence                  *localCAPIInitEvidence        `json:"initEvidence,omitempty"`
+	DevelopmentTemplatesAttempted bool                          `json:"developmentTemplatesAttempted,omitempty"`
+	DevelopmentTemplatesSHA256    string                        `json:"developmentTemplatesSHA256,omitempty"`
+	DevelopmentTemplatesComplete  bool                          `json:"developmentTemplatesComplete,omitempty"`
+	DevelopmentTemplates          []localCAPITemplateEvidence   `json:"developmentTemplates,omitempty"`
+	FailureStage                  string                        `json:"failureStage,omitempty"`
+	FailureCode                   string                        `json:"failureCode,omitempty"`
+}
+
+type localCAPITemplateEvidence struct {
+	APIVersion         string `json:"apiVersion"`
+	Kind               string `json:"kind"`
+	Namespace          string `json:"namespace"`
+	Name               string `json:"name"`
+	Status             string `json:"status"`
+	ReasonCode         string `json:"reasonCode,omitempty"`
+	ObservedAPIVersion string `json:"observedAPIVersion,omitempty"`
+	ObservedKind       string `json:"observedKind,omitempty"`
+	ObservedNamespace  string `json:"observedNamespace,omitempty"`
+	ObservedName       string `json:"observedName,omitempty"`
+	ObservedOwnerID    string `json:"observedOwnerID,omitempty"`
+	UID                string `json:"uid,omitempty"`
+	SpecSHA256         string `json:"specSHA256,omitempty"`
 }
 
 type localCAPIVerificationReport struct {
@@ -278,6 +298,11 @@ func verifyLocalCAPIBootstrap(ctx context.Context, runtime localRuntime, name st
 	if err := verifyLocalCAPIReady(ctx, runtime, state.Provider, &observed); err != nil {
 		result, reason := classifyLocalCAPIReadinessFailure(err)
 		return finish(result, reason)
+	}
+	if state.DevelopmentTemplatesAttempted {
+		if err := verifyLocalCAPITemplateReceipt(ctx, runtime, state); err != nil {
+			return finish("IDENTITY_MISMATCH", "DEVELOPMENT_TEMPLATE_OWNERSHIP_MISMATCH")
+		}
 	}
 	if _, err := readLocalCAPIState(runtime.stateRoot, name); err != nil {
 		return finish("UNVERIFIABLE", "STATE_CHANGED_DURING_OBSERVATION")
@@ -415,6 +440,32 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 			return errors.New("CAPI provider version inventory is invalid")
 		}
 	}
+	if !state.DevelopmentTemplatesAttempted && (state.DevelopmentTemplatesSHA256 != "" || state.DevelopmentTemplatesComplete || len(state.DevelopmentTemplates) != 0) {
+		return errors.New("CAPI template evidence exists without a durable installation intent")
+	}
+	if state.DevelopmentTemplatesAttempted && !localCAPISHA256Pattern.MatchString(state.DevelopmentTemplatesSHA256) {
+		return errors.New("CAPI template installation intent lacks a manifest digest")
+	}
+	if len(state.DevelopmentTemplates) > len(localCAPIWorkloadExpectedManifestObjects(""))-1 {
+		return errors.New("CAPI template ownership inventory exceeds its bounded limit")
+	}
+	templateEvidenceSeen := map[string]bool{}
+	for _, evidence := range state.DevelopmentTemplates {
+		key := evidence.APIVersion + "/" + evidence.Kind + "/" + evidence.Name
+		if evidence.Namespace != localCAPIWorkloadNamespace || !localCAPITemplateIdentityExpected(key) || templateEvidenceSeen[key] || !validLocalCAPITemplateEvidence(evidence) {
+			return errors.New("CAPI template ownership inventory is invalid")
+		}
+		if evidence.Status == localCAPITemplateVerified && evidence.ObservedOwnerID != state.OwnerID {
+			return errors.New("verified CAPI template owner differs from the management receipt")
+		}
+		templateEvidenceSeen[key] = true
+	}
+	if state.DevelopmentTemplatesComplete && !localCAPITemplateInventoryComplete(state.DevelopmentTemplates) {
+		return errors.New("completed CAPI template inventory is not fully verified")
+	}
+	if state.Phase == localCAPIPhaseCAPIReady && state.DevelopmentTemplatesAttempted && !state.DevelopmentTemplatesComplete {
+		return errors.New("CAPI_READY receipt lacks complete management-owned development templates")
+	}
 	if state.Phase == localCAPIPhaseCAPIReady && (state.BootstrapResourceState != localCAPIResourceVerified || !state.BootstrapKubeconfigSeen || state.Node == nil || state.Node.UID == "" || state.NodeOwnerID != state.OwnerID || state.KubeSystemUID == "" || len(state.Containers) != 1 || state.Containers[0].KindClusterName != state.BootstrapKindName || len(state.Deployments) != 7 || len(state.CRDs) < 4 || len(state.InstalledProviderVersions) != 5 || state.FailureCode != "") {
 		return errors.New("CAPI_READY receipt lacks independent readiness evidence")
 	}
@@ -507,7 +558,7 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 	if state.Phase != localCAPIPhaseIncomplete && (state.FailureCode != "" || state.FailureStage != "") {
 		return errors.New("non-INCOMPLETE CAPI receipt cannot contain failure classification")
 	}
-	wantFailureStage := map[string]string{"PREFLIGHT_FAILED": "preflight", "KIND_CREATE_FAILED": "kind-create", "BOOTSTRAP_VERIFY_FAILED": "bootstrap-verify", "CAPI_INIT_FAILED": "capi-init", "CAPI_INIT_ARGUMENTS_REJECTED": "capi-init", "CAPI_VERIFY_FAILED": "capi-verify", "STATE_PERSIST_FAILED": "state"}
+	wantFailureStage := map[string]string{"PREFLIGHT_FAILED": "preflight", "KIND_CREATE_FAILED": "kind-create", "BOOTSTRAP_VERIFY_FAILED": "bootstrap-verify", "CAPI_INIT_FAILED": "capi-init", "CAPI_INIT_ARGUMENTS_REJECTED": "capi-init", "CAPI_VERIFY_FAILED": "capi-verify", "CAPI_TEMPLATES_INSTALL_FAILED": "template-install", "STATE_PERSIST_FAILED": "state"}
 	if state.FailureCode != "" && wantFailureStage[state.FailureCode] != state.FailureStage {
 		return errors.New("CAPI failure code and stage do not match")
 	}
@@ -516,9 +567,9 @@ func validateLocalCAPIState(root string, state localCAPIState) error {
 
 var localCAPIFailureCodes = map[string]bool{
 	"PREFLIGHT_FAILED": true, "KIND_CREATE_FAILED": true, "BOOTSTRAP_VERIFY_FAILED": true,
-	"CAPI_INIT_FAILED": true, "CAPI_INIT_ARGUMENTS_REJECTED": true, "CAPI_VERIFY_FAILED": true, "STATE_PERSIST_FAILED": true,
+	"CAPI_INIT_FAILED": true, "CAPI_INIT_ARGUMENTS_REJECTED": true, "CAPI_VERIFY_FAILED": true, "CAPI_TEMPLATES_INSTALL_FAILED": true, "STATE_PERSIST_FAILED": true,
 }
-var localCAPIFailureStages = map[string]bool{"preflight": true, "kind-create": true, "bootstrap-verify": true, "capi-init": true, "capi-verify": true, "state": true}
+var localCAPIFailureStages = map[string]bool{"preflight": true, "kind-create": true, "bootstrap-verify": true, "capi-init": true, "capi-verify": true, "template-install": true, "state": true}
 
 type localCAPIDockerInfo struct {
 	CPUs   int    `json:"cpus"`
@@ -550,7 +601,7 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 		return errors.New("cannot safely inspect the private local CAPI state root")
 	}
 	// Check both lifecycle namespaces before any provider query or local write.
-	for _, path := range []string{filepath.Join(runtime.stateRoot, "clusters", name), localCAPIStateDirectory(runtime.stateRoot, name)} {
+	for _, path := range []string{filepath.Join(runtime.stateRoot, "clusters", name), localCAPIStateDirectory(runtime.stateRoot, name), localCAPIWorkloadDirectory(runtime.stateRoot, name)} {
 		if _, err := os.Lstat(path); err == nil {
 			return errors.New("existing local ownership material; CAPI mode will not overwrite, adopt, or retry it")
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -642,7 +693,7 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 			result = errors.Join(result, errors.New("local lifecycle lock could not be safely released; inspect it before another up"))
 		}
 	}() // A stale lock is fail-closed; it is never silently adopted.
-	for _, path := range []string{filepath.Join(runtime.stateRoot, "clusters", name), localCAPIStateDirectory(runtime.stateRoot, name)} {
+	for _, path := range []string{filepath.Join(runtime.stateRoot, "clusters", name), localCAPIStateDirectory(runtime.stateRoot, name), localCAPIWorkloadDirectory(runtime.stateRoot, name)} {
 		if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
 			return errors.New("existing local ownership material; CAPI mode will not overwrite, adopt, or retry it")
 		}
@@ -785,6 +836,9 @@ func runLocalCAPIUpContext(ctx context.Context, name, profile string, runtime lo
 	}
 	if err := verifyLocalCAPIReady(ctx, runtime, provider, &state); err != nil {
 		return fail("capi-verify", "CAPI_VERIFY_FAILED")
+	}
+	if err := installLocalCAPIDevelopmentTemplates(ctx, runtime, &state); err != nil {
+		return fail("template-install", "CAPI_TEMPLATES_INSTALL_FAILED")
 	}
 	state.Phase, state.FailureStage, state.FailureCode = localCAPIPhaseCAPIReady, "", ""
 	if err := writeLocalCAPIState(runtime.stateRoot, state, true); err != nil {
@@ -1365,7 +1419,7 @@ func writeLocalCAPIState(root string, state localCAPIState, replace bool) error 
 		return syncLocalCAPIDirectory(dir)
 	}
 	previous, err := readLocalCAPIState(root, state.Name)
-	if err != nil || !sameLocalCAPIIntent(previous, state) || !validLocalCAPITransition(previous.Phase, state.Phase) {
+	if err != nil || !sameLocalCAPIIntent(previous, state) || !validLocalCAPITransition(previous.Phase, state.Phase) || !validLocalCAPITemplateEvidenceTransition(previous, state) {
 		return errors.New("existing CAPI receipt is invalid, belongs to another intent, or has an invalid phase transition")
 	}
 	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
@@ -1403,6 +1457,28 @@ func writeLocalCAPIState(root string, state localCAPIState, replace bool) error 
 	return directory.Sync()
 }
 
+func validLocalCAPITemplateEvidenceTransition(previous, next localCAPIState) bool {
+	if (previous.DevelopmentTemplatesAttempted && !next.DevelopmentTemplatesAttempted) ||
+		(previous.DevelopmentTemplatesComplete && !next.DevelopmentTemplatesComplete) ||
+		(previous.DevelopmentTemplatesSHA256 != "" && previous.DevelopmentTemplatesSHA256 != next.DevelopmentTemplatesSHA256) ||
+		len(previous.DevelopmentTemplates) > len(next.DevelopmentTemplates) {
+		return false
+	}
+	if next.DevelopmentTemplatesComplete && !localCAPITemplateInventoryComplete(next.DevelopmentTemplates) {
+		return false
+	}
+	nextByIdentity := map[string]localCAPITemplateEvidence{}
+	for _, evidence := range next.DevelopmentTemplates {
+		nextByIdentity[evidence.APIVersion+"/"+evidence.Kind+"/"+evidence.Name] = evidence
+	}
+	for _, evidence := range previous.DevelopmentTemplates {
+		if nextByIdentity[evidence.APIVersion+"/"+evidence.Kind+"/"+evidence.Name] != evidence {
+			return false
+		}
+	}
+	return true
+}
+
 func sameLocalCAPIIntent(previous, next localCAPIState) bool {
 	return previous.Format == next.Format && previous.Name == next.Name && previous.OwnerID == next.OwnerID && previous.Provider == next.Provider &&
 		previous.BootstrapKindName == next.BootstrapKindName && previous.BootstrapKubeconfig == next.BootstrapKubeconfig &&
@@ -1430,7 +1506,7 @@ func validLocalCAPITransition(previous, next localCAPIPhase) bool {
 	case localCAPIPhaseBootstrapReady:
 		return next == localCAPIPhaseInitializing || next == localCAPIPhaseIncomplete
 	case localCAPIPhaseInitializing:
-		return next == localCAPIPhaseCAPIReady || next == localCAPIPhaseIncomplete
+		return next == localCAPIPhaseInitializing || next == localCAPIPhaseCAPIReady || next == localCAPIPhaseIncomplete
 	default:
 		return false
 	}
