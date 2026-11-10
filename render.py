@@ -638,7 +638,10 @@ def resolve_config(cfg: dict, cluster_name: str, require_live_inventory=False) -
         raise RuntimeError("live inventory enforcement requires the Talos/KubeVirt ok-infra reference profile")
     used = effective_used_ips(
         others,
-        exclude_cluster=cluster_name,
+        # A first-create M2 inventory must include every namespace: a pre-
+        # existing Service can occupy the requested cluster's namespace too.
+        # Legacy re-renders retain the historical self-namespace exclusion.
+        exclude_cluster=None if require_live_inventory else cluster_name,
         require_live=require_live_inventory,
     )
     if net.get("endpoint", "auto") == "auto":
@@ -908,7 +911,7 @@ def cmd_show_ip(args):
     others = [c for c in clusters if c["name"] != args.cluster]
     used = effective_used_ips(
         others,
-        exclude_cluster=args.cluster,
+        exclude_cluster=None if args.require_live_inventory else args.cluster,
         require_live=args.require_live_inventory,
     )
     start_ip = args.start_ip or os.environ.get("START_IP")

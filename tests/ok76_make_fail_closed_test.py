@@ -153,6 +153,22 @@ class RenderInventoryTests(unittest.TestCase):
                 resolved = render.resolve_config(unrelated, "ok-other")
         self.assertEqual(resolved["network"]["endpoint"], "192.168.100.200")
 
+    def test_strict_first_create_inventory_does_not_exclude_target_namespace(self):
+        cfg = {
+            "name": "ok-m2-test",
+            "type": "talos",
+            "provider": "kubevirt",
+            "providerProfile": {"name": "ok-infra"},
+            "network": {"endpoint": "auto", "podCIDR": "auto", "serviceCIDR": "auto"},
+        }
+        allocation = {"192.168.100.200": "ok-m2-test/existing-service"}
+        with mock.patch.object(render, "discover_clusters", return_value=[]), \
+             mock.patch.object(render, "live_metallb_allocations", return_value=allocation) as inventory, \
+             mock.patch.object(render, "resolve_talos_config", side_effect=lambda value, _path: value):
+            resolved = render.resolve_config(cfg, "ok-m2-test", require_live_inventory=True)
+        inventory.assert_called_once_with(exclude_cluster=None, required=True)
+        self.assertEqual(resolved["network"]["endpoint"], "192.168.100.201")
+
     def test_render_inventory_failure_occurs_before_manifest_writes(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
