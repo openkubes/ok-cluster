@@ -703,6 +703,9 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 1 && arguments[0] == "config" {
 		return runConfig(ctx, arguments[1:], stdout, stderr)
 	}
+	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "plan" {
+		return runClusterPlan(arguments[2:], stdout, stderr)
+	}
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "destroy" {
 		return runDestroyCluster(ctx, arguments[2:], stdout, stderr)
 	}

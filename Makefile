@@ -256,7 +256,7 @@ ok-target-admission-image-smoke: ## Verify the local target admission image is n
 
 ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries without cluster contact
 	@go test -mod=readonly ./cmd/ok -count=1 \
-		-run 'TestDestroy|TestManagedDestroy|TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
+		-run 'TestDestroy|TestManagedDestroy|TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterPlan|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestLocalConfig'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestGuidedUp|TestAutomaticUp'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
@@ -283,6 +283,7 @@ ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create scaffold --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create manifest-template >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster create plan-template >/dev/null
+	@$(SCRIPT_DIR)/.tools/bin/ok cluster plan --help >/dev/null
 	@$(SCRIPT_DIR)/.tools/bin/ok cluster stage run full prepare --help >/dev/null
 	@python3 $(SCRIPT_DIR)/tests/ok147_projection_render_test.py >/dev/null
 	@python3 $(SCRIPT_DIR)/tests/ok147_destroy_cli_test.py
