@@ -54,6 +54,11 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeDestroyClusterHelp(stdout)
 		return true
 	}
+	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "plan" &&
+		(len(arguments) == 2 || containsHelpArgument(arguments[2:])) {
+		writeClusterPlanHelp(stdout)
+		return true
+	}
 	if len(arguments) == 1 && arguments[0] == "cluster" ||
 		len(arguments) == 2 && arguments[0] == "cluster" && isHelpArgument(arguments[1]) {
 		writeClusterHelp(stdout)
@@ -191,12 +196,25 @@ Usage:
   ok cluster <command> [flags]
 
 Commands:
+  plan        Validate a Make-backed ClusterRequest and print a read-only plan
   create      Validate, prepare, or explicitly execute a Bare-MVP run
   destroy     Interactively tear down a cluster through the existing lifecycle
   stage       Expert stage-level commands
   dry-run     Read-only HTTP validation service (expert)
 
-Start with "ok cluster create --help" or "ok cluster destroy --help".
+Start with "ok cluster plan --help", "ok cluster create --help", or "ok cluster destroy --help".
+`)
+}
+
+func writeClusterPlanHelp(output io.Writer) {
+	fmt.Fprint(output, `Build a read-only plan for the trusted Make Talos/KubeVirt reference workflow
+
+Usage:
+  ok cluster plan -f <cluster.yaml>
+
+Accepts cli.openkubes.io/v1alpha1 ClusterRequest with profile talos-kubevirt-reference.
+The command reads and validates the request only. It never invokes Make, kubectl,
+the renderer, or any other external command, and it writes no files.
 `)
 }
 
