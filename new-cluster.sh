@@ -3,6 +3,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STAGING_DIR=""
+
+cleanup_ok76_staging() {
+  if [[ -n "$STAGING_DIR" && -d "$STAGING_DIR" ]]; then
+    rm -rf "$STAGING_DIR"
+  fi
+}
 
 # ok-linux is the source of truth for these defaults.
 # See: https://github.com/openkubes/ok-linux/blob/main/profiles/kubevirt/profile.yaml
@@ -42,6 +49,7 @@ if [[ -z "$WORKER_DISK" ]]; then
 fi
 NODE_SELECTOR="${NODE_SELECTOR:-${NODE:-}}"   # OK-82: NODE= accepted as alias
 SCHEDULING_PROFILE="${SCHEDULING_PROFILE:-}"
+OK76_REQUIRE_LIVE_METALLB_INVENTORY="${OK76_REQUIRE_LIVE_METALLB_INVENTORY:-false}"
 START_IP="${START_IP:-}"   # OK-83: optional override for MetalLB IP allocation
 REGISTRY_TRUST="${REGISTRY_TRUST:-false}"
 REGISTRY_HOST="${REGISTRY_HOST:-registry.ok-shared.internal}"
@@ -119,6 +127,21 @@ elif [[ -n "$SCHEDULING_PROFILE" ]]; then
   echo "ERROR: SCHEDULING_PROFILE is currently supported only for ordinary Talos KubeVirt clusters"
   exit 1
 fi
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" != "true" && "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" != "false" ]]; then
+  echo "ERROR: OK76_REQUIRE_LIVE_METALLB_INVENTORY must be exactly true or false"
+  exit 1
+fi
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" && \
+      ( "$TYPE" != "talos" || "$PROVIDER" != "kubevirt" || "$SCHEDULING_PROFILE" != "ok-infra" ) ]]; then
+  echo "ERROR: live allocation inventory enforcement is supported only for the Talos/KubeVirt ok-infra reference profile"
+  exit 1
+fi
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" && \
+      ( -z "${INFRA_KUBECONFIG:-}" || -z "${OKB_KUBECONFIG:-}" || \
+        "$INFRA_KUBECONFIG" != "$OKB_KUBECONFIG" ) ]]; then
+  echo "ERROR: strict allocation inventory requires the same explicit management kubeconfig for cluster and Service checks."
+  exit 1
+fi
 if [[ "$TYPE" == "talos-mgmt" && -z "$NODE_SELECTOR" ]]; then
   NODE_SELECTOR="ok-gpu"
   echo "  INFO: Talos management path defaults to ok-gpu"
@@ -157,6 +180,14 @@ if [[ -d "$CLUSTER_DIR" ]]; then
   echo "ERROR: Cluster '${CLUSTER}' already exists. Use 'make clean CLUSTER=${CLUSTER}' first."
   exit 1
 fi
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
+  for STALE_STAGING_DIR in "${SCRIPT_DIR}"/.ok76-"${CLUSTER}".*; do
+    if [[ -e "$STALE_STAGING_DIR" ]]; then
+      echo "ERROR: a prior incomplete OK-76 staging directory exists for '${CLUSTER}'; refusing to retry or remove it automatically."
+      exit 1
+    fi
+  done
+fi
 
 # OK-102 follow-up: the check above only looks at the local render directory.
 # On a checkout that never received a previous 'make e2e' post-commit push
@@ -165,28 +196,47 @@ fi
 # would re-render fresh values (e.g. a new MetalLB IP via render.py next-ip)
 # and re-apply them against an already-running cluster. Refuse in that case.
 INFRA_KUBECONFIG="${INFRA_KUBECONFIG:-$HOME/.kube/ok-infra.yaml}"
-if command -v kubectl >/dev/null 2>&1 && [[ -f "$INFRA_KUBECONFIG" ]]; then
-  if kubectl --kubeconfig "$INFRA_KUBECONFIG" get cluster "${CLUSTER}" -n "${CLUSTER}" >/dev/null 2>&1; then
-    echo "ERROR: Cluster '${CLUSTER}' already exists in the API (namespace ${CLUSTER} on"
-    echo "       $INFRA_KUBECONFIG), even though no local render directory was found."
-    echo "       This usually means another checkout rendered it and its manifests were"
-    echo "       never pushed/committed here. Refusing to scaffold a new one to avoid"
-    echo "       re-rendering colliding values (e.g. a different MetalLB IP) against a"
-    echo "       live cluster."
-    echo "       Fix: pull/sync the missing render directory from wherever it was"
-    echo "       created, or run 'make teardown CLUSTER=${CLUSTER}' first if it should"
-    echo "       genuinely be destroyed and recreated."
-    exit 1
-  fi
-else
-  echo "  WARN: kubectl or $INFRA_KUBECONFIG not available -- skipping live-cluster existence check."
+if ! command -v kubectl >/dev/null 2>&1; then
+  echo "ERROR: kubectl is required to verify that Cluster '${CLUSTER}' is absent; refusing to scaffold."
+  exit 1
+fi
+if [[ ! -f "$INFRA_KUBECONFIG" || ! -r "$INFRA_KUBECONFIG" ]]; then
+  echo "ERROR: a readable management kubeconfig is required to verify Cluster '${CLUSTER}' is absent; refusing to scaffold."
+  exit 1
 fi
 
-mkdir -p "$CLUSTER_DIR"
+# --ignore-not-found makes a confirmed 404 the only successful empty result.
+# Authentication, authorization, TLS, transport, timeout, missing API/CRD and
+# malformed output must all stop before the local cluster directory is made.
+if ! EXISTING_CLUSTER=$(kubectl --kubeconfig "$INFRA_KUBECONFIG" \
+    get clusters.cluster.x-k8s.io "${CLUSTER}" -n "${CLUSTER}" \
+    --ignore-not-found -o name); then
+  echo "ERROR: could not verify Cluster '${CLUSTER}' absence through the management API; refusing to scaffold."
+  exit 1
+fi
+if [[ -n "$EXISTING_CLUSTER" ]]; then
+  echo "ERROR: Cluster '${CLUSTER}' already exists or the absence check returned ambiguous output; refusing to scaffold."
+  exit 1
+fi
 
 # OK-83: next-ip is MetalLB-aware (queries live LB allocations on the mgmt
 # cluster). Warnings on stderr stay visible; hard errors abort the scaffold.
-NEXT_IP=$(START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" next-ip --cluster "${CLUSTER}")
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
+  NEXT_IP=$(START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" next-ip --cluster "${CLUSTER}" --require-live-inventory)
+else
+  NEXT_IP=$(START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" next-ip --cluster "${CLUSTER}")
+fi
+
+# Do not create any cluster scaffold until the required live checks and network
+# allocation query have both succeeded.
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
+  STAGING_DIR=$(mktemp -d "${SCRIPT_DIR}/.ok76-${CLUSTER}.XXXXXX")
+  trap cleanup_ok76_staging EXIT
+  CLUSTER_DIR="$STAGING_DIR"
+  CFG="${CLUSTER_DIR}/cluster-config.yaml"
+else
+  mkdir -p "$CLUSTER_DIR"
+fi
 NODE_DISPLAY="${NODE_SELECTOR:-any}"
 
 echo "Creating cluster: ${CLUSTER}"
@@ -287,7 +337,36 @@ YAML
 echo "  ✔ ${CFG}"
 echo ""
 echo "Rendering manifests..."
-START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" render --cluster "${CLUSTER}"
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
+  START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" render --cluster "${CLUSTER}" --cluster-dir "${CLUSTER_DIR}" --require-live-inventory
+else
+  START_IP="${START_IP}" python3 "${SCRIPT_DIR}/render.py" render --cluster "${CLUSTER}"
+fi
+
+if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
+  if [[ -e "${SCRIPT_DIR}/${CLUSTER}" ]]; then
+    echo "ERROR: Cluster '${CLUSTER}' appeared during scaffolding; preserving existing path and refusing to publish generated files."
+    exit 1
+  fi
+  STAGING_BASENAME="$(basename "$STAGING_DIR")"
+  mv -n "$STAGING_DIR" "${SCRIPT_DIR}/${CLUSTER}"
+  if [[ -d "${SCRIPT_DIR}/${CLUSTER}/${STAGING_BASENAME}" ]]; then
+    # If another writer created the destination between the check and rename,
+    # BSD/GNU mv may place our stage inside it. Point the trap only at our
+    # uniquely named temporary directory; never remove the competing target.
+    STAGING_DIR="${SCRIPT_DIR}/${CLUSTER}/${STAGING_BASENAME}"
+    echo "ERROR: Cluster '${CLUSTER}' appeared during scaffold publication; existing path is preserved."
+    exit 1
+  fi
+  if [[ -d "$STAGING_DIR" || ! -f "${SCRIPT_DIR}/${CLUSTER}/cluster-config.yaml" ]]; then
+    echo "ERROR: could not atomically publish the completed scaffold; staged files were not applied to infrastructure."
+    exit 1
+  fi
+  STAGING_DIR=""
+  trap - EXIT
+  CLUSTER_DIR="${SCRIPT_DIR}/${CLUSTER}"
+  CFG="${CLUSTER_DIR}/cluster-config.yaml"
+fi
 
 echo ""
 echo "Done. Next steps:"
