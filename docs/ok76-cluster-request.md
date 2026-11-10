@@ -31,3 +31,14 @@ The plan's fixed sizing values are sourced from the current Make workflow:
 reference profile fixes the Talos/KubeVirt `ok-infra` scheduling profile and
 ok-linux kubevirt OS profile. These are preview details, not reservations or
 runtime verification.
+
+## Community Preview provisioning constraint
+
+Only one cluster provisioning operation may run against the management
+cluster's shared network allocation pool at a time. This single-writer rule
+also covers provisioning performed outside the OpenKubes CLI, including direct
+Make workflows. The current live inventory check observes allocated addresses;
+it is not an atomic IP reservation. Concurrent independent provisioning can
+therefore still select the same address and cause a collision. This is an
+operational Community Preview limitation, not a technical concurrency
+guarantee: operators must coordinate all provisioning against that pool.
