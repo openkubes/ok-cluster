@@ -157,7 +157,7 @@ type clusterProvisionConfig struct {
 }
 
 var clusterProvisionRequiredTools = []string{
-	"make", "git", "kubectl", "clusterctl", "helm", "python3", "bash", "sh",
+	"make", "git", "kubectl", "clusterctl", "helm", "python3", "bash", "sh", "pwd",
 	"grep", "head", "seq", "sleep", "mktemp", "mv", "rm", "chmod", "basename", "dirname", "mkdir", "cat", "tr", "wc",
 }
 

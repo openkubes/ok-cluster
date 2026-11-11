@@ -810,6 +810,82 @@ func TestClusterProvisionPythonVenvBindingPreservesInstalledDependency(t *testin
 	}
 }
 
+func TestClusterProvisionActualMakefilePathAndRendererUseIsolatedTools(t *testing.T) {
+	var pwdRequired bool
+	for _, name := range clusterProvisionRequiredTools {
+		if name == "pwd" {
+			pwdRequired = true
+			break
+		}
+	}
+	if !pwdRequired {
+		t.Fatal("pwd must remain in the validated provisioning tool allowlist")
+	}
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("Makefile isolated PATH regression is supported on macOS and Linux")
+	}
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate source checkout")
+	}
+	makeRoot, err := filepath.EvalSymlinks(filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	makefile := filepath.Join(makeRoot, "Makefile")
+	info, err := os.Lstat(makefile)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("actual Makefile is missing or unsafe: %v", err)
+	}
+	tools := make(map[string]string)
+	for _, name := range []string{"make", "pwd", "git", "cat"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("required test tool %s is unavailable", name)
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatalf("cannot resolve test tool %s: %v", name, err)
+		}
+		tools[name] = resolved
+	}
+	pythonPath, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is unavailable")
+	}
+	venv := filepath.Join(t.TempDir(), "venv")
+	if output, err := exec.Command(pythonPath, "-m", "venv", venv).CombinedOutput(); err != nil {
+		t.Skipf("python3 venv support is unavailable: %v: %s", err, output)
+	}
+	selectedPython := filepath.Join(venv, "bin", "python3")
+	wheel := writeProvisionFixtureWheel(t, filepath.Dir(venv))
+	if output, err := exec.Command(selectedPython, "-m", "pip", "install", "--no-index", "--no-deps", wheel).CombinedOutput(); err != nil {
+		t.Fatalf("install local renderer dependency into venv: %v: %s", err, output)
+	}
+	tools["python3"] = selectedPython
+	restrictedPath, cleanup, err := createProvisionToolPath(tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	makeRuntime := clusterProvisionRuntime{makeRoot: makeRoot, environmentPath: restrictedPath}
+	probeMakefile := filepath.Join(t.TempDir(), "ok76-path-probe.mk")
+	probe := "ok76-provision-path-test:\n\t@python3 -c 'import sys; print(sys.argv[1])' '$(SCRIPT_DIR)'\n\t@python3 '$(SCRIPT_DIR)/render.py' --help >/dev/null\n"
+	if err := os.WriteFile(probeMakefile, []byte(probe), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(filepath.Join(restrictedPath, "make"), "--silent", "--no-print-directory", "--file", makefile, "--file", probeMakefile, "ok76-provision-path-test")
+	command.Dir = makeRoot
+	command.Env = provisionEnvironment(makeRuntime)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("actual Makefile could not resolve SCRIPT_DIR or invoke render.py through isolated PATH: %v: %s", err, output)
+	}
+	if strings.TrimSpace(string(output)) != makeRoot {
+		t.Fatalf("Make SCRIPT_DIR mismatch: got %q, want %q", strings.TrimSpace(string(output)), makeRoot)
+	}
+}
+
 func writeProvisionFixtureWheel(t *testing.T, directory string) string {
 	t.Helper()
 	files := map[string][]byte{
