@@ -4,12 +4,17 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,6 +90,16 @@ users:
   user:
     token: fixture-token
 `
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, cert, cert, pub, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managementConfig = strings.Replace(managementConfig, "Y2E=", base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), 1)
 	if err := os.WriteFile(mgmt, []byte(managementConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +182,10 @@ func (fixture *provisionFixture) run(ctx context.Context, executable string, arg
 		}
 		return nil
 	case "kubectl":
+		if strings.Contains(strings.Join(args, " "), "get namespace kube-system") {
+			fmt.Fprintln(stdout, `{"metadata":{"uid":"management-system-uid"}}`)
+			return nil
+		}
 		fixture.kubectlCount++
 		if fixture.clusterQueryFailure != nil {
 			return fixture.clusterQueryFailure
@@ -1003,5 +1022,100 @@ func TestClusterProvisionDetectsScaffoldChangedAfterReview(t *testing.T) {
 	}
 	if err := verifyProvisionArtifactsUnchanged(fixture.runtime, prepared, artifacts); err == nil {
 		t.Fatal("modified scaffold passed post-review integrity check")
+	}
+}
+
+func TestClusterProvisionRequiresExplicitSamePlaneChoice(t *testing.T) {
+	for _, topology := range []string{"", "split-plane", "auto"} {
+		args := []string{"-f", "unused.yaml", "--workload-kubeconfig", "/private/unused.yaml"}
+		if topology != "" {
+			args = append(args, "--topology", topology)
+		}
+		err := runClusterProvision(context.Background(), args, strings.NewReader(""), io.Discard, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "explicit --topology same-plane") {
+			t.Fatalf("topology %q: %v", topology, err)
+		}
+	}
+}
+
+func TestClusterProvisionPlaneUIDDriftPreventsMake(t *testing.T) {
+	fixture, request := newProvisionFixture(t)
+	original := fixture.runtime.command
+	reads := 0
+	fixture.runtime.command = func(ctx context.Context, executable string, args []string, dir string, env []string, out, errOut io.Writer) error {
+		if filepath.Base(executable) == "kubectl" && strings.Contains(strings.Join(args, " "), "get namespace kube-system") {
+			reads++
+			if reads > 1 {
+				fmt.Fprintln(out, `{"metadata":{"uid":"replacement-plane"}}`)
+				return nil
+			}
+		}
+		return original(ctx, executable, args, dir, env, out, errOut)
+	}
+	err := runClusterProvisionWithRuntime(context.Background(), request, strings.NewReader("provision preview-one\nbootstrap preview-one\n"), io.Discard, io.Discard, fixture.runtime)
+	if err == nil || fixture.makeCount["new"] != 0 || fixture.makeCount["bootstrap"] != 0 {
+		t.Fatalf("drift reached Make: %v %#v", err, fixture.makeCount)
+	}
+}
+
+func TestClusterProvisionSamePlaneGateFailurePreservesScaffold(t *testing.T) {
+	fixture, request := newProvisionFixture(t)
+	original := fixture.runtime.command
+	fixture.runtime.command = func(ctx context.Context, executable string, args []string, dir string, env []string, out, errOut io.Writer) error {
+		if strings.Contains(strings.Join(args, " "), "--same-plane-preflight") {
+			return errors.New("external provider / teardown contract unavailable")
+		}
+		return original(ctx, executable, args, dir, env, out, errOut)
+	}
+	err := runClusterProvisionWithRuntime(context.Background(), request, strings.NewReader("provision preview-one\nbootstrap preview-one\n"), io.Discard, io.Discard, fixture.runtime)
+	if err == nil || fixture.makeCount["new"] != 1 || fixture.makeCount["bootstrap"] != 0 {
+		t.Fatalf("readiness failure reached bootstrap: %v %#v", err, fixture.makeCount)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")); err != nil {
+		t.Fatal("scaffold was not preserved")
+	}
+}
+
+func TestClusterProvisionReviewedLifecycleExtensionRejectsTampering(t *testing.T) {
+	fixture, _ := newProvisionFixture(t)
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.runtime.toolPaths["python3"] = python
+	if err := os.WriteFile(filepath.Join(fixture.runtime.environmentPath, "python3"), []byte("#!/bin/sh\nexec "+python+" \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture.runtime.command = func(ctx context.Context, executable string, args []string, dir string, env []string, out, errOut io.Writer) error {
+		cmd := exec.CommandContext(ctx, executable, args...)
+		cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, out, errOut
+		return cmd.Run()
+	}
+	if len(clusterProvisionReviewedLifecycle) == 0 {
+		t.Fatal("reviewed extension must be pinned")
+	}
+	var first string
+	for path := range clusterProvisionReviewedLifecycle {
+		raw, err := os.ReadFile(filepath.Join("..", "..", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(fixture.root, path)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dest, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		first = dest
+	}
+	if err := verifyProvisionLifecycleExtension(context.Background(), fixture.runtime, fixture.root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first, []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyProvisionLifecycleExtension(context.Background(), fixture.runtime, fixture.root); err == nil {
+		t.Fatal("tampered reviewed lifecycle accepted")
 	}
 }

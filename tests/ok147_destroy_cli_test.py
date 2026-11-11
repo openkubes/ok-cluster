@@ -17,7 +17,7 @@ import unittest
 import ok147_split_teardown_test as fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / '.tools/bin/ok'
+BINARY = Path(os.environ.get('OK_CLI_TEST_BINARY', ROOT / '.tools/bin/ok'))
 OK_LINUX = Path(os.environ.get('OK_LINUX_PATH', ROOT.parent / 'ok-linux'))
 
 

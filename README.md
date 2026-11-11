@@ -529,7 +529,12 @@ RBAC manifest, record formats and admin lifecycle. Record schemas `1` and `2`
 store one ConfigMap per consumer cluster in namespace `ok-cluster-teardown`.
 Schema `1` records a single-plane teardown. Schema `2` adds the management and
 provider plane identities and provider storage provenance required by a
-split-plane teardown. The exact ConfigMap name is
+split-plane teardown. Explicit M2b same-plane CLI teardown uses schema `3`,
+including original config/render, API identity, provisioned namespace/Cluster UIDs
+and strict PVC/PV/CSI/Longhorn bindings; see the
+[M2b topology contract](docs/ok76-cluster-request.md#m2b-provisiondestroy-topology-contract).
+Schema 1/2 behavior is retained; same-plane CLI never falls back to schema 1.
+The exact ConfigMap name is
 `ok-cluster-teardown-<cluster>` and it has these labels:
 
 ```yaml

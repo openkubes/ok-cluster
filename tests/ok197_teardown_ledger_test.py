@@ -677,7 +677,7 @@ def recovery_test(base: Path) -> None:
 
 def schema_tests(base: Path) -> None:
     cases = (
-        (3, "unsupported teardown ledger schema 3; supported: 1, 2", "newer integer"),
+        (4, "unsupported teardown ledger schema 4; supported: 1, 2, 3", "newer integer"),
         (0, "unsupported teardown ledger schema 0; supported: 1, 2", "unknown integer"),
         (True, "teardown record schema is invalid", "boolean"),
         ("2", "teardown record schema is invalid", "string"),
@@ -1136,6 +1136,7 @@ def mutation_proofs(selected: str | None = None) -> int:
             """TEARDOWN_LEDGER_SUPPORTED_SCHEMAS = (
     TEARDOWN_LEDGER_SCHEMA,
     SPLIT_TEARDOWN_LEDGER_SCHEMA,
+    3,  # Explicit same-plane contract; never interpreted as schema 1 or 2.
 )""",
             """TEARDOWN_LEDGER_SUPPORTED_SCHEMAS = (
     TEARDOWN_LEDGER_SCHEMA,

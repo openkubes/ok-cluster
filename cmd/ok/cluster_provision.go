@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +23,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/openkubes/ok-cluster/internal/kubeconfigtarget"
 )
 
 const (
@@ -64,6 +67,8 @@ type clusterProvisionPrepared struct {
 	managementKubeconfig, workloadKubeconfig, chartPath string
 	managementKubeconfigSHA256                          string
 	managementContext, managementAPIServer              string
+	managementTarget                                    kubeconfigtarget.Target
+	managementUID                                       string
 }
 
 type clusterProvisionKubeconfig struct {
@@ -167,12 +172,16 @@ func runClusterProvision(ctx context.Context, arguments []string, stdin io.Reade
 	var input clusterPlanInputFlag
 	flags.Var(&input, "file", "ClusterRequest YAML file")
 	flags.Var(&input, "f", "ClusterRequest YAML file")
+	topology := flags.String("topology", "", "required: same-plane (M2b does not provision split-plane)")
 	workloadKubeconfig := flags.String("workload-kubeconfig", "", "private output path ending in <cluster>.yaml")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || input.value == "" || *workloadKubeconfig == "" {
 		return errors.New("ok cluster provision requires -f <cluster.yaml> and --workload-kubeconfig <private-path>")
+	}
+	if *topology != "same-plane" {
+		return errors.New("M2b provision requires explicit --topology same-plane; external providers are unsupported")
 	}
 	request, err := readClusterRequest(input.value)
 	if err != nil {
@@ -352,6 +361,13 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err != nil {
 		return fmt.Errorf("make new returned success but its scaffold could not be verified; preserve it and stop without bootstrap: %w", err)
 	}
+	if err := verifyProvisionSamePlane(ctx, prepared, runtime); err != nil {
+		return fmt.Errorf("scaffold preserved; same-plane teardown readiness failed before bootstrap: %w", err)
+	}
+	artifacts, network, err = inspectProvisionScaffold(runtime, prepared)
+	if err != nil {
+		return err
+	}
 	if err := verifyProvisionInputs(ctx, prepared, runtime, true); err != nil {
 		return fmt.Errorf("scaffold is preserved; trusted inputs changed before bootstrap: %w", err)
 	}
@@ -385,6 +401,9 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	}
 	if err := verifyWorkloadKubeconfigDestination(runtime.workloadKubeconfig, prepared.name); err != nil {
 		return fmt.Errorf("scaffold is preserved; workload kubeconfig destination changed after confirmation: %w", err)
+	}
+	if err := verifyProvisionSamePlane(ctx, prepared, runtime); err != nil {
+		return fmt.Errorf("same-plane contract changed after confirmation; no bootstrap: %w", err)
 	}
 	if err := verifyProvisionArtifactsUnchanged(runtime, prepared, artifacts); err != nil {
 		return fmt.Errorf("scaffold changed after review; bootstrap was not started: %w", err)
@@ -455,6 +474,14 @@ func prepareClusterProvision(request clusterRequest, runtime clusterProvisionRun
 	prepared.managementKubeconfigSHA256 = managementHash
 	prepared.managementContext = managementTarget.context
 	prepared.managementAPIServer = managementTarget.server
+	prepared.managementTarget, err = kubeconfigtarget.ReadCurrent(runtime.managementKubeconfig)
+	if err != nil {
+		return clusterProvisionPrepared{}, fmt.Errorf("same-plane API/CA identity cannot be verified: %w", err)
+	}
+	prepared.managementUID, err = provisionPlaneUID(context.Background(), prepared, runtime)
+	if err != nil {
+		return clusterProvisionPrepared{}, err
+	}
 	if err := verifyWorkloadKubeconfigDestination(runtime.workloadKubeconfig, prepared.name); err != nil {
 		return clusterProvisionPrepared{}, err
 	}
@@ -481,6 +508,7 @@ func clusterProvisionMakeAssignments(prepared clusterProvisionPrepared, runtime 
 		assignments = append(assignments,
 			"GUEST_KUBECONFIG_DIR="+filepath.Dir(prepared.workloadKubeconfig),
 			"TALOS_WORKLOAD_KUBECONFIG="+prepared.workloadKubeconfig,
+			"TALOS_LIFECYCLE_TOPOLOGY=same-plane",
 			"CILIUM_CHART="+prepared.chartPath,
 		)
 	}
@@ -601,6 +629,11 @@ func verifyProvisionInputs(ctx context.Context, prepared clusterProvisionPrepare
 	if err != nil {
 		return err
 	}
+	current, targetErr := kubeconfigtarget.ReadCurrent(prepared.managementKubeconfig)
+	uid, uidErr := provisionPlaneUID(ctx, prepared, runtime)
+	if targetErr != nil || uidErr != nil || current != prepared.managementTarget || uid != prepared.managementUID {
+		return errors.New("same-plane API endpoint/CA/context/kube-system UID changed or cannot be verified")
+	}
 	if managementTarget.context != prepared.managementContext || managementTarget.server != prepared.managementAPIServer {
 		return errors.New("management kubeconfig target changed after the request was prepared")
 	}
@@ -674,6 +707,12 @@ func verifyProvisionCheckout(ctx context.Context, runtime clusterProvisionRuntim
 	makefileChangeAllowed := false
 	if makeCheckout {
 		args := append(append([]string{}, gitPrefix...), "diff", "--quiet", "--no-ext-diff", "--no-textconv", runtime.reviewedMakeSource, "--", ".", ":(exclude)cmd/ok/**", ":(exclude)Makefile")
+		for path := range clusterProvisionReviewedLifecycle {
+			args = append(args, ":(exclude)"+path)
+		}
+		if err := verifyProvisionLifecycleExtension(ctx, runtime, path); err != nil {
+			return err
+		}
 		if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], args, path, io.Discard); err != nil {
 			return errors.New("Make source outside cmd/ok and the exact offline-smoke selector differs from the reviewed M2a baseline")
 		}
@@ -687,6 +726,10 @@ func verifyProvisionCheckout(ctx context.Context, runtime clusterProvisionRuntim
 			return errors.New("Makefile could not be read safely")
 		}
 		makefileChangeAllowed = provisionMakefileHasOnlyOfflineSmokeSelectorChange(baseline.Bytes(), current)
+		if pinned, ok := clusterProvisionReviewedLifecycle["Makefile"]; ok {
+			digest := sha256.Sum256(current)
+			makefileChangeAllowed = makefileChangeAllowed || hex.EncodeToString(digest[:]) == pinned
+		}
 		if !makefileChangeAllowed {
 			return errors.New("Makefile differs from the reviewed baseline beyond the exact offline-smoke selector")
 		}
@@ -990,6 +1033,7 @@ func runProvisionMake(ctx context.Context, runtime clusterProvisionRuntime, args
 }
 
 func printClusterProvisionPlan(output io.Writer, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) {
+	fmt.Fprintf(output, "Topology: same-plane; management/provider kube-system UID: %s\n", prepared.managementUID)
 	fmt.Fprintf(output, "OK-76 operator provisioning plan\nRequest: %s (%s)\n", prepared.name, clusterRequestProfile)
 	fmt.Fprintf(output, "Trusted Make checkout: %s @ %s (clean; provision sources match reviewed base %s)\n", runtime.makeRoot, runtime.makeRevision, runtime.reviewedMakeSource)
 	fmt.Fprintf(output, "ok-linux checkout: %s @ %s (clean)\n", runtime.okLinuxRoot, runtime.okLinuxRevision)
@@ -1045,4 +1089,37 @@ func runClusterProvisionCommand(ctx context.Context, executable string, args []s
 	command.Dir, command.Env, command.Stdout, command.Stderr = dir, environment, stdout, stderr
 	configureClusterProvisionProcess(command)
 	return command.Run()
+}
+
+// The reviewed lifecycle extension is content-pinned separately from the original
+// M2a Make source; arbitrary edits outside cmd/ok remain forbidden.
+func verifyProvisionLifecycleExtension(ctx context.Context, runtime clusterProvisionRuntime, root string) error {
+	raw, err := json.Marshal(clusterProvisionReviewedLifecycle)
+	if err != nil {
+		return err
+	}
+	script := "import hashlib,json,pathlib,sys; root=pathlib.Path(sys.argv[1]); expected=json.loads(sys.argv[2]); assert all((root/p).is_file() and not (root/p).is_symlink() and hashlib.sha256((root/p).read_bytes()).hexdigest()==h for p,h in expected.items()), 'reviewed lifecycle extension differs'"
+	return runProvisionCheck(ctx, runtime, provisionPythonExecutable(runtime), []string{"-c", script, root, string(raw)}, root, io.Discard)
+}
+
+func provisionPlaneUID(ctx context.Context, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) (string, error) {
+	output := new(bytes.Buffer)
+	args := []string{"--kubeconfig", prepared.managementKubeconfig, "--request-timeout=15s", "get", "namespace", "kube-system", "-o", "json"}
+	if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["kubectl"], args, runtime.makeRoot, output); err != nil {
+		return "", err
+	}
+	var ns struct {
+		Metadata struct {
+			UID string `json:"uid"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(output.Bytes(), &ns) != nil || ns.Metadata.UID == "" {
+		return "", errors.New("same-plane kube-system UID is absent/ambiguous")
+	}
+	return ns.Metadata.UID, nil
+}
+
+func verifyProvisionSamePlane(ctx context.Context, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) error {
+	args := []string{filepath.Join(runtime.makeRoot, "scripts", "talos_golden_lifecycle.py"), "--same-plane-preflight", "--topology", "same-plane", "--cluster", prepared.name, "--cluster-dir", filepath.Join(runtime.makeRoot, prepared.name), "--kubeconfig", prepared.managementKubeconfig, "--provider-kubeconfig", prepared.managementKubeconfig, "--ok-linux-path", runtime.okLinuxRoot}
+	return runProvisionCheck(ctx, runtime, provisionPythonExecutable(runtime), args, runtime.makeRoot, io.Discard)
 }

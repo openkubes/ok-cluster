@@ -228,7 +228,12 @@ func writeClusterProvisionHelp(output io.Writer) {
 	fmt.Fprint(output, `Provision the Talos/KubeVirt reference profile through the trusted Make workflow
 
 Usage:
-  ok cluster provision -f <cluster.yaml> --workload-kubeconfig <private-dir>/<cluster>.yaml
+  ok cluster provision --topology same-plane -f <cluster.yaml> --workload-kubeconfig <private-dir>/<cluster>.yaml
+
+M2b provisions only same-plane Talos/KubeVirt: management and provider are the
+same API identity. Explicit topology selection is mandatory; external-provider
+configuration is rejected. Original config/render and live UIDs are preserved
+for strict schema-3 destruction through ok cluster destroy --topology same-plane.
 
 Requires an interactive terminal, a private explicit HTTPS management kubeconfig
 without external credential plugins, the pinned sibling ok-linux checkout and

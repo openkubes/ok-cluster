@@ -545,6 +545,7 @@ ok198-expected-nodes-test: ## OK-198: offline expected-node registration and rea
 	@python3 $(SCRIPT_DIR)/tests/ok198_expected_nodes_test.py
 
 ok186-lifecycle-test: ## Offline-test kubeconfig overrides, bootstrap-resume and repeatable teardown
+	@python3 $(SCRIPT_DIR)/tests/ok76_same_plane_lifecycle_test.py
 	@python3 $(SCRIPT_DIR)/tests/ok186_lifecycle_test.py
 	@python3 $(SCRIPT_DIR)/tests/ok147_split_teardown_test.py
 
@@ -849,6 +850,12 @@ install-observability-metrics: require-cluster kubeconfig ## Install metrics + a
 bootstrap: require-not-flatcar
 	@echo "Bootstrapping Talos cluster $(CLUSTER)..."
 	@$(MAKE) --no-print-directory talos-golden-preflight CLUSTER=$(CLUSTER)
+	@if [ "$(TALOS_LIFECYCLE_TOPOLOGY)" = same-plane ]; then \
+		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py --same-plane-preflight --topology same-plane \
+		--cluster "$(CLUSTER)" --cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" --provider-kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"; \
+	elif [ -n "$(TALOS_LIFECYCLE_TOPOLOGY)" ]; then echo "ERROR: M2b bootstrap supports only same-plane"; exit 1; fi
 	@set -e; REGISTRY_TRUST_ENABLED="$$(cd "$(SCRIPT_DIR)" && python3 -c 'import sys,yaml,render; c=yaml.safe_load(open(sys.argv[1])) or {}; render.validate_registry_trust(c); print(str((c.get("registryTrust") or {}).get("enabled") is True).lower())' "$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml")"; \
 	if [ "$$REGISTRY_TRUST_ENABLED" = true ]; then \
 		REGISTRY_CA_KUBECONFIG="$(REGISTRY_CA_KUBECONFIG)" \
@@ -858,6 +865,12 @@ bootstrap: require-not-flatcar
 	else \
 		$(OKB) apply -f $(CLUSTERS_DIR)/$(CLUSTER)/cluster-base.yaml; \
 	fi
+	@if [ "$(TALOS_LIFECYCLE_TOPOLOGY)" = same-plane ]; then \
+		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py --same-plane-capture --topology same-plane \
+		--cluster "$(CLUSTER)" --cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
+		--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" --provider-kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
+		--ok-linux-path "$(OK_LINUX_PATH)"; \
+	elif [ -n "$(TALOS_LIFECYCLE_TOPOLOGY)" ]; then echo "ERROR: M2b bootstrap supports only same-plane"; exit 1; fi
 	@$(MAKE) --no-print-directory bootstrap-post-apply CLUSTER=$(CLUSTER)
 
 # Resume only a rendered, matching Cluster in a supported post-apply state.

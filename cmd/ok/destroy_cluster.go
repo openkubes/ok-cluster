@@ -52,11 +52,15 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	root := flags.String("lifecycle-root", "", "Trusted ok-cluster checkout (saved path, otherwise current directory)")
 	clusterDir := flags.String("cluster-dir", "", "Explicit render/evidence directory (otherwise discover managed preparation or saved inventory)")
 	management := flags.String("management-kubeconfig", "", "Explicit management kubeconfig (required)")
-	provider := flags.String("provider-kubeconfig", "", "Explicit separate provider kubeconfig (required)")
+	provider := flags.String("provider-kubeconfig", "", "Explicit provider kubeconfig (required)")
+	topology := flags.String("topology", "split-plane", "same-plane (explicit opt-in) or split-plane")
 	okLinux := flags.String("ok-linux-path", "", "ok-linux checkout (default: sibling of lifecycle-root)")
 	configFile := flags.String("config", "", "Local path configuration file (default: user configuration directory/ok/config.json)")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return err
+	}
+	if *topology != "same-plane" && *topology != "split-plane" {
+		return errors.New("destroy topology must be explicitly same-plane or split-plane")
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments; use ok cluster destroy <name> [flags]")
@@ -138,7 +142,7 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 			return fmt.Errorf("explicit kubeconfig is unavailable: %w", err)
 		}
 	}
-	if managementPath == providerPath {
+	if *topology == "split-plane" && managementPath == providerPath {
 		return errors.New("management and provider must be separate kubeconfigs; this command supports split-plane teardown")
 	}
 	if err := verifyDestroyTargets(managedTargets, managementPath, providerPath); err != nil {
@@ -157,6 +161,7 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	if !runtime.interactive {
 		return errors.New("destroy requires interactive terminal input; piped confirmation and --yes/--force are not supported")
 	}
+	fmt.Fprintf(stdout, "Topology: %s\n", *topology)
 	_, err = fmt.Fprintf(stdout, "Permanently delete cluster %q and its VM/storage data?\nManagement kubeconfig: %s\nProvider kubeconfig:   %s\nLifecycle checkout:    %s\nProfiles checkout:     %s\nPreserve local files:  %s\nPath configuration:    %s\n\nNo credential renewal, force deletion, rollback or automatic retry.\nSeparately installed runner authorities are not removed.\nType ok to delete, or no to cancel [no]: ",
 		name, managementPath, providerPath, rootPath, okLinuxPath, directory, configUsed)
 	if err != nil {
@@ -191,6 +196,9 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	args := []string{script, "--teardown", "--cluster", name, "--cluster-dir", directory,
 		"--kubeconfig", managementPath, "--provider-kubeconfig", providerPath,
 		"--ok-linux-path", okLinuxPath, "--preserve-local", "--confirm", "yes"}
+	if *topology == "same-plane" {
+		args = append(args, "--topology", "same-plane")
+	}
 	if err := runtime.execute(ctx, rootPath, args, stdout, stderr); err != nil {
 		return &destroyLifecycleError{cause: err}
 	}
@@ -268,7 +276,7 @@ Run "ok cluster destroy --help" for required inputs and confirmation rules.
 }
 
 func writeDestroyClusterHelp(output io.Writer) {
-	fmt.Fprint(output, `Destroy one split-plane cluster through the existing Python lifecycle
+	fmt.Fprint(output, `Destroy one explicitly selected topology through the existing Python lifecycle
 
 Usage:
   ok cluster destroy <name>                 # after ok config init
@@ -280,9 +288,14 @@ Inputs:
   --lifecycle-root          Trusted current ok-cluster checkout (default: current directory)
   --cluster-dir             Explicit render/evidence directory (normally discovered)
   --management-kubeconfig   Explicit management kubeconfig; never the default context
-  --provider-kubeconfig     Explicit separate provider kubeconfig
+  --provider-kubeconfig     Explicit provider kubeconfig
+  --topology                split-plane (compatibility default) or explicit same-plane
   --ok-linux-path           Profile checkout (default: sibling of lifecycle-root)
   --config                  Local path configuration file (default: OS user config directory/ok/config.json)
+
+Same-plane M2b requires --topology same-plane, original preparation/provisioned
+UID evidence and matching management/provider API identities. It never falls back
+to legacy single-plane cleanup. Split-plane still requires distinct planes.
 
 Run "ok config init --help" to save all five paths once. Saved paths fill omitted
 flags only; explicit flags override them. Without --cluster-dir, discover the private

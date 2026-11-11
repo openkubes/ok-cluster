@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextvars import ContextVar
 import json
 import math
 import re
@@ -24,11 +25,14 @@ EVIDENCE_DIR = ROOT / "docs" / "adoption" / "OK-130" / ".evidence"
 TEARDOWN_LEDGER_NAMESPACE = "ok-cluster-teardown"
 LEGACY_TEARDOWN_LEDGER_NAMESPACE = "kube-system"
 TEARDOWN_LEDGER_PREFIX = "ok-cluster-teardown-"
+STRICT_IO = ContextVar("same_plane_bounded_io", default=False)
+MUTATION_GUARD = ContextVar("same_plane_mutation_guard", default=None)
 TEARDOWN_LEDGER_SCHEMA = 1
 SPLIT_TEARDOWN_LEDGER_SCHEMA = 2
 TEARDOWN_LEDGER_SUPPORTED_SCHEMAS = (
     TEARDOWN_LEDGER_SCHEMA,
     SPLIT_TEARDOWN_LEDGER_SCHEMA,
+    3,  # Explicit same-plane contract; never interpreted as schema 1 or 2.
 )
 sys.path.insert(0, str(ROOT))
 
@@ -73,6 +77,7 @@ def run(
         text=True,
         check=False,
         input=input_text,
+        timeout=35 if STRICT_IO.get() else None,
     )
     if result.returncode not in expected:
         detail = result.stderr.strip() or result.stdout.strip()
@@ -88,8 +93,14 @@ def kubectl(
     expected: tuple[int, ...] = (0,),
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    verb = arguments[2] if len(arguments) > 2 and arguments[0] in ("-n", "--namespace") else (arguments[0] if arguments else "")
+    if verb in {"create", "patch", "delete", "apply", "annotate"}:
+        guard = MUTATION_GUARD.get()
+        if guard is not None:
+            guard()
     return run(
-        ["kubectl", "--kubeconfig", str(kubeconfig), *arguments],
+        ["kubectl", "--kubeconfig", str(kubeconfig),
+         *(["--request-timeout=15s"] if STRICT_IO.get() else []), *arguments],
         expected,
         input_text,
     )
@@ -2119,6 +2130,10 @@ def canonical_record(record: dict) -> str:
 
 
 def validate_teardown_record(record: dict, cluster: str) -> None:
+    if record.get("schema_version") == 3:
+        from scripts.same_plane_lifecycle import validate_record
+        validate_record(sys.modules[__name__], record, cluster)
+        return
     required = {
         "schema_version",
         "cluster",
@@ -2385,6 +2400,11 @@ def write_teardown_configmap(
             },
             "data": {"record.json": record_text},
         }
+        if MUTATION_GUARD.get() is not None:
+            uid = existing.get("metadata", {}).get("uid")
+            if not uid:
+                raise TalosLifecycleError("same-plane ledger UID is missing")
+            patch["metadata"]["uid"] = uid
         kubectl(
             kubeconfig,
             [
@@ -3019,7 +3039,8 @@ def migrate_teardown_ledger(args: argparse.Namespace) -> int:
             "legacy teardown ConfigMap UID/resourceVersion is absent"
         )
     legacy_text = teardown_record_text(legacy)
-    teardown_record_from_configmap(legacy, args.cluster)
+    if teardown_record_from_configmap(legacy, args.cluster).get("schema_version") == 3:
+        raise TalosLifecycleError("schema-3 records have no legacy migration path")
     destination = read_teardown_configmap(
         kubeconfig, args.cluster, require_labels=False
     )
@@ -3085,9 +3106,9 @@ def prune_teardown_ledger(args: argparse.Namespace) -> int:
             f"incomplete teardown record {TEARDOWN_LEDGER_NAMESPACE}/{name} "
             "cannot be pruned"
         )
-    if record["schema_version"] == SPLIT_TEARDOWN_LEDGER_SCHEMA:
+    if record["schema_version"] in (SPLIT_TEARDOWN_LEDGER_SCHEMA, 3):
         raise TalosLifecycleError(
-            "split-plane teardown record cannot be pruned without "
+            "split-plane or schema-3 teardown record cannot be pruned without "
             "provider-plane absence proof"
         )
     cluster = kubectl_json_optional(
@@ -3125,6 +3146,15 @@ def prune_teardown_ledger(args: argparse.Namespace) -> int:
 
 
 def teardown(args: argparse.Namespace) -> int:
+    if getattr(args, "topology", None) == "same-plane":
+        from scripts.same_plane_lifecycle import teardown as same_plane_teardown
+        token = STRICT_IO.set(True)
+        try:
+            return same_plane_teardown(sys.modules[__name__], args)
+        finally:
+            STRICT_IO.reset(token)
+    if getattr(args, "topology", None) == "split-plane" and not args.provider_kubeconfig:
+        raise TalosLifecycleError("split-plane requires explicit provider kubeconfig")
     kubeconfig = Path(args.kubeconfig).expanduser().resolve()
     if not kubeconfig.is_file():
         raise TalosLifecycleError(
@@ -3154,6 +3184,8 @@ def teardown(args: argparse.Namespace) -> int:
         if configmap is not None
         else None
     )
+    if record is not None and record.get("schema_version") == 3:
+        raise TalosLifecycleError("schema-3 teardown requires explicit --topology same-plane")
     if record is not None:
         saved_planes = record.get("planes")
         if (saved_planes is None) != (planes is None) or (
@@ -3210,7 +3242,7 @@ def teardown(args: argparse.Namespace) -> int:
             )
 
     if record is not None:
-        bound_cluster = bound_resource(
+        bound_resource(
             kubeconfig,
             ["-n", args.cluster, "get", "cluster", args.cluster],
             record["cluster"]["uid"],
@@ -3284,7 +3316,6 @@ def teardown(args: argparse.Namespace) -> int:
             record["storage_uids"] = teardown_storage_uids(
                 provider, record["persistent_volumes"], {},
             )
-        bound_cluster = cluster
         bound_namespace = namespace
 
     confirm_teardown(
@@ -3473,6 +3504,8 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--same-plane-capture", action="store_true")
+    mode.add_argument("--same-plane-preflight", action="store_true")
     mode.add_argument("--preflight", action="store_true")
     mode.add_argument("--replacement-preflight", action="store_true")
     mode.add_argument("--replacement-wait", action="store_true")
@@ -3486,6 +3519,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cluster", required=True)
     parser.add_argument("--cluster-dir")
     parser.add_argument("--kubeconfig", required=True)
+    parser.add_argument("--backend-timeout-seconds", type=positive_finite, default=600)
+    parser.add_argument("--topology", choices=("same-plane", "split-plane"))
     parser.add_argument("--provider-kubeconfig", help="Separate provider plane (teardown only; preserves local files)")
     parser.add_argument("--preserve-local", action="store_true", help="Keep local render and evidence after teardown")
     parser.add_argument("--ok-linux-path")
@@ -3505,6 +3540,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.same_plane_preflight or args.same_plane_capture:
+        STRICT_IO.set(True)
+        if args.topology != "same-plane":
+            raise TalosLifecycleError("preparation requires explicit same-plane topology")
+        from scripts.same_plane_lifecycle import preparation, capture
+        if args.same_plane_capture:
+            capture(sys.modules[__name__], args)
+        else:
+            preparation(sys.modules[__name__], args, create=True)
+        return 0
+    if args.topology and not args.teardown:
+        raise TalosLifecycleError("topology requires teardown or same-plane preflight")
     if (args.provider_kubeconfig or args.preserve_local) and not args.teardown:
         raise TalosLifecycleError("--provider-kubeconfig and --preserve-local require --teardown")
     if args.migrate_teardown_ledger:
@@ -3562,6 +3609,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    sys.modules["scripts.talos_golden_lifecycle"] = sys.modules[__name__]
     try:
         raise SystemExit(main())
     except (
@@ -3575,6 +3623,7 @@ if __name__ == "__main__":
         ValueError,
         json.JSONDecodeError,
         yaml.YAMLError,
+        subprocess.TimeoutExpired,
     ) as error:
         print(f"FAIL {error}", file=sys.stderr)
         raise SystemExit(1)
