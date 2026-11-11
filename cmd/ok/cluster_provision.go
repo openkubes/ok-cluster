@@ -648,23 +648,47 @@ func verifyProvisionCheckout(ctx context.Context, runtime clusterProvisionRuntim
 	if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], append(append([]string{}, gitPrefix...), "rev-parse", "HEAD"), path, stdout); err != nil || strings.TrimSpace(stdout.String()) != expectedRevision {
 		return errors.New("checkout revision does not match its required full commit")
 	}
+	makefileChangeAllowed := false
+	if makeCheckout {
+		args := append(append([]string{}, gitPrefix...), "diff", "--quiet", "--no-ext-diff", "--no-textconv", runtime.reviewedMakeSource, "--", ".", ":(exclude)cmd/ok/**", ":(exclude)Makefile")
+		if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], args, path, io.Discard); err != nil {
+			return errors.New("Make source outside cmd/ok and the exact offline-smoke selector differs from the reviewed M2a baseline")
+		}
+		baseline := new(bytes.Buffer)
+		showArgs := append(append([]string{}, gitPrefix...), "show", runtime.reviewedMakeSource+":Makefile")
+		if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], showArgs, path, baseline); err != nil {
+			return errors.New("reviewed Makefile baseline could not be verified")
+		}
+		current, err := os.ReadFile(filepath.Join(path, "Makefile"))
+		if err != nil {
+			return errors.New("Makefile could not be read safely")
+		}
+		makefileChangeAllowed = provisionMakefileHasOnlyOfflineSmokeSelectorChange(baseline.Bytes(), current)
+		if !makefileChangeAllowed {
+			return errors.New("Makefile differs from the reviewed baseline beyond the exact offline-smoke selector")
+		}
+	}
 	status := new(bytes.Buffer)
 	if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], append(append([]string{}, gitPrefix...), "status", "--porcelain", "--untracked-files=all"), path, status); err != nil {
 		return errors.New("checkout status could not be verified")
 	}
-	if !allowScaffold && status.Len() != 0 {
+	if !allowScaffold && status.Len() != 0 && !(makeCheckout && makefileChangeAllowed && status.String() == " M Makefile\n") {
 		return errors.New("checkout has local changes or untracked files")
 	}
-	if allowScaffold && !provisionStatusContainsOnlyScaffold(status.String(), clusterName) {
+	if allowScaffold && !provisionStatusContainsOnlyScaffold(status.String(), clusterName) && !(makeCheckout && makefileChangeAllowed && provisionStatusContainsOnlyScaffoldAndMakefile(status.String(), clusterName)) {
 		return errors.New("Make checkout has changes outside the newly generated scaffold")
 	}
-	if makeCheckout {
-		args := append(append([]string{}, gitPrefix...), "diff", "--quiet", "--no-ext-diff", "--no-textconv", runtime.reviewedMakeSource, "--", ".", ":(exclude)cmd/ok/**")
-		if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], args, path, io.Discard); err != nil {
-			return errors.New("Make source outside cmd/ok differs from the reviewed M2a baseline")
-		}
-	}
 	return nil
+}
+
+func provisionMakefileHasOnlyOfflineSmokeSelectorChange(baseline, current []byte) bool {
+	const before = "TestClusterPlan|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing"
+	const after = "TestClusterPlan|TestClusterProvision|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing"
+	if bytes.Count(baseline, []byte(before)) != 1 {
+		return false
+	}
+	expected := bytes.Replace(baseline, []byte(before), []byte(after), 1)
+	return bytes.Equal(expected, current)
 }
 
 func runProvisionCheck(parent context.Context, runtime clusterProvisionRuntime, executable string, args []string, directory string, stdout io.Writer) error {
@@ -681,6 +705,27 @@ func provisionStatusContainsOnlyScaffold(status, clusterName string) bool {
 		return true
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(status, "\n"), "\n") {
+		if len(line) < 4 || line[:3] != "?? " {
+			return false
+		}
+		name := filepath.Clean(line[3:])
+		if name != clusterName && !strings.HasPrefix(name, clusterName+string(filepath.Separator)) {
+			return false
+		}
+	}
+	return true
+}
+
+func provisionStatusContainsOnlyScaffoldAndMakefile(status, clusterName string) bool {
+	if status == "" {
+		return true
+	}
+	makefileSeen := false
+	for _, line := range strings.Split(strings.TrimSuffix(status, "\n"), "\n") {
+		if line == " M Makefile" && !makefileSeen {
+			makefileSeen = true
+			continue
+		}
 		if len(line) < 4 || line[:3] != "?? " {
 			return false
 		}

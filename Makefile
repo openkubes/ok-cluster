@@ -258,7 +258,7 @@ ok-target-admission-image-smoke: ## Verify the local target admission image is n
 ok-cli-offline-smoke: ok-cli-build ## Exercise the product CLI safety boundaries without cluster contact
 	@python3 tests/ok76_make_fail_closed_test.py
 	@go test -mod=readonly ./cmd/ok -count=1 \
-		-run 'TestDestroy|TestManagedDestroy|TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterPlan|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
+		-run 'TestDestroy|TestManagedDestroy|TestHierarchicalHelp|TestLeafFlagHelpIsSuccessfulAndUsesStdout|TestClusterPlan|TestClusterProvision|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing|TestClusterCreatePlanTemplateBindsExactSevenStageSequence|TestClusterCreateScaffoldIsPrivateCreateOnlyAndNameBound|TestClusterCreateRoutesIncompleteProductAndLegacyInputsClearly|TestClusterCreateFileDryRunAndPrepareAreNonMutating|TestClusterCreateLiveRequiresPreparedIdentityAndExplicitDoubleGate|TestClusterCreateLiveDelegatesThroughFullRunnerBoundary'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestLocalConfig'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestGuidedUp|TestAutomaticUp'
 	@go test -mod=readonly ./cmd/ok -count=1 -run 'TestProductCommand|TestUp|TestClusterDestroy'
