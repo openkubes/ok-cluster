@@ -2,7 +2,8 @@ package main
 
 // Exact reviewed extension of the original M2a Make source; never a wildcard exemption.
 var clusterProvisionReviewedLifecycle = map[string]string{
-	".github/workflows/ok-cli-ci.yaml":        "f4d1583aa3a05004375006810ea6e55015221e2109087fdfc8694e64ca08c1fb",
+	"tests/ok186_lifecycle_test.py":           "daf059ff0185b54f808af21724c22aef81e544e63d640e85caa398d71295c3d0",
+	".github/workflows/ok-cli-ci.yaml":        "e2d92f3189ee14b1d8ac14aa5db26faf50a9777594dfae2ce0329f2761ae8085",
 	"Makefile":                                "2761f5aa0b8648fd8f39cf28231ab9ba9ad22923306f530196e0294e30f7ac21",
 	"README.md":                               "b65992bde261206f8f3b5aa0eda362405ced90e506c628346a194b2a9a2e5bcd",
 	"docs/ok76-cluster-request.md":            "fe17778acab29afbd378dd1e0ee41dcf97289d8c10ab1919de1328065c667642",

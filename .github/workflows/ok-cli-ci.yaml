@@ -81,9 +81,13 @@ jobs:
           path: .ci/ok-linux
           persist-credentials: false
 
+      - name: Stage digest-pinned Cilium artifact for offline lifecycle tests
+        run: python3 scripts/prepare_cilium_chart.py --cache "$RUNNER_TEMP/cilium-1.19.6.tgz"
+
       - name: Test same-plane and split-plane lifecycle contracts against fake APIs
         env:
           OK_LINUX_PATH: ${{ github.workspace }}/.ci/ok-linux
+          CILIUM_CHART: ${{ runner.temp }}/cilium-1.19.6.tgz
           OK_CLI_TEST_BINARY: ${{ runner.temp }}/ok
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
