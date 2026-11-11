@@ -249,7 +249,17 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 		if statErr != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
 			return clusterProvisionRuntime{}, fmt.Errorf("required provisioning tool is not an executable regular file: %s", tool)
 		}
-		toolPaths[tool] = resolved
+		if tool == "python3" {
+			// A venv's python executable is commonly a symlink whose location is
+			// semantically significant: resolving it bypasses pyvenv.cfg discovery.
+			// Keep the selected path, but validate the resolved executable above.
+			if !filepath.IsAbs(path) || !clusterProvisionSafePathPattern.MatchString(path) {
+				return clusterProvisionRuntime{}, errors.New("selected Python interpreter path is not safe for isolated execution")
+			}
+			toolPaths[tool] = path
+		} else {
+			toolPaths[tool] = resolved
+		}
 	}
 	restrictedPath, cleanup, err := createProvisionToolPath(toolPaths)
 	if err != nil {
@@ -277,7 +287,20 @@ func createProvisionToolPath(toolPaths map[string]string) (string, func(), error
 			cleanup()
 			return "", nil, errors.New("required tool binding is invalid")
 		}
-		if err := os.Symlink(target, filepath.Join(directory, name)); err != nil {
+		link := filepath.Join(directory, name)
+		if name == "python3" {
+			if !clusterProvisionSafePathPattern.MatchString(target) {
+				cleanup()
+				return "", nil, errors.New("selected Python interpreter path is unsafe")
+			}
+			launcher := []byte("#!/bin/sh\nexec " + target + " \"$@\"\n")
+			if err := os.WriteFile(link, launcher, 0o700); err != nil {
+				cleanup()
+				return "", nil, errors.New("cannot create isolated Python interpreter launcher")
+			}
+			continue
+		}
+		if err := os.Symlink(target, link); err != nil {
 			cleanup()
 			return "", nil, errors.New("cannot create isolated command lookup binding")
 		}
@@ -748,10 +771,14 @@ func verifyProvisionTools(runtime clusterProvisionRuntime) error {
 			return fmt.Errorf("required provisioning tool is unavailable: %s", tool)
 		}
 	}
-	if err := runProvisionCheck(context.Background(), runtime, runtime.toolPaths["python3"], []string{"-c", "import yaml"}, runtime.makeRoot, io.Discard); err != nil {
+	if err := runProvisionCheck(context.Background(), runtime, provisionPythonExecutable(runtime), []string{"-c", "import yaml"}, runtime.makeRoot, io.Discard); err != nil {
 		return errors.New("python3 with PyYAML is required by the Make renderer")
 	}
 	return nil
+}
+
+func provisionPythonExecutable(runtime clusterProvisionRuntime) string {
+	return filepath.Join(runtime.environmentPath, "python3")
 }
 
 func verifyProvisionChart(runtime clusterProvisionRuntime) error {

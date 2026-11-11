@@ -1,9 +1,11 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -722,6 +725,114 @@ func TestClusterProvisionToolPathContainsOnlyResolvedTools(t *testing.T) {
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("temporary tool PATH was not removed: %v", err)
 	}
+}
+
+func TestClusterProvisionPythonVenvBindingPreservesInstalledDependency(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("Python venv PATH binding regression is supported on macOS and Linux")
+	}
+	hostPython, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is unavailable")
+	}
+	root := t.TempDir()
+	venv := filepath.Join(root, "venv")
+	command := exec.Command(hostPython, "-m", "venv", venv)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Skipf("python3 venv support is unavailable: %v: %s", err, output)
+	}
+	selectedPython := filepath.Join(venv, "bin", "python3")
+	wheel := writeProvisionFixtureWheel(t, root)
+	install := exec.Command(selectedPython, "-m", "pip", "install", "--no-index", "--no-deps", wheel)
+	if output, err := install.CombinedOutput(); err != nil {
+		t.Fatalf("install local fixture dependency into venv: %v: %s", err, output)
+	}
+
+	resolvedPython, err := filepath.EvalSymlinks(selectedPython)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolPath, cleanup, err := createProvisionToolPath(map[string]string{"python3": selectedPython})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	pinnedTools := make(map[string]string, len(clusterProvisionRequiredTools))
+	for _, name := range clusterProvisionRequiredTools {
+		pinnedTools[name] = hostPython
+	}
+	pinnedTools["python3"] = selectedPython
+	runtimeConfig := clusterProvisionRuntime{environmentPath: toolPath, toolPaths: pinnedTools, command: runClusterProvisionCommand}
+	if err := verifyProvisionTools(runtimeConfig); err != nil {
+		t.Fatalf("CLI PyYAML preflight did not use the selected venv: %v", err)
+	}
+	if output, err := exec.Command(resolvedPython, "-c", "import yaml").CombinedOutput(); err == nil {
+		t.Fatalf("directly resolved base interpreter unexpectedly found the venv-only dependency: %s", output)
+	}
+
+	makePath, err := exec.LookPath("make")
+	if err != nil {
+		t.Skip("make is unavailable")
+	}
+	makePath, err = filepath.EvalSymlinks(makePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeTools, makeCleanup, err := createProvisionToolPath(map[string]string{"make": makePath, "python3": selectedPython})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer makeCleanup()
+	makefile := filepath.Join(root, "Makefile")
+	contents := ".PHONY: verify-python\nverify-python:\n\t@python3 -c 'import yaml; assert yaml.__version__ == \"ok76-fixture\"'\n"
+	if err := os.WriteFile(makefile, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	makeCommand := exec.Command(filepath.Join(makeTools, "make"), "-f", makefile, "verify-python")
+	makeCommand.Dir = root
+	makeCommand.Env = []string{"PATH=" + makeTools, "PYTHONNOUSERSITE=1", "PYTHONDONTWRITEBYTECODE=1"}
+	if output, err := makeCommand.CombinedOutput(); err != nil {
+		t.Fatalf("Make did not use the same selected venv Python: %v: %s", err, output)
+	}
+}
+
+func writeProvisionFixtureWheel(t *testing.T, directory string) string {
+	t.Helper()
+	files := map[string][]byte{
+		"yaml.py": []byte("__version__ = 'ok76-fixture'\n"),
+		"ok76_yaml_fixture-1.0.dist-info/METADATA": []byte("Metadata-Version: 2.1\nName: ok76-yaml-fixture\nVersion: 1.0\n\n"),
+		"ok76_yaml_fixture-1.0.dist-info/WHEEL":    []byte("Wheel-Version: 1.0\nGenerator: ok76-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
+	}
+	var record bytes.Buffer
+	for name, content := range files {
+		digest := sha256.Sum256(content)
+		fmt.Fprintf(&record, "%s,sha256=%s,%d\n", name, base64.RawURLEncoding.EncodeToString(digest[:]), len(content))
+	}
+	recordPath := "ok76_yaml_fixture-1.0.dist-info/RECORD"
+	fmt.Fprintf(&record, "%s,,\n", recordPath)
+	files[recordPath] = record.Bytes()
+	wheel := filepath.Join(directory, "ok76_yaml_fixture-1.0-py3-none-any.whl")
+	file, err := os.Create(wheel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	for name, content := range files {
+		entry, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return wheel
 }
 
 func TestClusterProvisionNetworkAndStatusValidation(t *testing.T) {
