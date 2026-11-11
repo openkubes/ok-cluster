@@ -752,6 +752,10 @@ func TestClusterProvisionPythonVenvBindingPreservesInstalledDependency(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	venvRoot, err := filepath.EvalSymlinks(venv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	toolPath, cleanup, err := createProvisionToolPath(map[string]string{"python3": selectedPython})
 	if err != nil {
 		t.Fatal(err)
@@ -766,8 +770,18 @@ func TestClusterProvisionPythonVenvBindingPreservesInstalledDependency(t *testin
 	if err := verifyProvisionTools(runtimeConfig); err != nil {
 		t.Fatalf("CLI PyYAML preflight did not use the selected venv: %v", err)
 	}
-	if output, err := exec.Command(resolvedPython, "-c", "import yaml").CombinedOutput(); err == nil {
-		t.Fatalf("directly resolved base interpreter unexpectedly found the venv-only dependency: %s", output)
+	selectedResult := exec.Command(provisionPythonExecutable(runtimeConfig), "-c", "import sys, ok76_fixture_dep; print(sys.prefix); print(ok76_fixture_dep.__file__)")
+	selectedOutput, err := selectedResult.CombinedOutput()
+	if err != nil {
+		t.Fatalf("isolated Python PATH did not import the venv-installed dependency: %v: %s", err, selectedOutput)
+	}
+	selectedLines := strings.Split(strings.TrimSpace(string(selectedOutput)), "\n")
+	if len(selectedLines) != 2 || filepath.Clean(selectedLines[0]) != venvRoot || !strings.HasPrefix(filepath.Clean(selectedLines[1]), venvRoot+string(filepath.Separator)) {
+		t.Fatalf("isolated Python did not retain venv identity: prefix/module=%q, want root %q", selectedLines, venvRoot)
+	}
+	basePrefix, err := exec.Command(resolvedPython, "-c", "import sys; print(sys.prefix)").Output()
+	if err != nil || filepath.Clean(strings.TrimSpace(string(basePrefix))) == venvRoot {
+		t.Fatalf("test setup did not distinguish the resolved base interpreter from its venv: prefix=%q err=%v", basePrefix, err)
 	}
 
 	makePath, err := exec.LookPath("make")
@@ -784,7 +798,7 @@ func TestClusterProvisionPythonVenvBindingPreservesInstalledDependency(t *testin
 	}
 	defer makeCleanup()
 	makefile := filepath.Join(root, "Makefile")
-	contents := ".PHONY: verify-python\nverify-python:\n\t@python3 -c 'import yaml; assert yaml.__version__ == \"ok76-fixture\"'\n"
+	contents := ".PHONY: verify-python\nverify-python:\n\t@python3 -c 'import ok76_fixture_dep; assert ok76_fixture_dep.VALUE == \"installed-in-venv\"'\n"
 	if err := os.WriteFile(makefile, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -799,19 +813,20 @@ func TestClusterProvisionPythonVenvBindingPreservesInstalledDependency(t *testin
 func writeProvisionFixtureWheel(t *testing.T, directory string) string {
 	t.Helper()
 	files := map[string][]byte{
-		"yaml.py": []byte("__version__ = 'ok76-fixture'\n"),
-		"ok76_yaml_fixture-1.0.dist-info/METADATA": []byte("Metadata-Version: 2.1\nName: ok76-yaml-fixture\nVersion: 1.0\n\n"),
-		"ok76_yaml_fixture-1.0.dist-info/WHEEL":    []byte("Wheel-Version: 1.0\nGenerator: ok76-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
+		"ok76_fixture_dep.py": []byte("VALUE = 'installed-in-venv'\n"),
+		"yaml.py":             []byte("__version__ = 'ok76-yaml-fixture'\n"),
+		"ok76_fixture_dep-1.0.dist-info/METADATA": []byte("Metadata-Version: 2.1\nName: ok76-fixture-dep\nVersion: 1.0\n\n"),
+		"ok76_fixture_dep-1.0.dist-info/WHEEL":    []byte("Wheel-Version: 1.0\nGenerator: ok76-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
 	}
 	var record bytes.Buffer
 	for name, content := range files {
 		digest := sha256.Sum256(content)
 		fmt.Fprintf(&record, "%s,sha256=%s,%d\n", name, base64.RawURLEncoding.EncodeToString(digest[:]), len(content))
 	}
-	recordPath := "ok76_yaml_fixture-1.0.dist-info/RECORD"
+	recordPath := "ok76_fixture_dep-1.0.dist-info/RECORD"
 	fmt.Fprintf(&record, "%s,,\n", recordPath)
 	files[recordPath] = record.Bytes()
-	wheel := filepath.Join(directory, "ok76_yaml_fixture-1.0-py3-none-any.whl")
+	wheel := filepath.Join(directory, "ok76_fixture_dep-1.0-py3-none-any.whl")
 	file, err := os.Create(wheel)
 	if err != nil {
 		t.Fatal(err)
