@@ -59,6 +59,11 @@ func routeHelp(arguments []string, stdout io.Writer) bool {
 		writeClusterPlanHelp(stdout)
 		return true
 	}
+	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "provision" &&
+		(len(arguments) == 2 || containsHelpArgument(arguments[2:])) {
+		writeClusterProvisionHelp(stdout)
+		return true
+	}
 	if len(arguments) == 1 && arguments[0] == "cluster" ||
 		len(arguments) == 2 && arguments[0] == "cluster" && isHelpArgument(arguments[1]) {
 		writeClusterHelp(stdout)
@@ -197,6 +202,7 @@ Usage:
 
 Commands:
   plan        Validate a Make-backed ClusterRequest and print a read-only plan
+  provision   Operator-confirmed Talos/KubeVirt provisioning through trusted Make
   create      Validate, prepare, or explicitly execute a Bare-MVP run
   destroy     Interactively tear down a cluster through the existing lifecycle
   stage       Expert stage-level commands
@@ -215,6 +221,23 @@ Usage:
 Accepts cli.openkubes.io/v1alpha1 ClusterRequest with profile talos-kubevirt-reference.
 The command reads and validates the request only. It never invokes Make, kubectl,
 the renderer, or any other external command, and it writes no files.
+`)
+}
+
+func writeClusterProvisionHelp(output io.Writer) {
+	fmt.Fprint(output, `Provision the Talos/KubeVirt reference profile through the trusted Make workflow
+
+Usage:
+  ok cluster provision -f <cluster.yaml> --workload-kubeconfig <private-dir>/<cluster>.yaml
+
+Requires an interactive terminal, a private explicit HTTPS management kubeconfig
+without external credential plugins, the pinned sibling ok-linux checkout and
+the digest-verified local Cilium chart. It requires two
+exact confirmations: before make new, then after reviewing the published
+scaffold and resolved network values before make bootstrap. Failures and
+cancellation stop without retry, rollback or cleanup. Successful Make exit is
+not independent cluster-readiness verification. This local operator command
+does not create Runner grants or expose an agent/MCP provisioning API.
 `)
 }
 

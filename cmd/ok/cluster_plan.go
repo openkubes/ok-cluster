@@ -11,6 +11,7 @@ import (
 	"strings"
 	"text/template"
 
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -227,24 +228,7 @@ func runClusterPlan(arguments []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	values := clusterPlanValues{
-		Name: request.Metadata.Name, Profile: request.Spec.Profile,
-		Kubernetes: request.Spec.Versions.Kubernetes, Talos: request.Spec.Versions.Talos,
-		Endpoint: request.Spec.Network.Endpoint, PodCIDR: request.Spec.Network.PodCIDR, ServiceCIDR: request.Spec.Network.ServiceCIDR,
-		ControlPlaneReplicas: 1, Workers: 1, SchematicID: clusterRequestSchematic,
-	}
-	if values.Kubernetes == "" {
-		values.Kubernetes = "v1.34.1"
-	}
-	if values.Talos == "" {
-		values.Talos = "v1.9.6"
-	}
-	if request.Spec.ControlPlane.Replicas != nil {
-		values.ControlPlaneReplicas = *request.Spec.ControlPlane.Replicas
-	}
-	if request.Spec.Workers.Replicas != nil {
-		values.Workers = *request.Spec.Workers.Replicas
-	}
+	values := clusterPlanValuesForRequest(request)
 	if values.Endpoint == "" {
 		values.Endpoint = "auto (unresolved; Make allocates during scaffold/render)"
 	} else {
@@ -266,6 +250,30 @@ func runClusterPlan(arguments []string, stdout, stderr io.Writer) error {
 	}
 	return template.Execute(stdout, values)
 }
+
+func clusterPlanValuesForRequest(request clusterRequest) clusterPlanValues {
+	values := clusterPlanValues{
+		Name: request.Metadata.Name, Profile: request.Spec.Profile,
+		Kubernetes: request.Spec.Versions.Kubernetes, Talos: request.Spec.Versions.Talos,
+		Endpoint: request.Spec.Network.Endpoint, PodCIDR: request.Spec.Network.PodCIDR, ServiceCIDR: request.Spec.Network.ServiceCIDR,
+		ControlPlaneReplicas: 1, Workers: 1, SchematicID: clusterRequestSchematic,
+	}
+	if values.Kubernetes == "" {
+		values.Kubernetes = "v1.34.1"
+	}
+	if values.Talos == "" {
+		values.Talos = "v1.9.6"
+	}
+	if request.Spec.ControlPlane.Replicas != nil {
+		values.ControlPlaneReplicas = *request.Spec.ControlPlane.Replicas
+	}
+	if request.Spec.Workers.Replicas != nil {
+		values.Workers = *request.Spec.Workers.Replicas
+	}
+	return values
+}
+
+func stdinIsTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
 type clusterPlanInputFlag struct {
 	value string
