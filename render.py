@@ -34,6 +34,7 @@ SERVICE_CIDR_POOL = ipaddress.IPv4Network("10.96.0.0/12")
 OKB_KUBECONFIG = os.environ.get(
     "OKB_KUBECONFIG", os.path.expanduser("~/.kube/ok-infra.yaml")
 )
+OKB_KUBECONFIG_EXPLICIT = bool(os.environ.get("OKB_KUBECONFIG"))
 
 # ok-linux is the source of truth for this default.
 # See: https://github.com/openkubes/ok-linux/blob/main/profiles/kubevirt/profile.yaml
@@ -76,44 +77,135 @@ def allocated_svc_cidrs(clusters):
     return {c["config"]["network"]["serviceCIDR"] for c in clusters
             if c["config"].get("network", {}).get("serviceCIDR", "auto") != "auto"}
 
-def live_metallb_allocations(exclude_cluster=None):
+def _parse_live_service_inventory(raw, exclude_cluster=None):
+    """Validate a complete kubectl Service List and return its IPv4 LB claims."""
+    document = json.loads(raw)
+    if (not isinstance(document, dict) or document.get("apiVersion") != "v1"
+            or document.get("kind") != "List" or not isinstance(document.get("items"), list)):
+        raise ValueError("unexpected Kubernetes Service List envelope")
+    list_metadata = document.get("metadata")
+    if not isinstance(list_metadata, dict):
+        raise ValueError("Service List metadata is missing")
+    continuation = list_metadata.get("continue", "")
+    if not isinstance(continuation, str) or continuation:
+        raise ValueError("Service List is incomplete")
+    remaining = list_metadata.get("remainingItemCount")
+    if remaining is not None and (isinstance(remaining, bool) or not isinstance(remaining, int) or remaining != 0):
+        raise ValueError("Service List is incomplete")
+
+    allocations = {}
+    identities = set()
+    uids = set()
+
+    def add_allocation(ip, identity):
+        owner = allocations.get(ip)
+        if owner is not None and owner != identity:
+            raise ValueError("duplicate LoadBalancer IP allocation")
+        allocations[ip] = identity
+
+    for service in document["items"]:
+        if (not isinstance(service, dict) or service.get("apiVersion") != "v1"
+                or service.get("kind") != "Service"):
+            raise ValueError("invalid Service item")
+        metadata = service.get("metadata")
+        spec = service.get("spec")
+        if not isinstance(metadata, dict) or not isinstance(spec, dict):
+            raise ValueError("Service metadata or spec is missing")
+        namespace, name, uid = metadata.get("namespace"), metadata.get("name"), metadata.get("uid")
+        if (not isinstance(namespace, str) or not namespace or not isinstance(name, str) or not name
+                or not isinstance(uid, str) or not uid):
+            raise ValueError("Service identity is incomplete")
+        identity_key = (namespace, name)
+        if identity_key in identities or uid in uids:
+            raise ValueError("duplicate Service identity")
+        identities.add(identity_key)
+        uids.add(uid)
+
+        service_type = spec.get("type")
+        if service_type not in {"ClusterIP", "NodePort", "LoadBalancer", "ExternalName"}:
+            raise ValueError("Service type is missing or invalid")
+        if service_type != "LoadBalancer" or (exclude_cluster and namespace == exclude_cluster):
+            continue
+
+        identity = f"{namespace}/{name}"
+        requested_ip = spec.get("loadBalancerIP")
+        if requested_ip is not None:
+            if not isinstance(requested_ip, str) or not requested_ip:
+                raise ValueError("invalid spec.loadBalancerIP")
+            parsed_ip = ipaddress.ip_address(requested_ip)
+            if isinstance(parsed_ip, ipaddress.IPv4Address):
+                add_allocation(str(parsed_ip), identity)
+
+        status = service.get("status", {})
+        if status is None:
+            status = {}
+        if not isinstance(status, dict):
+            raise ValueError("invalid Service status")
+        load_balancer = status.get("loadBalancer", {})
+        if load_balancer is None:
+            load_balancer = {}
+        if not isinstance(load_balancer, dict):
+            raise ValueError("invalid loadBalancer status")
+        ingress = load_balancer.get("ingress", [])
+        if ingress is None:
+            ingress = []
+        if not isinstance(ingress, list):
+            raise ValueError("invalid loadBalancer ingress list")
+        for entry in ingress:
+            if not isinstance(entry, dict):
+                raise ValueError("invalid loadBalancer ingress entry")
+            ingress_ip = entry.get("ip")
+            hostname = entry.get("hostname")
+            if ingress_ip is not None:
+                if not isinstance(ingress_ip, str):
+                    raise ValueError("invalid loadBalancer ingress IP")
+                if ingress_ip:
+                    parsed_ip = ipaddress.ip_address(ingress_ip)
+                    if isinstance(parsed_ip, ipaddress.IPv4Address):
+                        add_allocation(str(parsed_ip), identity)
+            if hostname is not None and (not isinstance(hostname, str) or not hostname):
+                raise ValueError("invalid loadBalancer ingress hostname")
+            if not ingress_ip and not hostname:
+                raise ValueError("empty loadBalancer ingress entry")
+    return allocations
+
+
+def live_metallb_allocations(exclude_cluster=None, required=False):
     """Query LoadBalancer IPs actually allocated by MetalLB on the management
-    cluster (OK-83). Returns {ip: "namespace/service"} or None if the cluster
-    is unreachable (caller falls back to local state with a warning).
+    cluster (OK-83). Returns {ip: "namespace/service"}; legacy callers receive
+    None on an unavailable/invalid inventory, while required callers fail closed.
 
     Services in the namespace of `exclude_cluster` are skipped so that
     re-rendering an existing cluster does not collide with its own IPs.
     """
+    if required and not OKB_KUBECONFIG_EXPLICIT:
+        raise RuntimeError("an explicit management kubeconfig is required for live allocation inventory")
+    if required and (not Path(OKB_KUBECONFIG).is_file() or not os.access(OKB_KUBECONFIG, os.R_OK)):
+        raise RuntimeError("the explicit management kubeconfig is unavailable")
     try:
         out = subprocess.run(
             ["kubectl", "--kubeconfig", OKB_KUBECONFIG,
              "get", "svc", "-A", "-o", "json", "--request-timeout=10s"],
             capture_output=True, text=True, timeout=20, check=True,
         ).stdout
-        items = json.loads(out).get("items", [])
-    except (subprocess.SubprocessError, FileNotFoundError, OSError, ValueError):
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        if required:
+            raise RuntimeError("management-cluster Service inventory is unavailable") from None
         return None
-    allocations = {}
-    for svc in items:
-        if svc.get("spec", {}).get("type") != "LoadBalancer":
-            continue
-        ns = svc["metadata"]["namespace"]
-        if exclude_cluster and ns == exclude_cluster:
-            continue
-        name = f'{ns}/{svc["metadata"]["name"]}'
-        for ing in (svc.get("status", {}).get("loadBalancer", {}) or {}).get("ingress", []) or []:
-            if ing.get("ip"):
-                allocations[ing["ip"]] = name
-        lb_ip = svc.get("spec", {}).get("loadBalancerIP")
-        if lb_ip:
-            allocations[lb_ip] = name
-    return allocations
+    try:
+        return _parse_live_service_inventory(out, exclude_cluster=exclude_cluster)
+    except (TypeError, ValueError, KeyError):
+        if required:
+            raise RuntimeError("management-cluster Service inventory is incomplete or invalid") from None
+        return None
 
-def effective_used_ips(others, exclude_cluster=None):
+def effective_used_ips(others, exclude_cluster=None, require_live=False):
     """Union of locally declared endpoints and live MetalLB allocations (OK-83)."""
     used = dict.fromkeys(allocated_ips(others), "local cluster-config.yaml")
-    live = live_metallb_allocations(exclude_cluster=exclude_cluster)
+    live = live_metallb_allocations(exclude_cluster=exclude_cluster, required=require_live)
     if live is None:
+        if require_live:
+            raise RuntimeError("management-cluster Service inventory is unavailable; refusing network allocation")
         print(
             f"WARNING: management cluster unreachable via {OKB_KUBECONFIG} — "
             "IP allocation based on local cluster-config state only. "
@@ -523,7 +615,17 @@ def workload_user_namespaces_from_env(cluster_type: str, provider: str) -> dict 
     )
     return validated if validated["enabled"] else None
 
-def resolve_config(cfg: dict, cluster_name: str) -> dict:
+def is_ok76_talos_kubevirt_reference(cfg: dict) -> bool:
+    profile = cfg.get("providerProfile", {})
+    return (
+        cfg.get("type") == "talos"
+        and cfg.get("provider", "kubevirt") == "kubevirt"
+        and isinstance(profile, dict)
+        and profile.get("name") == "ok-infra"
+    )
+
+
+def resolve_config(cfg: dict, cluster_name: str, require_live_inventory=False) -> dict:
     cfg = yaml.safe_load(yaml.dump(cfg))
     validate_registry_trust(cfg)
     workload_user_namespaces = validate_workload_user_namespaces(cfg)
@@ -532,7 +634,16 @@ def resolve_config(cfg: dict, cluster_name: str) -> dict:
     clusters = discover_clusters()
     others = [c for c in clusters if c["name"] != cluster_name]
     net = cfg.setdefault("network", {})
-    used = effective_used_ips(others, exclude_cluster=cluster_name)
+    if require_live_inventory and not is_ok76_talos_kubevirt_reference(cfg):
+        raise RuntimeError("live inventory enforcement requires the Talos/KubeVirt ok-infra reference profile")
+    used = effective_used_ips(
+        others,
+        # A first-create M2 inventory must include every namespace: a pre-
+        # existing Service can occupy the requested cluster's namespace too.
+        # Legacy re-renders retain the historical self-namespace exclusion.
+        exclude_cluster=None if require_live_inventory else cluster_name,
+        require_live=require_live_inventory,
+    )
     if net.get("endpoint", "auto") == "auto":
         net["endpoint"] = next_free_ip(used, start_ip=os.environ.get("START_IP"))
     elif net["endpoint"] in used:
@@ -749,7 +860,17 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
 
 def cmd_render(args):
     cluster_name = args.cluster
-    cluster_dir  = CLUSTERS_DIR / cluster_name
+    if args.cluster_dir:
+        cluster_dir = Path(args.cluster_dir)
+        if (not cluster_dir.is_absolute()
+                or cluster_dir.parent.resolve() != SCRIPT_DIR.resolve()
+                or not cluster_dir.name.startswith(f".ok76-{cluster_name}.")
+                or cluster_dir.is_symlink()
+                or not cluster_dir.is_dir()):
+            print("ERROR: temporary render directory is not a valid OK-76 staging directory.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        cluster_dir = CLUSTERS_DIR / cluster_name
     cfg_path     = cluster_dir / "cluster-config.yaml"
     if not cfg_path.exists():
         print(f"ERROR: {cfg_path} not found.", file=sys.stderr)
@@ -761,7 +882,7 @@ def cmd_render(args):
         )
         if capability is not None:
             raw["workloadUserNamespaces"] = capability
-    cfg = resolve_config(raw, cluster_name)
+    cfg = resolve_config(raw, cluster_name, require_live_inventory=args.require_live_inventory)
     render_cluster(cluster_name, cluster_dir, cfg)
     print(f"\nCluster '{cluster_name}' rendered → {cluster_dir.relative_to(SCRIPT_DIR)}/")
 
@@ -788,7 +909,11 @@ def cmd_list(args):
 def cmd_show_ip(args):
     clusters = discover_clusters()
     others = [c for c in clusters if c["name"] != args.cluster]
-    used = effective_used_ips(others, exclude_cluster=args.cluster)
+    used = effective_used_ips(
+        others,
+        exclude_cluster=None if args.require_live_inventory else args.cluster,
+        require_live=args.require_live_inventory,
+    )
     start_ip = args.start_ip or os.environ.get("START_IP")
     print(next_free_ip(used, start_ip=start_ip))
 
@@ -976,9 +1101,9 @@ def cmd_projection(args):
 def main():
     p = argparse.ArgumentParser(description="OpenKubes cluster manifest renderer")
     sub = p.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("render"); r.add_argument("--cluster", required=True); r.set_defaults(func=cmd_render)
+    r = sub.add_parser("render"); r.add_argument("--cluster", required=True); r.add_argument("--cluster-dir", default=None); r.add_argument("--require-live-inventory", action="store_true"); r.set_defaults(func=cmd_render)
     l = sub.add_parser("list"); l.set_defaults(func=cmd_list)
-    ip = sub.add_parser("next-ip"); ip.add_argument("--cluster", default="__new__"); ip.add_argument("--start-ip", default=None); ip.set_defaults(func=cmd_show_ip)
+    ip = sub.add_parser("next-ip"); ip.add_argument("--cluster", default="__new__"); ip.add_argument("--start-ip", default=None); ip.add_argument("--require-live-inventory", action="store_true"); ip.set_defaults(func=cmd_show_ip)
     wuns = sub.add_parser("validate-workload-user-namespaces-env")
     wuns.add_argument("--type", dest="cluster_type", required=True)
     wuns.add_argument("--provider", required=True)
