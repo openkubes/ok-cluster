@@ -10,6 +10,8 @@ import (
  "net/http"
  "net/url"
  "strings"
+
+ "github.com/openkubes/ok-cluster/internal/jsonstrict"
 )
 
 // KubernetesStore is DISCONNECTED from the CLI and Executor. Kubernetes
@@ -62,11 +64,16 @@ func(s *KubernetesStore) request(ctx context.Context,method,path string,body []b
 }
 func(s *KubernetesStore) read(ctx context.Context,name string)(authorityConfigMap,bool,error){
  code,raw,e:=s.request(ctx,http.MethodGet,s.path(name),nil);if e!=nil{return authorityConfigMap{},false,e}
- if code==http.StatusNotFound{return authorityConfigMap{},false,nil}
+ // 404 may mean deleted/recreated authority data, not a trusted ABSENT.
+ // Until a separately proven fenced domain exists, fail closed.
+ if code==http.StatusNotFound{return authorityConfigMap{},false,ErrUnverifiable}
  if code!=http.StatusOK{return authorityConfigMap{},false,ErrUnverifiable}
  var cm authorityConfigMap
- d:=json.NewDecoder(bytes.NewReader(raw));d.DisallowUnknownFields()
- if d.Decode(&cm)!=nil||d.Decode(new(any))!=io.EOF||cm.Kind!="ConfigMap"||cm.APIVersion!="v1"||cm.Metadata.Name!=name||cm.Metadata.Namespace!=s.namespace||cm.Metadata.UID==""||cm.Metadata.ResourceVersion==""||len(cm.Data)!=1||cm.Data["state"]==""{return authorityConfigMap{},false,ErrUnverifiable}
+ // Kubernetes includes additional metadata fields; validate duplicate keys
+ // globally while decoding only our protected identity fields.
+ var rawObject map[string]json.RawMessage
+ if jsonstrict.Decode(raw,&rawObject)!=nil||json.Unmarshal(raw,&cm)!=nil{return authorityConfigMap{},false,ErrUnverifiable}
+ if cm.Kind!="ConfigMap"||cm.APIVersion!="v1"||cm.Metadata.Name!=name||cm.Metadata.Namespace!=s.namespace||cm.Metadata.UID==""||cm.Metadata.ResourceVersion==""||len(cm.Data)!=1||cm.Data["state"]==""{return authorityConfigMap{},false,ErrUnverifiable}
  return cm,true,nil
 }
 func(s *KubernetesStore) inspect(ctx context.Context,tenant,cluster,profile string)(Snapshot,authorityConfigMap,bool,error){
@@ -75,8 +82,7 @@ func(s *KubernetesStore) inspect(ctx context.Context,tenant,cluster,profile stri
  if e!=nil{return Snapshot{},authorityConfigMap{},false,e}
  if !found{return Snapshot{Revision:Absent},authorityConfigMap{},false,nil}
  var rec authorityRecord
- d:=json.NewDecoder(strings.NewReader(cm.Data["state"]));d.DisallowUnknownFields()
- if d.Decode(&rec)!=nil||d.Decode(new(any))!=io.EOF||rec.Tenant!=tenant||rec.Cluster!=cluster||rec.Profile!=profile||rec.Snapshot.Revision==""||rec.Snapshot.Revision==Absent||rec.Snapshot.Last==nil||rec.Snapshot.Last.To!=rec.Snapshot.Revision||rec.Snapshot.Last.Tenant!=tenant||rec.Snapshot.Last.Cluster!=cluster||rec.Snapshot.Last.AuthorityProfile!=profile||rec.Snapshot.Last.Validate()!=nil{return Snapshot{},authorityConfigMap{},false,ErrUnverifiable}
+ if jsonstrict.Decode([]byte(cm.Data["state"]),&rec)!=nil||rec.Tenant!=tenant||rec.Cluster!=cluster||rec.Profile!=profile||rec.Snapshot.Revision==""||rec.Snapshot.Revision==Absent||rec.Snapshot.Last==nil||rec.Snapshot.Last.To!=rec.Snapshot.Revision||rec.Snapshot.Last.Tenant!=tenant||rec.Snapshot.Last.Cluster!=cluster||rec.Snapshot.Last.AuthorityProfile!=profile||rec.Snapshot.Last.Validate()!=nil{return Snapshot{},authorityConfigMap{},false,ErrUnverifiable}
  return rec.Snapshot,cm,true,nil
 }
 func(s *KubernetesStore) Inspect(ctx context.Context,tenant,cluster,profile string)(Snapshot,error){
