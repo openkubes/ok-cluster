@@ -710,6 +710,14 @@ func verifyProvisionCheckout(ctx context.Context, runtime clusterProvisionRuntim
 		for path := range clusterProvisionReviewedLifecycle {
 			args = append(args, ":(exclude)"+path)
 		}
+		// Verify the post-M2a files against their own immutable reviewed tree.
+		// They are not lifecycle dependencies and must never become wildcards.
+		if err := verifyProvisionNonLifecycleSource(ctx, runtime, path); err != nil {
+			return err
+		}
+		for _, pinned := range clusterProvisionReviewedNonLifecyclePaths {
+			args = append(args, ":(exclude)"+pinned)
+		}
 		if err := verifyProvisionLifecycleExtension(ctx, runtime, path); err != nil {
 			return err
 		}
@@ -1093,6 +1101,19 @@ func runClusterProvisionCommand(ctx context.Context, executable string, args []s
 
 // The reviewed lifecycle extension is content-pinned separately from the original
 // M2a Make source; arbitrary edits outside cmd/ok remain forbidden.
+// verifyProvisionNonLifecycleSource checks the actual working-tree content,
+// not merely the commit ID. A changed/deleted pinned file fails closed.
+// An unlisted changed path still fails the M2a diff below.
+func verifyProvisionNonLifecycleSource(ctx context.Context, runtime clusterProvisionRuntime, root string) error {
+	prefix := []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", root}
+	args := append(append([]string{}, prefix...), "diff", "--quiet", "--no-ext-diff", "--no-textconv", clusterProvisionReviewedNonLifecycleRev, "--")
+	args = append(args, clusterProvisionReviewedNonLifecyclePaths...)
+	if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], args, root, io.Discard); err != nil {
+		return errors.New("post-M2a non-lifecycle source differs from the pinned reviewed revision")
+	}
+	return nil
+}
+
 func verifyProvisionLifecycleExtension(ctx context.Context, runtime clusterProvisionRuntime, root string) error {
 	raw, err := json.Marshal(clusterProvisionReviewedLifecycle)
 	if err != nil {
