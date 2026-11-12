@@ -6,6 +6,24 @@
 
 ```bash
 make ok-cli-build
+.tools/bin/ok up -f ~/clusters/preview-one.yaml --management ~/.kube/ok-infra.yaml
+# or: export TALOS_INFRA_KUBECONFIG=~/.kube/ok-infra.yaml; .tools/bin/ok up
+```
+
+`ok up` with a `kind: ClusterRequest` file (or without arguments in a terminal,
+using `<ok config>/requests/`) is a thin UX layer over the same provisioning
+engine. `<ok config>` is `$XDG_CONFIG_HOME/ok`, else `~/.config/ok`, on every OS
+(paths passed to Make must be shell-safe, so macOS "Application Support" is not
+used). Defaults: workload kubeconfig `<ok config>/kubeconfigs/<name>.yaml`, logs
+`<ok config>/logs/` (0600, credential values masked). Directories are created
+with mode 0700 only when `ok up` runs; existing permissions are never changed.
+The management cluster must be chosen explicitly (`--management` or
+`TALOS_INFRA_KUBECONFIG`); `KUBECONFIG` and the current context are never used.
+Output is concise by default; `-v` shows technical details and live Make output.
+Legacy `kind: Cluster` manifests keep the Runner route. The explicit form below
+is unchanged:
+
+```bash
 .tools/bin/ok up --mode operator --topology same-plane \
   -f /private/path/cluster.yaml \
   --workload-kubeconfig /private/path/<cluster>.yaml

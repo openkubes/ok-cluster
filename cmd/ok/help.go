@@ -11,7 +11,7 @@ func isHelpArgument(argument string) bool {
 }
 
 func routeHelp(arguments []string, stdout io.Writer) bool {
-	if len(arguments) == 1 && arguments[0] == "up" ||
+	if len(arguments) == 1 && arguments[0] == "up" && !upStdinIsTerminal() ||
 		len(arguments) >= 2 && arguments[0] == "up" && (arguments[1] == "--help" || arguments[1] == "-h") ||
 		len(arguments) == 2 && arguments[0] == "help" && arguments[1] == "up" {
 		writeOperatorUpHelp(stdout)
@@ -202,19 +202,37 @@ Run "ok <command> --help" for command-specific help.
 }
 
 func writeOperatorUpHelp(output io.Writer) {
-	fmt.Fprint(output, `Run a bounded, operator-confirmed Same-Plane Talos/KubeVirt lifecycle
+	fmt.Fprint(output, `Create a Same-Plane Talos/KubeVirt cluster with two typed confirmations
 
 Usage:
+  ok up                         find or create a request in <ok config>/requests
+  ok up -f <cluster.yaml>       use a ClusterRequest (cli.openkubes.io/v1alpha1)
+
+Flags:
+  --management <kubeconfig>     management cluster (or set TALOS_INFRA_KUBECONFIG)
+  --workload-kubeconfig <path>  output kubeconfig (default: <ok config>/kubeconfigs/<name>.yaml)
+  -v, --verbose                 technical details and live Make output
+
+<ok config> is $XDG_CONFIG_HOME/ok, else ~/.config/ok. Directories are created
+only when ok up actually runs, with mode 0700; logs go to <ok config>/logs with
+credential values masked.
+
+CLI v1.0 supports only the Same-Plane Talos/KubeVirt operator workflow: the
+management cluster also hosts the cluster VMs. ok up never uses KUBECONFIG or
+your current kubectl context for the management cluster. It runs only from the
+clean checkout the CLI was built from (make ok-cli-build), checks pinned
+ok-linux and Cilium inputs, and asks you to type "provision <name>" before
+make new and "bootstrap <name>" before make bootstrap. Nothing is retried or
+cleaned up automatically. A finished bootstrap is not a readiness check: verify
+the cluster yourself.
+
+Read-only preview without any changes:
+  ok cluster plan -f <cluster.yaml>
+
+Explicit form (unchanged):
   ok up --mode operator --topology same-plane -f <cluster.yaml> --workload-kubeconfig <private-dir>/<cluster>.yaml
 
-This command first runs the existing read-only ClusterRequest plan and then
-delegates to ok cluster provision with ALL of its original safeguards:
-reviewed CLI and dependency pins, management target checks, two exact
-interactive confirmations, scaffold verification and stop-without-retry on
-ambiguous or partial failure. This does NOT implement ADR-034 desired-state
-convergence, autonomous execution, or a Policy/CAS acceptance. No automatic
-credentials or topology are inferred. Kubernetes Readiness must be independently
-verified; a successful Make exit alone is not a readiness certificate.
+Legacy kind: Cluster manifests keep using the Runner workflow (ok up -f <manifest> --dry-run|--prepare|--live).
 `)
 }
 
