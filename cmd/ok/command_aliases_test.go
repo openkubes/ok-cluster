@@ -15,9 +15,9 @@ import (
 
 func TestProductCommandAliasesOnlyRewritePrefixes(t *testing.T) {
 	for _, test := range []struct{ input, want []string }{
-		{[]string{"up"}, []string{"cluster", "create"}},
-		{[]string{"up", "-f", "up", "--prepare"}, []string{"cluster", "create", "-f", "up", "--prepare"}},
-		{[]string{"help", "up"}, []string{"help", "cluster", "create"}},
+		{[]string{"up"}, []string{"up"}},
+		{[]string{"up", "-f", "up", "--prepare"}, []string{"up", "-f", "up", "--prepare"}},
+		{[]string{"help", "up"}, []string{"help", "up"}},
 		{[]string{"destroy", "cluster", "help", "--config", "up"}, []string{"cluster", "destroy", "help", "--config", "up"}},
 		{[]string{"help", "destroy", "cluster"}, []string{"help", "cluster", "destroy"}},
 		{[]string{"cluster", "destroy", "up"}, []string{"cluster", "destroy", "up"}},
@@ -34,7 +34,7 @@ func TestProductCommandAliasesOnlyRewritePrefixes(t *testing.T) {
 	}
 }
 
-func TestProductCommandAliasesHelpAndReadOnlySubcommands(t *testing.T) {
+func TestProductCommandAliasesHelpAndLegacyCreateSubcommands(t *testing.T) {
 	for _, args := range [][]string{{"up"}, {"up", "--help"}, {"help", "up"},
 		{"up", "--file", "/must-not-be-read.json", "--help"},
 		{"cluster", "destroy"}, {"cluster", "destroy", "--help"}, {"help", "cluster", "destroy"},
@@ -45,20 +45,15 @@ func TestProductCommandAliasesHelpAndReadOnlySubcommands(t *testing.T) {
 		}
 	}
 	for _, subcommand := range []string{"requirements", "manifest-template", "plan-template"} {
-		var alias, canonical bytes.Buffer
-		if err := run([]string{"up", subcommand}, &alias, &bytes.Buffer{}); err != nil {
-			t.Fatal(err)
-		}
+		var canonical bytes.Buffer
 		if err := run([]string{"cluster", "create", subcommand}, &canonical, &bytes.Buffer{}); err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(alias.Bytes(), canonical.Bytes()) {
-			t.Fatalf("%s: alias changed non-authorizing output", subcommand)
-		}
+		if canonical.Len() == 0 {t.Fatalf("%s: empty legacy create output", subcommand)}
 	}
 }
 
-func TestUpRejectsIncompleteAndAmbiguousExecutionWithoutOpeningManifest(t *testing.T) {
+func TestLegacyClusterCreateRejectsIncompleteAndAmbiguousExecutionWithoutOpeningManifest(t *testing.T) {
 	previous := prepareFullRunExecutionManifest
 	defer func() { prepareFullRunExecutionManifest = previous }()
 	prepareFullRunExecutionManifest = func(string) (runner.FullRunExecutionManifestReceipt, error) {
@@ -71,13 +66,13 @@ func TestUpRejectsIncompleteAndAmbiguousExecutionWithoutOpeningManifest(t *testi
 		{"--file", "a", "--prepare", "--contract", "b"}, {"--file", "a", "--dry-run", "--yes"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if err := run(append([]string{"up"}, suffix...), &stdout, &stderr); err == nil || stdout.Len() != 0 {
+		if err := run(append([]string{"cluster", "create"}, suffix...), &stdout, &stderr); err == nil || stdout.Len() != 0 {
 			t.Fatalf("unsafe input accepted: %v err=%v", suffix, err)
 		}
 	}
 }
 
-func TestUpPropagatesRunnerFailureWithoutRetryOrSyntheticSuccess(t *testing.T) {
+func TestLegacyClusterCreatePropagatesRunnerFailureWithoutRetryOrSyntheticSuccess(t *testing.T) {
 	previousPrepare, previousExecute, previousMarker := prepareFullRunExecutionManifest, executeClusterCreateLive, validateClusterCreateTerminalMarker
 	defer func() {
 		prepareFullRunExecutionManifest, executeClusterCreateLive, validateClusterCreateTerminalMarker = previousPrepare, previousExecute, previousMarker
@@ -90,7 +85,7 @@ func TestUpPropagatesRunnerFailureWithoutRetryOrSyntheticSuccess(t *testing.T) {
 	failure := errors.New("runner incomplete; convergence evidence missing")
 	executeClusterCreateLive = func(context.Context, clusterCreateLiveConfig, io.Writer, io.Writer) error { calls++; return failure }
 	var stdout bytes.Buffer
-	err := run([]string{"up", "--file", "/fake.json", "--live", "--execute", "--expected-manifest-digest", testSHA("1"),
+	err := run([]string{"cluster", "create", "--file", "/fake.json", "--live", "--execute", "--expected-manifest-digest", testSHA("1"),
 		"--independent-evidence-public-key", "/fake.pub", "--terminal-marker", "/private/executor-terminal"}, &stdout, &bytes.Buffer{})
 	if !errors.Is(err, failure) || calls != 1 || stdout.Len() != 0 {
 		t.Fatalf("err=%v calls=%d stdout=%s", err, calls, &stdout)
