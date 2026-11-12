@@ -183,6 +183,7 @@ Usage:
 Commands:
   cluster     Validate, prepare, and explicitly run cluster workflows
   up          Shorthand for cluster create (same flags and safety gates)
+  preview     Experimental local-only authoring preview (no authority or mutation)
   destroy     Compatibility spelling: ok destroy cluster (prefer ok cluster destroy)
   local       Manage the dedicated local kind + Console demo environment
   config      Save and inspect local CLI paths (no cluster contact)
