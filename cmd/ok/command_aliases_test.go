@@ -16,8 +16,11 @@ import (
 func TestProductCommandAliasesOnlyRewritePrefixes(t *testing.T) {
 	for _, test := range []struct{ input, want []string }{
 		{[]string{"up"}, []string{"up"}},
-		{[]string{"up", "-f", "up", "--prepare"}, []string{"up", "-f", "up", "--prepare"}},
+		{[]string{"up", "--mode", "operator", "-f", "in.yaml"}, []string{"up", "--mode", "operator", "-f", "in.yaml"}},
+		{[]string{"up", "--mode=convergence", "-f", "in.yaml"}, []string{"up", "--mode=convergence", "-f", "in.yaml"}},
+		{[]string{"up", "-f", "up", "--prepare"}, []string{"cluster", "create", "-f", "up", "--prepare"}},
 		{[]string{"help", "up"}, []string{"help", "up"}},
+		{[]string{"up", "--dry-run"}, []string{"cluster", "create", "--dry-run"}},
 		{[]string{"destroy", "cluster", "help", "--config", "up"}, []string{"cluster", "destroy", "help", "--config", "up"}},
 		{[]string{"help", "destroy", "cluster"}, []string{"help", "cluster", "destroy"}},
 		{[]string{"cluster", "destroy", "up"}, []string{"cluster", "destroy", "up"}},
