@@ -50,11 +50,6 @@ type provisionFixture struct {
 	clusterQueryFailure    error
 }
 
-const (
-	provisionMakefileBaselineFixture = "# fixture\nTestClusterPlan|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing\n"
-	provisionMakefileCurrentFixture  = "# fixture\nTestClusterPlan|TestClusterProvision|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing\n"
-)
-
 func newProvisionFixture(t *testing.T) (*provisionFixture, clusterRequest) {
 	t.Helper()
 	base := t.TempDir()
@@ -65,7 +60,7 @@ func newProvisionFixture(t *testing.T) (*provisionFixture, clusterRequest) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(provisionMakefileCurrentFixture), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("# fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(okLinux, "profiles", "kubevirt", "profile.yaml"), []byte("fixture\n"), 0o600); err != nil {
@@ -137,7 +132,7 @@ users:
 		makeFailure: make(map[string]error), makeCount: make(map[string]int)}
 	fixture.runtime = clusterProvisionRuntime{
 		makeRoot: root, okLinuxRoot: okLinux, makeExecutable: tools["make"], makeRevision: strings.Repeat("a", 40),
-		okLinuxRevision: strings.Repeat("b", 40), reviewedMakeSource: strings.Repeat("c", 40), expectedChartHash: chartHash,
+		okLinuxRevision: strings.Repeat("b", 40), expectedChartHash: chartHash,
 		managementKubeconfig: mgmt, workloadKubeconfig: workload, environmentPath: bin, toolPaths: tools,
 		isTerminal: true, newTimeout: time.Second, bootstrapTimeout: time.Second,
 	}
@@ -168,16 +163,9 @@ func (fixture *provisionFixture) run(ctx context.Context, executable string, arg
 			return nil
 		}
 		if subcommand == "status" {
-			if dir == fixture.root {
-				fmt.Fprintln(stdout, " M Makefile")
-			}
 			if fixture.makeCount["new"] > 0 && dir == fixture.root {
 				fmt.Fprintf(stdout, "?? preview-one/cluster-config.yaml\n?? preview-one/cluster-base.yaml\n")
 			}
-			return nil
-		}
-		if subcommand == "show" {
-			fmt.Fprint(stdout, provisionMakefileBaselineFixture)
 			return nil
 		}
 		return nil
@@ -225,7 +213,7 @@ func (fixture *provisionFixture) run(ctx context.Context, executable string, arg
 func provisionGitSubcommand(args []string) string {
 	for _, arg := range args {
 		switch arg {
-		case "rev-parse", "status", "diff", "show":
+		case "rev-parse", "status":
 			return arg
 		}
 	}
@@ -961,36 +949,10 @@ func TestClusterProvisionNetworkAndStatusValidation(t *testing.T) {
 	if !provisionStatusContainsOnlyScaffold("?? preview-one/a.yaml\n?? preview-one/b.yaml\n", "preview-one") {
 		t.Fatal("expected generated scaffold status rejected")
 	}
-	if !provisionStatusContainsOnlyScaffoldAndMakefile(" M Makefile\n?? preview-one/a.yaml\n", "preview-one") {
-		t.Fatal("exact reviewed Makefile change plus scaffold was rejected")
-	}
-	if provisionStatusContainsOnlyScaffoldAndMakefile("M  Makefile\n?? preview-one/a.yaml\n", "preview-one") {
-		t.Fatal("staged Makefile change was accepted")
-	}
 	for _, status := range []string{" M Makefile\n", "?? other/file\n", "?? preview-oneevil/file\n", "?? preview-one/../outside\n"} {
 		if provisionStatusContainsOnlyScaffold(status, "preview-one") {
 			t.Fatalf("unsafe git status accepted: %q", status)
 		}
-	}
-}
-
-func TestClusterProvisionAllowsOnlyExactOfflineSmokeSelectorMakefileChange(t *testing.T) {
-	fixture, _ := newProvisionFixture(t)
-	if err := verifyProvisionCheckout(context.Background(), fixture.runtime, fixture.root, fixture.runtime.makeRevision, false, "", true); err != nil {
-		t.Fatalf("exact offline smoke selector change rejected: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(fixture.root, "Makefile"), []byte(provisionMakefileCurrentFixture+"# unrelated Makefile change\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyProvisionCheckout(context.Background(), fixture.runtime, fixture.root, fixture.runtime.makeRevision, false, "", true); err == nil || !strings.Contains(err.Error(), "offline-smoke selector") {
-		t.Fatalf("unrelated Makefile change was not rejected precisely: %v", err)
-	}
-}
-
-func TestProvisionMakefileHasOnlyOfflineSmokeSelectorChangeRejectsAmbiguousBaseline(t *testing.T) {
-	baseline := []byte(provisionMakefileBaselineFixture + "TestClusterPlan|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing\n")
-	if provisionMakefileHasOnlyOfflineSmokeSelectorChange(baseline, []byte(provisionMakefileCurrentFixture)) {
-		t.Fatal("ambiguous reviewed Makefile baseline accepted")
 	}
 }
 
@@ -1073,49 +1035,5 @@ func TestClusterProvisionSamePlaneGateFailurePreservesScaffold(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")); err != nil {
 		t.Fatal("scaffold was not preserved")
-	}
-}
-
-func TestClusterProvisionReviewedLifecycleExtensionRejectsTampering(t *testing.T) {
-	fixture, _ := newProvisionFixture(t)
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.runtime.toolPaths["python3"] = python
-	if err := os.WriteFile(filepath.Join(fixture.runtime.environmentPath, "python3"), []byte("#!/bin/sh\nexec "+python+" \"$@\"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	fixture.runtime.command = func(ctx context.Context, executable string, args []string, dir string, env []string, out, errOut io.Writer) error {
-		cmd := exec.CommandContext(ctx, executable, args...)
-		cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, out, errOut
-		return cmd.Run()
-	}
-	if len(clusterProvisionReviewedLifecycle) == 0 {
-		t.Fatal("reviewed extension must be pinned")
-	}
-	var first string
-	for path := range clusterProvisionReviewedLifecycle {
-		raw, err := os.ReadFile(filepath.Join("..", "..", path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		dest := filepath.Join(fixture.root, path)
-		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dest, raw, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		first = dest
-	}
-	if err := verifyProvisionLifecycleExtension(context.Background(), fixture.runtime, fixture.root); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(first, []byte("changed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyProvisionLifecycleExtension(context.Background(), fixture.runtime, fixture.root); err == nil {
-		t.Fatal("tampered reviewed lifecycle accepted")
 	}
 }

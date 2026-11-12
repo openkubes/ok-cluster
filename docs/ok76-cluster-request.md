@@ -56,9 +56,11 @@ Provision now requires `ok cluster provision --topology same-plane -f <request>
 explicitly to the reviewed private kubeconfig. Context, HTTPS endpoint, CA trust
 and live `kube-system` UID must remain stable across both confirmation gates.
 Neither ambient kubeconfig selection nor auth plugins/impersonation are allowed.
-The original Make/profile revisions and Cilium chart digest remain pinned; the
-reviewed same-plane lifecycle extension is separately content-pinned in the CLI.
-Rebuild the CLI from the reviewed final commit; an old binary is insufficient.
+The ok-cluster checkout must be clean and at exactly the commit the CLI was
+built from; the ok-linux checkout must be clean at its pinned commit, and the
+Cilium chart digest remains pinned. After `make new`, only untracked files under
+`<checkout>/<cluster>/` are tolerated. Rebuild the CLI after every checkout
+change; an old binary is refused.
 
 Before apply, `.same-plane-lifecycle.json` privately preserves the original
 resolved config, Secret-free render, content hashes and public API identity.

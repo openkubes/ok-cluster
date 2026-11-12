@@ -28,7 +28,6 @@ import (
 )
 
 const (
-	clusterProvisionReviewedMakeSource = "13dfc9803164d4b3d83b0da14bc285d1540e077e"
 	// The newer profile source is recorded in the repository's OK-147 evidence;
 	// the earlier OK-130 runtime commit predates provider_profiles required by
 	// the current resolver and fails the existing offline profile contract.
@@ -48,7 +47,7 @@ var (
 type clusterProvisionRuntime struct {
 	makeRoot, okLinuxRoot, makeExecutable    string
 	makeRevision, okLinuxRevision            string
-	reviewedMakeSource, expectedChartHash    string
+	expectedChartHash                        string
 	managementKubeconfig, workloadKubeconfig string
 	environmentPath                          string
 	toolPaths                                map[string]string
@@ -277,7 +276,7 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 	return clusterProvisionRuntime{
 		makeRoot: makeRoot, okLinuxRoot: okLinuxRoot, makeExecutable: toolPaths["make"],
 		makeRevision: revision, okLinuxRevision: clusterProvisionReviewedOKLinux,
-		reviewedMakeSource: clusterProvisionReviewedMakeSource, expectedChartHash: clusterProvisionCiliumSHA256,
+		expectedChartHash:    clusterProvisionCiliumSHA256,
 		managementKubeconfig: managementKubeconfig, workloadKubeconfig: workloadKubeconfig,
 		environmentPath: restrictedPath,
 		toolPaths:       toolPaths, command: runClusterProvisionCommand, isTerminal: stdinIsTerminal(),
@@ -460,7 +459,7 @@ func prepareClusterProvision(request clusterRequest, runtime clusterProvisionRun
 	if !clusterProvisionRevisionPattern.MatchString(runtime.makeRevision) || !clusterProvisionRevisionPattern.MatchString(runtime.okLinuxRevision) {
 		return clusterProvisionPrepared{}, errors.New("trusted Make and ok-linux revisions must be full lowercase Git commit IDs")
 	}
-	if runtime.reviewedMakeSource == "" || runtime.expectedChartHash == "" || runtime.command == nil {
+	if runtime.expectedChartHash == "" || runtime.command == nil {
 		return clusterProvisionPrepared{}, errors.New("trusted provisioning runtime is incomplete")
 	}
 	managementTarget, err := inspectProvisionManagementKubeconfig(runtime.managementKubeconfig)
@@ -704,57 +703,20 @@ func verifyProvisionCheckout(ctx context.Context, runtime clusterProvisionRuntim
 	if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], append(append([]string{}, gitPrefix...), "rev-parse", "HEAD"), path, stdout); err != nil || strings.TrimSpace(stdout.String()) != expectedRevision {
 		return errors.New("checkout revision does not match its required full commit")
 	}
-	makefileChangeAllowed := false
-	if makeCheckout {
-		args := append(append([]string{}, gitPrefix...), "diff", "--quiet", "--no-ext-diff", "--no-textconv", runtime.reviewedMakeSource, "--", ".", ":(exclude)cmd/ok/**", ":(exclude)Makefile")
-		for path := range clusterProvisionReviewedLifecycle {
-			args = append(args, ":(exclude)"+path)
-		}
-		if err := verifyProvisionLifecycleExtension(ctx, runtime, path); err != nil {
-			return err
-		}
-		if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], args, path, io.Discard); err != nil {
-			return errors.New("Make source outside cmd/ok and the exact offline-smoke selector differs from the reviewed M2a baseline")
-		}
-		baseline := new(bytes.Buffer)
-		showArgs := append(append([]string{}, gitPrefix...), "show", runtime.reviewedMakeSource+":Makefile")
-		if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], showArgs, path, baseline); err != nil {
-			return errors.New("reviewed Makefile baseline could not be verified")
-		}
-		current, err := os.ReadFile(filepath.Join(path, "Makefile"))
-		if err != nil {
-			return errors.New("Makefile could not be read safely")
-		}
-		makefileChangeAllowed = provisionMakefileHasOnlyOfflineSmokeSelectorChange(baseline.Bytes(), current)
-		if pinned, ok := clusterProvisionReviewedLifecycle["Makefile"]; ok {
-			digest := sha256.Sum256(current)
-			makefileChangeAllowed = makefileChangeAllowed || hex.EncodeToString(digest[:]) == pinned
-		}
-		if !makefileChangeAllowed {
-			return errors.New("Makefile differs from the reviewed baseline beyond the exact offline-smoke selector")
-		}
-	}
+	// HEAD equals the commit this CLI was built from (or the pinned ok-linux
+	// commit), so a clean tree pins every tracked byte. Review policy belongs to
+	// Git and CI, not to runtime path allowlists.
 	status := new(bytes.Buffer)
 	if err := runProvisionCheck(ctx, runtime, runtime.toolPaths["git"], append(append([]string{}, gitPrefix...), "status", "--porcelain", "--untracked-files=all"), path, status); err != nil {
 		return errors.New("checkout status could not be verified")
 	}
-	if !allowScaffold && status.Len() != 0 && !(makeCheckout && makefileChangeAllowed && status.String() == " M Makefile\n") {
+	if !allowScaffold && status.Len() != 0 {
 		return errors.New("checkout has local changes or untracked files")
 	}
-	if allowScaffold && !provisionStatusContainsOnlyScaffold(status.String(), clusterName) && !(makeCheckout && makefileChangeAllowed && provisionStatusContainsOnlyScaffoldAndMakefile(status.String(), clusterName)) {
+	if allowScaffold && !provisionStatusContainsOnlyScaffold(status.String(), clusterName) {
 		return errors.New("Make checkout has changes outside the newly generated scaffold")
 	}
 	return nil
-}
-
-func provisionMakefileHasOnlyOfflineSmokeSelectorChange(baseline, current []byte) bool {
-	const before = "TestClusterPlan|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing"
-	const after = "TestClusterPlan|TestClusterProvision|TestClusterCreateManifestTemplateIsMachineReadableAndNonAuthorizing"
-	if bytes.Count(baseline, []byte(before)) != 1 {
-		return false
-	}
-	expected := bytes.Replace(baseline, []byte(before), []byte(after), 1)
-	return bytes.Equal(expected, current)
 }
 
 func runProvisionCheck(parent context.Context, runtime clusterProvisionRuntime, executable string, args []string, directory string, stdout io.Writer) error {
@@ -771,27 +733,6 @@ func provisionStatusContainsOnlyScaffold(status, clusterName string) bool {
 		return true
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(status, "\n"), "\n") {
-		if len(line) < 4 || line[:3] != "?? " {
-			return false
-		}
-		name := filepath.Clean(line[3:])
-		if name != clusterName && !strings.HasPrefix(name, clusterName+string(filepath.Separator)) {
-			return false
-		}
-	}
-	return true
-}
-
-func provisionStatusContainsOnlyScaffoldAndMakefile(status, clusterName string) bool {
-	if status == "" {
-		return true
-	}
-	makefileSeen := false
-	for _, line := range strings.Split(strings.TrimSuffix(status, "\n"), "\n") {
-		if line == " M Makefile" && !makefileSeen {
-			makefileSeen = true
-			continue
-		}
 		if len(line) < 4 || line[:3] != "?? " {
 			return false
 		}
@@ -1035,7 +976,7 @@ func runProvisionMake(ctx context.Context, runtime clusterProvisionRuntime, args
 func printClusterProvisionPlan(output io.Writer, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) {
 	fmt.Fprintf(output, "Topology: same-plane; management/provider kube-system UID: %s\n", prepared.managementUID)
 	fmt.Fprintf(output, "OK-76 operator provisioning plan\nRequest: %s (%s)\n", prepared.name, clusterRequestProfile)
-	fmt.Fprintf(output, "Trusted Make checkout: %s @ %s (clean; provision sources match reviewed base %s)\n", runtime.makeRoot, runtime.makeRevision, runtime.reviewedMakeSource)
+	fmt.Fprintf(output, "Trusted Make checkout: %s @ %s (clean; exact commit this CLI was built from)\n", runtime.makeRoot, runtime.makeRevision)
 	fmt.Fprintf(output, "ok-linux checkout: %s @ %s (clean)\n", runtime.okLinuxRoot, runtime.okLinuxRevision)
 	fmt.Fprintf(output, "Management kubeconfig: %s (explicit; contents are not displayed)\n", prepared.managementKubeconfig)
 	fmt.Fprintf(output, "Management target: context=%s apiServer=%s (TLS verification enabled)\n", prepared.managementContext, prepared.managementAPIServer)
@@ -1089,17 +1030,6 @@ func runClusterProvisionCommand(ctx context.Context, executable string, args []s
 	command.Dir, command.Env, command.Stdout, command.Stderr = dir, environment, stdout, stderr
 	configureClusterProvisionProcess(command)
 	return command.Run()
-}
-
-// The reviewed lifecycle extension is content-pinned separately from the original
-// M2a Make source; arbitrary edits outside cmd/ok remain forbidden.
-func verifyProvisionLifecycleExtension(ctx context.Context, runtime clusterProvisionRuntime, root string) error {
-	raw, err := json.Marshal(clusterProvisionReviewedLifecycle)
-	if err != nil {
-		return err
-	}
-	script := "import hashlib,json,pathlib,sys; root=pathlib.Path(sys.argv[1]); expected=json.loads(sys.argv[2]); assert all((root/p).is_file() and not (root/p).is_symlink() and hashlib.sha256((root/p).read_bytes()).hexdigest()==h for p,h in expected.items()), 'reviewed lifecycle extension differs'"
-	return runProvisionCheck(ctx, runtime, provisionPythonExecutable(runtime), []string{"-c", script, root, string(raw)}, root, io.Discard)
 }
 
 func provisionPlaneUID(ctx context.Context, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) (string, error) {

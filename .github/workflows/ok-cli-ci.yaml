@@ -31,6 +31,20 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Check gofmt on Go files changed by the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          changed=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.go')
+          if [ -n "$changed" ]; then
+            unformatted=$(gofmt -l $changed)
+            if [ -n "$unformatted" ]; then
+              echo "Run gofmt -w on:"; echo "$unformatted"; exit 1
+            fi
+          fi
+
       - name: Test all packages offline from clusters
         run: go test -mod=readonly ./... -count=1
 
