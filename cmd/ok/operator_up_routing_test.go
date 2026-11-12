@@ -28,10 +28,18 @@ func TestOperatorUpPublicRoutingAndHelp(t *testing.T) {
  if strings.Contains(out.String(),"Scaffold review") {t.Fatal("unexpected provisioning output")}
 }
 
-func TestOperatorUpCannotEnterLegacyRunnerThroughAlias(t *testing.T) {
+func TestOperatorUpRejectsUnsupportedExplicitMode(t *testing.T) {
  var out,errOut bytes.Buffer
- err:=run([]string{"up","-f","/nonexistent.yaml","--prepare"},&out,&errOut)
+ err:=run([]string{"up","--mode","convergence","-f","/nonexistent.yaml","--prepare"},&out,&errOut)
  if err==nil || !strings.Contains(err.Error(),"--mode operator"){
-  t.Fatalf("legacy --prepare reached via up: err=%v output=%s",err,out.String())
+  t.Fatalf("unsupported explicit mode fell back to legacy Runner: err=%v output=%s",err,out.String())
+ }
+}
+
+func TestLegacyUpWithoutModeStillUsesRunner(t *testing.T) {
+ var out,errOut bytes.Buffer
+ err:=run([]string{"up","--file","/nonexistent-legacy-manifest.json","--dry-run"},&out,&errOut)
+ if err==nil || strings.Contains(err.Error(),"flag provided but not defined") || strings.Contains(err.Error(),"--mode operator") {
+  t.Fatalf("legacy up compatibility broken: err=%v",err)
  }
 }
