@@ -11,6 +11,12 @@ func isHelpArgument(argument string) bool {
 }
 
 func routeHelp(arguments []string, stdout io.Writer) bool {
+	if len(arguments) == 1 && arguments[0] == "up" ||
+		len(arguments) >= 2 && arguments[0] == "up" && (arguments[1] == "--help" || arguments[1] == "-h") ||
+		len(arguments) == 2 && arguments[0] == "help" && arguments[1] == "up" {
+		writeOperatorUpHelp(stdout)
+		return true
+	}
 	if len(arguments) == 0 || (len(arguments) == 1 && isHelpArgument(arguments[0])) {
 		writeRootHelp(stdout)
 		return true
@@ -182,7 +188,7 @@ Usage:
 
 Commands:
   cluster     Validate, prepare, and explicitly run cluster workflows
-  up          Shorthand for cluster create (same flags and safety gates)
+  up          Explicit operator-mode Same-Plane plan + provision workflow
   preview     Experimental local-only authoring preview (no authority or mutation)
   destroy     Compatibility spelling: ok destroy cluster (prefer ok cluster destroy)
   local       Manage the dedicated local kind + Console demo environment
@@ -192,6 +198,23 @@ Commands:
   evidence    Expert commands for independent evidence collection
 
 Run "ok <command> --help" for command-specific help.
+`)
+}
+
+func writeOperatorUpHelp(output io.Writer) {
+	fmt.Fprint(output, `Run a bounded, operator-confirmed Same-Plane Talos/KubeVirt lifecycle
+
+Usage:
+  ok up --mode operator --topology same-plane -f <cluster.yaml> --workload-kubeconfig <private-dir>/<cluster>.yaml
+
+This command first runs the existing read-only ClusterRequest plan and then
+delegates to ok cluster provision with ALL of its original safeguards:
+reviewed CLI and dependency pins, management target checks, two exact
+interactive confirmations, scaffold verification and stop-without-retry on
+ambiguous or partial failure. This does NOT implement ADR-034 desired-state
+convergence, autonomous execution, or a Policy/CAS acceptance. No automatic
+credentials or topology are inferred. Kubernetes Readiness must be independently
+verified; a successful Make exit alone is not a readiness certificate.
 `)
 }
 

@@ -697,6 +697,9 @@ func runContext(ctx context.Context, arguments []string, stdout, stderr io.Write
 }
 
 func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	if len(arguments) >= 1 && arguments[0] == "up" {
+		return runOperatorUp(ctx, arguments[1:], os.Stdin, stdout, stderr)
+	}
 	if len(arguments) >= 1 && arguments[0] == "preview" {
 		return runPreviewCLI(arguments[1:], stdout, stderr)
 	}
