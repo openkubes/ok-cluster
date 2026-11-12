@@ -1,7 +1,7 @@
 package main
 
-// Command aliases only rewrite the command prefix. Flags, input identity,
-// execution mode and approval/evidence requirements are never inferred.
+// Only legacy destroy aliases are normalized. In particular, "up" must reach
+// the explicit operator-mode dispatcher unchanged; never remap it to create.
 func canonicalProductArguments(arguments []string) []string {
 	offset := 0
 	if len(arguments) > 0 && arguments[0] == "help" {
@@ -13,8 +13,6 @@ func canonicalProductArguments(arguments []string) []string {
 	var command []string
 	consumed := 1
 	switch {
-	case arguments[offset] == "up":
-		command = []string{"cluster", "create"}
 	case len(arguments) > offset+1 && arguments[offset] == "destroy" && arguments[offset+1] == "cluster":
 		command = []string{"cluster", "destroy"}
 		consumed = 2
