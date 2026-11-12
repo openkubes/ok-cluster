@@ -7,7 +7,6 @@ import (
  "io"
  "mime"
  "net/http"
- "strings"
 
  "github.com/openkubes/ok-cluster/internal/jsonstrict"
 )
