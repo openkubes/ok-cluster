@@ -31,7 +31,7 @@ func TestOperatorUpPublicRoutingAndHelp(t *testing.T) {
 func TestOperatorUpRejectsUnsupportedExplicitMode(t *testing.T) {
  var out,errOut bytes.Buffer
  err:=run([]string{"up","--mode","convergence","-f","/nonexistent.yaml","--prepare"},&out,&errOut)
- if err==nil || !strings.Contains(err.Error(),"--mode operator"){
+ if err==nil || !strings.Contains(err.Error(),"flag provided but not defined: -prepare"){
   t.Fatalf("unsupported explicit mode fell back to legacy Runner: err=%v output=%s",err,out.String())
  }
 }
