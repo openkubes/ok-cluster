@@ -166,6 +166,13 @@ args = list(raw)""",
             """    if resource == "kubevirtcluster":
         obj = state.get("kvc")
     elif resource in ("volumeattachments.storage.k8s.io", "persistentvolumeclaims", "pods", "engines.longhorn.io", "volumeattachments.longhorn.io", "replicas.longhorn.io", "snapshots.longhorn.io", "virtualmachines.kubevirt.io", "kubevirtmachines.infrastructure.cluster.x-k8s.io"):
+        if resource == "virtualmachines.kubevirt.io" and state.get("cluster") is None and state.get("gc_mode") == "delayed":
+            state["gc_vm_reads"] = state.get("gc_vm_reads", 0) + 1
+            if state["gc_vm_reads"] >= 2:
+                state[resource] = []
+                state["datavolumes"] = []
+                state["pvcs"] = []
+            save()
         print(json.dumps({"items": state.get(resource, [])}))
         sys.exit(0)
     elif resource == "cluster":
@@ -174,9 +181,26 @@ args = list(raw)""",
         fake = fake.replace(
             '        state["cluster"] = None',
             """        state["cluster"] = None
-        state["datavolumes"] = []
-        state["pvcs"] = []
-        for pv in state["pvs"]: pv["status"] = {"phase": "Released"}""",
+        state["kubevirtmachines.infrastructure.cluster.x-k8s.io"] = []
+        state["machines"] = []
+        if not state.get("gc_mode"):
+            state["virtualmachines.kubevirt.io"] = []
+            state["datavolumes"] = []
+            state["pvcs"] = []
+        else:
+            for vm in state["virtualmachines.kubevirt.io"]:
+                vm["metadata"]["deletionTimestamp"] = "2026-11-12T10:27:27Z"
+            if state["gc_mode"] == "replacement":
+                state["virtualmachines.kubevirt.io"][0]["metadata"]["uid"] = "replacement-vm"
+            if state["gc_mode"] == "labels":
+                state["virtualmachines.kubevirt.io"][0]["metadata"]["labels"]["capk.cluster.x-k8s.io/kubevirt-machine-name"] = "foreign"
+            if state["gc_mode"] == "owner":
+                state["virtualmachines.kubevirt.io"][0]["metadata"]["ownerReferences"] = [{"kind": "KubevirtMachine", "uid": "foreign"}]
+            if state["gc_mode"] == "api-error":
+                state.setdefault("faults", {})["get:virtualmachines.kubevirt.io"] = 1
+        for pv in state["pvs"]:
+            if pv["spec"].get("claimRef", {}).get("namespace") == state["namespace"]["metadata"]["name"]:
+                pv["status"] = {"phase": "Released"}""",
         )
         (self.box.bin / "kubectl").write_text(fake)
         initial = copy.deepcopy(self.original)
@@ -235,6 +259,104 @@ args = list(raw)""",
         result, calls = self.destroy()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(fixtures.mutation_calls(calls), [])
+
+    def test_capk_gone_before_original_vm_converges(self):
+        self.box.mutate(lambda s: s.update(gc_mode="delayed"))
+        self.args = (*self.args[:-1], "5")
+        result, calls = self.destroy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.box.read_state()
+        self.assertGreaterEqual(state["gc_vm_reads"], 2)
+        self.assertTrue(self.record()["complete"])
+        self.assertIsNone(state["namespace"])
+        self.assertEqual(state["longhorns"], [])
+        self.assertEqual(state["golden"], self.original["golden"])
+        self.assertEqual(
+            [x["metadata"]["name"] for x in state["snapshots"]], ["foreign-snapshot"]
+        )
+
+    def test_original_compute_already_absent_after_cluster_delete(self):
+        result, _ = self.destroy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.box.read_state()["virtualmachines.kubevirt.io"], [])
+        self.assertTrue(self.record()["complete"])
+
+    def test_live_gc_identity_ownership_and_api_errors_fail_closed(self):
+        for mode, message in (
+            ("replacement", "unrecorded/replacement compute UID"),
+            ("labels", "live compute ownership changed"),
+            ("owner", "live compute ownership changed"),
+            ("api-error", "InternalError"),
+            ("stalled", "recorded compute absence timeout"),
+        ):
+            with self.subTest(mode=mode):
+                self.box.write_state({**copy.deepcopy(self.original), "gc_mode": mode})
+                result, calls = self.destroy()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                state = self.box.read_state()
+                self.assertFalse(self.record()["complete"])
+                self.assertIsNotNone(state["namespace"])
+                self.assertEqual(len(state["pvs"]), 2)
+                self.assertEqual(len(state["longhorns"]), 2)
+                self.assertIsNotNone(state["role"])
+                self.assertFalse(any("delete" in c and "namespace" in c for c in calls))
+
+    def test_interrupted_gc_resumes_original_ledger_without_reconstruction(self):
+        self.box.mutate(lambda s: s.update(gc_mode="stalled"))
+        result, _ = self.destroy()
+        self.assertNotEqual(result.returncode, 0)
+        before = self.record()
+        cm_before = copy.deepcopy(
+            next(iter(self.box.read_state()["configmaps"].values()))
+        )
+        self.assertFalse(before["complete"])
+        # A new process has no authenticated in-memory live labels. It must
+        # refuse ambiguity, not reconstruct them from a UID-only ledger.
+        result, _ = self.destroy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("live compute ownership is unproven", result.stderr)
+
+        def finish_gc(state):
+            for key in ("virtualmachines.kubevirt.io", "datavolumes", "pvcs"):
+                state[key] = []
+
+        self.box.mutate(finish_gc)
+        result, _ = self.destroy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = self.record()
+        self.assertTrue(after["complete"])
+        self.assertEqual({**after, "complete": False}, before)
+        cm_after = next(iter(self.box.read_state()["configmaps"].values()))
+        self.assertEqual(cm_after["metadata"]["uid"], cm_before["metadata"]["uid"])
+
+    def test_longhorn_error_keeps_original_receipt_and_foreign_storage(self):
+        foreign_pv = copy.deepcopy(self.original["pvs"][0])
+        foreign_pv["metadata"].update(name="foreign-pv", uid="foreign-pv-uid")
+        foreign_pv["spec"]["claimRef"]["namespace"] = "unrelated"
+        foreign_pv["spec"]["csi"]["volumeHandle"] = "foreign-pv"
+        foreign_lh = copy.deepcopy(self.original["longhorns"][0])
+        foreign_lh["metadata"].update(name="foreign-pv", uid="foreign-lh-uid")
+
+        def add_foreign(state):
+            state["pvs"].append(foreign_pv)
+            state["longhorns"].append(foreign_lh)
+            state["faults"] = {"delete:longhorn": 1}
+
+        self.box.mutate(add_foreign)
+        result, _ = self.destroy()
+        self.assertNotEqual(result.returncode, 0)
+        before = self.record()
+        self.assertFalse(before["complete"])
+        state = self.box.read_state()
+        self.assertIn(foreign_pv, state["pvs"])
+        self.assertIn(foreign_lh, state["longhorns"])
+        self.assertEqual(state["golden"], self.original["golden"])
+        result, _ = self.destroy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({**self.record(), "complete": False}, before)
+        self.assertEqual(self.box.read_state()["pvs"], [foreign_pv])
+        self.assertEqual(self.box.read_state()["longhorns"], [foreign_lh])
 
     def test_external_provider_rejected_before_preparation_or_bootstrap(self):
         import yaml

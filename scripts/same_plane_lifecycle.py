@@ -313,7 +313,7 @@ def validate_record(life, record, cluster):
             fail("same-plane PVC/PV/CSI/Longhorn provenance is invalid")
 
 
-def storage(life, path, cluster, saved=None):
+def storage(life, path, cluster, saved=None, *, observed=None):
     saved = saved or {}
     claims = life.kubectl_json(path, ["-n", cluster, "get", "pvc"])["items"]
     dvs = life.kubectl_json(path, ["-n", cluster, "get", "datavolumes"])["items"]
@@ -437,7 +437,66 @@ def storage(life, path, cluster, saved=None):
         if not all(b.values()) or (pvname in saved and saved[pvname] != b):
             fail("same-plane storage UID changed")
         result[pvname] = b
+    if observed is not None:
+        # These are authenticated by the complete ownership graph above. Keep
+        # them in memory only; never extend or rewrite historical schema-3 data.
+        observed.update(
+            {
+                kind: {x["metadata"]["uid"]: x for x in values}
+                for kind, values in (
+                    ("virtualmachines.kubevirt.io", vms),
+                    ("kubevirtmachines.infrastructure.cluster.x-k8s.io", machines),
+                    ("machines.cluster.x-k8s.io", capi_machines),
+                    ("datavolumes", dvs),
+                    ("pvc", claims),
+                )
+            }
+        )
     return result
+
+
+def wait_compute_absent(life, path, cluster, bindings, observed, timeout_seconds):
+    """Wait for recorded children, without rebuilding already deleted parents."""
+    kinds = {
+        "virtualmachines.kubevirt.io": "vmUID",
+        "kubevirtmachines.infrastructure.cluster.x-k8s.io": "kubevirtMachineUID",
+        "machines.cluster.x-k8s.io": "machineUID",
+        "datavolumes": "dataVolumeUID",
+        "pvc": "pvcUID",
+    }
+    deadline = time.monotonic() + min(timeout_seconds, 600)
+    while True:
+        remaining = []
+        for kind, field in kinds.items():
+            # A successful empty list proves convergence. API/auth errors must
+            # propagate; they are never interpreted as disappearance.
+            values = life.kubectl_json(path, ["-n", cluster, "get", kind])["items"]
+            expected = {b[field] for b in bindings.values()}
+            for obj in values:
+                meta = obj["metadata"]
+                uid = meta.get("uid")
+                if uid not in expected:
+                    fail("same-plane unrecorded/replacement compute UID: " + kind)
+                before = observed.get(kind, {}).get(uid)
+                if before is None:
+                    # A resumed historical record binds UIDs, not all original
+                    # labels/names. Do not invent missing live ownership proof.
+                    fail("same-plane live compute ownership is unproven: " + kind)
+                original = before["metadata"]
+                if any(
+                    meta.get(key) != original.get(key)
+                    for key in ("name", "namespace", "labels", "ownerReferences")
+                ) or (
+                    kind in ("pvc", "datavolumes")
+                    and obj.get("spec") != before.get("spec")
+                ):
+                    fail("same-plane live compute ownership changed: " + kind)
+                remaining.append(kind + "/" + meta["name"])
+        if not remaining:
+            return
+        if time.monotonic() >= deadline:
+            fail("same-plane recorded compute absence timeout: " + ", ".join(remaining))
+        time.sleep(min(2, max(0, deadline - time.monotonic())))
 
 
 def verify_storage(life, path, cluster, bindings, *, detached=False):
@@ -636,6 +695,8 @@ def teardown(life, args):
         }
     validate_record(life, record, args.cluster)
 
+    observed = {}
+
     def guard():
         if (
             life.require_teardown_ledger_namespace(path)["metadata"].get("uid")
@@ -665,7 +726,13 @@ def teardown(life, args):
             "deletionTimestamp"
         ):
             if (
-                storage(life, provider, args.cluster, record["storage_bindings"])
+                storage(
+                    life,
+                    provider,
+                    args.cluster,
+                    record["storage_bindings"],
+                    observed=observed,
+                )
                 != record["storage_bindings"]
             ):
                 fail("same-plane compute/storage ownership changed before mutation")
@@ -716,23 +783,24 @@ def teardown(life, args):
             "Namespace",
         )
         if ns:
-            dv, volumes = life.teardown_inventory(
+            # CAPK can finish before KubeVirt finishes deleting its children.
+            # Their original graph is already durable; never reconstruct it
+            # from partially collected lists or adopt new storage during GC.
+            wait_compute_absent(
+                life,
                 provider,
                 args.cluster,
-                record["config"],
+                record["storage_bindings"],
+                observed,
+                getattr(args, "backend_timeout_seconds", 600),
+            )
+            ns = life.bound_resource(
+                path,
+                ["get", "namespace", args.cluster],
                 record["namespace_uid"],
-                set(record["persistent_volumes"]),
+                "Namespace",
             )
-            record["storage_bindings"] = storage(
-                life, provider, args.cluster, record["storage_bindings"]
-            )
-            if set(record["storage_bindings"]) != volumes | set(
-                record["persistent_volumes"]
-            ):
-                fail("same-plane refreshed storage inventory differs")
-            record["data_volume_uids"] = sorted(set(record["data_volume_uids"]) | dv)
-            record["persistent_volumes"] = sorted(record["storage_bindings"])
-            cm = life.persist_teardown_record(path, args.cluster, record, cm)
+        if ns:
             life.preconditioned_delete(
                 path,
                 ns,

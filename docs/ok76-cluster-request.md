@@ -97,6 +97,20 @@ replica, snapshot and attachment CR absence before independent repeated absence
 reads permit a complete receipt. Local evidence is always preserved. Schema-3
 records cannot be pruned by the legacy receipt-prune command.
 
+CAPK completion can precede KubeVirt child disappearance. After CAPI deletion,
+same-plane teardown therefore waits (bounded to ten minutes) for the recorded
+VMs, Machines, DataVolumes and PVCs to disappear instead of rebuilding their
+already deleted parent graph. Any still-live child must retain its recorded UID
+and the ownership metadata authenticated before deletion; replacement or drift
+stops teardown. No new storage is adopted during garbage collection. A new
+process can continue from the original incomplete schema-3 ledger once those
+children are absent. If live children remain and their original ownership
+metadata is no longer available, it fails closed rather than reconstructing
+proof or upgrading the historical ledger. API read failures never mean absence.
+An interrupted run requires separate operator review/approval before retrying
+the explicit same-plane CLI command; a generic Make teardown hint is not a
+topology selection.
+
 Operators must arrange usable cleanup credentials outside the target namespace
 for the entire test, verify controller readiness and two-replica capacity for the
 selected Golden Image, install/verify the durable management ledger separately,
