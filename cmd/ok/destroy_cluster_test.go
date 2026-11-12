@@ -208,3 +208,28 @@ func TestDestroyExecFailureIsNotRetriedAndKeepsExitCode(t *testing.T) {
 		t.Fatal("child exit status leaked into existing command error semantics")
 	}
 }
+
+func TestDestroySamePlaneRequiresExplicitSelection(t *testing.T) {
+	root, args := destroyFixture(t)
+	args = append(args, "--provider-kubeconfig", filepath.Join(root, "management.yaml"))
+	runtime := destroyClusterRuntime{input: strings.NewReader("ok\n"), interactive: true,
+		execute: func(context.Context, string, []string, io.Writer, io.Writer) error {
+			t.Fatal("implicit same-plane launch")
+			return nil
+		}}
+	if err := runDestroyClusterWithRuntime(context.Background(), args, io.Discard, io.Discard, runtime); err == nil {
+		t.Fatal("implicit same-plane accepted")
+	}
+	calls := 0
+	runtime.execute = func(_ context.Context, _ string, argv []string, _, _ io.Writer) error {
+		calls++
+		if !strings.Contains(strings.Join(argv, " "), "--topology same-plane") {
+			t.Fatal("same-plane choice not delegated")
+		}
+		return nil
+	}
+	args = append(args, "--topology", "same-plane")
+	if err := runDestroyClusterWithRuntime(context.Background(), args, io.Discard, io.Discard, runtime); err != nil || calls != 1 {
+		t.Fatalf("explicit same-plane: %v, calls %d", err, calls)
+	}
+}

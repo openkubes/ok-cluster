@@ -1003,10 +1003,31 @@ def resume_tests(base: Path) -> None:
             result.returncode == 0 and not mutation_calls(calls),
             f"resume supported phase {phase or '<empty>'}: passes read-only",
         )
+    # A clean CI checkout has no ignored .tools cache. The workflow stages the
+    # authentic pinned chart explicitly; the production verification gate must
+    # still reject an absent or corrupt override before Helm, without apply.
+    for name, content, diagnostic in (
+        ("missing", None, "Cilium chart is absent"),
+        ("corrupt", b"not the digest-pinned Cilium chart", "digest mismatch"),
+    ):
+        rejected = Sandbox(base / f"chart-{name}")
+        chart = rejected.base / "candidate.tgz"
+        if content is not None:
+            chart.write_bytes(content)
+        result, calls = rejected.make("bootstrap-resume", f"CILIUM_CHART={chart}")
+        check(
+            result.returncode != 0 and diagnostic in result.stderr
+            and not any(call[0] == "helm" or "apply" in call for call in calls),
+            f"bootstrap-resume {name} chart: real digest gate refuses Helm and never applies manifests",
+        )
+
     result, calls = supported.make("bootstrap-resume")
+    if result.returncode != 0:
+        print(f"bootstrap-resume exit={result.returncode}\n{result.stdout}\n{result.stderr}", file=sys.stderr)
     check(
         result.returncode == 0 and any("--resume-preconditions" in line for line in result.stdout.splitlines()) is False
-        and not any("apply" in call for call in calls),
+        and not any("apply" in call for call in calls)
+        and any(call[:4] == ["helm", "upgrade", "--install", "cilium"] for call in calls),
         "bootstrap-resume happy path: real precondition plus post-apply fake flow never applies manifests",
     )
 
