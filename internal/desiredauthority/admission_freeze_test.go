@@ -31,7 +31,7 @@ func TestAuthorityFreezeCandidateIsDenyOnly(t *testing.T){
  }
  if len(objects)!=4{t.Fatalf("expected 2 policies and 2 bindings, got %d",len(objects))}
  for _,name:=range []string{"ok226-authority-record-freeze","ok226-authority-namespace-freeze"}{
-  policy:=requirePolicyObject(t,objects,"ValidatingAdmissionPolicy/"+name)
+  policy:=requirePolicyObject(t,requirePolicyObject(t,objects,"ValidatingAdmissionPolicy/"+name),"spec")
   if policy["failurePolicy"]!="Fail"{t.Fatalf("%s does not fail closed",name)}
   conditions:=requirePolicyList(t,policy,"matchConditions")
   if len(conditions)!=1{t.Fatalf("%s has unexpected matching conditions",name)}
@@ -50,7 +50,7 @@ func TestAuthorityFreezeCandidateIsDenyOnly(t *testing.T){
    ensureStringSet(t,rules["resources"],"namespaces")
    if rules["scope"]!="Cluster"{t.Fatal("wrong namespace scope")}
   }
-  bind:=requirePolicyObject(t,objects,"ValidatingAdmissionPolicyBinding/"+name)
+  bind:=requirePolicyObject(t,requirePolicyObject(t,objects,"ValidatingAdmissionPolicyBinding/"+name),"spec")
   if bind["policyName"]!=name{t.Fatalf("%s binding policy mismatch",name)}
   ensureStringSet(t,bind["validationActions"],"Deny")
  }
