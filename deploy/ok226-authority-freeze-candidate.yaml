@@ -1,0 +1,60 @@
+# This is a DISCONNECTED policy candidate; do NOT apply automatically.
+# It freezes ALL ConfigMap mutations in the dedicated Authority namespace,
+# and UPDATE/DELETE on the Authority Namespace itself. No writer is granted.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ok226-authority-record-freeze
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+        scope: Namespaced
+  matchConditions:
+    - name: exact-authority-namespace
+      expression: request.namespace == 'openkubes-authority'
+  validations:
+    - expression: "false"
+      message: authority ConfigMap mutations are frozen pending verified writer isolation and admission
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ok226-authority-record-freeze
+spec:
+  policyName: ok226-authority-record-freeze
+  validationActions: [Deny]
+---
+# A namespace delete would bypass namespaced ConfigMap DELETE admissions.
+# Protect the exact namespace object independently.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ok226-authority-namespace-freeze
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["namespaces"]
+        scope: Cluster
+  matchConditions:
+    - name: exact-authority-namespace
+      expression: request.name == 'openkubes-authority'
+  validations:
+    - expression: "false"
+      message: authority namespace changes are frozen pending independently reviewed domain protections
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ok226-authority-namespace-freeze
+spec:
+  policyName: ok226-authority-namespace-freeze
+  validationActions: [Deny]
