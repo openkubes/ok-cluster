@@ -211,11 +211,12 @@ Usage:
 Flags:
   --management <kubeconfig>     management cluster (or set TALOS_INFRA_KUBECONFIG)
   --workload-kubeconfig <path>  output kubeconfig (default: <ok config>/kubeconfigs/<name>.yaml)
-  -v, --verbose                 technical details and live Make output
+  -v, --verbose                 technical details and live Make output instead of a log
 
 <ok config> is $XDG_CONFIG_HOME/ok, else ~/.config/ok. Directories are created
-only when ok up actually runs, with mode 0700; logs go to <ok config>/logs with
-credential values masked.
+with mode 0700 only when ok up runs. Make output goes to a private (0600) log in
+<ok config>/logs, created after your first confirmation. The log is raw Make
+output and may contain sensitive information; nothing is removed or masked.
 
 CLI v1.0 supports only the Same-Plane Talos/KubeVirt operator workflow: the
 management cluster also hosts the cluster VMs. ok up never uses KUBECONFIG or

@@ -55,17 +55,11 @@ type clusterProvisionRuntime struct {
 	command                                  clusterProvisionCommand
 	isTerminal                               bool
 	newTimeout, bootstrapTimeout             time.Duration
-	// Presentation only: concise output and an optional Make output sink.
-	// Neither changes which checks run, their order, or what Make executes.
-	concise bool
-	makeLog io.Writer
-}
-
-// clusterProvisionPresentation selects how provisioning reports progress.
-// The zero value keeps the original detailed output with Make streamed live.
-type clusterProvisionPresentation struct {
-	concise bool
-	makeLog io.Writer
+	// Presentation only (ok up). When openMakeLog is set, output is concise and
+	// Make writes directly to the returned file, opened after the first typed
+	// confirmation. It never changes which checks run or what Make executes.
+	openMakeLog func() (*os.File, error)
+	makeLog     *os.File
 }
 
 type clusterProvisionCommand func(context.Context, string, []string, string, []string, io.Writer, io.Writer) error
@@ -193,12 +187,12 @@ func runClusterProvision(ctx context.Context, arguments []string, stdin io.Reade
 	if *topology != "same-plane" {
 		return errors.New("M2b provision requires explicit --topology same-plane; external providers are unsupported")
 	}
-	return runClusterProvisionFor(ctx, input.value, *workloadKubeconfig, stdin, stdout, stderr, clusterProvisionPresentation{})
+	return runClusterProvisionFor(ctx, input.value, *workloadKubeconfig, stdin, stdout, stderr, nil)
 }
 
 // runClusterProvisionFor is the single provisioning entry used by both
-// `ok cluster provision` and `ok up`; presentation never alters safeguards.
-func runClusterProvisionFor(ctx context.Context, requestPath, workloadKubeconfig string, stdin io.Reader, stdout, stderr io.Writer, presentation clusterProvisionPresentation) error {
+// `ok cluster provision` and `ok up`.
+func runClusterProvisionFor(ctx context.Context, requestPath, workloadKubeconfig string, stdin io.Reader, stdout, stderr io.Writer, openMakeLog func() (*os.File, error)) error {
 	request, err := readClusterRequest(requestPath)
 	if err != nil {
 		return err
@@ -210,7 +204,7 @@ func runClusterProvisionFor(ctx context.Context, requestPath, workloadKubeconfig
 	if runtime.cleanupToolPath != nil {
 		defer runtime.cleanupToolPath()
 	}
-	runtime.concise, runtime.makeLog = presentation.concise, presentation.makeLog
+	runtime.openMakeLog = openMakeLog
 	return runClusterProvisionWithRuntime(ctx, request, stdin, stdout, stderr, runtime)
 }
 
@@ -357,7 +351,7 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := verifyProvisionClusterAbsent(ctx, prepared, runtime); err != nil {
 		return err
 	}
-	if runtime.concise {
+	if runtime.openMakeLog != nil {
 		printConciseProvisionPlan(stdout, prepared, runtime)
 	} else {
 		printClusterProvisionPlan(stdout, prepared, runtime)
@@ -375,11 +369,15 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := verifyProvisionClusterAbsent(ctx, prepared, runtime); err != nil {
 		return fmt.Errorf("preflight changed after confirmation; Make was not started: %w", err)
 	}
-	newStarted := provisionStepStart(stdout, runtime, "[1/2] Generating cluster scaffold (make new)")
+	if runtime.openMakeLog != nil {
+		if runtime.makeLog, err = runtime.openMakeLog(); err != nil {
+			return fmt.Errorf("cannot create the private Make log; Make was not started: %w", err)
+		}
+		fmt.Fprintf(stdout, "\n[1/2] Generating cluster scaffold (make new) … output: %s\n", runtime.makeLog.Name())
+	}
 	if err := runProvisionMake(ctx, runtime, prepared.newArgs, clusterProvisionNewTimeout, stdout, stderr); err != nil {
 		return fmt.Errorf("make new did not complete successfully; no retry, rollback or cleanup was performed; inspect command output and any scaffold at %s: %w", filepath.Join(runtime.makeRoot, prepared.name), err)
 	}
-	provisionStepDone(stdout, runtime, newStarted)
 	artifacts, network, err := inspectProvisionScaffold(runtime, prepared)
 	if err != nil {
 		return fmt.Errorf("make new returned success but its scaffold could not be verified; preserve it and stop without bootstrap: %w", err)
@@ -403,7 +401,7 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := verifyWorkloadKubeconfigDestination(runtime.workloadKubeconfig, prepared.name); err != nil {
 		return fmt.Errorf("scaffold is preserved; workload kubeconfig destination changed: %w", err)
 	}
-	if runtime.concise {
+	if runtime.openMakeLog != nil {
 		fmt.Fprintf(stdout, "      endpoint %s · pods %s · services %s\n", network.Endpoint, network.PodCIDR, network.ServiceCIDR)
 		fmt.Fprintf(stdout, "      scaffold: %s\n\n", filepath.Join(runtime.makeRoot, prepared.name))
 		fmt.Fprintln(stdout, "Next: create and bootstrap the cluster (make bootstrap). This changes the management")
@@ -438,15 +436,16 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := verifyProvisionArtifactsUnchanged(runtime, prepared, artifacts); err != nil {
 		return fmt.Errorf("scaffold changed after review; bootstrap was not started: %w", err)
 	}
-	bootstrapStarted := provisionStepStart(stdout, runtime, "[2/2] Bootstrapping cluster (make bootstrap)")
+	if runtime.openMakeLog != nil {
+		fmt.Fprintln(stdout, "\n[2/2] Bootstrapping cluster (make bootstrap) …")
+	}
 	if err := runProvisionMake(ctx, runtime, prepared.bootstrapArgs, clusterProvisionBootstrapTimeout, stdout, stderr); err != nil {
 		return fmt.Errorf("make bootstrap failed or was interrupted; partial Kubernetes changes and local files may exist; no retry, rollback or cleanup was performed: %w", err)
 	}
 	if err := verifyProducedWorkloadKubeconfig(runtime.workloadKubeconfig); err != nil {
 		return fmt.Errorf("make bootstrap returned success but requested workload kubeconfig is not safely present; partial state is preserved and readiness is not verified: %w", err)
 	}
-	provisionStepDone(stdout, runtime, bootstrapStarted)
-	if runtime.concise {
+	if runtime.openMakeLog != nil {
 		fmt.Fprintf(stdout, "\n✓ make bootstrap finished for %s\n", prepared.name)
 		fmt.Fprintf(stdout, "  workload kubeconfig: %s\n", runtime.workloadKubeconfig)
 		fmt.Fprintln(stdout, "  Kubernetes readiness is NOT verified yet. Check it read-only, for example:")
@@ -1141,18 +1140,4 @@ func shortProvisionRevision(revision string) string {
 		return revision[:7]
 	}
 	return revision
-}
-
-// provisionStepStart/Done print progress lines only in concise mode.
-func provisionStepStart(output io.Writer, runtime clusterProvisionRuntime, label string) time.Time {
-	if runtime.concise {
-		fmt.Fprintf(output, "\n%s …\n", label)
-	}
-	return time.Now()
-}
-
-func provisionStepDone(output io.Writer, runtime clusterProvisionRuntime, started time.Time) {
-	if runtime.concise {
-		fmt.Fprintf(output, "      done (%s)\n", time.Since(started).Round(time.Second))
-	}
 }

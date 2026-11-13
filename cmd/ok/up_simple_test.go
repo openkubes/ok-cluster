@@ -12,22 +12,13 @@ import (
 	"time"
 )
 
-const legacyClusterManifestYAML = `apiVersion: cli.openkubes.io/v1alpha1
-kind: Cluster
-metadata:
-  name: legacy-one
-spec:
-  profile: talos-kubevirt-mvp
-`
-
 type fakeSimpleUp struct {
-	calls        int
-	requestPath  string
-	workload     string
-	presentation clusterProvisionPresentation
-	env          map[string]string
-	makeOutput   string
-	err          error
+	calls       int
+	requestPath string
+	workload    string
+	openLog     func() (*os.File, error)
+	writeLog    string // when set, open the log and write this, like Make would
+	err         error
 }
 
 func newFakeSimpleUp(t *testing.T) (*fakeSimpleUp, simpleUpRuntime, string) {
@@ -36,37 +27,42 @@ func newFakeSimpleUp(t *testing.T) (*fakeSimpleUp, simpleUpRuntime, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeSimpleUp{env: map[string]string{"XDG_CONFIG_HOME": filepath.Join(base, "xdg"), "HOME": filepath.Join(base, "home"),
-		"KUBECONFIG": filepath.Join(base, "ambient-admin.yaml")}}
-	rt := simpleUpRuntime{
-		input:    strings.NewReader(""),
-		terminal: true,
-		getenv:   func(key string) (string, bool) { value, ok := fake.env[key]; return value, ok },
-		setenv:   func(key, value string) error { fake.env[key] = value; return nil },
-		now:      func() time.Time { return time.Date(2026, 11, 13, 1, 2, 3, 0, time.UTC) },
-		provision: func(_ context.Context, requestPath, workload string, _ io.Reader, stdout, _ io.Writer, presentation clusterProvisionPresentation) error {
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "xdg"))
+	t.Setenv("HOME", filepath.Join(base, "home"))
+	t.Setenv("KUBECONFIG", filepath.Join(base, "ambient-admin.yaml"))
+	t.Setenv("TALOS_INFRA_KUBECONFIG", "")
+	fake := &fakeSimpleUp{}
+	rt := simpleUpRuntime{input: strings.NewReader(""), terminal: true,
+		provision: func(_ context.Context, requestPath, workload string, _ io.Reader, stdout, _ io.Writer, openLog func() (*os.File, error)) error {
 			fake.calls++
-			fake.requestPath, fake.workload, fake.presentation = requestPath, workload, presentation
-			if fake.makeOutput != "" {
-				io.WriteString(presentation.makeLog, fake.makeOutput)
+			fake.requestPath, fake.workload, fake.openLog = requestPath, workload, openLog
+			if fake.writeLog != "" && openLog != nil {
+				file, err := openLog()
+				if err != nil {
+					return err
+				}
+				io.WriteString(file, fake.writeLog)
 			}
-			io.WriteString(stdout, "PLAN-OUTPUT\n")
 			return fake.err
-		},
-	}
+		}}
 	return fake, rt, base
 }
 
-func writeSimpleUpRequest(t *testing.T, dir, contents string) string {
+func writeSimpleUpFile(t *testing.T, dir, name, contents string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "cluster.yaml")
+	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeManagementKubeconfig(t *testing.T, base string) string {
+	t.Helper()
+	return writeSimpleUpFile(t, filepath.Join(base, "secure"), "ok-infra-operator.yaml", "apiVersion: v1\nkind: Config\n")
 }
 
 func assertNotExist(t *testing.T, path string) {
@@ -76,258 +72,340 @@ func assertNotExist(t *testing.T, path string) {
 	}
 }
 
-func TestSimpleUpRoutingByKind(t *testing.T) {
+func TestSimpleUpRoutingKeepsEveryRunnerInput(t *testing.T) {
 	dir := t.TempDir()
-	request := writeSimpleUpRequest(t, filepath.Join(dir, "request"), validClusterRequestYAML)
-	legacy := writeSimpleUpRequest(t, filepath.Join(dir, "legacy"), legacyClusterManifestYAML)
-	if !isClusterRequestUp([]string{"-f", request}) || !isClusterRequestUp([]string{"--file=" + request, "-v"}) {
-		t.Fatal("ClusterRequest file not routed to the simple UX")
+	request := writeSimpleUpFile(t, dir, "request.yaml", validClusterRequestYAML)
+	legacy := writeSimpleUpFile(t, dir, "legacy.yaml", "apiVersion: cli.openkubes.io/v1alpha1\nkind: Cluster\nmetadata:\n  name: legacy-one\n")
+	jsonManifest := writeSimpleUpFile(t, dir, "full-run.json", `{"format":"full-run"}`)
+	malformed := writeSimpleUpFile(t, dir, "malformed.yaml", "kind: ClusterRequest\n  bad: [indent\n")
+	empty := writeSimpleUpFile(t, dir, "empty.yaml", "")
+	symlink := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(request, symlink); err != nil {
+		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"-f", legacy}, {"--file", legacy, "--dry-run"}, {"-f", filepath.Join(dir, "missing.yaml")}, {"cluster-template"}, {}} {
-		if isClusterRequestUp(args) {
-			t.Fatalf("%v must stay on the legacy route", args)
+	simple := [][]string{
+		{"-f", request}, {"--file=" + request, "-v"}, {"-f", request, "--management", "/m.yaml", "--workload-kubeconfig=/w.yaml"},
+		{"-f", malformed}, {"-f", empty}, {"-f", symlink}, {"-f", dir}, {"-f", filepath.Join(dir, "missing.yaml")}, {"-v"},
+	}
+	for _, args := range simple {
+		if !simpleUpHandles(args) {
+			t.Errorf("%v must use the simple UX", args)
 		}
 	}
-	// Through the public dispatcher (tests run without a terminal).
-	xdg := filepath.Join(dir, "xdg")
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-	var out, errOut bytes.Buffer
-	err := run([]string{"up", "-f", request}, &out, &errOut)
-	if err == nil || !strings.Contains(err.Error(), "ok up needs an interactive terminal") {
-		t.Fatalf("ClusterRequest did not reach the simple UX: %v", err)
+	runner := [][]string{
+		{"-f", legacy}, {"-f", jsonManifest}, {"-f", request, "--dry-run"}, {"--file", request, "--prepare"},
+		{"-f", request, "--live", "--execute"}, {"--contract", "c.yaml", "--schema", "s.json", "--dry-run"},
+		{"-f", request, "--prepared-dir", "/p"}, {"requirements"}, {"cluster-template"}, {"network-suggest"},
+		{"render", "-f", request}, {"bind", "-f", request}, {"-f", request, "extra"}, {"--"},
 	}
-	err = run([]string{"up", "-f", legacy}, &out, &errOut)
-	if err == nil || strings.Contains(err.Error(), "ok up needs an interactive terminal") {
+	for _, args := range runner {
+		if simpleUpHandles(args) {
+			t.Errorf("%v must keep the Runner route", args)
+		}
+	}
+}
+
+func TestSimpleUpInvalidRequestsFailClearly(t *testing.T) {
+	_, _, base := newFakeSimpleUp(t)
+	dir := filepath.Join(base, "inputs")
+	cases := map[string]string{
+		"malformed": writeSimpleUpFile(t, dir, "malformed.yaml", "kind: ClusterRequest\n  bad: [indent\n"),
+		"empty":     writeSimpleUpFile(t, dir, "empty.yaml", ""),
+		"wrong":     writeSimpleUpFile(t, dir, "wrong.yaml", strings.Replace(validClusterRequestYAML, "talos-kubevirt-reference", "other", 1)),
+		"directory": dir,
+		"missing":   filepath.Join(dir, "missing.yaml"),
+	}
+	symlink := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(cases["malformed"], symlink); err != nil {
+		t.Fatal(err)
+	}
+	cases["symlink"] = symlink
+	if os.Geteuid() != 0 {
+		unreadable := writeSimpleUpFile(t, dir, "unreadable.yaml", validClusterRequestYAML)
+		if err := os.Chmod(unreadable, 0); err != nil {
+			t.Fatal(err)
+		}
+		cases["unreadable"] = unreadable
+	}
+	for name, path := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := run([]string{"up", "-f", path}, io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "expects a "+clusterRequestAPIVersion+" "+clusterRequestKind) {
+				t.Fatalf("unclear error: %v", err)
+			}
+		})
+	}
+	assertNotExist(t, filepath.Join(base, "xdg"))
+	legacy := writeSimpleUpFile(t, dir, "legacy.yaml", "apiVersion: cli.openkubes.io/v1alpha1\nkind: Cluster\nmetadata:\n  name: legacy-one\n")
+	if err := run([]string{"up", "-f", legacy}, io.Discard, io.Discard); err != nil && strings.Contains(err.Error(), "expects a "+clusterRequestAPIVersion) {
 		t.Fatalf("legacy kind: Cluster left the Runner route: %v", err)
 	}
-	assertNotExist(t, xdg)
 }
 
 func TestSimpleUpHelpAndPlanCreateNothing(t *testing.T) {
-	xdg := filepath.Join(t.TempDir(), "xdg")
-	t.Setenv("XDG_CONFIG_HOME", xdg)
+	_, _, base := newFakeSimpleUp(t)
 	for _, args := range [][]string{{"up"}, {"up", "--help"}, {"help", "up"}} {
 		var out bytes.Buffer
 		if err := run(args, &out, io.Discard); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
-		if !strings.Contains(out.String(), "ok up -f <cluster.yaml>") || !strings.Contains(out.String(), "--mode operator --topology same-plane") {
-			t.Fatalf("%v: help lacks simple or explicit form:\n%s", args, out.String())
+		help := out.String()
+		if !strings.Contains(help, "ok up -f <cluster.yaml>") || !strings.Contains(help, "--mode operator --topology same-plane") ||
+			!strings.Contains(help, "may contain sensitive information") || strings.Contains(help, "masked;") {
+			t.Fatalf("%v: unexpected help:\n%s", args, help)
 		}
 	}
-	request := writeSimpleUpRequest(t, t.TempDir(), validClusterRequestYAML)
+	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
 	if err := run([]string{"cluster", "plan", "--file", request}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	assertNotExist(t, xdg)
+	if err := run([]string{"up", "-f", request}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("non-terminal run not refused: %v", err)
+	}
+	assertNotExist(t, filepath.Join(base, "xdg"))
 }
 
 func TestSimpleUpRequiresExplicitManagementCluster(t *testing.T) {
 	fake, rt, base := newFakeSimpleUp(t)
-	request := writeSimpleUpRequest(t, filepath.Join(base, "requests"), validClusterRequestYAML)
-	err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt)
+	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
+	err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt)
 	if err == nil || !strings.Contains(err.Error(), "no management cluster selected") || !strings.Contains(err.Error(), "never uses KUBECONFIG") {
 		t.Fatalf("ambient KUBECONFIG was not refused: %v", err)
 	}
+	missing := filepath.Join(base, "missing.yaml")
+	err = runSimpleUpWith(context.Background(), []string{"-f", request, "--management", missing}, io.Discard, io.Discard, rt)
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("missing management kubeconfig not named: %v", err)
+	}
 	if fake.calls != 0 {
-		t.Fatal("provisioning started without an explicit management cluster")
+		t.Fatal("provisioning started without a usable explicit management cluster")
 	}
 	assertNotExist(t, filepath.Join(base, "xdg"))
 
-	fake.env["TALOS_INFRA_KUBECONFIG"] = "/explicit/env.yaml"
+	fromEnv := writeManagementKubeconfig(t, base)
+	t.Setenv("TALOS_INFRA_KUBECONFIG", fromEnv)
 	var out bytes.Buffer
-	if err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request}, &out, io.Discard, rt); err != nil {
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request}, &out, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
-	if fake.env["TALOS_INFRA_KUBECONFIG"] != "/explicit/env.yaml" || !strings.Contains(out.String(), "management kubeconfig from TALOS_INFRA_KUBECONFIG") {
-		t.Fatalf("environment selection not shown: %q\n%s", fake.env["TALOS_INFRA_KUBECONFIG"], out.String())
+	if os.Getenv("TALOS_INFRA_KUBECONFIG") != fromEnv || !strings.Contains(out.String(), "management kubeconfig from TALOS_INFRA_KUBECONFIG") {
+		t.Fatalf("environment selection not used or shown:\n%s", out.String())
 	}
+	fromFlag := writeSimpleUpFile(t, filepath.Join(base, "secure"), "other.yaml", "apiVersion: v1\nkind: Config\n")
 	out.Reset()
-	if err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request, "--management", "/explicit/flag.yaml"}, &out, io.Discard, rt); err != nil {
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request, "--management", fromFlag}, &out, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
-	if fake.env["TALOS_INFRA_KUBECONFIG"] != "/explicit/flag.yaml" || !strings.Contains(out.String(), "management kubeconfig from --management") {
+	if os.Getenv("TALOS_INFRA_KUBECONFIG") != fromFlag || !strings.Contains(out.String(), "management kubeconfig from --management") {
 		t.Fatal("--management did not take precedence over the environment")
-	}
-	// Both runs started in the same second: logs are kept side by side.
-	logs, _ := filepath.Glob(filepath.Join(base, "xdg", "ok", "logs", "preview-one-20261113-010203*.log"))
-	if len(logs) != 2 {
-		t.Fatalf("same-second runs did not keep separate logs: %v", logs)
 	}
 }
 
 func TestSimpleUpDefaultPathsArePrivateAndNeverWidened(t *testing.T) {
 	fake, rt, base := newFakeSimpleUp(t)
-	fake.env["TALOS_INFRA_KUBECONFIG"] = "/explicit/env.yaml"
-	request := writeSimpleUpRequest(t, filepath.Join(base, "requests"), validClusterRequestYAML)
-	if err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt); err != nil {
+	t.Setenv("TALOS_INFRA_KUBECONFIG", writeManagementKubeconfig(t, base))
+	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Join(base, "xdg", "ok")
-	if fake.workload != filepath.Join(home, "kubeconfigs", "preview-one.yaml") {
-		t.Fatalf("unexpected default workload kubeconfig %s", fake.workload)
+	if fake.workload != filepath.Join(home, "kubeconfigs", "preview-one.yaml") || fake.openLog == nil {
+		t.Fatalf("unexpected defaults: %s log=%v", fake.workload, fake.openLog != nil)
 	}
-	for _, dir := range []string{home, filepath.Join(home, "kubeconfigs"), filepath.Join(home, "logs")} {
-		info, err := os.Stat(dir)
-		if err != nil || info.Mode().Perm() != 0o700 {
-			t.Fatalf("%s not created private: %v %v", dir, err, info)
+	for _, dir := range []string{home, filepath.Join(home, "kubeconfigs")} {
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s not created private: %v", dir, err)
 		}
 	}
-	if !fake.presentation.concise || fake.presentation.makeLog == nil {
-		t.Fatal("default output must be concise with Make output going to the log")
-	}
+	assertNotExist(t, filepath.Join(home, "logs")) // the fake engine never opened the log
 
-	// HOME fallback is ~/.config/ok when XDG_CONFIG_HOME is unset.
-	delete(fake.env, "XDG_CONFIG_HOME")
-	if err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt); err != nil {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
 	if fake.workload != filepath.Join(base, "home", ".config", "ok", "kubeconfigs", "preview-one.yaml") {
 		t.Fatalf("unexpected HOME fallback %s", fake.workload)
 	}
 
-	// An existing, too-open directory is refused and left unchanged.
-	open := filepath.Join(base, "open-xdg")
-	if err := os.MkdirAll(filepath.Join(open, "ok"), 0o755); err != nil {
+	open := filepath.Join(base, "open-xdg", "ok")
+	if err := os.MkdirAll(open, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(filepath.Join(open, "ok"), 0o755); err != nil {
+	if err := os.Chmod(open, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fake.env["XDG_CONFIG_HOME"] = open
+	t.Setenv("XDG_CONFIG_HOME", filepath.Dir(open))
 	calls := fake.calls
-	err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt)
+	err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt)
 	if err == nil || !strings.Contains(err.Error(), "chmod 700") || fake.calls != calls {
 		t.Fatalf("too-open directory accepted: %v", err)
 	}
-	if info, _ := os.Stat(filepath.Join(open, "ok")); info.Mode().Perm() != 0o755 {
+	if info, _ := os.Stat(open); info.Mode().Perm() != 0o755 {
 		t.Fatal("ok up changed existing permissions")
 	}
 
-	// An explicit output path creates no kubeconfigs directory.
-	fresh := filepath.Join(base, "fresh-xdg")
-	fake.env["XDG_CONFIG_HOME"] = fresh
-	if err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request, "--workload-kubeconfig", "/private/out/preview-one.yaml"}, io.Discard, io.Discard, rt); err != nil {
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "fresh"))
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request, "--workload-kubeconfig", "/private/out/preview-one.yaml", "-v"}, io.Discard, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
-	if fake.workload != "/private/out/preview-one.yaml" {
-		t.Fatalf("override ignored: %s", fake.workload)
+	if fake.workload != "/private/out/preview-one.yaml" || fake.openLog != nil {
+		t.Fatalf("explicit output or verbose not honoured: %s log=%v", fake.workload, fake.openLog != nil)
 	}
-	assertNotExist(t, filepath.Join(fresh, "ok", "kubeconfigs"))
+	assertNotExist(t, filepath.Join(base, "fresh"))
 }
 
 func TestSimpleUpBareDiscoversOrCreatesRequest(t *testing.T) {
 	fake, rt, base := newFakeSimpleUp(t)
-	fake.env["TALOS_INFRA_KUBECONFIG"] = "/explicit/env.yaml"
+	t.Setenv("TALOS_INFRA_KUBECONFIG", writeManagementKubeconfig(t, base))
 	requests := filepath.Join(base, "xdg", "ok", "requests")
 
 	rt.input = strings.NewReader("Bad Name!\n")
-	if err := runSimpleUpWithRuntime(context.Background(), nil, io.Discard, io.Discard, rt); err == nil || !strings.Contains(err.Error(), "not a valid cluster name") {
+	if err := runSimpleUpWith(context.Background(), nil, io.Discard, io.Discard, rt); err == nil || !strings.Contains(err.Error(), "not a valid cluster name") {
 		t.Fatalf("invalid name accepted: %v", err)
 	}
 	assertNotExist(t, requests)
 
 	rt.input = strings.NewReader("demo-one\n")
 	var out bytes.Buffer
-	if err := runSimpleUpWithRuntime(context.Background(), nil, &out, io.Discard, rt); err != nil {
+	if err := runSimpleUpWith(context.Background(), nil, &out, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
 	created := filepath.Join(requests, "demo-one.yaml")
-	info, err := os.Stat(created)
-	if err != nil || info.Mode().Perm() != 0o600 || fake.calls != 0 || !strings.Contains(out.String(), "ok up -f "+created) {
-		t.Fatalf("starter request not written privately or provisioning started: %v calls=%d\n%s", err, fake.calls, out.String())
+	if info, err := os.Stat(created); err != nil || info.Mode().Perm() != 0o600 || fake.calls != 0 || !strings.Contains(out.String(), "ok up -f "+created) {
+		t.Fatalf("starter request not written privately, or provisioning started: %v calls=%d\n%s", err, fake.calls, out.String())
 	}
 	if _, err := readClusterRequest(created); err != nil {
 		t.Fatalf("starter request is invalid: %v", err)
 	}
 
 	out.Reset()
-	if err := runSimpleUpWithRuntime(context.Background(), nil, &out, io.Discard, rt); err != nil {
+	if err := runSimpleUpWith(context.Background(), nil, &out, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
 	if fake.calls != 1 || fake.requestPath != created || !strings.Contains(out.String(), "Using "+created) {
 		t.Fatalf("single request not used: calls=%d path=%s", fake.calls, fake.requestPath)
 	}
 
-	if err := os.WriteFile(filepath.Join(requests, "other.yaml"), []byte(validClusterRequestYAML), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	err = runSimpleUpWithRuntime(context.Background(), nil, io.Discard, io.Discard, rt)
-	if err == nil || !strings.Contains(err.Error(), "several cluster requests") || fake.calls != 1 {
+	writeSimpleUpFile(t, requests, "other.yaml", validClusterRequestYAML)
+	if err := runSimpleUpWith(context.Background(), nil, io.Discard, io.Discard, rt); err == nil || !strings.Contains(err.Error(), "several cluster requests") || fake.calls != 1 {
 		t.Fatalf("ambiguous requests not refused: %v", err)
 	}
 }
 
-func TestSimpleUpLogIsPrivateAndRedactsSecrets(t *testing.T) {
+func TestSimpleUpMakeLogIsRawPrivateAndReported(t *testing.T) {
 	fake, rt, base := newFakeSimpleUp(t)
-	fake.env["TALOS_INFRA_KUBECONFIG"] = "/explicit/env.yaml"
-	request := writeSimpleUpRequest(t, filepath.Join(base, "requests"), validClusterRequestYAML)
-	fake.makeOutput = "rendering\n    token: abc123secret\n  client-key-data: S3CR3TKEY\nAuthorization: Bearer eyJhbGciOi\n" +
-		"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\npassword=hunter2\nmake: *** [bootstrap] Error 2"
+	t.Setenv("TALOS_INFRA_KUBECONFIG", writeManagementKubeconfig(t, base))
+	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
+	fake.writeLog = "rendering\nmake: *** [bootstrap] Error 2\n"
 	fake.err = errors.New("make bootstrap failed or was interrupted")
-	var out bytes.Buffer
-	err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request}, &out, io.Discard, rt)
-	if err == nil || !strings.Contains(err.Error(), "full log: ") {
-		t.Fatalf("failure did not point to the log: %v", err)
+	err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt)
+	logs, _ := filepath.Glob(filepath.Join(base, "xdg", "ok", "logs", "preview-one-*.log"))
+	if len(logs) != 1 || err == nil || !strings.Contains(err.Error(), fake.err.Error()) || !strings.Contains(err.Error(), "tail -n 50 "+logs[0]) ||
+		!strings.Contains(err.Error(), "may contain sensitive data") {
+		t.Fatalf("failure does not point to the log: %v %v", err, logs)
 	}
-	logPath := filepath.Join(base, "xdg", "ok", "logs", "preview-one-20261113-010203.log")
-	info, statErr := os.Stat(logPath)
-	if statErr != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("log not private: %v", statErr)
+	info, _ := os.Stat(logs[0])
+	dirInfo, _ := os.Stat(filepath.Dir(logs[0]))
+	raw, _ := os.ReadFile(logs[0])
+	if info.Mode().Perm() != 0o600 || dirInfo.Mode().Perm() != 0o700 || string(raw) != fake.writeLog {
+		t.Fatalf("log not private or not raw Make output: %v %v %q", info.Mode(), dirInfo.Mode(), raw)
 	}
-	raw, _ := os.ReadFile(logPath)
-	for _, secret := range []string{"abc123secret", "S3CR3TKEY", "eyJhbGciOi", "MIIEowIBAAKCAQEA", "hunter2"} {
-		if strings.Contains(string(raw), secret) || strings.Contains(out.String(), secret) {
-			t.Fatalf("secret %q leaked:\nlog:\n%s\nterminal:\n%s", secret, raw, out.String())
-		}
+	// A second run never overwrites the first log.
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt); err == nil {
+		t.Fatal("expected failure")
 	}
-	for _, expected := range []string{"PLAN-OUTPUT", "rendering", "make: *** [bootstrap] Error 2", "result: stopped"} {
-		if !strings.Contains(string(raw), expected) {
-			t.Fatalf("log lacks %q:\n%s", expected, raw)
-		}
-	}
-	if !strings.Contains(out.String(), "Last lines of Make output") || !strings.Contains(out.String(), "Error 2") {
-		t.Fatalf("concise failure lacks a Make tail:\n%s", out.String())
-	}
-
-	// Verbose streams (redacted) Make output to the terminal.
-	fake.err = nil
-	rt.now = func() time.Time { return time.Date(2026, 11, 13, 1, 2, 4, 0, time.UTC) }
-	out.Reset()
-	if err := runSimpleUpWithRuntime(context.Background(), []string{"-f", request, "-v"}, &out, io.Discard, rt); err != nil {
-		t.Fatal(err)
-	}
-	if fake.presentation.concise || !strings.Contains(out.String(), "token: [REDACTED]") || strings.Contains(out.String(), "abc123secret") {
-		t.Fatalf("verbose output not detailed and redacted:\n%s", out.String())
+	if logs, _ = filepath.Glob(filepath.Join(base, "xdg", "ok", "logs", "preview-one-*.log")); len(logs) != 2 {
+		t.Fatalf("logs overwritten: %v", logs)
 	}
 }
 
-func TestClusterProvisionConciseOutputKeepsBothConfirmations(t *testing.T) {
-	fixture, request := newProvisionFixture(t)
-	var makeLog bytes.Buffer
-	fixture.runtime.concise, fixture.runtime.makeLog = true, &makeLog
-	fixture.makeStdout = "MAKE-OUTPUT-MARKER\n"
-	var output bytes.Buffer
-	err := runClusterProvisionWithRuntime(context.Background(), request, strings.NewReader("provision preview-one\nbootstrap preview-one\n"), &output, io.Discard, fixture.runtime)
-	if err != nil {
-		t.Fatalf("%v\n%s", err, output.String())
+// The engine must open the log only after the first typed confirmation and
+// re-check, immediately before make new, and never on a failed preflight.
+func TestClusterProvisionMakeLogOpenedOnlyAfterFirstConfirmation(t *testing.T) {
+	type outcome struct {
+		opened, newRuns int
 	}
-	text := output.String()
-	for _, expected := range []string{"Checks passed", "Plan", "[1/2] Generating cluster scaffold", "[2/2] Bootstrapping cluster",
-		`type exactly "provision preview-one"`, `type exactly "bootstrap preview-one"`, "Kubernetes readiness is NOT verified"} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("concise output lacks %q:\n%s", expected, text)
+	runCase := func(t *testing.T, input string, mutate func(*provisionFixture), openErr error) (outcome, string, error) {
+		fixture, request := newProvisionFixture(t)
+		fixture.makeStdout = "MAKE-OUTPUT-MARKER\n"
+		if mutate != nil {
+			mutate(fixture)
 		}
+		var result outcome
+		logPath := filepath.Join(t.TempDir(), "make.log")
+		fixture.runtime.openMakeLog = func() (*os.File, error) {
+			result.opened++
+			if fixture.makeCount["new"] != 0 {
+				t.Fatal("log opened after make new started")
+			}
+			if openErr != nil {
+				return nil, openErr
+			}
+			return os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		}
+		var output bytes.Buffer
+		err := runClusterProvisionWithRuntime(context.Background(), request, strings.NewReader(input), &output, io.Discard, fixture.runtime)
+		result.newRuns = fixture.makeCount["new"]
+		return result, output.String() + "\n--log--\n" + readFileOrEmpty(logPath), err
 	}
-	if strings.Contains(text, "tool make:") || strings.Contains(text, "MAKE-OUTPUT-MARKER") || !strings.Contains(makeLog.String(), "MAKE-OUTPUT-MARKER") {
-		t.Fatalf("Make output or tool details leaked into concise output:\n%s", text)
-	}
+	t.Run("cancelled at first confirmation", func(t *testing.T) {
+		result, _, err := runCase(t, "no\n", nil, nil)
+		if err == nil || result != (outcome{0, 0}) {
+			t.Fatalf("%v %+v", err, result)
+		}
+	})
+	t.Run("failed preflight", func(t *testing.T) {
+		result, _, err := runCase(t, "provision preview-one\n", func(f *provisionFixture) { f.clusterAppearsAt = 1 }, nil)
+		if err == nil || result != (outcome{0, 0}) {
+			t.Fatalf("%v %+v", err, result)
+		}
+	})
+	t.Run("log cannot be created", func(t *testing.T) {
+		result, _, err := runCase(t, "provision preview-one\nbootstrap preview-one\n", nil, errors.New("disk full"))
+		if err == nil || !strings.Contains(err.Error(), "Make was not started") || result != (outcome{1, 0}) {
+			t.Fatalf("%v %+v", err, result)
+		}
+	})
+	t.Run("success keeps both confirmations and routes Make to the log", func(t *testing.T) {
+		result, text, err := runCase(t, "provision preview-one\nbootstrap preview-one\n", nil, nil)
+		if err != nil || result != (outcome{1, 1}) {
+			t.Fatalf("%v %+v\n%s", err, result, text)
+		}
+		terminal, log, _ := strings.Cut(text, "\n--log--\n")
+		for _, expected := range []string{"Checks passed", `type exactly "provision preview-one"`, `type exactly "bootstrap preview-one"`,
+			"[1/2] Generating cluster scaffold", "[2/2] Bootstrapping cluster", "Kubernetes readiness is NOT verified"} {
+			if !strings.Contains(terminal, expected) {
+				t.Fatalf("concise output lacks %q:\n%s", expected, terminal)
+			}
+		}
+		if strings.Contains(terminal, "MAKE-OUTPUT-MARKER") || strings.Contains(terminal, "tool make:") || strings.Count(log, "MAKE-OUTPUT-MARKER") != 2 {
+			t.Fatalf("Make output not confined to the log:\n%s", text)
+		}
+	})
+}
 
-	cancelled, request := newProvisionFixture(t)
-	cancelled.runtime.concise, cancelled.runtime.makeLog = true, io.Discard
-	err = runClusterProvisionWithRuntime(context.Background(), request, strings.NewReader("provision preview-one\nnope\n"), io.Discard, io.Discard, cancelled.runtime)
-	if err == nil || cancelled.makeCount["new"] != 1 || cancelled.makeCount["bootstrap"] != 0 {
-		t.Fatalf("concise mode weakened the bootstrap confirmation: %v %#v", err, cancelled.makeCount)
+func readFileOrEmpty(path string) string {
+	raw, _ := os.ReadFile(path)
+	return string(raw)
+}
+
+// Make output goes to the log as a plain file descriptor, like `make > log`.
+// A failing log write must not kill the step (a Go pipe would SIGPIPE it).
+func TestProvisionMakeOutputFileWriteFailureDoesNotKillProcess(t *testing.T) {
+	full, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skip("/dev/full is not available on this platform")
+	}
+	defer full.Close()
+	runtime := clusterProvisionRuntime{command: runClusterProvisionCommand, makeExecutable: "/bin/sh", makeRoot: t.TempDir(),
+		environmentPath: "/usr/bin:/bin", makeLog: full}
+	script := "i=0; while [ $i -lt 2000 ]; do echo output-line-$i; i=$((i+1)); done; echo done >&2; exit 0"
+	var terminal bytes.Buffer
+	if err := runProvisionMake(context.Background(), runtime, []string{"-c", script}, time.Minute, &terminal, &terminal); err != nil {
+		t.Fatalf("log write failure changed the step result: %v", err)
+	}
+	if terminal.Len() != 0 {
+		t.Fatalf("Make output bypassed the log: %q", terminal.String())
 	}
 }
 
