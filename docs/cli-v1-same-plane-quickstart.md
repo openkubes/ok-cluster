@@ -15,7 +15,7 @@ The management cluster needs a previously validated Talos/KubeVirt provider prof
 - macOS or Linux; Git, Go, Python 3, Make, kubectl and the exact tooling required by the CLI preflight (including clusterctl and Helm). Tool versions must meet the repository's tested requirements.
 - Two sibling checkouts at the **reviewed, pinned revisions**: `ok-cluster` and `ok-linux`. A random HEAD of `ok-linux` is not sufficient. Use the revision required by your checked-out `ok-cluster` and validate it using the CLI preflight. The source-integrity checks require reviewed/clean source, and may reject unrelated untracked files.
 - A prepared Same-Plane provider/management cluster with an explicitly selected and authorized kubeconfig; do not use the current kubectl context or rely on `KUBECONFIG`.
-- A unique, currently unused workload-cluster name, a verified free API endpoint IP, and verified non-conflicting pod/service CIDRs. Example addresses are **not** allocations.
+- A unique, currently unused workload-cluster name, coordinated exclusive access to the shared network-allocation pool. This profile requires **automatic** endpoint and CIDR allocation; review its live inventory and the allocated values during provisioning.
 
 **Shared infrastructure safety:** Read-only-check the API endpoint assignment, network allocations and other clusters before confirming provisioning. Never remove, overwrite or forcibly clean up existing namespaces, storage, evidence, or worktrees to make the preflight pass. A separate clean worktree can help, but must still match the CLI's embedded source revision and pinned dependencies.
 
@@ -54,22 +54,22 @@ The simple CLI ignores `KUBECONFIG` and the current kubectl context for manageme
 
 ## 3. Write an intent file
 
-Copy and edit `examples/ok-cli-cluster.yaml`, or create `my-cluster.yaml`:
+Create `my-cluster.yaml` with the **operator-mode `ClusterRequest`** contract. **Do not copy `examples/ok-cli-cluster.yaml`**: that file uses `kind: Cluster` and `talos-kubevirt-mvp` for the separate Runner intent, and is rejected by `ok cluster plan`.
 
 ```yaml
 apiVersion: cli.openkubes.io/v1alpha1
-kind: Cluster
+kind: ClusterRequest
 metadata:
   name: my-cluster
 spec:
-  profile: talos-kubevirt-mvp
+  profile: talos-kubevirt-reference
   network:
-    endpoint: 192.0.2.10
-    podCIDR: 10.42.0.0/16
-    serviceCIDR: 10.96.0.0/20
+    endpoint: auto
+    podCIDR: auto
+    serviceCIDR: auto
 ```
 
-`192.0.2.10` is a **documentation-only** address; it must be replaced by a validated address allocated in your environment. Check existing cluster control-plane endpoints and any MetalLB allocations, as well as CIDR overlaps, before applying. The intent file is not the generated `cluster-config.yaml` in a prior cluster's lifecycle scaffold.
+The Make reference profile allows network fields to be omitted or set to `auto` **only**. It rejects explicit IPs and CIDRs in the request. The existing Make scaffold selects values later; `ok cluster plan` does **not** allocate or reserve them. Before authorizing live provisioning, coordinate exclusive access to the shared MetalLB/network allocation pool, inspect existing allocations, and independently validate the chosen endpoint/CIDRs. The request is not the generated `cluster-config.yaml` from a previous cluster.
 
 ## 4. Plan, provision and verify
 
