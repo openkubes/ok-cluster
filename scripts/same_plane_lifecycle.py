@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import ssl
+import sys
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -618,6 +619,39 @@ def absence(life, path, cluster, bindings):
             fail("same-plane target PV remains")
 
 
+def stage(number, text):
+    print(f"[{number}/5] {text}", flush=True)
+
+
+def confirm_cluster_name(record, cluster):
+    identity, volumes = record["identity"], record["persistent_volumes"]
+    print("Checked against the original ok up evidence (read-only):")
+    print(f"  ✓ API identity  context {identity['context']} · {identity['endpoint']}")
+    print(f"                  kube-system UID {identity['kubeSystemUID']}")
+    print(f"  ✓ Namespace {cluster} UID {record['namespace_uid']}")
+    print(f"  ✓ CAPI Cluster {cluster} UID {record['cluster']['uid']}")
+    print("  ✓ Golden image unchanged")
+    print("Will permanently delete:")
+    print(
+        f"  CAPI Cluster {cluster}, its KubeVirt VMs,"
+        f" {len(record['data_volume_uids'])} DataVolume(s), namespace {cluster}"
+    )
+    print(
+        f"  {len(volumes)} retained volume(s) (PV + Longhorn):"
+        f" {', '.join(volumes) or 'none'}"
+    )
+    print(f"  image-clone access for {cluster} in the Golden image namespace")
+    print("Kept: Golden image, other clusters, local evidence, teardown ledger")
+    if not sys.stdin.isatty():
+        fail("cluster-name confirmation needs an interactive terminal; nothing deleted")
+    try:
+        answer = input(f"Type {cluster} to delete it, or press Enter to cancel: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer.strip() == cluster
+
+
 def teardown(life, args):
     path, provider, config, prep = preparation(life, args)
     life.require_teardown_ledger_namespace(path)
@@ -756,7 +790,14 @@ def teardown(life, args):
         absence(life, provider, args.cluster, record["storage_bindings"])
         print("SKIP same-plane cluster already torn down; original evidence preserved")
         return 0
-    life.confirm_teardown(args.cluster, record["persistent_volumes"], args.confirm)
+    if args.confirm == "cluster-name":
+        # Only `ok destroy <name>`: confirm the live, UID-bound record that this
+        # same process will persist and delete. Nothing has been written yet.
+        if not confirm_cluster_name(record, args.cluster):
+            print("Cancelled. Nothing deleted.")
+            return 0
+    else:
+        life.confirm_teardown(args.cluster, record["persistent_volumes"], args.confirm)
     guard()
     token = life.MUTATION_GUARD.set(guard)
     try:
@@ -767,6 +808,7 @@ def teardown(life, args):
             record["cluster"]["uid"],
             "CAPI Cluster",
         )
+        stage(1, "Deleting CAPI Cluster (machines and VMs; usually a few minutes)")
         if current:
             life.preconditioned_delete(
                 path,
@@ -782,6 +824,7 @@ def teardown(life, args):
             record["namespace_uid"],
             "Namespace",
         )
+        stage(2, "Waiting for KubeVirt VMs and launcher pods to disappear")
         if ns:
             # CAPK can finish before KubeVirt finishes deleting its children.
             # Their original graph is already durable; never reconstruct it
@@ -800,6 +843,7 @@ def teardown(life, args):
                 record["namespace_uid"],
                 "Namespace",
             )
+        stage(3, f"Deleting namespace {args.cluster}")
         if ns:
             life.preconditioned_delete(
                 path,
@@ -809,6 +853,7 @@ def teardown(life, args):
                 "Namespace",
                 propagation_policy="Foreground",
             )
+        stage(4, "Removing retained volumes and image-clone access")
         verify_storage(
             life, provider, args.cluster, record["storage_bindings"], detached=True
         )
@@ -828,6 +873,7 @@ def teardown(life, args):
             golden_before=record["golden_before"],
             kubeconfig=provider,
         )
+        stage(5, "Verifying absence independently")
         deadline = time.monotonic() + min(
             getattr(args, "backend_timeout_seconds", 600), 600
         )
@@ -851,5 +897,7 @@ def teardown(life, args):
         life.MUTATION_GUARD.reset(token)
     print(
         "Same-plane teardown independently observed complete; original evidence preserved"
+        f" (ledger {life.TEARDOWN_LEDGER_NAMESPACE}/{life.TEARDOWN_LEDGER_PREFIX}{args.cluster},"
+        f" {life.cluster_directory(args)})"
     )
     return 0

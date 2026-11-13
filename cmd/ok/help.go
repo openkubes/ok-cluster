@@ -190,7 +190,7 @@ Commands:
   cluster     Validate, prepare, and explicitly run cluster workflows
   up          Explicit operator-mode Same-Plane plan + provision workflow
   preview     Experimental local-only authoring preview (no authority or mutation)
-  destroy     Compatibility spelling: ok destroy cluster (prefer ok cluster destroy)
+  destroy     Destroy a cluster created by ok up (ok destroy <name>)
   local       Manage the dedicated local kind + Console demo environment
   config      Save and inspect local CLI paths (no cluster contact)
   version     Print version and source revision

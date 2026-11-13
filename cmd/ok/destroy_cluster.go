@@ -44,8 +44,8 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 		return errors.New("usage: ok cluster destroy <name> [flags]; see --help")
 	}
 	name := arguments[0]
-	if len(name) > 63 || !destroyClusterName.MatchString(name) || name == "default" || strings.HasPrefix(name, "kube-") {
-		return errors.New("cluster name must be a non-reserved Kubernetes namespace name (lowercase, at most 63 characters)")
+	if err := validateDestroyName(name); err != nil {
+		return err
 	}
 	flags := flag.NewFlagSet("ok cluster destroy", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -207,6 +207,13 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 	return nil
 }
 
+func validateDestroyName(name string) error {
+	if len(name) > 63 || !destroyClusterName.MatchString(name) || name == "default" || strings.HasPrefix(name, "kube-") {
+		return errors.New("cluster name must be a non-reserved Kubernetes namespace name (lowercase, at most 63 characters)")
+	}
+	return nil
+}
+
 func destroyRegularFile(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -264,14 +271,14 @@ func cliExitCode(err error) int {
 }
 
 func writeDestroyHelp(output io.Writer) {
-	fmt.Fprint(output, `Compatibility spelling for interactive cluster destruction
+	fmt.Fprint(output, `Destroy a cluster interactively
 
 Usage:
-  ok destroy cluster <name> [flags]
+  ok destroy <name>                  # a cluster created by ok up (Same-Plane)
+  ok destroy cluster <name> [flags]  # same as ok cluster destroy <name>
 
-Prefer "ok cluster destroy <name>". Both spellings use the same lifecycle,
-configuration, interactive confirmation and durable evidence requirements.
-Run "ok cluster destroy --help" for required inputs and confirmation rules.
+Run "ok destroy <name> --help" or "ok cluster destroy --help" for required
+inputs and confirmation rules.
 `)
 }
 

@@ -487,6 +487,88 @@ args = list(raw)""",
         self.assertIn("refuses legacy/split", result.stderr)
         self.assertEqual(fixtures.mutation_calls(calls), [])
 
+    def destroy_typing(self, answer: bytes | None):
+        """`ok destroy <name>` mode: the lifecycle reads the name from a terminal."""
+        if answer is None:
+            return self.box.lifecycle(
+                "--teardown", *self.args, confirm="cluster-name",
+                stdin=subprocess.DEVNULL,
+            )
+        master, slave = os.openpty()
+        try:
+            os.write(master, answer)
+            return self.box.lifecycle(
+                "--teardown", *self.args, confirm="cluster-name", stdin=slave
+            )
+        finally:
+            os.close(slave)
+            os.close(master)
+
+    def test_cluster_name_confirmation_shows_inventory_then_deletes(self):
+        result, _ = self.destroy_typing(fixtures.CLUSTER.encode() + b"\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout
+        for text in (
+            "context infra",
+            "kube-system UID original-plane",
+            "UID " + self.original["cluster"]["metadata"]["uid"],
+            "Golden image unchanged",
+            "retained volume(s) (PV + Longhorn)",
+            f"Type {fixtures.CLUSTER} to delete it",
+        ):
+            self.assertIn(text, out)
+        positions = [out.index(f"[{n}/5]") for n in range(1, 6)]
+        self.assertEqual(positions, sorted(positions))
+        self.assertLess(out.index("Type "), positions[0])
+        self.assertGreater(out.index("independently observed complete"), positions[-1])
+        self.assertIn(f"ok-cluster-teardown/ok-cluster-teardown-{fixtures.CLUSTER}", out)
+        self.assertTrue(self.record()["complete"])
+        self.assertIsNone(self.box.read_state()["namespace"])
+
+    def test_cluster_name_mismatch_or_empty_deletes_and_persists_nothing(self):
+        for answer in (b"\n", b"yes\n", b"ok\n", fixtures.CLUSTER.encode() + b"x\n", b"\x04"):
+            with self.subTest(answer=answer):
+                result, calls = self.destroy_typing(answer)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Cancelled. Nothing deleted.", result.stdout)
+                self.assertNotIn("[1/5]", result.stdout)
+                self.assertEqual(fixtures.mutation_calls(calls), [])
+                self.assertEqual(self.box.read_state()["configmaps"], {})
+                self.assertEqual(self.box.read_state(), self.original)
+
+    def test_cluster_name_confirmation_requires_terminal(self):
+        result, calls = self.destroy_typing(None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("interactive terminal", result.stderr)
+        self.assertEqual(fixtures.mutation_calls(calls), [])
+
+    def test_confirm_yes_mode_has_no_prompt_and_reports_stages(self):
+        result, _ = self.destroy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Type ", result.stdout)
+        self.assertIn("Tearing down Talos cluster", result.stdout)
+        self.assertIn("[5/5]", result.stdout)
+
+    def test_completed_record_skips_prompt_and_mutations(self):
+        result, _ = self.destroy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result, calls = self.destroy_typing(None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already torn down", result.stdout)
+        self.assertEqual(fixtures.mutation_calls(calls), [])
+
+    def test_partial_failure_resumes_original_ledger_after_cluster_name(self):
+        self.box.mutate(lambda s: s.update(faults={"delete:longhorn": 1}))
+        result, _ = self.destroy_typing(fixtures.CLUSTER.encode() + b"\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("independently observed complete", result.stdout)
+        first = self.record()
+        self.assertFalse(first["complete"])
+        result, _ = self.destroy_typing(fixtures.CLUSTER.encode() + b"\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.record()["namespace_uid"], first["namespace_uid"])
+        self.assertTrue(self.record()["complete"])
+
     def test_real_cli_explicit_same_plane_destroy(self):
         binary = Path(
             os.environ.get("OK_CLI_TEST_BINARY", fixtures.ROOT / ".tools/bin/ok")

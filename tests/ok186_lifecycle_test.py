@@ -561,6 +561,7 @@ class Sandbox:
         mode: str,
         *extra: str,
         confirm: str | None = None,
+        stdin: int | None = None,
         **env: str,
     ):
         self.log.write_text("")
@@ -586,6 +587,7 @@ class Sandbox:
                 **env,
             },
             capture_output=True, text=True, check=False,
+            stdin=stdin,
         )
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         return result, calls
