@@ -1,6 +1,6 @@
 # OpenKubes CLI v1.0 — Same-Plane installation and first cluster (Community Preview)
 
-> **Scope and status (November 2026):** This is the source-checkout-based **Same-Plane Talos/KubeVirt operator** workflow, not a general-purpose, one-command Kubernetes installation and not the separate OK-147 Runner/Bare-MVP path. The `ok up` provisioning engine and the underlying Same-Plane teardown were tested against a real management cluster. The newly added `ok destroy <name>` CLI entry point has passed offline tests; its first end-to-end CLI acceptance run is still pending. Do not describe that new CLI path as live-verified until the test is complete.
+> **Scope and status (November 2026):** This is the source-checkout-based **Same-Plane Talos/KubeVirt operator** workflow, not a general-purpose, one-command Kubernetes installation and not the separate OK-147 Runner/Bare-MVP path. The complete `ok up` → independently verify Kubernetes readiness → `ok destroy <name>` → independently verify absence workflow **passed a live acceptance run** for `ok-v1-test-2` on the existing RKE2 management cluster, using CLI build `4cb6f12d0dff9a166e41212bd5ec8290b6e557de`. This is evidence for that narrow operator workflow, not general production support, arbitrary providers, or release-asset verification.
 >
 > **v1.0.1 UX direction:** We plan to simplify installation, dependency setup and the CLI experience. These improvements are not implemented in v1.0; no release date or particular installer is promised.
 
