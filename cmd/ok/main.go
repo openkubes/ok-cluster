@@ -721,6 +721,9 @@ func dispatchContext(ctx context.Context, arguments []string, stdout, stderr io.
 	if len(arguments) >= 2 && arguments[0] == "cluster" && arguments[1] == "destroy" {
 		return runDestroyCluster(ctx, arguments[2:], stdout, stderr)
 	}
+	if len(arguments) >= 2 && arguments[0] == "destroy" && arguments[1] != "cluster" && !strings.HasPrefix(arguments[1], "-") {
+		return runSimpleDestroy(ctx, arguments[1], arguments[2:], stdout, stderr)
+	}
 	if len(arguments) == 1 && arguments[0] == "version" {
 		fmt.Fprintf(stdout, "%s %s\n", version, revision)
 		return nil
