@@ -55,6 +55,11 @@ type clusterProvisionRuntime struct {
 	command                                  clusterProvisionCommand
 	isTerminal                               bool
 	newTimeout, bootstrapTimeout             time.Duration
+	// Presentation only (ok up). When openMakeLog is set, output is concise and
+	// Make writes directly to the returned file, opened after the first typed
+	// confirmation. It never changes which checks run or what Make executes.
+	openMakeLog func() (*os.File, error)
+	makeLog     *os.File
 }
 
 type clusterProvisionCommand func(context.Context, string, []string, string, []string, io.Writer, io.Writer) error
@@ -182,17 +187,24 @@ func runClusterProvision(ctx context.Context, arguments []string, stdin io.Reade
 	if *topology != "same-plane" {
 		return errors.New("M2b provision requires explicit --topology same-plane; external providers are unsupported")
 	}
-	request, err := readClusterRequest(input.value)
+	return runClusterProvisionFor(ctx, input.value, *workloadKubeconfig, stdin, stdout, stderr, nil)
+}
+
+// runClusterProvisionFor is the single provisioning entry used by both
+// `ok cluster provision` and `ok up`.
+func runClusterProvisionFor(ctx context.Context, requestPath, workloadKubeconfig string, stdin io.Reader, stdout, stderr io.Writer, openMakeLog func() (*os.File, error)) error {
+	request, err := readClusterRequest(requestPath)
 	if err != nil {
 		return err
 	}
-	runtime, err := clusterProvisionRuntimeFromProcess(*workloadKubeconfig)
+	runtime, err := clusterProvisionRuntimeFromProcess(workloadKubeconfig)
 	if err != nil {
 		return err
 	}
 	if runtime.cleanupToolPath != nil {
 		defer runtime.cleanupToolPath()
 	}
+	runtime.openMakeLog = openMakeLog
 	return runClusterProvisionWithRuntime(ctx, request, stdin, stdout, stderr, runtime)
 }
 
@@ -339,7 +351,11 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := verifyProvisionClusterAbsent(ctx, prepared, runtime); err != nil {
 		return err
 	}
-	printClusterProvisionPlan(stdout, prepared, runtime)
+	if runtime.openMakeLog != nil {
+		printConciseProvisionPlan(stdout, prepared, runtime)
+	} else {
+		printClusterProvisionPlan(stdout, prepared, runtime)
+	}
 	confirmations := bufio.NewReader(stdin)
 	if err := requireProvisionConfirmation(confirmations, stdout, "provision "+prepared.name); err != nil {
 		return fmt.Errorf("provisioning cancelled before Make was started: %w", err)
@@ -352,6 +368,12 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	}
 	if err := verifyProvisionClusterAbsent(ctx, prepared, runtime); err != nil {
 		return fmt.Errorf("preflight changed after confirmation; Make was not started: %w", err)
+	}
+	if runtime.openMakeLog != nil {
+		if runtime.makeLog, err = runtime.openMakeLog(); err != nil {
+			return fmt.Errorf("cannot create the private Make log; Make was not started: %w", err)
+		}
+		fmt.Fprintf(stdout, "\n[1/2] Generating cluster scaffold (make new) … output: %s\n", runtime.makeLog.Name())
 	}
 	if err := runProvisionMake(ctx, runtime, prepared.newArgs, clusterProvisionNewTimeout, stdout, stderr); err != nil {
 		return fmt.Errorf("make new did not complete successfully; no retry, rollback or cleanup was performed; inspect command output and any scaffold at %s: %w", filepath.Join(runtime.makeRoot, prepared.name), err)
@@ -379,13 +401,20 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := verifyWorkloadKubeconfigDestination(runtime.workloadKubeconfig, prepared.name); err != nil {
 		return fmt.Errorf("scaffold is preserved; workload kubeconfig destination changed: %w", err)
 	}
-	fmt.Fprintf(stdout, "\nScaffold review for %s (bootstrap has not run):\n", prepared.name)
-	fmt.Fprintf(stdout, "  endpoint: %s\n  pod CIDR: %s\n  service CIDR: %s\n", network.Endpoint, network.PodCIDR, network.ServiceCIDR)
-	for _, artifact := range artifacts {
-		fmt.Fprintf(stdout, "  artifact: %s sha256:%s\n", artifact.name, artifact.digest)
+	if runtime.openMakeLog != nil {
+		fmt.Fprintf(stdout, "      endpoint %s · pods %s · services %s\n", network.Endpoint, network.PodCIDR, network.ServiceCIDR)
+		fmt.Fprintf(stdout, "      scaffold: %s\n\n", filepath.Join(runtime.makeRoot, prepared.name))
+		fmt.Fprintln(stdout, "Next: create and bootstrap the cluster (make bootstrap). This changes the management")
+		fmt.Fprintln(stdout, "cluster (CAPI resources, PVC annotations) and installs Cilium on the new cluster.")
+	} else {
+		fmt.Fprintf(stdout, "\nScaffold review for %s (bootstrap has not run):\n", prepared.name)
+		fmt.Fprintf(stdout, "  endpoint: %s\n  pod CIDR: %s\n  service CIDR: %s\n", network.Endpoint, network.PodCIDR, network.ServiceCIDR)
+		for _, artifact := range artifacts {
+			fmt.Fprintf(stdout, "  artifact: %s sha256:%s\n", artifact.name, artifact.digest)
+		}
+		fmt.Fprintf(stdout, "\nNext target: make bootstrap CLUSTER=%s\n", prepared.name)
+		fmt.Fprintln(stdout, "Bootstrap may apply CAPI resources, annotate management PVCs, generate the private workload kubeconfig, and install the pinned Cilium chart on the workload cluster.")
 	}
-	fmt.Fprintf(stdout, "\nNext target: make bootstrap CLUSTER=%s\n", prepared.name)
-	fmt.Fprintln(stdout, "Bootstrap may apply CAPI resources, annotate management PVCs, generate the private workload kubeconfig, and install the pinned Cilium chart on the workload cluster.")
 	if err := requireProvisionConfirmation(confirmations, stdout, "bootstrap "+prepared.name); err != nil {
 		return fmt.Errorf("bootstrap cancelled; completed scaffold is preserved and no bootstrap command was started: %w", err)
 	}
@@ -407,11 +436,21 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := verifyProvisionArtifactsUnchanged(runtime, prepared, artifacts); err != nil {
 		return fmt.Errorf("scaffold changed after review; bootstrap was not started: %w", err)
 	}
+	if runtime.openMakeLog != nil {
+		fmt.Fprintln(stdout, "\n[2/2] Bootstrapping cluster (make bootstrap) …")
+	}
 	if err := runProvisionMake(ctx, runtime, prepared.bootstrapArgs, clusterProvisionBootstrapTimeout, stdout, stderr); err != nil {
 		return fmt.Errorf("make bootstrap failed or was interrupted; partial Kubernetes changes and local files may exist; no retry, rollback or cleanup was performed: %w", err)
 	}
 	if err := verifyProducedWorkloadKubeconfig(runtime.workloadKubeconfig); err != nil {
 		return fmt.Errorf("make bootstrap returned success but requested workload kubeconfig is not safely present; partial state is preserved and readiness is not verified: %w", err)
+	}
+	if runtime.openMakeLog != nil {
+		fmt.Fprintf(stdout, "\n✓ make bootstrap finished for %s\n", prepared.name)
+		fmt.Fprintf(stdout, "  workload kubeconfig: %s\n", runtime.workloadKubeconfig)
+		fmt.Fprintln(stdout, "  Kubernetes readiness is NOT verified yet. Check it read-only, for example:")
+		fmt.Fprintf(stdout, "    KUBECONFIG=%s kubectl get nodes\n", runtime.workloadKubeconfig)
+		return nil
 	}
 	fmt.Fprintf(stdout, "\nMake bootstrap completed for %s; workload kubeconfig present at %s.\n", prepared.name, runtime.workloadKubeconfig)
 	fmt.Fprintln(stdout, "Command completion is not independent verification of cluster readiness; use established read-only verification procedures.")
@@ -711,10 +750,10 @@ func verifyProvisionCheckout(ctx context.Context, runtime clusterProvisionRuntim
 		return errors.New("checkout status could not be verified")
 	}
 	if !allowScaffold && status.Len() != 0 {
-		return errors.New("checkout has local changes or untracked files")
+		return fmt.Errorf("checkout has local changes or untracked files: %s", provisionStatusSummary(status.String()))
 	}
 	if allowScaffold && !provisionStatusContainsOnlyScaffold(status.String(), clusterName) {
-		return errors.New("Make checkout has changes outside the newly generated scaffold")
+		return fmt.Errorf("Make checkout has changes outside the newly generated scaffold: %s", provisionStatusSummary(status.String()))
 	}
 	return nil
 }
@@ -957,7 +996,11 @@ func runProvisionMake(ctx context.Context, runtime clusterProvisionRuntime, args
 	defer cancel()
 	stepContext, stopSignals := clusterProvisionSignalContext(stepContext)
 	defer stopSignals()
-	if err := runtime.command(stepContext, runtime.makeExecutable, args, runtime.makeRoot, provisionEnvironment(runtime), stdout, stderr); err != nil {
+	makeStdout, makeStderr := stdout, stderr
+	if runtime.makeLog != nil {
+		makeStdout, makeStderr = runtime.makeLog, runtime.makeLog
+	}
+	if err := runtime.command(stepContext, runtime.makeExecutable, args, runtime.makeRoot, provisionEnvironment(runtime), makeStdout, makeStderr); err != nil {
 		if errors.Is(stepContext.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("timed out after %s", timeout)
 		}
@@ -1052,4 +1095,49 @@ func provisionPlaneUID(ctx context.Context, prepared clusterProvisionPrepared, r
 func verifyProvisionSamePlane(ctx context.Context, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) error {
 	args := []string{filepath.Join(runtime.makeRoot, "scripts", "talos_golden_lifecycle.py"), "--same-plane-preflight", "--topology", "same-plane", "--cluster", prepared.name, "--cluster-dir", filepath.Join(runtime.makeRoot, prepared.name), "--kubeconfig", prepared.managementKubeconfig, "--provider-kubeconfig", prepared.managementKubeconfig, "--ok-linux-path", runtime.okLinuxRoot}
 	return runProvisionCheck(ctx, runtime, provisionPythonExecutable(runtime), args, runtime.makeRoot, io.Discard)
+}
+
+// provisionStatusSummary names up to three changed paths from git status
+// porcelain output so an error tells the operator what to commit or remove.
+func provisionStatusSummary(status string) string {
+	lines := strings.Split(strings.TrimSuffix(status, "\n"), "\n")
+	paths := make([]string, 0, 3)
+	for _, line := range lines {
+		if len(line) > 3 && len(paths) < 3 {
+			paths = append(paths, line[3:])
+		}
+	}
+	summary := strings.Join(paths, ", ")
+	if len(lines) > len(paths) {
+		summary += fmt.Sprintf(" (+%d more)", len(lines)-len(paths))
+	}
+	return summary
+}
+
+func printConciseProvisionPlan(output io.Writer, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) {
+	fmt.Fprintf(output, "Cluster      %s (%s) · same-plane\n", prepared.name, clusterRequestProfile)
+	fmt.Fprintf(output, "Size         1 control plane, %d worker(s) · Kubernetes %s · Talos %s\n", prepared.workers, prepared.kubernetesVersion, prepared.talosVersion)
+	fmt.Fprintln(output, "Network      endpoint, pod and service CIDRs are allocated by make new")
+	fmt.Fprintf(output, "Management   context %s · %s · TLS verified\n", prepared.managementContext, prepared.managementAPIServer)
+	fmt.Fprintf(output, "             kube-system UID %s\n", prepared.managementUID)
+	fmt.Fprintf(output, "             kubeconfig %s\n", prepared.managementKubeconfig)
+	fmt.Fprintf(output, "Kubeconfig   %s (private; written during bootstrap)\n\n", prepared.workloadKubeconfig)
+	fmt.Fprintln(output, "Checks passed")
+	fmt.Fprintf(output, "  ✓ CLI matches checkout %s @ %s (clean)\n", runtime.makeRoot, shortProvisionRevision(runtime.makeRevision))
+	fmt.Fprintf(output, "  ✓ ok-linux pinned @ %s (clean)\n", shortProvisionRevision(runtime.okLinuxRevision))
+	fmt.Fprintln(output, "  ✓ Cilium chart digest verified")
+	fmt.Fprintf(output, "  ✓ Required tools found (%d)\n", len(runtime.toolPaths))
+	fmt.Fprintf(output, "  ✓ No Cluster named %s on the management cluster\n\n", prepared.name)
+	fmt.Fprintln(output, "Plan")
+	fmt.Fprintln(output, "  1. Generate the cluster scaffold          make new")
+	fmt.Fprintln(output, "  2. Create and bootstrap the cluster       make bootstrap (you confirm again first)")
+	fmt.Fprintln(output, "Nothing is retried or cleaned up automatically if a step fails.")
+	fmt.Fprintln(output)
+}
+
+func shortProvisionRevision(revision string) string {
+	if len(revision) > 7 {
+		return revision[:7]
+	}
+	return revision
 }

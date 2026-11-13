@@ -17,7 +17,9 @@ func canonicalProductArguments(arguments []string) []string {
 		return arguments // the new operator dispatcher validates exact allowed mode
 	case arguments[offset] == "up" && (len(arguments) == offset+1 ||
 		(len(arguments) == offset+2 && isHelpArgument(arguments[offset+1]))):
-		return arguments // show the new up operator help, no execution
+		return arguments // help, or the guided ok up in an interactive terminal
+	case offset == 0 && arguments[offset] == "up" && simpleUpHandles(arguments[offset+1:]):
+		return arguments // simple operator UX; Runner subcommands, flags and manifests keep the Runner route
 	case arguments[offset] == "up":
 		command = []string{"cluster", "create"} // preserve existing runner semantics
 	case len(arguments) > offset+1 && arguments[offset] == "destroy" && arguments[offset+1] == "cluster":
