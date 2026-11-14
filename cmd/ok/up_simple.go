@@ -66,7 +66,7 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 		if !rt.terminal {
 			return errSimpleUpNeedsTerminal
 		}
-		if requestPath, err = chooseClusterRequest(home, reader, stdout); err != nil {
+		if requestPath, err = chooseClusterRequest(ctx, home, reader, stdout); err != nil {
 			return err
 		}
 	}
@@ -88,7 +88,7 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 	}
 	if managementPath == "" {
 		fmt.Fprint(stdout, "Management cluster kubeconfig (path; KUBECONFIG is never used): ")
-		if managementPath, err = readPromptPath(reader); err != nil {
+		if managementPath, err = readPromptPath(ctx, reader); err != nil {
 			return err
 		}
 		source = "your input"
@@ -247,7 +247,7 @@ func ensurePrivateDirs(directories ...string) error {
 // chooseClusterRequest lists <ok config>/requests and lets the operator pick a
 // request, give another path, or create one from the validated template. The
 // profile always comes from the file's spec.profile, never from its name.
-func chooseClusterRequest(home string, input *bufio.Reader, stdout io.Writer) (string, error) {
+func chooseClusterRequest(ctx context.Context, home string, input *bufio.Reader, stdout io.Writer) (string, error) {
 	directory := filepath.Join(home, "requests")
 	found, err := filepath.Glob(filepath.Join(directory, "*.y*ml"))
 	if err != nil {
@@ -264,7 +264,7 @@ func chooseClusterRequest(home string, input *bufio.Reader, stdout io.Writer) (s
 		choice = "1"
 	}
 	fmt.Fprintf(stdout, "Choose [%s]: ", choice)
-	line, err := readPromptLine(input)
+	line, err := readPromptLine(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -273,10 +273,10 @@ func chooseClusterRequest(home string, input *bufio.Reader, stdout io.Writer) (s
 	}
 	switch choice {
 	case "n":
-		return createClusterRequest(home, directory, input, stdout)
+		return createClusterRequest(ctx, home, directory, input, stdout)
 	case "p":
 		fmt.Fprint(stdout, "ClusterRequest file: ")
-		path, err := readPromptPath(input)
+		path, err := readPromptPath(ctx, input)
 		if err == nil && path == "" {
 			err = errors.New("no ClusterRequest file given")
 		}
@@ -289,9 +289,9 @@ func chooseClusterRequest(home string, input *bufio.Reader, stdout io.Writer) (s
 	return found[index-1], nil
 }
 
-func createClusterRequest(home, directory string, input *bufio.Reader, stdout io.Writer) (string, error) {
+func createClusterRequest(ctx context.Context, home, directory string, input *bufio.Reader, stdout io.Writer) (string, error) {
 	fmt.Fprint(stdout, "Cluster name: ")
-	name, err := readPromptLine(input)
+	name, err := readPromptLine(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -317,17 +317,34 @@ func createClusterRequest(home, directory string, input *bufio.Reader, stdout io
 	return path, nil
 }
 
-func readPromptLine(input *bufio.Reader) (string, error) {
-	line, err := input.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", errors.New("could not read your input")
+var errPromptCancelled = errors.New("cancelled; nothing was started")
+
+// readPromptLine returns one typed line. Ctrl-C (the context) and end of input
+// cancel instead of selecting a default, so nothing starts.
+func readPromptLine(ctx context.Context, input *bufio.Reader) (string, error) {
+	type result struct {
+		line string
+		err  error
 	}
-	return strings.TrimSpace(line), nil
+	done := make(chan result, 1)
+	go func() {
+		line, err := input.ReadString('\n')
+		done <- result{line, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", errPromptCancelled
+	case read := <-done:
+		if read.err != nil {
+			return "", errPromptCancelled
+		}
+		return strings.TrimSpace(read.line), nil
+	}
 }
 
 // readPromptPath accepts an absolute, relative or ~/ path; empty stays empty.
-func readPromptPath(input *bufio.Reader) (string, error) {
-	path, err := readPromptLine(input)
+func readPromptPath(ctx context.Context, input *bufio.Reader) (string, error) {
+	path, err := readPromptLine(ctx, input)
 	if err != nil || !strings.HasPrefix(path, "~/") {
 		return path, err
 	}

@@ -171,6 +171,7 @@ func TestSimpleUpHelpAndPlanCreateNothing(t *testing.T) {
 
 func TestSimpleUpRequiresExplicitManagementCluster(t *testing.T) {
 	fake, rt, base := newFakeSimpleUp(t)
+	rt.input = strings.NewReader("\n") // an empty answer at the management prompt
 	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
 	err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt)
 	if err == nil || !strings.Contains(err.Error(), "no management cluster selected") || !strings.Contains(err.Error(), "never uses KUBECONFIG") {
@@ -343,6 +344,42 @@ func TestSimpleUpAsksForManagementWhenNotSelected(t *testing.T) {
 	if err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt); err == nil ||
 		!strings.Contains(err.Error(), "from your input") || fake.calls != 1 {
 		t.Fatalf("absent prompted management accepted: %v", err)
+	}
+}
+
+// Ctrl-C or end of input at any prompt cancels; a default is never taken and
+// nothing is created or provisioned.
+func TestSimpleUpCancelledInputStartsNothing(t *testing.T) {
+	fake, rt, base := newFakeSimpleUp(t)
+	requests := filepath.Join(base, "xdg", "ok", "requests")
+	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
+	run := func(ctx context.Context, arguments []string, input io.Reader) error {
+		rt.input = input
+		return runSimpleUpWith(ctx, arguments, io.Discard, io.Discard, rt)
+	}
+	// End of input (Ctrl-D) at the menu, the name prompt and the management prompt.
+	for _, input := range []string{"", "n\n", "n\ndemo-one"} {
+		if err := run(context.Background(), nil, strings.NewReader(input)); !errors.Is(err, errPromptCancelled) {
+			t.Fatalf("%q: %v", input, err)
+		}
+	}
+	assertNotExist(t, requests)
+	writeSimpleUpFile(t, requests, "existing.yaml", validClusterRequestYAML)
+	if err := run(context.Background(), nil, strings.NewReader("")); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("end of input selected the default request: %v", err)
+	}
+	if err := run(context.Background(), []string{"-f", request}, strings.NewReader("")); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("end of input at the management prompt: %v", err)
+	}
+	// Ctrl-C while a prompt is waiting returns at once.
+	ctx, cancel := context.WithCancel(context.Background())
+	waiting, _ := io.Pipe()
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	if err := run(ctx, nil, waiting); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("Ctrl-C at the menu: %v", err)
+	}
+	if fake.calls != 0 || os.Getenv("TALOS_INFRA_KUBECONFIG") != "" {
+		t.Fatalf("cancelled input started provisioning: calls=%d", fake.calls)
 	}
 }
 
