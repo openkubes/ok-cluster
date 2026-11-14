@@ -114,20 +114,28 @@ type localForwardIdentity struct {
 type localCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
 type localRuntime struct {
-	stateRoot      string
-	consoleRoot    string
-	input          io.Reader
-	interactive    bool
-	run            localCommandRunner
-	newOwnerID     func() (string, error)
-	runPinned      func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
-	runKindCreate  localKindCreateRunner
-	runVerifier    func(context.Context, string, map[string]string) error
-	inspectForward func(localForwardIdentity) (localForwardProcessState, error)
-	stopForward    func(localForwardIdentity) error
-	checkLocalPort func(int) error
-	startForward   func(context.Context, localClusterState) (localForwardIdentity, error)
-	waitConsole    func(context.Context, int) error
+	stateRoot            string
+	consoleRoot          string
+	input                io.Reader
+	interactive          bool
+	run                  localCommandRunner
+	newOwnerID           func() (string, error)
+	runPinned            func(context.Context, localProviderIdentity, string, ...string) ([]byte, error)
+	runKindCreate        localKindCreateRunner
+	runVerifier          func(context.Context, string, map[string]string) error
+	inspectForward       func(localForwardIdentity) (localForwardProcessState, error)
+	stopForward          func(localForwardIdentity) error
+	checkLocalPort       func(int) error
+	startForward         func(context.Context, localClusterState) (localForwardIdentity, error)
+	waitConsole          func(context.Context, int) error
+	lookPath             func(string) (string, error)
+	runCAPI              localCAPICommandRunner
+	environ              func() []string
+	homeDir              func() (string, error)
+	verifySocket         func(string) bool
+	fetchCalicoManifest  func(context.Context) ([]byte, error)
+	calicoManifestSHA256 string
+	wait                 func(context.Context, time.Duration) error
 }
 
 type localVerifierFailure struct {
@@ -156,23 +164,34 @@ func defaultLocalRuntime() localRuntime {
 		stateRoot = filepath.Join(root, "ok", "local")
 	}
 	return localRuntime{
-		stateRoot:      stateRoot,
-		consoleRoot:    findLocalConsoleRoot(),
-		input:          os.Stdin,
-		interactive:    term.IsTerminal(int(os.Stdin.Fd())),
-		run:            runLocalCommand,
-		runPinned:      runLocalCommandPinned,
-		runKindCreate:  runLocalKindCreatePinned,
-		runVerifier:    runLocalConsoleVerifier,
-		checkLocalPort: ensureLocalPortAvailable,
-		startForward:   startLocalForward,
-		stopForward:    stopLocalForward,
-		waitConsole:    waitLocalConsole,
+		stateRoot:            stateRoot,
+		consoleRoot:          findLocalConsoleRoot(),
+		input:                os.Stdin,
+		interactive:          term.IsTerminal(int(os.Stdin.Fd())),
+		run:                  runLocalCommand,
+		runPinned:            runLocalCommandPinned,
+		runKindCreate:        runLocalKindCreatePinned,
+		runVerifier:          runLocalConsoleVerifier,
+		checkLocalPort:       ensureLocalPortAvailable,
+		startForward:         startLocalForward,
+		stopForward:          stopLocalForward,
+		waitConsole:          waitLocalConsole,
+		lookPath:             exec.LookPath,
+		runCAPI:              runLocalCAPICommand,
+		environ:              os.Environ,
+		homeDir:              os.UserHomeDir,
+		verifySocket:         localCAPIHostSocketExists,
+		fetchCalicoManifest:  fetchPinnedLocalCAPIWorkloadCalicoManifest,
+		calicoManifestSHA256: localCAPIWorkloadCalicoSourceSHA256,
+		wait:                 waitLocalCAPIWorkloadInterval,
 	}
 }
 
 func runLocalCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, arguments...)
+	if isLocalKindClusterListCommand(name, arguments) {
+		return runLocalKindClusterListStdout(command)
+	}
 	if isLocalKindKubeconfigCommand(name, arguments) {
 		return runLocalStdoutOnly(command, name, arguments...)
 	}
@@ -199,6 +218,9 @@ func runLocalCommandPinned(ctx context.Context, provider localProviderIdentity, 
 		env = append(env, item)
 	}
 	command.Env = append(env, "DOCKER_HOST="+provider.Endpoint, "KIND_EXPERIMENTAL_PROVIDER=docker")
+	if isLocalKindClusterListCommand(name, arguments) {
+		return runLocalKindClusterListStdout(command)
+	}
 	if isLocalKindKubeconfigCommand(name, arguments) {
 		return runLocalStdoutOnly(command, name, arguments...)
 	}
@@ -213,6 +235,77 @@ func runLocalCommandPinned(ctx context.Context, provider localProviderIdentity, 
 		return output, fmt.Errorf("%s %s failed: %w: %s", name, strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
 	}
 	return output, nil
+}
+
+func isLocalKindClusterListCommand(name string, arguments []string) bool {
+	return name == "kind" && len(arguments) == 2 && arguments[0] == "get" && arguments[1] == "clusters"
+}
+
+// runLocalKindClusterListStdout keeps Kind's informational stderr separate
+// from the machine-readable cluster-name list. Only known informational
+// messages are accepted; errors and unexpected diagnostics fail closed.
+func runLocalKindClusterListStdout(command *exec.Cmd) ([]byte, error) {
+	stdout := &boundedDiagnosticOutput{limit: 1 << 20}
+	var stderr boundedDiagnosticOutput
+	stderr.limit = 64 * 1024
+	command.Stdout, command.Stderr = stdout, &stderr
+	if err := command.Run(); err != nil {
+		return nil, errors.New("kind cluster listing command failed")
+	}
+	if stdout.truncated || stderr.truncated {
+		return nil, errors.New("kind cluster listing output exceeded the safe limit")
+	}
+	names, err := parseLocalKindClusterNames(stdout.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	noClustersMessage := false
+	for _, line := range strings.Split(strings.TrimSpace(string(stderr.Bytes())), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch line {
+		case "No kind clusters found.":
+			noClustersMessage = true
+		case "using docker due to KIND_EXPERIMENTAL_PROVIDER":
+			// Kind reports this provider-selection notice on stderr on some versions.
+		default:
+			return nil, errors.New("kind cluster listing emitted an unexpected diagnostic")
+		}
+	}
+	if noClustersMessage && len(names) != 0 {
+		return nil, errors.New("kind cluster listing output is contradictory")
+	}
+	return stdout.Bytes(), nil
+}
+
+func parseLocalKindClusterNames(output []byte) ([]string, error) {
+	if len(output) == 0 {
+		return nil, nil
+	}
+	text := string(output)
+	if strings.HasSuffix(text, "\n") {
+		text = strings.TrimSuffix(text, "\n")
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > 1024 {
+		return nil, errors.New("kind cluster listing contains too many names")
+	}
+	names := make([]string, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" || strings.TrimSpace(line) != line || !localKindClusterNamePattern.MatchString(line) {
+			return nil, errors.New("kind cluster listing contains malformed output")
+		}
+		if _, exists := seen[line]; exists {
+			return nil, errors.New("kind cluster listing contains duplicate names")
+		}
+		seen[line] = struct{}{}
+		names = append(names, line)
+	}
+	return names, nil
 }
 
 func isLocalKubectlStructuredCommand(name string, arguments []string) bool {
@@ -286,6 +379,10 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 	switch arguments[0] {
 	case "up":
 		return runLocalUp(ctx, arguments[1:], runtime, stdout, stderr)
+	case "verify":
+		return runLocalVerify(ctx, arguments[1:], runtime, stdout, stderr)
+	case "cluster":
+		return runLocalCAPIWorkloadCommand(ctx, arguments[1:], runtime, stdout, stderr)
 	case "resume":
 		return runLocalResume(ctx, arguments[1:], runtime, stdout, stderr)
 	case "reconnect":
@@ -300,7 +397,7 @@ func runLocalWithRuntime(ctx context.Context, arguments []string, stdout, stderr
 		}
 		return runLocalDiagnoseBootstrap(ctx, arguments[2:], runtime, stdout, stderr)
 	default:
-		return errors.New("use ok local up, ok local resume, ok local reconnect, ok local status, or ok local down; see ok local --help")
+		return errors.New("use ok local up, verify, resume, reconnect, status, or down; see ok local --help")
 	}
 }
 
@@ -352,15 +449,51 @@ func (output *boundedDiagnosticOutput) Bytes() []byte {
 	return append([]byte(nil), output.buffer.Bytes()...)
 }
 
-func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) error {
+func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, stdout, stderr io.Writer) (result error) {
 	flags := flag.NewFlagSet("ok local up", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	name := flags.String("name", localClusterDefaultName, "Dedicated local kind cluster name")
+	bootstrap := flags.String("bootstrap", "", "Experimental bootstrap mode (currently: capi)")
+	colimaProfile := flags.String("colima-profile", "", "Existing dedicated Colima profile for experimental CAPI bootstrap")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || !localClusterNamePattern.MatchString(*name) {
 		return errors.New("ok local up accepts no positional arguments and requires a valid --name")
+	}
+	bootstrapSet := false
+	profileSet := false
+	flags.Visit(func(parsed *flag.Flag) {
+		if parsed.Name == "bootstrap" {
+			bootstrapSet = true
+		}
+		if parsed.Name == "colima-profile" {
+			profileSet = true
+		}
+	})
+	if bootstrapSet {
+		if *bootstrap != "capi" {
+			return errors.New("unsupported --bootstrap mode; the only recognized experimental value is capi")
+		}
+		if !profileSet || !validLocalColimaProfileName(*colimaProfile) {
+			return errors.New("experimental CAPI bootstrap requires an explicit valid --colima-profile")
+		}
+		if err := runLocalCAPIUpContext(ctx, *name, *colimaProfile, runtime); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(stdout, "Temporary CAPI bootstrap %q is ready; lifecycle phase CAPI_READY. No workload cluster was provisioned or moved.\n", *name)
+		return err
+	}
+	if profileSet {
+		return errors.New("--colima-profile is only valid with --bootstrap capi")
+	}
+	if _, err := os.Lstat(localCAPIStateDirectory(runtime.stateRoot, *name)); err == nil {
+		return errors.New("CAPI lifecycle ownership exists for this name; the Console workflow will not adopt or overwrite it")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("cannot safely inspect CAPI lifecycle ownership; the Console workflow stopped")
+	}
+	if _, err := os.Lstat(localCAPIWorkloadDirectory(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("CAPI workload ownership exists or cannot be inspected; the Console workflow will not adopt or overwrite it")
 	}
 	if runtime.consoleRoot == "" || runtime.runVerifier == nil {
 		return errors.New("cannot find the ok-console checkout and local-kind verifier; set OK_CONSOLE_DIR; no cluster was contacted")
@@ -403,6 +536,21 @@ func runLocalUp(ctx context.Context, arguments []string, runtime localRuntime, s
 	kindVersion, err := runtime.run(ctx, "kind", "version")
 	if err != nil || !localKindVersionSupported(string(kindVersion), localKindMinimumVersion) {
 		return fmt.Errorf("kind %s or newer is required for isolated kubeconfig creation; no local state or cluster change was made", localKindMinimumVersion)
+	}
+	releaseOperation, err := acquireLocalLifecycleOperationLock(runtime.stateRoot, *name)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := releaseOperation(); err != nil {
+			result = errors.Join(result, errors.New("local lifecycle lock could not be safely released; inspect it before another up"))
+		}
+	}()
+	if _, err := os.Lstat(localCAPIStateDirectory(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("CAPI lifecycle ownership exists or cannot be inspected; the Console workflow will not adopt it")
+	}
+	if _, err := os.Lstat(localStateFilePath(runtime.stateRoot, *name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("local ownership state appeared during preparation; automatic retries are disabled")
 	}
 	provider, err := observeLocalDockerProvider(ctx, runtime)
 	if err != nil {
@@ -2547,7 +2695,9 @@ Usage:
   ok local <command> [flags]
 
 Commands:
-  up       Create a dedicated kind cluster and deploy the local Console demo
+  up       Create a dedicated kind cluster and deploy the local Console demo, or explicitly select temporary CAPI bootstrap
+  verify   Read-only verification of an existing owner-bound CAPI bootstrap
+  cluster  Create or inspect a CAPD workload cluster through a verified CAPI bootstrap
   resume   Verify and resume an existing owner-bound INCOMPLETE installation
   reconnect Restore a missing owner-bound Console port-forward without redeploying
   status   Verify local cluster ownership and Console health
@@ -2562,8 +2712,12 @@ fixture profile; no production identity or database is installed.
 
 func writeLocalCommandHelp(command string, output io.Writer) {
 	switch command {
+	case "verify":
+		fmt.Fprint(output, "Usage: ok local verify --name <name> --bootstrap capi\n\nRead-only verification of an existing private CAPI receipt and live bootstrap. Reports current observed health separately from the historical lifecycle phase. Never changes the receipt or infrastructure.\n")
+	case "cluster":
+		fmt.Fprint(output, "Usage: ok local cluster create --name <cluster> --management <capi-name> [--control-plane 1 --workers 1]\n       ok local cluster continue --name <workload> --management <management>\n       ok local cluster status --name <cluster> --management <capi-name>\n\nCreates one development-flavor CAPD workload through a currently verified private CAPI bootstrap, captures its workload kubeconfig from the pinned Docker daemon, and installs checksum-pinned Calico v3.33.0 for the validated Pod CIDR. If workload access is still pending, create records a nonterminal waiting phase; explicitly continue later to verify identity and attempt the not-yet-attempted Calico install once. A durable one-shot receipt prevents replay after an ambiguous mutation. READY requires current CAPI, Machine, Node and CNI health. Status is read-only.\n")
 	case "up":
-		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n\nCreates one owner-labeled local kind cluster and deploys the Console local-kind fixture profile. Requires Docker, kind, kubectl, and an ok-console checkout. Interrupted runs stop in INCOMPLETE; no automatic retry.\n")
+		fmt.Fprint(output, "Usage: ok local up [--name ok-local]\n       ok local up [--name ok-local] --bootstrap capi\n\nWithout --bootstrap, creates one owner-labeled local Kind cluster and deploys the Console local-kind fixture profile.\n--bootstrap capi creates a temporary owner-bound Colima/Kind management cluster, installs pinned CAPI/CAPD providers and stops at CAPI_READY. It does not create ok-mgmt-local, move cluster ownership, or deploy Console.\nRequires Docker, Kind, kubectl, clusterctl v1.14.4 and Colima. Failures after durable intent remain INCOMPLETE; no automatic retry or cleanup.\n")
 	case "resume":
 		fmt.Fprint(output, "Usage: ok local resume [--name ok-local]\n\nResumes only an existing owner-bound INCOMPLETE installation. Rechecks Docker, Kind, Kubernetes identities, the isolated kubeconfig and the existing Console workload before starting the managed loopback port-forward. It never creates or redeploys resources or replaces kubeconfig.\n")
 	case "reconnect":

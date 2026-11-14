@@ -1097,6 +1097,94 @@ exit 23
 	}
 }
 
+func TestRunLocalCommandPinnedKindClusterListSeparatesStdoutAndStderr(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  string
+		stderr  string
+		exit    int
+		want    string
+		wantErr bool
+	}{
+		{name: "empty stdout with no-clusters diagnostic", stderr: "No kind clusters found.\n", want: ""},
+		{name: "empty stdout with provider notice and no-clusters diagnostic", stderr: "using docker due to KIND_EXPERIMENTAL_PROVIDER\nNo kind clusters found.\n", want: ""},
+		{name: "one existing cluster", stdout: "existing-cluster\n", want: "existing-cluster\n"},
+		{name: "multiple existing clusters", stdout: "cluster-a\ncluster-b\n", want: "cluster-a\ncluster-b\n"},
+		{name: "nonzero exit", stdout: "cluster-a\n", stderr: "No kind clusters found.\n", exit: 7, wantErr: true},
+		{name: "unexpected stderr", stderr: "warning with opaque diagnostic\n", wantErr: true},
+		{name: "malformed stdout", stdout: "cluster names: cluster-a\n", wantErr: true},
+		{name: "contradictory stdout and diagnostic", stdout: "cluster-a\n", stderr: "No kind clusters found.\n", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' %s\nprintf '%%s' %s >&2\nexit %d\n", shellSingleQuoteForTest(test.stdout), shellSingleQuoteForTest(test.stderr), test.exit)
+			writeMockKindExecutable(t, binDir, script)
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			provider := localProviderIdentity{Kind: "docker", Context: "colima-ok-capi", Endpoint: "unix:///private/ok-capi/docker.sock", DaemonID: "test-daemon"}
+			got, err := runLocalCommandPinned(context.Background(), provider, "kind", "get", "clusters")
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("ambiguous or failed Kind list was accepted")
+				}
+				for _, private := range []string{"opaque diagnostic", "cluster names:"} {
+					if strings.Contains(err.Error(), private) {
+						t.Fatalf("raw Kind output leaked in error: %v", err)
+					}
+				}
+				return
+			}
+			if err != nil || string(got) != test.want {
+				t.Fatalf("cluster-list result = %q, %v; want %q, nil", got, err, test.want)
+			}
+		})
+	}
+}
+
+func shellSingleQuoteForTest(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func TestLocalCAPIDedicatedPreflightAcceptsKindNoClustersStderr(t *testing.T) {
+	binDir := t.TempDir()
+	writeMockKindExecutable(t, binDir, "#!/bin/sh\nprintf '%s\\n' 'No kind clusters found.' >&2\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	provider := localProviderIdentity{Kind: "docker", Context: "colima-ok-capi", Endpoint: "unix:///private/ok-capi/docker.sock", DaemonID: "test-daemon"}
+	runtime := localRuntime{runPinned: func(ctx context.Context, actual localProviderIdentity, command string, args ...string) ([]byte, error) {
+		if actual != provider {
+			t.Fatalf("daemon identity was not preserved: got=%+v want=%+v", actual, provider)
+		}
+		if command == "kind" {
+			return runLocalCommandPinned(ctx, actual, command, args...)
+		}
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "container ls -aq --no-trunc", joined == "volume ls -q", joined == "image ls -q --no-trunc":
+			return nil, nil
+		case joined == "system df --format {{.Type}}|{{.TotalCount}}":
+			return []byte("Images|0\nContainers|0\nLocal Volumes|0\nBuild Cache|0\n"), nil
+		case joined == "network ls --format {{.Name}}":
+			return []byte("bridge\nhost\nnone\n"), nil
+		default:
+			t.Fatalf("unexpected read-only Docker inventory request: %q", joined)
+			return nil, errors.New("unexpected mock request")
+		}
+	}}
+	if err := verifyLocalCAPIDedicatedDaemon(context.Background(), runtime, provider); err != nil {
+		t.Fatalf("empty dedicated daemon rejected because Kind wrote an informational stderr line: %v", err)
+	}
+}
+
+func TestRunLocalCommandKindClusterListUsesStdoutOnly(t *testing.T) {
+	binDir := t.TempDir()
+	writeMockKindExecutable(t, binDir, "#!/bin/sh\nprintf '%s\\n' 'No kind clusters found.' >&2\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := runLocalCommand(context.Background(), "kind", "get", "clusters")
+	if err != nil || len(output) != 0 {
+		t.Fatalf("un-pinned Kind list included stderr as cluster output: stdout=%q err=%v", output, err)
+	}
+}
+
 func writeMockKindExecutable(t *testing.T, binDir, script string) {
 	t.Helper()
 	path := filepath.Join(binDir, "kind")
