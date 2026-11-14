@@ -144,10 +144,13 @@ jobs:
           path: ok-linux
           persist-credentials: false
 
-      - name: Set up Go from go.mod
+      # Release bundles are built with the recorded release toolchain (the RC1
+      # bundles used go1.24.13). go.mod's go 1.21 builds go test binaries that
+      # macOS 15 runners refuse to load (dyld: missing LC_UUID load command).
+      - name: Set up the release Go toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: ok-cluster/go.mod
+          go-version: "1.24.13"
           check-latest: false
           cache: true
           cache-dependency-path: ok-cluster/go.sum
