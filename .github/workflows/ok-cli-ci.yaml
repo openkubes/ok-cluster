@@ -121,6 +121,47 @@ jobs:
           OK_CLI_TEST_OK_LINUX_PATH="$GITHUB_WORKSPACE/.ci/ok-linux" \
           python3 -B tests/ok147_cluster_intent_test.py
 
+  release-bundle:
+    # Build the release bundle on each target platform, then extract, install
+    # into an isolated prefix and run it there (OK-228).
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: ok-cluster
+          persist-credentials: false
+
+      - name: Check out the pinned ok-linux as a sibling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: openkubes/ok-linux
+          ref: a1687263d46c48e47c14f5bf202c9a652d7c1a71
+          path: ok-linux
+          persist-credentials: false
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: ok-cluster/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: ok-cluster/go.sum
+
+      - name: Stage digest-pinned Cilium artifact
+        run: python3 ok-cluster/scripts/prepare_cilium_chart.py --cache "$RUNNER_TEMP/cilium-1.19.6.tgz"
+
+      - name: Build, extract, install and run the bundle
+        env:
+          OK_LINUX_PATH: ${{ github.workspace }}/ok-linux
+          CILIUM_CHART: ${{ runner.temp }}/cilium-1.19.6.tgz
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -B ok-cluster/tests/release_bundle_test.py
+
   target-admission-image:
     runs-on: ubuntu-latest
     timeout-minutes: 15

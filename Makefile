@@ -235,6 +235,11 @@ ok-cli-build: ## Build the local ok CLI without contacting a cluster
 		-o $(SCRIPT_DIR)/.tools/bin/ok ./cmd/ok
 	@echo "Built $(SCRIPT_DIR)/.tools/bin/ok"
 
+ok-release-bundle: ## Build an installable release bundle: make ok-release-bundle GOOS=darwin GOARCH=arm64 [OUT=dist]
+	@bash $(SCRIPT_DIR)/scripts/build_release_bundle.sh --out "$(or $(OUT),$(SCRIPT_DIR)/dist)" \
+		--goos "$(or $(GOOS),$(shell go env GOOS))" --goarch "$(or $(GOARCH),$(shell go env GOARCH))" \
+		--ok-linux "$(OK_LINUX_PATH)" $(if $(wildcard $(CILIUM_CHART)),--chart-source "$(CILIUM_CHART)")
+
 ok-target-admission-build: ## Build the target admission HTTPS service without contacting a cluster
 	@mkdir -p $(SCRIPT_DIR)/.tools/bin
 	@CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false \

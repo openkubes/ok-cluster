@@ -38,7 +38,47 @@ make ok-cli-build
 
 `make ok-cli-build` is the supported Make target (not `make ok-cli`). The resulting CLI is `.tools/bin/ok`; running an ad-hoc `go build` without the Makefile's version/revision linker flags can produce `unknown` revision and fail source-integrity verification.
 
-> **Current installation limitation:** Unlike a standalone distributable binary, these operator commands depend on the matching reviewed source checkout and local lifecycle tools. Installation is not complete merely by placing `ok` on `PATH`.
+> **Current installation limitation:** Unlike a standalone distributable binary, these operator commands depend on the matching reviewed source checkout and local lifecycle tools. Installation is not complete merely by placing `ok` on `PATH`. A release bundle (below) packages exactly that.
+
+### Alternative: install a release bundle (no source checkout to maintain)
+
+A maintainer builds one bundle per platform from a clean, reviewed commit:
+
+```bash
+make ok-release-bundle GOOS=darwin GOARCH=arm64 OUT=dist   # needs the pinned ../ok-linux
+```
+
+This produces `ok-<version>-<os>-<arch>.tar.gz`, its `.sha256` and an unpacked copy:
+
+```text
+ok-<version>-<os>-<arch>/
+  ok-cluster/          minimal Git copy of the release commit
+    .tools/bin/ok      built from that commit (its embedded revision)
+    .tools/cilium-1.19.6.tgz   pinned chart, SHA-256 verified
+  ok-linux/            minimal Git copy of the ok-linux commit pinned in bin/ok
+  release.txt          version, both commits, SHA-256 of bin/ok and the chart
+```
+
+**Integrity and provenance.** Checking the SHA-256 proves only that your tarball matches a published value. It shows you got the intended file, but only as far as you trust where that value was published. A checksum does not independently establish who built the bundle, or from what. `release.txt` makes the relationships explicit: the binary's embedded revision is the `ok-cluster` commit, and the binary pins the `ok-linux` commit. At runtime, `ok` checks that both copies sit at those commits with no changes, which catches accidental modification. None of this is signed release provenance, and this bundle is neither signed nor notarized.
+
+**Versions.** Without `--version`, the bundle is named by `git describe` (for example `v0.15.0-531-g3633dc9`). An official version such as `v1.0.1` is accepted only when the tag `v1.0.1` points at the commit being packaged. Any other build keeps a distinct preview version.
+
+Install into a prefix of your own, as the user who will run `ok`. Git refuses checkouts owned by another user, and the source check then fails closed.
+
+```bash
+shasum -a 256 -c ok-<version>-<os>-<arch>.tar.gz.sha256     # Linux: sha256sum -c
+PREFIX="$HOME/.local/share/ok"                              # or an isolated test prefix
+mkdir -p "$PREFIX" "$HOME/.local/bin"
+tar -xzf ok-<version>-<os>-<arch>.tar.gz -C "$PREFIX"
+ln -s "$PREFIX/ok-<version>-<os>-<arch>/ok-cluster/.tools/bin/ok" "$HOME/.local/bin/ok"
+ok version
+```
+
+- **Keep your current `ok`.** For acceptance testing, use an isolated prefix and call the linked binary by its full path. Do not overwrite an existing global `ok`.
+- **macOS:** a tarball downloaded with a browser is quarantined, and macOS blocks the unsigned binary. Download with `curl`, or review it and clear the flag yourself.
+- **Tools:** the required tools are unchanged: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm.
+
+**Upgrades.** Install the new bundle next to the old one and repoint the link. Lifecycle state in `~/.local/state/ok` and requests in `~/.config/ok` are kept. **Destroying a cluster with a different version than the one that created it is not yet tested and not promised.** Keep the creating bundle installed until its clusters are destroyed, and destroy with that version: call its `ok-cluster/.tools/bin/ok` by full path.
 
 ## 2. Select the management Kubernetes cluster
 
