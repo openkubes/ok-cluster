@@ -172,7 +172,7 @@ func TestSamePlaneInitDiscoversBundleThroughSymlinkWithoutProvider(t *testing.T)
 		t.Fatal("existing configuration changed")
 	}
 	var shown bytes.Buffer
-	if err := runConfigWithRuntime(context.Background(), []string{"show"}, &shown, io.Discard, b.runtime(link, "", false)); err != nil ||
+	if err := runConfigWithRuntime(context.Background(), []string{"show", "-o", "json"}, &shown, io.Discard, b.runtime(link, "", false)); err != nil ||
 		!strings.Contains(shown.String(), `"topology":"same-plane"`) || strings.Contains(shown.String(), "fixture only") {
 		t.Fatalf("show: %v %s", err, shown.String())
 	}
@@ -535,7 +535,7 @@ func TestConfigShowVerifiesTheRunningBundle(t *testing.T) {
 	show := func(rt configInitRuntime) string {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		if err := runConfigWithRuntime(context.Background(), []string{"show", "--config", path}, &stdout, &stderr, rt); err != nil {
+		if err := runConfigWithRuntime(context.Background(), []string{"show", "--config", path, "--output", "json"}, &stdout, &stderr, rt); err != nil {
 			t.Fatal(err)
 		}
 		return stderr.String()
@@ -566,7 +566,7 @@ func TestUpgradeKeepsConfigButUsesRunningBundleSources(t *testing.T) {
 	}
 	// ok config show from RC2: RC2 verified, RC1 paths named as not used by ok up/destroy.
 	var stdout, stderr bytes.Buffer
-	if err := runConfigWithRuntime(context.Background(), []string{"show"}, &stdout, &stderr, rc2.runtime(rc2.executable, "", false)); err != nil {
+	if err := runConfigWithRuntime(context.Background(), []string{"show", "-o", "json"}, &stdout, &stderr, rc2.runtime(rc2.executable, "", false)); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stderr.String(), "running ok: verified") || !strings.Contains(stderr.String(), rc2.okCluster) ||

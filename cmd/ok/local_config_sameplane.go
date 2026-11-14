@@ -132,13 +132,60 @@ func initSamePlaneConfig(ctx context.Context, resolved, lifecycleRoot, okLinux, 
 	return err
 }
 
-// showLocalConfig prints the saved file (paths only) and, for Same-Plane,
-// warns when the running ok is a different bundle than the one recorded.
-func showLocalConfig(ctx context.Context, resolved string, stdout, stderr io.Writer, rt configInitRuntime) error {
+// runningBundleStatus is the live check of the ok being run, with the same
+// rules as ok up. It is never stored and never re-verifies saved paths.
+type runningBundleStatus struct {
+	unidentified bool
+	err          error
+	bundle       verifiedBundle
+	expect       bundleExpectations
+}
+
+func checkRunningBundle(ctx context.Context, rt configInitRuntime) runningBundleStatus {
+	status := runningBundleStatus{expect: runningBundleExpectations()}
+	if rt.expect != nil {
+		status.expect = *rt.expect
+	}
+	executable := rt.executable
+	if executable == "" {
+		var err error
+		if executable, err = os.Executable(); err != nil {
+			status.unidentified = true
+			return status
+		}
+	}
+	status.bundle, status.err = discoverRunningBundle(ctx, executable, status.expect)
+	return status
+}
+
+func (status runningBundleStatus) kind() string {
+	if status.bundle.release {
+		return "release bundle, release.txt matches"
+	}
+	return "source checkout build"
+}
+
+// showLocalConfig is read-only: it loads the saved settings (paths only; no
+// kubeconfig is opened and no cluster contacted) and, for Same-Plane, checks
+// the running ok's bundle live. Text is the default; --output json keeps the
+// RC2 contract (JSON object on stdout, diagnostics on stderr).
+func showLocalConfig(ctx context.Context, resolved string, asJSON bool, stdout, stderr io.Writer, rt configInitRuntime) error {
 	config, err := loadLocalConfig(resolved)
 	if err != nil {
 		return fmt.Errorf("cannot load local configuration %s: %w", resolved, err)
 	}
+	var status runningBundleStatus
+	if config.Format == localConfigFormatV2 {
+		status = checkRunningBundle(ctx, rt)
+	}
+	if asJSON {
+		return showLocalConfigJSON(resolved, config, status, stdout, stderr)
+	}
+	return showLocalConfigText(resolved, config, status, stdout)
+}
+
+// showLocalConfigJSON reproduces the RC2 output byte for byte.
+func showLocalConfigJSON(resolved string, config localCLIConfig, status runningBundleStatus, stdout, stderr io.Writer) error {
 	if err := json.NewEncoder(stdout).Encode(struct {
 		Path   string         `json:"path"`
 		Config localCLIConfig `json:"config"`
@@ -148,37 +195,68 @@ func showLocalConfig(ctx context.Context, resolved string, stdout, stderr io.Wri
 	if config.Format != localConfigFormatV2 {
 		return nil
 	}
-	// Live check of the ok you are running, with the same rules as ok up.
-	// It does not re-verify the saved lifecycleRoot/okLinuxPath: ok up and
-	// ok destroy <name> never use them, they use the running bundle.
-	executable := rt.executable
-	if executable == "" {
-		if executable, err = os.Executable(); err != nil {
-			fmt.Fprintln(stderr, "running ok: cannot identify this binary; not verified")
-			return nil
+	switch {
+	case status.unidentified:
+		fmt.Fprintln(stderr, "running ok: cannot identify this binary; not verified")
+	case status.err != nil:
+		fmt.Fprintf(stderr, "running ok: NOT verified: %v\n  ok up and ok destroy <name> will refuse to run from it\n", status.err)
+	default:
+		fmt.Fprintf(stderr, "running ok: verified (%s): ok-cluster %s at %s, clean; ok-linux %s at %s, clean; Cilium chart pinned\n",
+			status.kind(), status.bundle.lifecycleRoot, shortProvisionRevision(status.expect.revision), status.bundle.okLinuxPath, shortProvisionRevision(status.expect.okLinux))
+		if status.bundle.lifecycleRoot != config.LifecycleRoot {
+			fmt.Fprintf(stderr, "note: the saved sources are %s, not the running bundle.\n"+
+				"  ok up and ok destroy <name> always use the sources of the ok you run; the saved paths\n"+
+				"  serve other commands. init never overwrites: move %s aside yourself, then run ok config init\n", config.LifecycleRoot, resolved)
 		}
 	}
-	expect := runningBundleExpectations()
-	if rt.expect != nil {
-		expect = *rt.expect
-	}
-	bundle, verifyErr := discoverRunningBundle(ctx, executable, expect)
-	if verifyErr != nil {
-		fmt.Fprintf(stderr, "running ok: NOT verified: %v\n  ok up and ok destroy <name> will refuse to run from it\n", verifyErr)
-		return nil
-	}
-	kind := "source checkout build"
-	if bundle.release {
-		kind = "release bundle, release.txt matches"
-	}
-	fmt.Fprintf(stderr, "running ok: verified (%s): ok-cluster %s at %s, clean; ok-linux %s at %s, clean; Cilium chart pinned\n",
-		kind, bundle.lifecycleRoot, shortProvisionRevision(expect.revision), bundle.okLinuxPath, shortProvisionRevision(expect.okLinux))
-	if bundle.lifecycleRoot != config.LifecycleRoot {
-		fmt.Fprintf(stderr, "note: the saved sources are %s, not the running bundle.\n"+
-			"  ok up and ok destroy <name> always use the sources of the ok you run; the saved paths\n"+
-			"  serve other commands. init never overwrites: move %s aside yourself, then run ok config init\n", config.LifecycleRoot, resolved)
-	}
 	return nil
+}
+
+func showLocalConfigText(resolved string, config localCLIConfig, status runningBundleStatus, stdout io.Writer) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "OpenKubes ok config show\n  Config file:   %s\n", resolved)
+	if config.Format != localConfigFormatV2 {
+		fmt.Fprintf(&b, "\nSaved settings (%s, split-plane / legacy):\n"+
+			"  ok-cluster:    %s\n  ok-linux:      %s\n  Clusters dir:  %s\n"+
+			"  Management:    %s (reference only; contents not read)\n  Provider:      %s (reference only; contents not read)\n"+
+			"\nUsed by ok cluster destroy and the offline YAML commands.\n"+
+			"ok up and ok destroy <name> do not use these kubeconfigs; for Same-Plane, write a\n"+
+			"separate file with ok config init --config <file> (init never overwrites).\n"+
+			"\nNothing was changed, no kubeconfig was opened and no cluster was contacted.\n",
+			config.Format, config.LifecycleRoot, config.OKLinuxPath, config.ClustersDir, config.ManagementKubeconfig, config.ProviderKubeconfig)
+		_, err := io.WriteString(stdout, b.String())
+		return err
+	}
+	management := "not saved - ok up asks, or pass --management"
+	if config.ManagementKubeconfig != "" {
+		management = config.ManagementKubeconfig + " (reference only; contents not read)"
+	}
+	fmt.Fprintf(&b, "\nSaved settings (%s, Same-Plane):\n"+
+		"  ok-cluster:    %s\n  ok-linux:      %s\n  Cluster state: %s\n  Management:    %s\n",
+		config.Format, config.LifecycleRoot, config.OKLinuxPath, config.ClustersDir, management)
+	b.WriteString("\nRunning ok (checked now, not saved):\n")
+	switch {
+	case status.unidentified:
+		b.WriteString("  Bundle:        NOT VERIFIED - cannot identify this binary\n")
+	case status.err != nil:
+		fmt.Fprintf(&b, "  ok:            %s %s\n  Bundle:        NOT VERIFIED\n  Reason:        %v\n"+
+			"  ok up and ok destroy <name> will refuse to run from this ok.\n",
+			version, shortProvisionRevision(status.expect.revision), status.err)
+	default:
+		fmt.Fprintf(&b, "  ok:            %s %s\n  Bundle:        verified (%s)\n"+
+			"  ok-cluster:    %s (at this ok's commit, clean)\n  ok-linux:      %s (pinned %s, clean)\n  Cilium chart:  verified (pinned SHA-256)\n",
+			version, shortProvisionRevision(status.expect.revision), status.kind(), status.bundle.lifecycleRoot,
+			status.bundle.okLinuxPath, shortProvisionRevision(status.expect.okLinux))
+		if status.bundle.lifecycleRoot != config.LifecycleRoot {
+			fmt.Fprintf(&b, "\nWarning: the saved sources (%s) are not the running bundle.\n"+
+				"  ok up and ok destroy <name> always use the sources of the ok you run; the saved\n"+
+				"  paths serve other commands. init never overwrites: move %s aside yourself,\n"+
+				"  then run ok config init.\n", config.LifecycleRoot, resolved)
+		}
+	}
+	b.WriteString("\nNothing was changed, no kubeconfig was opened and no cluster was contacted.\n")
+	_, err := io.WriteString(stdout, b.String())
+	return err
 }
 
 func samePlaneManagement(flagValue, configFlag string) (path, source string, err error) {

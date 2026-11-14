@@ -85,7 +85,7 @@ class DestroyCLIIntegrationTests(unittest.TestCase):
                                 env=self.env, cwd=box.home, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_no_owner_calls()
-        shown = subprocess.run([str(BINARY), 'config', 'show'], capture_output=True,
+        shown = subprocess.run([str(BINARY), 'config', 'show', '-o', 'json'], capture_output=True,
             text=True, env=self.env, cwd=box.home, timeout=10)
         self.assertEqual(shown.returncode, 0, shown.stderr)
         config = json.loads(shown.stdout)
