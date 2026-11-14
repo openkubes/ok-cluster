@@ -125,7 +125,8 @@ class RCAcceptanceTest(unittest.TestCase):
         self.assertEqual(sum(a["nativeSmoke"] == "yes" for a in names.values()), 1)
         self.assertEqual(self.user_ok.read_text(), "#!/bin/sh\necho user-ok\n")
         self.assertFalse((self.home / ".config" / "ok").exists())
-        self.assertFalse((self.home / "Library").exists())
+        # Go may create its build cache under ~/Library/Caches; the ok config must not appear.
+        self.assertFalse((self.home / "Library" / "Application Support" / "ok").exists())
         clean = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True)
         self.assertEqual(clean.stdout, "")
 
