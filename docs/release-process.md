@@ -25,7 +25,7 @@ The two never mix:
 
 ## What `scripts/ok-rc-acceptance.sh` checks
 
-Both make targets run it. It needs to run as a normal user, with `git`, `go`, `python3`, `tar` and `sha256sum` or `shasum`. It writes `acceptance-<version>-<UTC time>.json` next to the artifacts; any failure is recorded there as `"result": "FAIL"` with the failed step.
+Both make targets run it. It needs to run as a normal user, with `git`, `go`, `python3`, `tar` and `sha256sum` or `shasum`. It writes `acceptance-<version>-<UTC time>.json` next to the artifacts. **Reporting boundary:** a setup refusal before the output location is accepted (arguments, version format, root, missing tools, `ok-linux`/chart paths, `--out`/`--work` location, an existing report name) exits **2** with no report, and says so on stderr: nothing has been built and there is no accepted place for a report yet. Every failure from step 1 on exits **1** and is recorded in the report as `"result": "FAIL"` with the failed step; a pass exits 0 with `"PASS"`.
 
 1. **source:** `ok-cluster` HEAD equals `--commit` and is clean. Official builds: the tag points at `--commit`. `ok-linux` is at the commit pinned in `cmd/ok/cluster_provision.go` and is clean. The Cilium chart matches the pinned SHA-256.
 2. **tests:** `go vet ./cmd/ok`, `go test ./cmd/ok`, `tests/release_bundle_test.py`, `tests/install_ok_test.py`.

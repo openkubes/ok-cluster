@@ -43,37 +43,59 @@ class RCAcceptanceTest(unittest.TestCase):
     def reports(self, out):
         return [json.loads(p.read_text()) for p in sorted(Path(out).glob("acceptance-*.json"))]
 
+    def assertSetupRefusal(self, result, message, out):
+        """Before the report location is accepted: exit 2, said on stderr, no report anywhere."""
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertIn("no report written", result.stderr)
+        self.assertEqual(list(Path(out).glob("acceptance-*.json")) if Path(out).exists() else [], [])
+
     def test_refusals(self):
         commit = head()
+        missing_chart = str(self.temp / "no-chart.tgz")
         cases = {
             "short commit": (["--commit", commit[:12]], "full 40-character", {}),
-            "out inside the checkout": (["--commit", commit], "outside ok-cluster", {"--out": str(ROOT / "rc-test-out")}),
             "official version without --release": (["--commit", commit], "need --release", {"--version": "v0.0.1"}),
             "--release with an rc version": (["--release", "--commit", commit], "no -rc suffix", {}),
+            "missing chart": (["--commit", commit], "--chart must be", {"--chart": missing_chart}),
+            "missing ok-linux": (["--commit", commit], "ok-linux checkout not found", {"--ok-linux": str(self.temp / "no-ok-linux")}),
+            "out inside the checkout": (["--commit", commit], "outside ok-cluster", {"--out": str(ROOT / "rc-test-out")}),
+            "unknown argument": (["--commit", commit, "--bogus"], "unknown argument", {}),
         }
         for label, (args, message, override) in cases.items():
             with self.subTest(label):
+                out = override.get("--out", str(self.temp / label.replace(" ", "-")))
                 command = ["bash", str(SCRIPT), "--version", override.get("--version", VERSION), *args,
-                           "--ok-linux", os.environ["OK_LINUX_PATH"], "--chart", os.environ["CILIUM_CHART"],
-                           "--out", override.get("--out", str(self.temp / label.replace(" ", "-")))]
+                           "--ok-linux", override.get("--ok-linux", os.environ["OK_LINUX_PATH"]),
+                           "--chart", override.get("--chart", os.environ["CILIUM_CHART"]), "--out", out]
                 result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "HOME": str(self.home)})
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(message, result.stderr)
+                self.assertSetupRefusal(result, message, out)
         self.assertFalse((ROOT / "rc-test-out").exists(), "created a directory inside the checkout")
-        # A commit that is not HEAD fails at the source step and says so in the report.
-        other = "0" * 40
-        result = self.run_script("--commit", other, out=self.temp / "wrong-commit")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"not --commit {other}", result.stderr)
-        (report,) = self.reports(self.temp / "wrong-commit")
-        self.assertEqual((report["result"], report["failedStep"]), ("FAIL", "source"))
-        # A non-empty output directory is never reused for a build.
+        # A non-empty output directory and an existing --work directory are setup refusals too.
         busy = self.temp / "busy"
         busy.mkdir()
         (busy / "keep").write_text("x")
-        result = self.run_script("--commit", head(), out=busy)
-        self.assertIn("new or empty directory", result.stderr)
+        self.assertSetupRefusal(self.run_script("--commit", commit, out=busy), "new or empty directory", busy)
         self.assertEqual([p.name for p in busy.iterdir()], ["keep"])
+        work = self.temp / "existing-work"
+        work.mkdir()
+        self.assertSetupRefusal(self.run_script("--commit", commit, "--work", str(work), out=self.temp / "with-work"),
+                                "--work must not exist", self.temp / "with-work")
+        # An unexpected command failure during setup (set -e) is reported the same way.
+        locked = self.temp / "locked"
+        locked.mkdir(mode=0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        result = self.run_script("--commit", commit, out=locked / "out")
+        self.assertSetupRefusal(result, "setup failed (exit 1)", locked / "out")
+        # From the source step on, every failure exits 1 and is in the report.
+        other = "0" * 40
+        result = self.run_script("--commit", other, out=self.temp / "wrong-commit")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(f"not --commit {other}", result.stderr)
+        self.assertNotIn("no report written", result.stderr)
+        (report,) = self.reports(self.temp / "wrong-commit")
+        self.assertEqual((report["result"], report["failedStep"]), ("FAIL", "source"))
+        self.assertEqual(report["steps"][-1], {"name": "source", "status": "FAIL", "detail": "exit 1"})
 
     def test_release_requires_tag_on_the_exact_commit(self):
         """In a throwaway local clone (never pushed): a missing tag and a tag on
@@ -93,6 +115,7 @@ class RCAcceptanceTest(unittest.TestCase):
 
         result = release(self.temp / "no-tag", later)
         self.assertIn("does not exist locally", result.stderr)
+        self.assertEqual((result.returncode, self.reports(self.temp / "no-tag")[0]["failedStep"]), (1, "source"))
         subprocess.run(git + ["tag", "v0.0.1", base], check=True)
         result = release(self.temp / "other-commit", later)
         self.assertIn(f"points at {base}, not the approved commit {later}", result.stderr)

@@ -30,6 +30,15 @@
 #                and default config file are unchanged
 # Writes <out>/acceptance-<version>-<UTC timestamp>.json (never overwritten).
 #
+# Reporting boundary and exit codes:
+#   2  setup refused before the report location is known (arguments, version,
+#      root, missing tools, ok-linux/chart paths, --out/--work location, an
+#      existing report name). Nothing is built; no report is written, because
+#      no accepted output directory exists yet; stderr says so.
+#   1  any failure after that point (steps 1-6): always written to the report
+#      with "result": "FAIL" and the failed step.
+#   0  all steps passed; the report says "PASS".
+#
 # It never changes PATH or shell files, never touches ~/.local/bin/ok or the
 # user's configuration, never runs ok up or ok destroy, never contacts a
 # cluster, never tags or publishes. The smoke test needs no network; building
@@ -38,7 +47,22 @@ set -euo pipefail
 export LC_ALL=C
 
 usage() { sed -n '3,4p' "$0" >&2; exit 2; }
-fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+# Until the report location is accepted (REPORTING=1), every refusal - including
+# an unexpected command failure under set -e - exits 2 and says no report was written.
+REPORTING=0
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  (( REPORTING )) && exit 1
+  printf '  setup refused before the report location was known: no report written (exit 2)\n' >&2
+  exit 2
+}
+early_exit() {
+  local code=$?
+  (( code == 0 || code == 2 )) && return
+  printf 'ERROR: setup failed (exit %s) before the report location was known: no report written (exit 2)\n' "$code" >&2
+  exit 2
+}
+trap early_exit EXIT
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 VERSION="" COMMIT="" OK_LINUX="$ROOT/../ok-linux" CHART="$ROOT/.tools/cilium-1.19.6.tgz" OUT="" WORK="" SMOKE_ONLY=0 RELEASE=0
@@ -124,6 +148,7 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
+REPORTING=1
 
 git_clean() { [[ -z "$(git -C "$1" status --porcelain --untracked-files=all)" ]]; }
 user_state() { # fingerprint of what this run must never touch
