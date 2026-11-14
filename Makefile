@@ -1,7 +1,7 @@
 # OpenKubes Cluster Templating — Makefile
 # Usage: make new CLUSTER=ok3 TYPE=ubuntu|talos|talos-mgmt|flatcar [HA=true] [WORKERS=3] [SCHEDULING_PROFILE=ok-gpu|ok-gpu-single-replica]
 #        TYPE is REQUIRED — no silent default (OK-119).
-.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test ok76-make-fail-closed-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok-target-admission-build ok-target-admission-image-build ok-target-admission-image-smoke ok147-runner-image-plan ok147-runner-image-build install-teardown-ledger install-teardown-provider-reader remove-teardown-provider-reader migrate-teardown-ledger prune-teardown-ledger ok197-teardown-ledger-test ok198-expected-nodes-test
+.PHONY: new render install kubeconfig install-cni install-storage install-ingress install-observability install-observability-metrics install-keycloak register-cluster unregister-cluster bootstrap bootstrap-resume bootstrap-post-apply annotate-pvcs upgrade clean teardown teardown-all reap-orphaned-volumes e2e e2e-verify list status help prepare-cilium-chart verify-cilium-chart cilium-chart-tool-test configure-kubevirt-expand-disks talos-registry-trust-review talos-registry-trust-dry-run talos-registry-trust-apply ok138-registry-trust-test ok178-workload-user-namespaces-test verify-workload-user-namespaces ok186-lifecycle-test ok76-make-fail-closed-test contract-executor-test contract-executor-dry-run ok-cli-build ok-cli-offline-smoke ok-rc-acceptance ok-rc-smoke-install ok-release-acceptance ok-target-admission-build ok-target-admission-image-build ok-target-admission-image-smoke ok147-runner-image-plan ok147-runner-image-build install-teardown-ledger install-teardown-provider-reader remove-teardown-provider-reader migrate-teardown-ledger prune-teardown-ledger ok197-teardown-ledger-test ok198-expected-nodes-test
 .DEFAULT_GOAL := help
 
 OK_CLI_VERSION  ?= $(shell git describe --tags --always --dirty)
@@ -239,6 +239,34 @@ ok-release-bundle: ## Build an installable release bundle: make ok-release-bundl
 	@bash $(SCRIPT_DIR)/scripts/build_release_bundle.sh --out "$(or $(OUT),$(SCRIPT_DIR)/dist)" \
 		--goos "$(or $(GOOS),$(shell go env GOOS))" --goarch "$(or $(GOARCH),$(shell go env GOARCH))" \
 		--ok-linux "$(OK_LINUX_PATH)" $(if $(wildcard $(CILIUM_CHART)),--chart-source "$(CILIUM_CHART)")
+
+# Release-candidate build and acceptance (OK-228). Version and commit are always
+# explicit; the checkout must be at RC_COMMIT and clean. See docs/cli-v1.0.1-release-acceptance.md.
+RC_VERSION ?=
+RC_COMMIT ?=
+RC_OUT ?= $(SCRIPT_DIR)/../rc-artifacts/$(RC_VERSION)
+RC_WORK ?=
+
+ok-rc-acceptance: ## Build + verify + smoke-test an RC: make ok-rc-acceptance RC_VERSION=v1.0.1-rc3 RC_COMMIT=<40-hex SHA>
+	@test -n "$(RC_VERSION)" && test -n "$(RC_COMMIT)" || { echo "set RC_VERSION and RC_COMMIT explicitly" >&2; exit 2; }
+	@bash $(SCRIPT_DIR)/scripts/ok-rc-acceptance.sh --version "$(RC_VERSION)" --commit "$(RC_COMMIT)" \
+		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RC_OUT)" $(if $(RC_WORK),--work "$(RC_WORK)")
+
+ok-rc-smoke-install: ## Re-run verify + isolated smoke on already built RC artifacts in RC_OUT
+	@test -n "$(RC_VERSION)" && test -n "$(RC_COMMIT)" || { echo "set RC_VERSION and RC_COMMIT explicitly" >&2; exit 2; }
+	@bash $(SCRIPT_DIR)/scripts/ok-rc-acceptance.sh --version "$(RC_VERSION)" --commit "$(RC_COMMIT)" \
+		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RC_OUT)" $(if $(RC_WORK),--work "$(RC_WORK)") --smoke-only
+
+# Official SemVer release build (docs/release-process.md): only after explicit
+# approval, with the tag RELEASE_VERSION already pointing at RELEASE_COMMIT.
+RELEASE_VERSION ?=
+RELEASE_COMMIT ?=
+RELEASE_OUT ?= $(SCRIPT_DIR)/../release-artifacts/$(RELEASE_VERSION)
+
+ok-release-acceptance: ## Official build + verify + smoke: make ok-release-acceptance RELEASE_VERSION=v1.0.1 RELEASE_COMMIT=<tagged SHA>
+	@test -n "$(RELEASE_VERSION)" && test -n "$(RELEASE_COMMIT)" || { echo "set RELEASE_VERSION and RELEASE_COMMIT explicitly" >&2; exit 2; }
+	@bash $(SCRIPT_DIR)/scripts/ok-rc-acceptance.sh --release --version "$(RELEASE_VERSION)" --commit "$(RELEASE_COMMIT)" \
+		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RELEASE_OUT)" $(if $(RC_WORK),--work "$(RC_WORK)")
 
 ok-target-admission-build: ## Build the target admission HTTPS service without contacting a cluster
 	@mkdir -p $(SCRIPT_DIR)/.tools/bin

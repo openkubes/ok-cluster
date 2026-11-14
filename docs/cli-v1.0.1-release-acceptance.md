@@ -1,14 +1,15 @@
 # CLI v1.0.1 release acceptance checklist (OK-228)
 
-This checklist applies to a new release candidate built from the merge commit of the first-run PR. The RC1 artifacts (`2a9b805`) are not changed.
+This checklist applies to acceptance builds (`v1.0.1-rcN`) of the approved merge commit, and then to the official v1.0.1 built from the tag on that same commit (see `docs/release-process.md`). The RC1 (`2a9b805`) and RC2 artifacts are not changed.
 
 The live steps require separately authorized disposable infrastructure and a dedicated, explicitly authorized identity. Run nothing against shared clusters without approval.
 
 ## A. Build (maintainer, clean checkout of the reviewed commit)
 
-- [ ] `make ok-release-bundle GOOS=darwin GOARCH=arm64 …` and `GOOS=linux GOARCH=amd64 …` with the pinned `ok-linux` and the pinned Cilium chart
-- [ ] Record the Go toolchain, build host, `release.txt` and SHA-256 of both archives. Never claim a signature or reproducibility that wasn't established.
-- [ ] CI green on the reviewed commit: `test`, `release-bundle` (macOS and Ubuntu, including `install_ok_test.py`)
+- [ ] `make ok-rc-acceptance RC_VERSION=v1.0.1-rcN RC_COMMIT=<approved commit>` passes. It checks the sources, runs the tests, builds both bundles, verifies the checksums and `release.txt`, smoke-tests the native bundle, and writes `acceptance-*.json` next to the artifacts
+- [ ] `make ok-rc-smoke-install …` passes natively on the other platform (macOS ARM64 and Linux AMD64/WSL2)
+- [ ] Record the Go toolchain, build host and the acceptance reports. Never claim a signature or reproducibility that wasn't established.
+- [ ] CI green on the reviewed commit: `test`, `release-bundle` (macOS and Ubuntu, including `install_ok_test.py` and `ok_rc_acceptance_test.py`)
 
 ## B. Installation, per platform (macOS ARM64 natively; Linux AMD64 natively, preferably WSL2), as an unprivileged user
 
@@ -27,7 +28,7 @@ The live steps require separately authorized disposable infrastructure and a ded
 - [ ] Without a terminal (`</dev/null`), `ok config init` shows the summary and saves nothing; with `--yes` it saves, but only after the same verification
 - [ ] No provider kubeconfig is requested. The management kubeconfig must be 0600, a regular file, and not a symlink. Its contents are not read; no cluster is contacted
 - [ ] Missing tools (for example uninstalling or hiding `helm`) are listed and nothing is installed
-- [ ] A second `ok config init` refuses (create-only); `ok config show` shows the path and settings and reports the running bundle as verified (tampered bundle: "NOT verified"), never kubeconfig contents
+- [ ] A second `ok config init` refuses (create-only); `ok config show` prints a readable summary (saved settings separate from the live running-bundle check, which reports `verified`, or `NOT VERIFIED` with a reason for a tampered bundle) and never kubeconfig contents; `ok config show -o json` / `--output json` output is identical to RC2
 - [ ] The config path is the OS default (macOS `~/Library/Application Support/ok/config.json`) or `--config`; an explicit missing `--config` fails for `ok up` and `ok destroy`
 - [ ] Split-plane compatibility: `ok config init --topology split-plane` (or the five path flags) still writes `ok-cli-paths/v1` with both kubeconfigs; legacy `ok cluster destroy` refuses a Same-Plane config
 
@@ -47,9 +48,11 @@ The live steps require separately authorized disposable infrastructure and a ded
 - [ ] Independent absence checks for namespace, exact PVs, Longhorn volumes and Golden image cloner RBAC; the ledger ConfigMap persists; the Golden image is preserved
 - [ ] Two disposable clusters from the same installation (OK-228 gate)
 
-## E. Release gates (unchanged)
+## E. Release gates (v1.0.1 is not stable before A to D and these are complete)
 
 - [ ] Licensing and redistribution decision
 - [ ] Provenance/signing decision (or an explicit unsigned Community Preview policy)
-- [ ] Version and tag semantics decided; a tag only on the reviewed commit, and only with explicit approval
+- [x] Version semantics decided: SemVer, one version for ok-cluster releases and the `ok` CLI; v1.0.1 is the first `1.x` release, and the next patch release is v1.0.2
+- [ ] Approval to tag: `v1.0.1` (free in the tag history as of 2026-11-14) on the approved commit only; then `make ok-release-acceptance RELEASE_VERSION=v1.0.1 RELEASE_COMMIT=<approved commit>`
+- [ ] Approval to publish the GitHub release (checklist in `docs/release-process.md`); release notes in `docs/release-notes/v1.0.1.md`
 - [ ] Release notes state the limitations: Same-Plane only, prepared management cluster, unsigned, local CIDR inventory, no cross-version destroy, no name reuse
