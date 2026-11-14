@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -189,6 +191,94 @@ class RenderInventoryTests(unittest.TestCase):
                         cluster="ok-m2-test", cluster_dir=str(stage), require_live_inventory=True
                     ))
             self.assertEqual([path.name for path in stage.iterdir()], ["cluster-config.yaml"])
+
+
+class RenderExternalStateTests(unittest.TestCase):
+    """ok up stages under CLUSTERS_DIR (outside the checkout); render must accept
+    exactly that staging directory and nothing looser (OK-228 acceptance blocker)."""
+
+    CONFIG = ("name: ok-v101-a1\ntype: talos\nprovider: kubevirt\nproviderProfile:\n  name: ok-infra\n"
+              "network:\n  endpoint: auto\n  podCIDR: auto\n  serviceCIDR: auto\n")
+
+    def render(self, state, stage):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(render, "CLUSTERS_DIR", state), \
+             mock.patch.object(render, "live_metallb_allocations", return_value={}), \
+             mock.patch.object(render, "resolve_talos_config", side_effect=lambda value, _path: value), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            render.cmd_render(argparse.Namespace(cluster="ok-v101-a1", cluster_dir=str(stage), require_live_inventory=True))
+        return out.getvalue(), err.getvalue()
+
+    def test_renders_into_staging_directory_under_external_clusters_dir(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp).resolve() / "state" / "ok" / "clusters"
+            stage = state / ".ok76-ok-v101-a1.FFzvxy"
+            stage.mkdir(parents=True)
+            (stage / "cluster-config.yaml").write_text(self.CONFIG, encoding="utf-8")
+            out, _ = self.render(state, stage)
+            self.assertTrue((stage / "cluster-base.yaml").is_file())
+            self.assertIn(f"rendered → {stage}/", out)  # absolute: not a descendant of the checkout
+
+    def test_rejects_unsafe_staging_directories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            state = base / "state" / "ok" / "clusters"
+            state.mkdir(parents=True)
+            target = base / "elsewhere"
+            target.mkdir()
+            (state / ".ok76-ok-v101-a1.link").symlink_to(target, target_is_directory=True)
+            (state / "nested").mkdir()
+            cases = {
+                "outside CLUSTERS_DIR": base / ".ok76-ok-v101-a1.abc",
+                "checkout instead of CLUSTERS_DIR": ROOT / ".ok76-ok-v101-a1.abc",
+                "nested below CLUSTERS_DIR": state / "nested" / ".ok76-ok-v101-a1.abc",
+                "other cluster's name": state / ".ok76-ok-other.abc",
+                "not a staging name": state / "ok-v101-a1",
+                "symlink": state / ".ok76-ok-v101-a1.link",
+                "missing": state / ".ok76-ok-v101-a1.missing",
+                "relative": Path("state/ok/clusters/.ok76-ok-v101-a1.abc"),
+            }
+            for label, stage in cases.items():
+                if label not in ("symlink", "missing", "relative", "checkout instead of CLUSTERS_DIR"):
+                    stage.mkdir(parents=True, exist_ok=True)
+                with self.subTest(label):
+                    with self.assertRaises(SystemExit):
+                        _, err = self.render(state, stage)
+            self.assertEqual(sorted(p.name for p in target.iterdir()), [])
+
+    def test_real_make_new_publishes_into_external_state(self):
+        """The acceptance failure end to end: real make new, new-cluster.sh and
+        render.py with ok up's assignments; only kubectl is faked."""
+        if not os.environ.get("OK_LINUX_PATH"):
+            self.skipTest("needs OK_LINUX_PATH (pinned ok-linux) for the real renderer")
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            state, bin_dir = base / "state" / "ok" / "clusters", base / "bin"
+            state.mkdir(parents=True)
+            bin_dir.mkdir()
+            kubectl = bin_dir / "kubectl"
+            kubectl.write_text("#!/bin/sh\ncase \"$*\" in *\" svc \"*) "
+                               "echo '{\"apiVersion\":\"v1\",\"kind\":\"List\",\"metadata\":{},\"items\":[]}';; esac\nexit 0\n")
+            kubectl.chmod(0o755)
+            management = base / "management.yaml"
+            management.write_text("fixture only\n")
+            before = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"], capture_output=True, text=True).stdout
+            result = subprocess.run(
+                ["make", "-s", "-C", str(ROOT), "new", "CLUSTER=ok-v101-a1", "TYPE=talos", "PROVIDER=kubevirt", "HA=false",
+                 "WORKERS=1", "K8S_VERSION=v1.34.1", "TALOS_VERSION=v1.9.6", "ARCHITECTURE=amd64",
+                 "SCHEDULING_PROFILE=ok-infra", "NODE_SELECTOR=ok-infra", "REGISTRY_TRUST=false", "START_IP=",
+                 "OK76_REQUIRE_LIVE_METALLB_INVENTORY=true", f"TALOS_INFRA_KUBECONFIG={management}",
+                 f"OK_LINUX_PATH={os.environ['OK_LINUX_PATH']}", f"CLUSTERS_DIR={state}"],
+                capture_output=True, text=True, timeout=120,
+                env={**os.environ, "HOME": str(base), "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            published = state / "ok-v101-a1"
+            for name in ("cluster-config.yaml", "cluster-base.yaml"):
+                self.assertTrue((published / name).is_file(), name)
+            self.assertEqual(sorted(p.name for p in state.iterdir()), ["ok-v101-a1"])  # no staging left
+            after = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"], capture_output=True, text=True).stdout
+            self.assertEqual(after, before)  # nothing written into the checkout
 
 
 class BootstrapStateDirectoryTests(unittest.TestCase):
