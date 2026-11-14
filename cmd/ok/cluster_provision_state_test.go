@@ -95,3 +95,17 @@ func TestClusterProvisionRefusesNameInStateOrCheckout(t *testing.T) {
 		})
 	}
 }
+
+// OK-228 R1: the lifecycle records the creating CLI's version and binary hash
+// as informational metadata; enforcement is by source commit in Python.
+func TestProvisionEnvironmentCarriesCreatorMetadata(t *testing.T) {
+	env := strings.Join(provisionEnvironment(clusterProvisionRuntime{environmentPath: "/tools", cliBinarySHA256: strings.Repeat("b", 64)}), "\n")
+	for _, want := range []string{"OK_CLI_VERSION=" + version, "OK_CLI_BINARY_SHA256=" + strings.Repeat("b", 64)} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("environment lacks %s:\n%s", want, env)
+		}
+	}
+	if strings.Contains(strings.Join(provisionEnvironment(clusterProvisionRuntime{environmentPath: "/tools"}), "\n"), "OK_CLI_BINARY_SHA256") {
+		t.Fatal("an unknown binary hash must be omitted, not passed empty")
+	}
+}

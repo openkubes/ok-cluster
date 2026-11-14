@@ -569,7 +569,9 @@ args = list(raw)""",
         self.assertEqual(self.record()["namespace_uid"], first["namespace_uid"])
         self.assertTrue(self.record()["complete"])
 
-    def test_real_cli_explicit_same_plane_destroy(self):
+    def real_cluster_destroy(self):
+        """`ok cluster destroy --topology same-plane` on a real terminal; types
+        ok at the CLI's own prompt and returns (returncode, stdout, stderr)."""
         binary = Path(
             os.environ.get("OK_CLI_TEST_BINARY", fixtures.ROOT / ".tools/bin/ok")
         )
@@ -602,6 +604,7 @@ args = list(raw)""",
             "FAKE_STATE": str(self.box.state_path),
             "FAKE_LOG": str(self.box.log),
         }
+        self.box.log.write_text("")
         process = subprocess.Popen(
             args, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
@@ -617,14 +620,123 @@ args = list(raw)""",
                     output += chunk
             os.write(master, b"ok\n")
             stdout, stderr = process.communicate(timeout=90)
-            self.assertEqual(process.returncode, 0, stderr.decode())
-            self.assertTrue(self.record()["complete"])
-            self.assertIn(b"independently observed complete", stdout)
+            return process.returncode, output + stdout, stderr
         finally:
             if process.poll() is None:
                 process.kill()
                 process.communicate()
             os.close(master)
+
+    def test_real_cli_explicit_same_plane_destroy(self):
+        code, stdout, stderr = self.real_cluster_destroy()
+        self.assertEqual(code, 0, stderr.decode())
+        self.assertTrue(self.record()["complete"])
+        self.assertIn(b"independently observed complete", stdout)
+
+    # OK-228 R1: creating-build identity in the preparation record.
+
+    def preparation_path(self):
+        return self.box.rendered / ".same-plane-lifecycle.json"
+
+    def edit_preparation(self, change):
+        path = self.preparation_path()
+        saved = json.loads(path.read_text())
+        change(saved)
+        path.write_text(json.dumps(saved, sort_keys=True, indent=2) + "\n")
+
+    def assert_refused(self, result, calls, message):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(message, result.stderr)
+        self.assertNotIn("Type ", result.stdout)
+        self.assertEqual(fixtures.mutation_calls(calls), [])
+        self.assertEqual(self.box.read_state()["configmaps"], {})
+
+    def test_preparation_binds_the_creating_source_commits(self):
+        saved = json.loads(self.preparation_path().read_text())
+        head = lambda path: subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(saved["build"], {
+            "okClusterCommit": head(fixtures.ROOT),
+            "okLinuxCommit": head(fixtures.OK_LINUX_PATH),
+        })
+        # Created without the CLI: informational metadata says so explicitly.
+        self.assertEqual(saved["createdBy"], {"version": "unrecorded", "binarySHA256": "unrecorded"})
+
+    def test_same_commits_with_other_version_or_binary_still_destroy(self):
+        self.edit_preparation(lambda s: s.update(createdBy={
+            "version": "v9.9.9-rebuilt", "binarySHA256": "c" * 64}))
+        result, _ = self.destroy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.record()["complete"])
+        # The original creator metadata is preserved, never rewritten.
+        self.assertEqual(json.loads(self.preparation_path().read_text())["createdBy"]["version"], "v9.9.9-rebuilt")
+
+    def test_mismatched_creating_build_refuses_before_any_change(self):
+        for key in ("okClusterCommit", "okLinuxCommit"):
+            with self.subTest(key):
+                original = self.preparation_path().read_text()
+                self.edit_preparation(lambda s: s["build"].update({key: "0" * 40}))
+                result, calls = self.destroy()
+                self.assert_refused(result, calls, "Run it with the creating build")
+                self.assertIn(f"{'ok-cluster' if key == 'okClusterCommit' else 'ok-linux'} {'0' * 40}", result.stderr)
+                self.preparation_path().write_text(original)
+
+    def test_legacy_record_without_build_refuses(self):
+        self.edit_preparation(lambda s: s.pop("build"))
+        result, calls = self.destroy()
+        self.assert_refused(result, calls, "predates creating-build identity")
+
+    def test_malformed_build_or_creator_metadata_refuses(self):
+        cases = {
+            "build not a mapping": lambda s: s.update(build="x"),
+            "build extra key": lambda s: s["build"].update(extra="y"),
+            "build short commit": lambda s: s["build"].update(okLinuxCommit="abc"),
+            "build uppercase commit": lambda s: s["build"].update(okClusterCommit=s["build"]["okClusterCommit"].upper()),
+            "createdBy missing": lambda s: s.pop("createdBy"),
+            "createdBy extra key": lambda s: s["createdBy"].update(path="/old/install"),
+            "createdBy bad version": lambda s: s["createdBy"].update(version="v1 ; rm"),
+            "createdBy bad hash": lambda s: s["createdBy"].update(binarySHA256="xyz"),
+        }
+        for label, change in cases.items():
+            with self.subTest(label):
+                original = self.preparation_path().read_text()
+                self.edit_preparation(change)
+                result, calls = self.destroy()
+                self.assert_refused(result, calls, "malformed")
+                self.preparation_path().write_text(original)
+
+    def test_modified_truncated_missing_or_symlinked_preparation_refuses(self):
+        path = self.preparation_path()
+        original = path.read_text()
+        cases = [
+            ("unknown field", lambda: self.edit_preparation(lambda s: s.update(note="edited")), "identity/artifacts changed"),
+            ("truncated", lambda: path.write_text(original[: len(original) // 2]), "unreadable or truncated"),
+            ("missing", lambda: path.unlink(), "original same-plane preparation is missing"),
+            ("symlink", lambda: (path.unlink(), path.symlink_to(self.box.home / "elsewhere.json")), "must not be a symlink"),
+        ]
+        for label, damage, message in cases:
+            with self.subTest(label):
+                damage()
+                result, calls = self.destroy()
+                self.assert_refused(result, calls, message)
+                if path.is_symlink() or path.exists():
+                    path.unlink()
+                path.write_text(original)
+
+    def test_both_destroy_entry_points_refuse_a_mismatched_build(self):
+        self.edit_preparation(lambda s: s["build"].update(okClusterCommit="0" * 40))
+        # ok destroy <name>: the lifecycle refuses before its name prompt.
+        result, calls = self.destroy_typing(fixtures.CLUSTER.encode() + b"\n")
+        self.assert_refused(result, calls, "Run it with the creating build")
+        # ok cluster destroy --topology same-plane: refused after its own prompt,
+        # before the lifecycle changes anything.
+        code, stdout, stderr = self.real_cluster_destroy()
+        self.assertNotEqual(code, 0)
+        self.assertIn(b"Run it with the creating build", stderr)
+        self.assertEqual(fixtures.mutation_calls([json.loads(l) for l in self.box.log.read_text().splitlines()]), [])
+        self.assertEqual(self.box.read_state()["configmaps"], {})
 
     def test_make_orders_preflight_apply_and_capture(self):
         result, _ = self.box.make(

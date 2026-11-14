@@ -78,7 +78,29 @@ ok version
 - **macOS:** a tarball downloaded with a browser is quarantined, and macOS blocks the unsigned binary. Download with `curl`, or review it and clear the flag yourself.
 - **Tools:** the required tools are unchanged: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm.
 
-**Upgrades.** Install the new bundle next to the old one and repoint the link. Lifecycle state in `~/.local/state/ok` and requests in `~/.config/ok` are kept. **Destroying a cluster with a different version than the one that created it is not yet tested and not promised.** Keep the creating bundle installed until its clusters are destroyed, and destroy with that version: call its `ok-cluster/.tools/bin/ok` by full path.
+**Upgrades.** Install the new bundle next to the old one and repoint the link. Lifecycle state in `~/.local/state/ok` and requests in `~/.config/ok` are kept. Keep the creating bundle installed until its clusters are destroyed, and destroy with that version: call its `ok-cluster/.tools/bin/ok` by full path.
+
+**Creating-build identity (from v1.1).** At preparation, before anything is applied, `ok up` records in `.same-plane-lifecycle.json`:
+
+- **Enforced:** the source commits that actually ran (`build.okClusterCommit`, `build.okLinuxCommit`).
+- **Informational:** the CLI version and binary SHA-256 (`createdBy`).
+
+`ok destroy` and `ok cluster destroy --topology same-plane` proceed only when the running sources have the same two commits. A different version string or binary hash built from those commits is accepted. Moving an installation doesn't matter, because no install path is recorded. These cases are refused before anything changes:
+
+- a commit mismatch;
+- a missing, malformed, truncated, symlinked or edited record.
+
+This is a compatibility check. It is not supply-chain provenance, and all existing source-integrity checks still apply.
+
+**Legacy records (created before v1.1, without `build`) are refused.** Running an older CLI is not a supported workaround, and `ok` never suggests or performs a downgrade. Destroying such a cluster is a separately reviewed exception and requires all of:
+
+1. verified management and cluster identities (API identity, namespace and Cluster UIDs from the original evidence);
+2. complete original lifecycle evidence;
+3. an independent inventory review of what will be deleted;
+4. explicit operator authorization;
+5. an audit record of the decision, kept with the evidence.
+
+Evidence is never edited to make a check pass.
 
 ## 2. Select the management Kubernetes cluster
 
