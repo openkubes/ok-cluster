@@ -35,6 +35,7 @@ type provisionCall struct {
 type provisionFixture struct {
 	t                      *testing.T
 	root, okLinux          string
+	dirtyStatus            string // git status output for the Make checkout
 	management             string
 	workload               string
 	chartHash              string
@@ -132,6 +133,7 @@ users:
 		makeFailure: make(map[string]error), makeCount: make(map[string]int)}
 	fixture.runtime = clusterProvisionRuntime{
 		makeRoot: root, okLinuxRoot: okLinux, makeExecutable: tools["make"], makeRevision: strings.Repeat("a", 40),
+		clustersDir:     filepath.Join(base, "state", "ok", "clusters"),
 		okLinuxRevision: strings.Repeat("b", 40), expectedChartHash: chartHash,
 		managementKubeconfig: mgmt, workloadKubeconfig: workload, environmentPath: bin, toolPaths: tools,
 		isTerminal: true, newTimeout: time.Second, bootstrapTimeout: time.Second,
@@ -163,8 +165,8 @@ func (fixture *provisionFixture) run(ctx context.Context, executable string, arg
 			return nil
 		}
 		if subcommand == "status" {
-			if fixture.makeCount["new"] > 0 && dir == fixture.root {
-				fmt.Fprintf(stdout, "?? preview-one/cluster-config.yaml\n?? preview-one/cluster-base.yaml\n")
+			if fixture.dirtyStatus != "" && dir == fixture.root {
+				fmt.Fprint(stdout, fixture.dirtyStatus)
 			}
 			return nil
 		}
@@ -222,7 +224,7 @@ func provisionGitSubcommand(args []string) string {
 
 func (fixture *provisionFixture) writeScaffold() {
 	fixture.t.Helper()
-	directory := filepath.Join(fixture.root, "preview-one")
+	directory := filepath.Join(fixture.runtime.clustersDir, "preview-one")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -327,8 +329,11 @@ func TestClusterProvisionRunsOnlyNewThenBootstrapWithPinnedInputs(t *testing.T) 
 	for _, entry := range entries {
 		rootNames = append(rootNames, entry.Name())
 	}
-	if !reflect.DeepEqual(rootNames, []string{".git", ".tools", "Makefile", "preview-one"}) {
-		t.Fatalf("unexpected files were created in Make checkout: %v", rootNames)
+	if !reflect.DeepEqual(rootNames, []string{".git", ".tools", "Makefile"}) {
+		t.Fatalf("lifecycle state must stay outside the Make checkout: %v", rootNames)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml")); err != nil {
+		t.Fatalf("scaffold not in the state directory: %v", err)
 	}
 	var makeCalls []provisionCall
 	for _, call := range fixture.calls {
@@ -398,7 +403,7 @@ func TestClusterProvisionSecondConfirmationPreservesScaffold(t *testing.T) {
 	if err == nil || fixture.makeCount["new"] != 1 || fixture.makeCount["bootstrap"] != 0 {
 		t.Fatalf("second confirmation boundary failed: err=%v calls=%#v", err, fixture.makeCount)
 	}
-	if _, statErr := os.Stat(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml")); statErr != nil {
 		t.Fatal("completed scaffold was not preserved")
 	}
 	if !strings.Contains(output.String(), "endpoint: 192.168.100.200") {
@@ -438,7 +443,7 @@ func TestClusterProvisionFailureDoesNotRetryOrCleanScaffold(t *testing.T) {
 		if !strings.Contains(stdout.String(), "safe progress") || !strings.Contains(stderr.String(), "safe error detail") {
 			t.Fatalf("Make diagnostics were not preserved: stdout=%q stderr=%q", stdout.String(), stderr.String())
 		}
-		if _, statErr := os.Stat(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")); statErr != nil {
+		if _, statErr := os.Stat(filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml")); statErr != nil {
 			t.Fatal("partial published scaffold was cleaned")
 		}
 	})
@@ -449,7 +454,7 @@ func TestClusterProvisionFailureDoesNotRetryOrCleanScaffold(t *testing.T) {
 		if err == nil || fixture.makeCount["new"] != 1 || fixture.makeCount["bootstrap"] != 1 {
 			t.Fatalf("unexpected command counts: %v %#v", err, fixture.makeCount)
 		}
-		if _, statErr := os.Stat(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")); statErr != nil {
+		if _, statErr := os.Stat(filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml")); statErr != nil {
 			t.Fatal("scaffold was cleaned after bootstrap failure")
 		}
 	})
@@ -498,7 +503,7 @@ func TestClusterProvisionTimeoutAndCancellationDoNotAdvance(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "timed out") || fixture3.makeCount["new"] != 1 || fixture3.makeCount["bootstrap"] != 1 {
 		t.Fatalf("bootstrap timeout did not stop without retry: %v %#v", err, fixture3.makeCount)
 	}
-	if _, statErr := os.Stat(filepath.Join(fixture3.root, "preview-one", "cluster-config.yaml")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(fixture3.runtime.clustersDir, "preview-one", "cluster-config.yaml")); statErr != nil {
 		t.Fatal("scaffold was not preserved after bootstrap timeout")
 	}
 }
@@ -548,7 +553,7 @@ func TestClusterProvisionRejectsPrerequisitesAndUnsafeScaffold(t *testing.T) {
 		if err := os.WriteFile(fixture.management, []byte("replacement kubeconfig\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyProvisionInputs(context.Background(), prepared, fixture.runtime, false); err == nil {
+		if err := verifyProvisionInputs(context.Background(), prepared, fixture.runtime); err == nil {
 			t.Fatal("changed management kubeconfig passed the preflight binding")
 		}
 	})
@@ -608,7 +613,7 @@ func TestClusterProvisionRejectsPrerequisitesAndUnsafeScaffold(t *testing.T) {
 	t.Run("unexpected generated config field", func(t *testing.T) {
 		fixture, request := newProvisionFixture(t)
 		fixture.writeScaffold()
-		path := filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")
+		path := filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml")
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -979,7 +984,7 @@ func TestClusterProvisionDetectsScaffoldChangedAfterReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml"), []byte("changed\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml"), []byte("changed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := verifyProvisionArtifactsUnchanged(fixture.runtime, prepared, artifacts); err == nil {
@@ -1033,7 +1038,7 @@ func TestClusterProvisionSamePlaneGateFailurePreservesScaffold(t *testing.T) {
 	if err == nil || fixture.makeCount["new"] != 1 || fixture.makeCount["bootstrap"] != 0 {
 		t.Fatalf("readiness failure reached bootstrap: %v %#v", err, fixture.makeCount)
 	}
-	if _, err := os.Stat(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml")); err != nil {
 		t.Fatal("scaffold was not preserved")
 	}
 }

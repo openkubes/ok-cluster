@@ -46,6 +46,7 @@ var (
 
 type clusterProvisionRuntime struct {
 	makeRoot, okLinuxRoot, makeExecutable    string
+	clustersDir                              string // lifecycle state: <state>/ok/clusters, outside the checkout
 	makeRevision, okLinuxRevision            string
 	expectedChartHash                        string
 	managementKubeconfig, workloadKubeconfig string
@@ -285,8 +286,13 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 	if err != nil {
 		return clusterProvisionRuntime{}, err
 	}
+	clustersDir, err := okClustersDir()
+	if err != nil {
+		cleanup()
+		return clusterProvisionRuntime{}, err
+	}
 	return clusterProvisionRuntime{
-		makeRoot: makeRoot, okLinuxRoot: okLinuxRoot, makeExecutable: toolPaths["make"],
+		makeRoot: makeRoot, okLinuxRoot: okLinuxRoot, makeExecutable: toolPaths["make"], clustersDir: clustersDir,
 		makeRevision: revision, okLinuxRevision: clusterProvisionReviewedOKLinux,
 		expectedChartHash:    clusterProvisionCiliumSHA256,
 		managementKubeconfig: managementKubeconfig, workloadKubeconfig: workloadKubeconfig,
@@ -294,6 +300,24 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 		toolPaths:       toolPaths, command: runClusterProvisionCommand, isTerminal: stdinIsTerminal(),
 		cleanupToolPath: cleanup,
 	}, nil
+}
+
+// okClustersDir is $XDG_STATE_HOME/ok/clusters, else ~/.local/state/ok/clusters.
+// It is only created after the first typed confirmation.
+func okClustersDir() (string, error) {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home := os.Getenv("HOME")
+		if !filepath.IsAbs(home) {
+			return "", errors.New("HOME must be an absolute path")
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	directory := filepath.Join(filepath.Clean(base), "ok", "clusters")
+	if !filepath.IsAbs(directory) || !clusterProvisionSafePathPattern.MatchString(directory) {
+		return "", errors.New("lifecycle state directory must be an absolute shell-safe path (check XDG_STATE_HOME/HOME)")
+	}
+	return directory, nil
 }
 
 func createProvisionToolPath(toolPaths map[string]string) (string, func(), error) {
@@ -342,7 +366,7 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err != nil {
 		return err
 	}
-	if err := verifyProvisionInputs(ctx, prepared, runtime, false); err != nil {
+	if err := verifyProvisionInputs(ctx, prepared, runtime); err != nil {
 		return err
 	}
 	if err := verifyProvisionScaffoldAbsent(runtime, prepared.name); err != nil {
@@ -360,7 +384,14 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := requireProvisionConfirmation(confirmations, stdout, "provision "+prepared.name); err != nil {
 		return fmt.Errorf("provisioning cancelled before Make was started: %w", err)
 	}
-	if err := verifyProvisionInputs(ctx, prepared, runtime, false); err != nil {
+	// Held from the name and network checks until make new has published the
+	// scaffold, so two ok up runs of this installation never allocate at once.
+	unlock, err := lockProvisionAllocation(runtime.clustersDir)
+	if err != nil {
+		return fmt.Errorf("Make was not started: %w", err)
+	}
+	defer unlock()
+	if err := verifyProvisionInputs(ctx, prepared, runtime); err != nil {
 		return fmt.Errorf("preflight changed after confirmation; Make was not started: %w", err)
 	}
 	if err := verifyProvisionScaffoldAbsent(runtime, prepared.name); err != nil {
@@ -376,12 +407,13 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 		fmt.Fprintf(stdout, "\n[1/2] Generating cluster scaffold (make new) … output: %s\n", runtime.makeLog.Name())
 	}
 	if err := runProvisionMake(ctx, runtime, prepared.newArgs, clusterProvisionNewTimeout, stdout, stderr); err != nil {
-		return fmt.Errorf("make new did not complete successfully; no retry, rollback or cleanup was performed; inspect command output and any scaffold at %s: %w", filepath.Join(runtime.makeRoot, prepared.name), err)
+		return fmt.Errorf("make new did not complete successfully; no retry, rollback or cleanup was performed; inspect command output and any scaffold at %s: %w", filepath.Join(runtime.clustersDir, prepared.name), err)
 	}
 	artifacts, network, err := inspectProvisionScaffold(runtime, prepared)
 	if err != nil {
 		return fmt.Errorf("make new returned success but its scaffold could not be verified; preserve it and stop without bootstrap: %w", err)
 	}
+	unlock() // the published scaffold now holds its endpoint and CIDRs
 	if err := verifyProvisionSamePlane(ctx, prepared, runtime); err != nil {
 		return fmt.Errorf("scaffold preserved; same-plane teardown readiness failed before bootstrap: %w", err)
 	}
@@ -389,7 +421,7 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err != nil {
 		return err
 	}
-	if err := verifyProvisionInputs(ctx, prepared, runtime, true); err != nil {
+	if err := verifyProvisionInputs(ctx, prepared, runtime); err != nil {
 		return fmt.Errorf("scaffold is preserved; trusted inputs changed before bootstrap: %w", err)
 	}
 	if err := verifyProvisionClusterAbsent(ctx, prepared, runtime); err != nil {
@@ -403,7 +435,7 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	}
 	if runtime.openMakeLog != nil {
 		fmt.Fprintf(stdout, "      endpoint %s · pods %s · services %s\n", network.Endpoint, network.PodCIDR, network.ServiceCIDR)
-		fmt.Fprintf(stdout, "      scaffold: %s\n\n", filepath.Join(runtime.makeRoot, prepared.name))
+		fmt.Fprintf(stdout, "      scaffold: %s\n\n", filepath.Join(runtime.clustersDir, prepared.name))
 		fmt.Fprintln(stdout, "Next: create and bootstrap the cluster (make bootstrap). This changes the management")
 		fmt.Fprintln(stdout, "cluster (CAPI resources, PVC annotations) and installs Cilium on the new cluster.")
 	} else {
@@ -418,7 +450,7 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	if err := requireProvisionConfirmation(confirmations, stdout, "bootstrap "+prepared.name); err != nil {
 		return fmt.Errorf("bootstrap cancelled; completed scaffold is preserved and no bootstrap command was started: %w", err)
 	}
-	if err := verifyProvisionInputs(ctx, prepared, runtime, true); err != nil {
+	if err := verifyProvisionInputs(ctx, prepared, runtime); err != nil {
 		return fmt.Errorf("scaffold is preserved; trusted inputs changed after confirmation, bootstrap was not started: %w", err)
 	}
 	if err := verifyProvisionClusterAbsent(ctx, prepared, runtime); err != nil {
@@ -457,10 +489,13 @@ func runClusterProvisionWithRuntime(ctx context.Context, request clusterRequest,
 	return nil
 }
 
+// verifyProvisionScaffoldAbsent refuses a name already used in the state
+// directory or in the checkout (committed clusters and the old layout).
 func verifyProvisionScaffoldAbsent(runtime clusterProvisionRuntime, clusterName string) error {
-	path := filepath.Join(runtime.makeRoot, clusterName)
-	if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return errors.New("a local scaffold already exists or cannot be safely checked; refusing to overwrite it")
+	for _, path := range []string{filepath.Join(runtime.clustersDir, clusterName), filepath.Join(runtime.makeRoot, clusterName)} {
+		if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s already exists or cannot be safely checked; refusing to reuse the name %s", path, clusterName)
+		}
 	}
 	return nil
 }
@@ -540,7 +575,7 @@ func clusterProvisionMakeAssignments(prepared clusterProvisionPrepared, runtime 
 		"SCHEDULING_PROFILE=ok-infra", "NODE_SELECTOR=ok-infra", "CP_CORES=2", "CP_MEMORY=4Gi", "CP_DISK=20Gi",
 		"WORKER_CORES=2", "WORKER_MEMORY=4Gi", "WORKER_DISK=15Gi", "REGISTRY_TRUST=false", "START_IP=",
 		"OK76_REQUIRE_LIVE_METALLB_INVENTORY=true", "TALOS_INFRA_KUBECONFIG=" + prepared.managementKubeconfig,
-		"OK_LINUX_PATH=" + runtime.okLinuxRoot,
+		"OK_LINUX_PATH=" + runtime.okLinuxRoot, "CLUSTERS_DIR=" + runtime.clustersDir,
 	}
 	if bootstrap {
 		assignments = append(assignments,
@@ -554,7 +589,7 @@ func clusterProvisionMakeAssignments(prepared clusterProvisionPrepared, runtime 
 }
 
 func inspectProvisionScaffold(runtime clusterProvisionRuntime, prepared clusterProvisionPrepared) ([]clusterProvisionArtifact, clusterProvisionNetwork, error) {
-	dir := filepath.Join(runtime.makeRoot, prepared.name)
+	dir := filepath.Join(runtime.clustersDir, prepared.name)
 	info, err := os.Lstat(dir)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, clusterProvisionNetwork{}, errors.New("published cluster directory is absent or unsafe")
@@ -662,7 +697,7 @@ func containsProvisionArtifact(artifacts []clusterProvisionArtifact, name string
 	return false
 }
 
-func verifyProvisionInputs(ctx context.Context, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime, allowScaffold bool) error {
+func verifyProvisionInputs(ctx context.Context, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) error {
 	managementTarget, err := inspectProvisionManagementKubeconfig(prepared.managementKubeconfig)
 	if err != nil {
 		return err
@@ -688,7 +723,8 @@ func verifyProvisionInputs(ctx context.Context, prepared clusterProvisionPrepare
 	if err := verifyProvisionTools(runtime); err != nil {
 		return err
 	}
-	if err := verifyProvisionCheckout(ctx, runtime, runtime.makeRoot, runtime.makeRevision, allowScaffold, prepared.name, true); err != nil {
+	// Lifecycle state lives outside the checkout, so it stays fully clean.
+	if err := verifyProvisionCheckout(ctx, runtime, runtime.makeRoot, runtime.makeRevision, false, "", true); err != nil {
 		return fmt.Errorf("Make checkout is not the reviewed source: %w", err)
 	}
 	if err := verifyProvisionCheckout(ctx, runtime, runtime.okLinuxRoot, runtime.okLinuxRevision, false, "", false); err != nil {
@@ -1038,7 +1074,7 @@ func printClusterProvisionPlan(output io.Writer, prepared clusterProvisionPrepar
 	fmt.Fprintln(output, "     Creates local scaffold and performs explicit management Cluster/network inventory checks.")
 	fmt.Fprintf(output, "  2. make %s\n", quotedProvisionArgs(prepared.bootstrapArgs))
 	fmt.Fprintln(output, "     Applies CAPI resources, annotates management PVCs, obtains a workload kubeconfig and installs pinned Cilium.")
-	fmt.Fprintf(output, "Local writes: %s and, during bootstrap, %s; kubectl/Helm may update standard caches under HOME. Temporary tool links are removed on exit.\n", filepath.Join(runtime.makeRoot, prepared.name), prepared.workloadKubeconfig)
+	fmt.Fprintf(output, "Local writes: %s and, during bootstrap, %s; kubectl/Helm may update standard caches under HOME. Temporary tool links are removed on exit.\n", filepath.Join(runtime.clustersDir, prepared.name), prepared.workloadKubeconfig)
 	fmt.Fprintln(output, "Management access: reads Cluster and Service allocation inventory; bootstrap mutates management CAPI/PVC resources and workload Cilium resources.")
 	fmt.Fprintln(output, "Network endpoint, Pod CIDR and Service CIDR remain auto until the scaffold is reviewed after make new.")
 	fmt.Fprintln(output, "Interactive confirmation is an operator UX boundary, not protection from other locally privileged processes.")
@@ -1093,7 +1129,7 @@ func provisionPlaneUID(ctx context.Context, prepared clusterProvisionPrepared, r
 }
 
 func verifyProvisionSamePlane(ctx context.Context, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) error {
-	args := []string{filepath.Join(runtime.makeRoot, "scripts", "talos_golden_lifecycle.py"), "--same-plane-preflight", "--topology", "same-plane", "--cluster", prepared.name, "--cluster-dir", filepath.Join(runtime.makeRoot, prepared.name), "--kubeconfig", prepared.managementKubeconfig, "--provider-kubeconfig", prepared.managementKubeconfig, "--ok-linux-path", runtime.okLinuxRoot}
+	args := []string{filepath.Join(runtime.makeRoot, "scripts", "talos_golden_lifecycle.py"), "--same-plane-preflight", "--topology", "same-plane", "--cluster", prepared.name, "--cluster-dir", filepath.Join(runtime.clustersDir, prepared.name), "--kubeconfig", prepared.managementKubeconfig, "--provider-kubeconfig", prepared.managementKubeconfig, "--ok-linux-path", runtime.okLinuxRoot}
 	return runProvisionCheck(ctx, runtime, provisionPythonExecutable(runtime), args, runtime.makeRoot, io.Discard)
 }
 

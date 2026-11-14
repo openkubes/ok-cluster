@@ -13,11 +13,11 @@ import (
 )
 
 type simpleDestroyFixture struct {
-	root, management string
-	rt               simpleDestroyRuntime
-	calls            [][]string
-	stdin            []io.Reader
-	sourced, cleaned int
+	root, state, management string
+	rt                      simpleDestroyRuntime
+	calls                   [][]string
+	stdin                   []io.Reader
+	sourced, cleaned        int
 }
 
 func newSimpleDestroyFixture(t *testing.T) *simpleDestroyFixture {
@@ -25,7 +25,8 @@ func newSimpleDestroyFixture(t *testing.T) *simpleDestroyFixture {
 	isolatedConfigHome(t)
 	t.Setenv("TALOS_INFRA_KUBECONFIG", "")
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "never-used.yaml"))
-	f := &simpleDestroyFixture{root: filepath.Join(t.TempDir(), "ok-cluster")}
+	base := t.TempDir()
+	f := &simpleDestroyFixture{root: filepath.Join(base, "ok-cluster"), state: filepath.Join(base, "state", "ok", "clusters")}
 	directory := filepath.Join(f.root, "ok-v1-test")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
@@ -45,7 +46,7 @@ func newSimpleDestroyFixture(t *testing.T) *simpleDestroyFixture {
 		input: input, terminal: true,
 		sources: func(ctx context.Context, name string) (clusterProvisionRuntime, error) {
 			f.sourced++
-			return clusterProvisionRuntime{makeRoot: f.root, okLinuxRoot: "/src/ok-linux", makeRevision: strings.Repeat("a", 40),
+			return clusterProvisionRuntime{makeRoot: f.root, clustersDir: f.state, okLinuxRoot: "/src/ok-linux", makeRevision: strings.Repeat("a", 40),
 				environmentPath: "/tmp/tools", managementKubeconfig: os.Getenv("TALOS_INFRA_KUBECONFIG"),
 				cleanupToolPath: func() { f.cleaned++ }}, nil
 		},
@@ -266,5 +267,52 @@ func TestDestroyRoutingKeepsExistingSpellings(t *testing.T) {
 	if err := run([]string{"destroy", "ok-v1-test", "--help"}, &stdout, &stderr); err != nil ||
 		!strings.Contains(stdout.String(), "ok destroy <name> [--management <kubeconfig>]") {
 		t.Fatalf("help: %v %s %s", err, &stdout, &stderr)
+	}
+}
+
+// v1.0.1 clusters live in the state directory; pre-v1.0.1 clusters stay in
+// the checkout and remain destroyable. Both, or neither, deletes nothing.
+func TestSimpleDestroyFindsStateOrLegacyClusterAndRefusesBoth(t *testing.T) {
+	f := newSimpleDestroyFixture(t)
+	legacy, state := filepath.Join(f.root, "ok-v1-test"), filepath.Join(f.state, "ok-v1-test")
+	if _, err := f.run("--management", f.management); err != nil || !strings.Contains(strings.Join(f.calls[0], " "), "--cluster-dir "+legacy) {
+		t.Fatalf("legacy layout: %v %q", err, f.calls)
+	}
+	if err := os.MkdirAll(filepath.Dir(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(legacy, state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run("--management", f.management); err != nil || !strings.Contains(strings.Join(f.calls[1], " "), "--cluster-dir "+state) {
+		t.Fatalf("state layout: %v %q", err, f.calls)
+	}
+	if err := os.Mkdir(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run("--management", f.management); err == nil || !strings.Contains(err.Error(), "will not choose") || len(f.calls) != 2 {
+		t.Fatalf("both layouts: %v calls=%d", err, len(f.calls))
+	}
+	os.RemoveAll(legacy)
+	os.RemoveAll(state)
+	if _, err := f.run("--management", f.management); err == nil || !strings.Contains(err.Error(), f.state) || !strings.Contains(err.Error(), f.root) {
+		t.Fatalf("missing cluster must name both locations: %v", err)
+	}
+}
+
+// An uninspectable state location never falls back to the legacy checkout.
+func TestSimpleDestroyUninspectableStateFailsClosed(t *testing.T) {
+	f := newSimpleDestroyFixture(t) // the legacy cluster exists in the checkout
+	if err := os.MkdirAll(filepath.Dir(f.state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A file where the clusters directory should be: Lstat fails with ENOTDIR
+	// (not ErrNotExist), also when the tests run as root.
+	if err := os.WriteFile(f.state, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run("--management", f.management)
+	if err == nil || !strings.Contains(err.Error(), "cannot inspect "+filepath.Join(f.state, "ok-v1-test")) || len(f.calls) != 0 {
+		t.Fatalf("legacy chosen despite uninspectable state: %v calls=%d", err, len(f.calls))
 	}
 }

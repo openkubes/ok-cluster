@@ -125,7 +125,7 @@ Verify Ready nodes, expected CAPI/KubeVirt resources and system components; inve
   --management "$TALOS_INFRA_KUBECONFIG"
 ```
 
-This path is specifically for clusters created with the operator-mode `ok up`. It requires the original local preparation and provisioned UID evidence in the matching source checkout. The same Python Same-Plane teardown engine independently validates management API identity, object UIDs, ownership, Golden-image state and storage bindings. It presents a live deletion inventory and requires **typing the exact cluster name**. It reports five progress stages and only reports success after the engine's final absence checks and durable teardown-ledger completion.
+This path is specifically for clusters created with the operator-mode `ok up`. It requires the original local preparation and provisioned UID evidence: in `~/.local/state/ok/clusters/<name>/` (or `$XDG_STATE_HOME/ok/clusters/<name>/`) for clusters created by v1.0.1, or in `<checkout>/<name>/` for clusters created earlier. If both exist, `ok destroy` refuses and deletes nothing. The same Python Same-Plane teardown engine independently validates management API identity, object UIDs, ownership, Golden-image state and storage bindings. It presents a live deletion inventory and requires **typing the exact cluster name**. It reports five progress stages and only reports success after the engine's final absence checks and durable teardown-ledger completion.
 
 The historic form `ok cluster destroy <name>` (and its `ok destroy cluster <name>` alias) retains its distinct Runner/legacy routing; `ok local down` is for local kind environments. These are **not** interchangeable.
 
@@ -144,10 +144,16 @@ The deleted namespace should be `NotFound`; the teardown evidence ConfigMap shou
 
 On failures or interruption, **do not force-delete finalizers, namespaces, PVs or Longhorn volumes**. Preserve the original evidence and the ledger, inspect the error, then use the documented guarded recovery process. The CLI does not automatically retry.
 
+## Where lifecycle state lives
+
+From v1.0.1, `ok up` writes each cluster's lifecycle evidence (scaffold, preparation and provisioned-UID records) to `~/.local/state/ok/clusters/<name>/`, or `$XDG_STATE_HOME/ok/clusters/<name>/` when that is set. The source checkout stays clean, so one installation can create several clusters. Nothing is migrated: clusters created earlier keep their evidence in `<checkout>/<name>/` and remain destroyable from there. `ok up` refuses a name that already exists in either place.
+
+Network allocation considers the committed clusters in the checkout, earlier checkout-layout clusters, the state directory and the management cluster's live LoadBalancer inventory. While `ok up` allocates and writes a scaffold, it holds a local lock (`~/.local/state/ok/clusters/.allocate.lock`). A second `ok up` on the same machine and user fails at once instead of choosing the same endpoint or CIDRs. **The lock does not coordinate independent machines or operators:** a cluster scaffolded elsewhere but not yet bootstrapped is invisible here, and pod/service CIDRs come only from local files. Coordinate shared-pool use between operators as before.
+
 ## Current limitations and next version
 
 - v1.0 requires a prepared management infrastructure, reviewed source checkout, pinned `ok-linux`, local toolchain and explicit kubeconfig.
-- Source-integrity checks may reject modified or unrelated untracked files; do not erase evidence to satisfy them.
+- Source-integrity checks may reject modified or unrelated untracked files; do not erase evidence to satisfy them. A checkout that still holds an earlier `<checkout>/<name>/` cluster can destroy it, but new `ok up` runs need a clean checkout.
 - Cluster-name reuse is not supported by the current durable teardown ledger.
 - v1.0.1 is intended to improve **UX and installation simplicity**, while keeping identity checks, human approval and independently verifiable operations. The exact UX and release timing remain to be defined.
 
