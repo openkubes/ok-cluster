@@ -136,7 +136,7 @@ func TestSamePlaneInitDiscoversBundleThroughSymlinkWithoutProvider(t *testing.T)
 	link := b.link(t)
 	management := privateKubeconfig(t, t.TempDir())
 	path, _ := localConfigPath("")
-	_, stderr, err := configInit(b.runtime(link, "", false), "--management", management)
+	_, stderr, err := configInit(b.runtime(link, "", false), "--management", management, "--yes")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, stderr)
 	}
@@ -182,7 +182,7 @@ func TestSamePlaneInitAlternativePrefixAndSourceBuild(t *testing.T) {
 	samePlaneHome(t)
 	b := newFakeBundle(t) // no release.txt: a source checkout build
 	config := filepath.Join(privateConfigTestDir(t), "custom.json")
-	_, stderr, err := configInit(b.runtime(b.executable, "", false, "helm", "PyYAML (for /usr/bin/python3)"), "--config", config)
+	_, stderr, err := configInit(b.runtime(b.executable, "", false, "helm", "PyYAML (for /usr/bin/python3)"), "--config", config, "--yes")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, stderr)
 	}
@@ -288,7 +288,7 @@ func TestSamePlaneInitManagementReferenceIsMetadataOnly(t *testing.T) {
 	if err := os.Chmod(unreadable, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	if _, stderr, err := configInit(b.runtime(b.executable, "", false), "--management", unreadable); err != nil {
+	if _, stderr, err := configInit(b.runtime(b.executable, "", false), "--management", unreadable, "--yes"); err != nil {
 		t.Fatalf("contents were needed: %v\n%s", err, stderr)
 	}
 }
@@ -332,6 +332,7 @@ func TestSamePlaneInitFlagCombinations(t *testing.T) {
 		{"--topology", "dual-plane"},
 		{"--topology", "same-plane", "--lifecycle-root", b.okCluster},
 		{"--management", ""},
+		{"--topology", "split-plane", "--yes"},
 	} {
 		if _, _, err := configInit(b.runtime(b.executable, "", false), args...); err == nil {
 			t.Fatalf("accepted %v", args)
@@ -340,7 +341,7 @@ func TestSamePlaneInitFlagCombinations(t *testing.T) {
 	// Source developers name both sources; they are verified the same way.
 	other := filepath.Join(t.TempDir(), "ok")
 	writeTestFile(t, other, "#!/bin/sh\n", 0o755)
-	_, stderr, err := configInit(b.runtime(other, "", false), "--topology", "same-plane", "--lifecycle-root", b.okCluster, "--ok-linux-path", b.okLinux)
+	_, stderr, err := configInit(b.runtime(other, "", false), "--topology", "same-plane", "--lifecycle-root", b.okCluster, "--ok-linux-path", b.okLinux, "--yes")
 	if err != nil || !strings.Contains(stderr, "explicit (--lifecycle-root/--ok-linux-path), verified") {
 		t.Fatalf("explicit sources: %v\n%s", err, stderr)
 	}
@@ -495,16 +496,104 @@ func TestLegacyDestroyRefusesSamePlaneConfiguration(t *testing.T) {
 	}
 }
 
-func TestConfigShowWarnsWhenRunningAnotherBundle(t *testing.T) {
+func TestSamePlaneInitConfirmationModes(t *testing.T) {
 	samePlaneHome(t)
 	b := newFakeBundle(t)
+	management := privateKubeconfig(t, t.TempDir())
+	path, _ := localConfigPath("")
+	// No terminal, no --yes: the summary is shown, nothing is written.
+	_, stderr, err := configInit(b.runtime(b.executable, "", false), "--management", management)
+	if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(stderr, "Config file:") || fileExists(filepath.Dir(path)) {
+		t.Fatalf("non-interactive without --yes: err=%v created=%v\n%s", err, fileExists(filepath.Dir(path)), stderr)
+	}
+	// --yes never bypasses verification.
+	broken := newFakeBundle(t)
+	writeTestFile(t, filepath.Join(broken.okCluster, "extra.txt"), "x", 0o644)
+	if _, _, err := configInit(broken.runtime(broken.executable, "", false), "--yes"); err == nil || fileExists(filepath.Dir(path)) {
+		t.Fatalf("--yes saved an unverified bundle: %v", err)
+	}
+	if _, _, err := configInit(b.runtime(b.executable, "", false), "--management", filepath.Join(t.TempDir(), "absent.yaml"), "--yes"); err == nil || fileExists(filepath.Dir(path)) {
+		t.Fatalf("--yes saved an invalid management reference: %v", err)
+	}
+	// On a terminal, --yes reads no input at all.
+	rt := b.runtime(b.executable, "", true)
+	rt.input = panicConfigReader{}
+	if _, stderr, err := configInit(rt, "--management", management, "--yes"); err != nil || strings.Contains(stderr, "Type ok") {
+		t.Fatalf("terminal --yes: %v\n%s", err, stderr)
+	}
+	if config, err := loadLocalConfig(path); err != nil || config.ManagementKubeconfig != management {
+		t.Fatalf("not saved: %+v %v", config, err)
+	}
+}
+
+func TestConfigShowVerifiesTheRunningBundle(t *testing.T) {
+	samePlaneHome(t)
+	b := newFakeBundle(t)
+	b.writeRelease(t, "")
 	path := filepath.Join(privateConfigTestDir(t), "config.json")
 	writeSamePlaneConfig(t, path, "")
-	var stdout, stderr bytes.Buffer
-	if err := runConfigWithRuntime(context.Background(), []string{"show", "--config", path}, &stdout, &stderr, b.runtime(b.executable, "", false)); err != nil {
+	show := func(rt configInitRuntime) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if err := runConfigWithRuntime(context.Background(), []string{"show", "--config", path}, &stdout, &stderr, rt); err != nil {
+			t.Fatal(err)
+		}
+		return stderr.String()
+	}
+	out := show(b.runtime(b.executable, "", false))
+	if !strings.Contains(out, "running ok: verified (release bundle, release.txt matches)") || !strings.Contains(out, "the saved sources are /b/ok-cluster") {
+		t.Fatalf("show did not verify the running bundle:\n%s", out)
+	}
+	writeTestFile(t, filepath.Join(b.okCluster, ".tools", "cilium-1.19.6.tgz"), "tampered", 0o644)
+	if out := show(b.runtime(b.executable, "", false)); !strings.Contains(out, "running ok: NOT verified") || strings.Contains(out, "running ok: verified") {
+		t.Fatalf("tampered bundle reported as verified:\n%s", out)
+	}
+}
+
+// An RC1-era v2 file stays valid after upgrading to RC2: its management
+// reference is still used, but lifecycle sources always come from the ok you
+// run (RC2), never from the lifecycleRoot recorded for RC1.
+func TestUpgradeKeepsConfigButUsesRunningBundleSources(t *testing.T) {
+	samePlaneHome(t)
+	rc1, rc2 := newFakeBundle(t), newFakeBundle(t)
+	management := privateKubeconfig(t, t.TempDir())
+	path, _ := localConfigPath("")
+	if _, _, err := configInit(rc1.runtime(rc1.executable, "", false), "--management", management, "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), "this ok runs from "+b.okCluster) || !strings.Contains(stderr.String(), "never overwrites") {
-		t.Fatalf("no stale-bundle note:\n%s", stderr.String())
+	if config, _ := loadLocalConfig(path); config.LifecycleRoot != rc1.okCluster {
+		t.Fatalf("setup: %+v", config)
+	}
+	// ok config show from RC2: RC2 verified, RC1 paths named as not used by ok up/destroy.
+	var stdout, stderr bytes.Buffer
+	if err := runConfigWithRuntime(context.Background(), []string{"show"}, &stdout, &stderr, rc2.runtime(rc2.executable, "", false)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "running ok: verified") || !strings.Contains(stderr.String(), rc2.okCluster) ||
+		!strings.Contains(stderr.String(), "the saved sources are "+rc1.okCluster) {
+		t.Fatalf("show after upgrade:\n%s", stderr.String())
+	}
+	// Repeated init from RC2 never overwrites the RC1-era file.
+	if _, _, err := configInit(rc2.runtime(rc2.executable, "", false), "--yes"); err == nil {
+		t.Fatal("init overwrote the existing configuration")
+	}
+	// ok destroy <name> from RC2 takes the saved management reference but runs
+	// the teardown from the running bundle's sources.
+	f := newSimpleDestroyFixture(t) // isolates HOME again: resolve the default config there
+	path, _ = localConfigPath("")
+	if err := writeLocalConfig(path, localCLIConfig{Format: localConfigFormatV2, Topology: localConfigSamePlane, LifecycleRoot: rc1.okCluster,
+		OKLinuxPath: rc1.okLinux, ClustersDir: filepath.Join(os.Getenv("HOME"), ".local", "state", "ok", "clusters"), ManagementKubeconfig: f.management}); err != nil {
+		t.Fatal(err)
+	}
+	output, err := f.run()
+	if err != nil || len(f.calls) != 1 {
+		t.Fatalf("destroy: %v\n%s", err, output)
+	}
+	joined := strings.Join(f.calls[0], " ")
+	if !strings.HasPrefix(f.calls[0][2], f.root+string(filepath.Separator)) || strings.Contains(joined, rc1.okCluster) || strings.Contains(joined, rc1.okLinux) {
+		t.Fatalf("teardown did not use the running sources: %v", f.calls[0])
+	}
+	if os.Getenv("TALOS_INFRA_KUBECONFIG") != f.management {
+		t.Fatal("saved management reference not used after upgrade")
 	}
 }

@@ -52,8 +52,8 @@ class InstallOkTest(unittest.TestCase):
         self.home = self.case / "home"
         self.home.mkdir()
 
-    def install(self, *args, archive=None, digest=None, path=None):
-        env = {"HOME": str(self.home), "PATH": path or os.environ["PATH"], "LC_ALL": "C"}
+    def install(self, *args, archive=None, digest=None, path=None, extra_env=None):
+        env = {"HOME": str(self.home), "PATH": path or os.environ["PATH"], "LC_ALL": "C", **(extra_env or {})}
         command = ["sh", str(INSTALLER), "--archive", str(archive or self.archive), "--sha256", digest or self.digest, *args]
         return subprocess.run(command, capture_output=True, text=True, env=env)
 
@@ -86,9 +86,14 @@ class InstallOkTest(unittest.TestCase):
         self.assertFalse(any(p.name.startswith(".install-") for p in bundle.parent.iterdir()))
         # ok config init through the ~/.local/bin/ok symlink finds and verifies this bundle.
         config = self.home / "cfg" / "config.json"
-        init = subprocess.run([str(link), "config", "init", "--config", str(config)], capture_output=True, text=True,
-                              env={"HOME": str(self.home), "PATH": os.environ["PATH"], "XDG_STATE_HOME": str(self.home / "state")},
-                              stdin=subprocess.DEVNULL)
+        env = {"HOME": str(self.home), "PATH": os.environ["PATH"], "XDG_STATE_HOME": str(self.home / "state")}
+        refused = subprocess.run([str(link), "config", "init", "--config", str(config)], capture_output=True, text=True,
+                                 env=env, stdin=subprocess.DEVNULL)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("--yes", refused.stderr)
+        self.assertFalse(config.parent.exists(), "non-interactive init without --yes wrote something")
+        init = subprocess.run([str(link), "config", "init", "--config", str(config), "--yes"], capture_output=True, text=True,
+                              env=env, stdin=subprocess.DEVNULL)
         self.assertEqual(init.returncode, 0, init.stdout + init.stderr)
         self.assertIn("release bundle (release.txt matches)", init.stderr)
         self.assertIn(f'"lifecycleRoot": "{bundle / "ok-cluster"}"', config.read_text())
@@ -204,6 +209,51 @@ class InstallOkTest(unittest.TestCase):
             truncated = self.case / f"{NAME}.tar.gz"
             truncated.write_bytes(self.archive.read_bytes()[: self.archive.stat().st_size // 2])
             self.assertNothingInstalled(self.install(archive=truncated, digest=sha256(truncated)), reason="cannot list")
+
+    def test_destination_created_concurrently_is_never_replaced_or_nested(self):
+        """Shims for mkdir and mv create the destination at the very moment the
+        installer acts on it (after every existence check): the install must
+        fail without replacing, entering or nesting into what appeared there."""
+        dest = self.home / ".local" / "share" / "ok" / NAME
+        other = self.case / "other-install"
+        other.mkdir()
+        (other / "marker").write_text("other")
+        shim_dir = self.case / "shim"
+        shim_dir.mkdir()
+        real = {tool: shutil.which(tool) for tool in ("mkdir", "mv", "ln")}
+        for tool in ("mkdir", "mv"):
+            shim = shim_dir / tool
+            shim.write_text(f"""#!/bin/sh
+for last; do :; done
+if [ "$last" = "$RACE_DEST" ] && [ ! -e "$RACE_DEST" ] && [ ! -L "$RACE_DEST" ]; then
+  case "$RACE_KIND" in
+    dir) "{real['mkdir']}" "$RACE_DEST" && echo concurrent > "$RACE_DEST/marker" ;;
+    symlink) "{real['ln']}" -s "$RACE_OTHER" "$RACE_DEST" ;;
+    file) echo concurrent > "$RACE_DEST" ;;
+  esac
+fi
+exec "{real[tool]}" "$@"
+""")
+            shim.chmod(0o755)
+        path = f"{shim_dir}:{os.environ['PATH']}"
+        for kind in ("dir", "symlink", "file"):
+            with self.subTest(kind):
+                if dest.is_symlink() or dest.is_file():
+                    dest.unlink()
+                elif dest.exists():
+                    shutil.rmtree(dest)
+                result = self.install(path=path, extra_env={"RACE_KIND": kind, "RACE_DEST": str(dest), "RACE_OTHER": str(other)})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("nothing replaced", result.stderr)
+                self.assertEqual(sorted(p.name for p in other.iterdir()), ["marker"])
+                if kind == "dir":
+                    self.assertEqual(sorted(p.name for p in dest.iterdir()), ["marker"])
+                elif kind == "symlink":
+                    self.assertTrue(dest.is_symlink())
+                else:
+                    self.assertEqual(dest.read_text(), "concurrent\n")
+                self.assertFalse(any(p.name.startswith(".install-") for p in dest.parent.iterdir()))
+                self.assertFalse((self.home / ".local" / "bin" / "ok").exists())
 
     def test_missing_runtime_tool_stops_before_extraction(self):
         tools = self.case / "tools"

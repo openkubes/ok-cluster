@@ -182,9 +182,11 @@ func runConfigWithRuntime(ctx context.Context, arguments []string, stdout, stder
 	config := localCLIConfig{Format: localConfigFormat}
 	interactive := false
 	topology, management := "", ""
+	yes := false
 	if arguments[0] == "init" {
 		flags.StringVar(&topology, "topology", "", "same-plane (default) or split-plane (the five-path legacy setup)")
 		flags.StringVar(&management, "management", "", "Same-Plane: management cluster kubeconfig reference (contents are not read)")
+		flags.BoolVar(&yes, "yes", false, "Same-Plane: save without the ok/no prompt (required without a terminal); verification still runs")
 		flags.BoolVar(&interactive, "interactive", false, "Split-plane: prompt for missing paths and require confirmation on a terminal")
 		flags.StringVar(&config.LifecycleRoot, "lifecycle-root", "", "Trusted ok-cluster checkout (Same-Plane: explicit override, verified)")
 		flags.StringVar(&config.OKLinuxPath, "ok-linux-path", "", "ok-linux profile checkout (Same-Plane: explicit override, verified)")
@@ -242,8 +244,11 @@ func runConfigWithRuntime(ctx context.Context, arguments []string, stdout, stder
 	if legacy && set["management"] {
 		return errors.New("--management is the Same-Plane reference; split-plane setup uses --management-kubeconfig and --provider-kubeconfig")
 	}
+	if legacy && set["yes"] {
+		return errors.New("--yes applies only to the Same-Plane setup; split-plane setup is confirmed by its explicit path flags or its prompt")
+	}
 	if !legacy {
-		return initSamePlaneConfig(ctx, resolved, config.LifecycleRoot, config.OKLinuxPath, management, rt, stdout, stderr)
+		return initSamePlaneConfig(ctx, resolved, config.LifecycleRoot, config.OKLinuxPath, management, yes, rt, stdout, stderr)
 	}
 	pathFlags := 0
 	for name := range set {
@@ -338,7 +343,7 @@ func writeConfigHelp(output io.Writer) {
 	fmt.Fprint(output, `Save local settings once; never stores credentials or authorizes an operation
 
 Usage:
-  ok config init [--management <kubeconfig>]          Same-Plane (ok up / ok destroy <name>)
+  ok config init [--management <kubeconfig>] [--yes]  Same-Plane (ok up / ok destroy <name>)
   ok config init --topology split-plane ...           legacy five-path setup (see below)
   ok config show
 
@@ -353,7 +358,9 @@ Same-Plane (default):
   commit and clean, ok-linux at the pinned commit and clean, the pinned Cilium
   chart and, for release bundles, release.txt. No other checkout is searched.
   It reports missing tools (nothing is installed) and asks for the management
-  kubeconfig path (Enter skips; ok up then asks). Only a reference is saved:
+  kubeconfig path (Enter skips; ok up then asks). It shows a summary and saves
+  only after you type ok. Without a terminal it saves nothing unless --yes is
+  given; --yes skips the prompts, never the verification. Only a reference is saved:
   the file must be a private regular file, its contents are not read and no
   cluster is contacted. No provider kubeconfig is needed for Same-Plane.
   ok up and ok destroy <name> use the saved reference only when neither

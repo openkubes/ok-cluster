@@ -18,7 +18,7 @@ import (
 // belongs to, reports missing tools, optionally records a management
 // kubeconfig reference and writes ok-cli-paths/v2. It never contacts a
 // cluster, reads kubeconfig contents, installs anything or overwrites a file.
-func initSamePlaneConfig(ctx context.Context, resolved, lifecycleRoot, okLinux, management string, rt configInitRuntime, stdout, stderr io.Writer) error {
+func initSamePlaneConfig(ctx context.Context, resolved, lifecycleRoot, okLinux, management string, yes bool, rt configInitRuntime, stdout, stderr io.Writer) error {
 	expect := runningBundleExpectations()
 	if rt.expect != nil {
 		expect = *rt.expect
@@ -57,8 +57,10 @@ func initSamePlaneConfig(ctx context.Context, resolved, lifecycleRoot, okLinux, 
 	if err != nil {
 		return err
 	}
+	// A terminal shows the summary and requires a typed ok. Without one,
+	// nothing is saved unless --yes was given; --yes skips prompts only.
 	var reader *bufio.Reader
-	if rt.interactive && rt.input != nil {
+	if rt.interactive && rt.input != nil && !yes {
 		reader = bufio.NewReaderSize(rt.input, 4096)
 	}
 	if management == "" && reader != nil {
@@ -104,6 +106,9 @@ func initSamePlaneConfig(ctx context.Context, resolved, lifecycleRoot, okLinux, 
 	if len(absent) > 0 {
 		fmt.Fprintf(stderr, "  Missing for ok up: %s\n  (nothing was installed; install them before ok up)\n", strings.Join(absent, ", "))
 	}
+	if reader == nil && !yes {
+		return errors.New("configuration not saved: no terminal to confirm it\n  review the summary above, then run again with --yes (and --management <kubeconfig> if wanted)")
+	}
 	if reader != nil {
 		fmt.Fprint(stderr, "Save this configuration? Type ok or no [no]: ")
 		line, err := readConfigPromptLine(ctx, reader)
@@ -143,30 +148,39 @@ func showLocalConfig(ctx context.Context, resolved string, stdout, stderr io.Wri
 	if config.Format != localConfigFormatV2 {
 		return nil
 	}
+	// Live check of the ok you are running, with the same rules as ok up.
+	// It does not re-verify the saved lifecycleRoot/okLinuxPath: ok up and
+	// ok destroy <name> never use them, they use the running bundle.
 	executable := rt.executable
 	if executable == "" {
 		if executable, err = os.Executable(); err != nil {
+			fmt.Fprintln(stderr, "running ok: cannot identify this binary; not verified")
 			return nil
 		}
 	}
-	makeRoot, _, _, err := bundleRootsForExecutable(executable)
-	if err != nil {
-		fmt.Fprintf(stderr, "note: this ok is not inside a release bundle; ok up uses the sources next to the ok it runs from\n")
+	expect := runningBundleExpectations()
+	if rt.expect != nil {
+		expect = *rt.expect
+	}
+	bundle, verifyErr := discoverRunningBundle(ctx, executable, expect)
+	if verifyErr != nil {
+		fmt.Fprintf(stderr, "running ok: NOT verified: %v\n  ok up and ok destroy <name> will refuse to run from it\n", verifyErr)
 		return nil
 	}
-	if makeRoot != config.LifecycleRoot {
-		fmt.Fprintf(stderr, "note: this ok runs from %s, the saved sources are %s.\n"+
+	kind := "source checkout build"
+	if bundle.release {
+		kind = "release bundle, release.txt matches"
+	}
+	fmt.Fprintf(stderr, "running ok: verified (%s): ok-cluster %s at %s, clean; ok-linux %s at %s, clean; Cilium chart pinned\n",
+		kind, bundle.lifecycleRoot, shortProvisionRevision(expect.revision), bundle.okLinuxPath, shortProvisionRevision(expect.okLinux))
+	if bundle.lifecycleRoot != config.LifecycleRoot {
+		fmt.Fprintf(stderr, "note: the saved sources are %s, not the running bundle.\n"+
 			"  ok up and ok destroy <name> always use the sources of the ok you run; the saved paths\n"+
-			"  serve other commands. init never overwrites: move %s aside yourself, then run ok config init\n", makeRoot, config.LifecycleRoot, resolved)
+			"  serve other commands. init never overwrites: move %s aside yourself, then run ok config init\n", config.LifecycleRoot, resolved)
 	}
 	return nil
 }
 
-// samePlaneManagement selects the management kubeconfig for ok up and
-// ok destroy <name>: --management, then TALOS_INFRA_KUBECONFIG, then the
-// reference saved by ok config init. KUBECONFIG and the current kubectl
-// context are never consulted. An explicit --config is always loaded and must
-// be a Same-Plane configuration, even when a flag already selects the file.
 func samePlaneManagement(flagValue, configFlag string) (path, source string, err error) {
 	explicit := configFlag != ""
 	env := os.Getenv("TALOS_INFRA_KUBECONFIG")

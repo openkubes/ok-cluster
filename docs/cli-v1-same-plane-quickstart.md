@@ -76,7 +76,7 @@ Replace the path with **your** management-cluster kubeconfig (for the internal O
 - finds the bundle from where `ok` really is (through the `~/.local/bin/ok` link) and verifies it like `ok up`: `ok-cluster` at this binary's commit and clean, `ok-linux` at the pinned commit and clean, the pinned Cilium chart, and `release.txt`. It never searches for other checkouts;
 - lists missing runtime tools (nothing is installed);
 - saves only the **path** of the management kubeconfig: the file must be a private (0600) regular file; its contents are not read and no cluster is contacted. **No provider kubeconfig is needed for Same-Plane;**
-- shows everything and, on a terminal, asks `ok`/`no` before writing a private, create-only file (scripts pass `--management` and get no prompt). It never overwrites an existing one (review it with `ok config show`).
+- shows everything and, on a terminal, asks `ok`/`no` before writing a private, create-only file. Without a terminal it saves nothing unless you pass `--yes` (scripts: `ok config init --management <file> --yes`); `--yes` skips only the prompts, never the verification. It never overwrites an existing file.
 
 The management cluster is chosen in this order: `--management`, then `TALOS_INFRA_KUBECONFIG`, then the saved path. `KUBECONFIG` and the current kubectl context are never used. The saved path only selects the file: `ok up` and `ok destroy` still verify the API server, CA and kube-system UID, and still require their typed confirmations. Check the target first:
 
@@ -187,7 +187,7 @@ On failures or interruption, **do not force-delete finalizers, namespaces, PVs o
 | Cluster lifecycle state and evidence | `$XDG_STATE_HOME/ok/clusters` or `~/.local/state/ok/clusters` | `ok up`, `ok destroy` |
 | Installed bundles | `~/.local/share/ok/<bundle>` (or `--prefix`) | `install-ok.sh` |
 
-Settings can be recreated; lifecycle state cannot: never delete it to work around an error. An explicit `--config` must exist and is never replaced by another file. `ok config show` notes when the `ok` you run is a different bundle than the one recorded; `ok up` and `ok destroy` always use the sources of the `ok` you run.
+Settings can be recreated; lifecycle state cannot: never delete it to work around an error. An explicit `--config` must exist and is never replaced by another file. `ok config show` prints the saved settings and verifies the **running** `ok`'s bundle live, with the same checks as `ok up`. It does not re-verify the saved source paths: `ok up` and `ok destroy` never use them, they always use the sources of the `ok` you run, and `ok config show` notes when the saved paths belong to another bundle (for example after an upgrade).
 
 ### Lifecycle state
 
