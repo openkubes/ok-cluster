@@ -178,12 +178,27 @@ def kubectl_json(
     return json.loads(result.stdout)
 
 
+def require_flatcar_type(cluster: str) -> None:
+    """OK-132: reject a non-Flatcar cluster before any other input check."""
+    config_path = ROOT / cluster / "cluster-config.yaml"
+    if not config_path.is_file():
+        return
+    config = load_yaml(config_path)
+    cluster_type = config.get("type") if isinstance(config, dict) else None
+    if cluster_type != "flatcar":
+        raise FlatcarLifecycleError(
+            f"{cluster} is type {cluster_type!r}, not a Flatcar cluster; "
+            "the Flatcar lifecycle only accepts type: flatcar"
+        )
+
+
 def require_inputs(args: argparse.Namespace) -> dict[str, object]:
     if not args.cluster or args.cluster == "ok125-flatcar":
         raise FlatcarLifecycleError(
             "ordinary lifecycle requires a non-evidence cluster name"
         )
     validate_cluster_name(args.cluster)
+    require_flatcar_type(args.cluster)
     management_value = args.management_kubeconfig
     chart_value = args.cilium_chart
     if not management_value:
@@ -253,6 +268,7 @@ def require_teardown_inputs(args: argparse.Namespace) -> dict[str, object]:
             "ordinary teardown requires a non-evidence cluster name"
         )
     validate_cluster_name(args.cluster)
+    require_flatcar_type(args.cluster)
     if not args.management_kubeconfig:
         raise FlatcarLifecycleError(
             "an explicit --management-kubeconfig path is required"
