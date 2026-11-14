@@ -34,7 +34,7 @@ var errSimpleUpNeedsTerminal = errors.New("ok up needs an interactive terminal f
 	"  read-only preview: ok cluster plan -f <cluster.yaml>")
 
 func runSimpleUp(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
-	return runSimpleUpWith(ctx, arguments, stdout, stderr, simpleUpRuntime{input: os.Stdin, terminal: upStdinIsTerminal(), provision: runClusterProvisionFor})
+	return runSimpleUpWith(ctx, arguments, stdout, stderr, simpleUpRuntime{input: os.Stdin, terminal: upStdinIsTerminal(), provision: runClusterProvisionForSimple})
 }
 
 func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.Writer, rt simpleUpRuntime) error {
