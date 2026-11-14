@@ -81,6 +81,8 @@ The Make reference profile allows network fields to be omitted or set to `auto` 
   --management "$TALOS_INFRA_KUBECONFIG"
 ```
 
+**CLI v1.0.1 preparation (OK-228):** For the simple operator `ok up` route, a *missing* local Cilium 1.19.6 chart is acquired automatically from the reviewed authoritative chart URL and verified against the exact pinned SHA-256. This only prepares a local artifact; it does not modify Kubernetes. The source checkouts and toolchain must be clean and reviewed before the acquisition. A present but mismatched chart, symlink, untrusted source or missing tool is **never** silently repaired; the operation fails before provisioning. The explicit Make targets `make prepare-cilium-chart` / `make verify-cilium-chart` remain available for offline preparation and troubleshooting. The expert `ok cluster provision` route is unchanged. These changes are in the pending OK-228 branch and are **not yet released**.
+
 Read the plan and the target-cluster identity before authorizing either step. In interactive operator mode, the CLI requests **two separate typed confirmations**:
 
 ```text
