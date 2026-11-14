@@ -34,7 +34,7 @@ hand, so nothing can drift out of sync with the documentation.
 | `mode` | `read-only` \| `read-write` | whether a write identity exists at all |
 | `write.scope` | `namespaces` | cluster scope is refused by this installer |
 | `write.namespaces` | `[kagent-lab]` | the only evidenced write target |
-| `write.resources` | supported resource list | exact namespaced kinds that may be changed |
+| `write.resources` | resource-to-verb mapping | exact namespaced API verbs kagent may use |
 | `write.requireApproval` | `true` | Approve/Reject gate per write tool |
 
 Switch a profile:
@@ -45,7 +45,7 @@ sed -i'' -e 's/^mode: .*/mode: read-only/' access-config.yaml
 make install          # removes the write identity, Role, tool server and Agent
 
 # approval-gated writes for selected kinds in the lab namespace
-$EDITOR access-config.yaml   # mode: read-write; select write.resources
+$EDITOR access-config.yaml   # mode: read-write; set write.resources per kind/verb
 make install
 make verify-access
 ```
@@ -54,7 +54,8 @@ The cluster installer adds an independent fail-closed OK-129 guard before the
 shared renderer. Both layers refuse cluster scope, ungated writes, unsupported
 or sensitive resources, and targets other than `kagent-lab`. Supported kinds
 are ConfigMaps, Pods, Services, Deployments, StatefulSets, DaemonSets,
-ReplicaSets, Jobs, CronJobs and Ingresses; any non-empty subset can be selected.
+ReplicaSets, Jobs, CronJobs and Ingresses; each selected kind receives only the
+verbs explicitly configured for it.
 
 Full reference: `openkubes/research/kagent-standalone/access/README.md`.
 
