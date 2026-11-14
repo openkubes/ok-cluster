@@ -4,6 +4,7 @@
 #   scripts/ok-rc-acceptance.sh --version v1.0.1-rc3 --commit <40-hex SHA> ...        acceptance build
 #   scripts/ok-rc-acceptance.sh --release --version v1.0.1 --commit <40-hex SHA> ...  official release
 #     [--ok-linux DIR] [--chart FILE] [--out DIR] [--work DIR] [--smoke-only]
+#     [--targets "darwin-arm64 linux-amd64"]   default: both; CI builds each natively
 #
 # Versions follow SemVer and are shared by ok-cluster releases and the ok CLI.
 # Acceptance builds are vX.Y.Z-rcN and go to ../rc-artifacts/<version>; an
@@ -66,13 +67,14 @@ trap early_exit EXIT
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 VERSION="" COMMIT="" OK_LINUX="$ROOT/../ok-linux" CHART="$ROOT/.tools/cilium-1.19.6.tgz" OUT="" WORK="" SMOKE_ONLY=0 RELEASE=0
+TARGETS="darwin-arm64 linux-amd64"
 while (( $# )); do
   case "$1" in
-    --version|--commit|--ok-linux|--chart|--out|--work)
+    --version|--commit|--ok-linux|--chart|--out|--work|--targets)
       (( $# >= 2 )) || fail "missing value for $1"
       case "$1" in
         --version) VERSION=$2 ;; --commit) COMMIT=$2 ;; --ok-linux) OK_LINUX=$2 ;;
-        --chart) CHART=$2 ;; --out) OUT=$2 ;; --work) WORK=$2 ;;
+        --chart) CHART=$2 ;; --out) OUT=$2 ;; --work) WORK=$2 ;; --targets) TARGETS=$2 ;;
       esac
       shift 2 ;;
     --smoke-only) SMOKE_ONLY=1; shift ;;
@@ -89,6 +91,13 @@ else
   [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]] || fail "--version must be an acceptance build like v1.0.1-rc3; official versions need --release"
 fi
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "--commit must be the full 40-character lowercase source SHA"
+seen=" "
+for target in $TARGETS; do
+  case "$target" in darwin-arm64|linux-amd64) ;; *) fail "--targets accepts darwin-arm64 and linux-amd64, not: $target" ;; esac
+  [[ "$seen" != *" $target "* ]] || fail "--targets lists $target twice"
+  seen="$seen$target "
+done
+[[ -n "${TARGETS// /}" ]] || fail "--targets must name at least one platform"
 (( EUID != 0 )) || fail "run as an unprivileged user (install-ok.sh refuses root)"
 for tool in git go python3 tar awk; do command -v "$tool" >/dev/null 2>&1 || fail "missing tool: $tool"; done
 if command -v sha256sum >/dev/null 2>&1; then sha256() { sha256sum "$1" | awk '{print $1}'; }
@@ -116,9 +125,9 @@ CURRENT="setup" FINISHED=0
 
 record() { printf '%s\t%s\t%s\n' "$1" "$2" "${3//$'\t'/ }" >> "$STEPS"; printf '[%s] %s %s\n' "$2" "$1" "${3:-}"; }
 write_report() {
-  python3 -I - "$REPORT" "$1" "$CURRENT" "$KIND" "$VERSION" "$COMMIT" "${PIN:-}" "${CHART_SHA:-}" "$OUT" "$WORK" "$STEPS" "$ARTIFACTS" "$SMOKE_ONLY" "$STAMP" <<'PY'
+  python3 -I - "$REPORT" "$1" "$CURRENT" "$KIND" "$VERSION" "$COMMIT" "${PIN:-}" "${CHART_SHA:-}" "$OUT" "$WORK" "$STEPS" "$ARTIFACTS" "$SMOKE_ONLY" "$STAMP" "$TARGETS" <<'PY'
 import json, platform, subprocess, sys
-report, status, current, kind, version, commit, pin, chart, out, work, steps, artifacts, smoke_only, stamp = sys.argv[1:]
+report, status, current, kind, version, commit, pin, chart, out, work, steps, artifacts, smoke_only, stamp, targets = sys.argv[1:]
 def lines(path):
     with open(path) as f:
         return [l.rstrip("\n").split("\t") for l in f if l.strip()]
@@ -126,7 +135,7 @@ go = subprocess.run(["go", "version"], capture_output=True, text=True).stdout.st
 data = {
     "schema": "ok-rc-acceptance/v1", "result": status, "failedStep": None if status == "PASS" else current,
     "kind": kind, "version": version, "commit": commit, "okLinuxCommit": pin, "ciliumChartSHA256": chart,
-    "smokeOnly": smoke_only == "1", "startedUTC": stamp, "host": {"os": platform.system(), "arch": platform.machine(), "go": go},
+    "smokeOnly": smoke_only == "1", "targets": targets.split(), "startedUTC": stamp, "host": {"os": platform.system(), "arch": platform.machine(), "go": go},
     "outputDir": out, "workDir": work,
     "steps": [{"name": s[0], "status": s[1], "detail": s[2] if len(s) > 2 else ""} for s in lines(steps)],
     "artifacts": [{"file": a[0], "platform": a[1], "sha256": a[2], "nativeSmoke": a[3]} for a in lines(artifacts)],
@@ -191,7 +200,6 @@ if (( ! SMOKE_ONLY )); then
 fi
 
 # 3. Build
-TARGETS="darwin-arm64 linux-amd64"
 if (( ! SMOKE_ONLY )); then
   CURRENT="build"
   for target in $TARGETS; do
@@ -225,8 +233,8 @@ record verify PASS "checksums, release.txt version/platform/commits for $TARGETS
 
 # 5. Isolated, offline smoke test of the native bundle
 CURRENT="smoke"
-if [[ "$NATIVE" == none ]]; then
-  record smoke SKIP "no bundle is native to $(uname -s)/$(uname -m)"
+if [[ "$NATIVE" == none || " $TARGETS " != *" $NATIVE "* ]]; then
+  record smoke SKIP "no selected bundle is native to $(uname -s)/$(uname -m)"
 else
   name="ok-$VERSION-$NATIVE" archive="$OUT/ok-$VERSION-$NATIVE.tar.gz"
   digest="$(awk '{print $1; exit}' "$archive.sha256")"

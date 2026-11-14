@@ -61,6 +61,8 @@ class RCAcceptanceTest(unittest.TestCase):
             "missing ok-linux": (["--commit", commit], "ok-linux checkout not found", {"--ok-linux": str(self.temp / "no-ok-linux")}),
             "out inside the checkout": (["--commit", commit], "outside ok-cluster", {"--out": str(ROOT / "rc-test-out")}),
             "unknown argument": (["--commit", commit, "--bogus"], "unknown argument", {}),
+            "unknown target": (["--commit", commit, "--targets", "windows-amd64"], "--targets accepts", {}),
+            "duplicate target": (["--commit", commit, "--targets", "linux-amd64 linux-amd64"], "twice", {}),
         }
         for label, (args, message, override) in cases.items():
             with self.subTest(label):
@@ -157,7 +159,14 @@ class RCAcceptanceTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([r["result"] for r in self.reports(out)], ["PASS", "PASS"])
 
+        # One native target only, as each CI runner does it.
         native = next(a for a in names.values() if a["nativeSmoke"] == "yes")
+        result = self.run_script("--commit", commit, "--smoke-only", "--targets", native["platform"], out=out)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        last = self.reports(out)[-1]
+        self.assertEqual((last["targets"], [a["platform"] for a in last["artifacts"]]), ([native["platform"]], [native["platform"]]))
+        self.assertEqual([s["status"] for s in last["steps"] if s["name"] == "smoke"], ["PASS"])
+
         with open(out / native["file"], "ab") as archive:
             archive.write(b"x")
         result = self.run_script("--commit", commit, "--smoke-only", out=out)

@@ -246,16 +246,17 @@ RC_VERSION ?=
 RC_COMMIT ?=
 RC_OUT ?= $(SCRIPT_DIR)/../rc-artifacts/$(RC_VERSION)
 RC_WORK ?=
+RC_TARGETS ?= darwin-arm64 linux-amd64
 
 ok-rc-acceptance: ## Build + verify + smoke-test an RC: make ok-rc-acceptance RC_VERSION=v1.0.1-rc3 RC_COMMIT=<40-hex SHA>
 	@test -n "$(RC_VERSION)" && test -n "$(RC_COMMIT)" || { echo "set RC_VERSION and RC_COMMIT explicitly" >&2; exit 2; }
 	@bash $(SCRIPT_DIR)/scripts/ok-rc-acceptance.sh --version "$(RC_VERSION)" --commit "$(RC_COMMIT)" \
-		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RC_OUT)" $(if $(RC_WORK),--work "$(RC_WORK)")
+		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RC_OUT)" --targets "$(RC_TARGETS)" $(if $(RC_WORK),--work "$(RC_WORK)")
 
 ok-rc-smoke-install: ## Re-run verify + isolated smoke on already built RC artifacts in RC_OUT
 	@test -n "$(RC_VERSION)" && test -n "$(RC_COMMIT)" || { echo "set RC_VERSION and RC_COMMIT explicitly" >&2; exit 2; }
 	@bash $(SCRIPT_DIR)/scripts/ok-rc-acceptance.sh --version "$(RC_VERSION)" --commit "$(RC_COMMIT)" \
-		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RC_OUT)" $(if $(RC_WORK),--work "$(RC_WORK)") --smoke-only
+		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RC_OUT)" --targets "$(RC_TARGETS)" $(if $(RC_WORK),--work "$(RC_WORK)") --smoke-only
 
 # Official SemVer release build (docs/release-process.md): only after explicit
 # approval, with the tag RELEASE_VERSION already pointing at RELEASE_COMMIT.
@@ -266,7 +267,7 @@ RELEASE_OUT ?= $(SCRIPT_DIR)/../release-artifacts/$(RELEASE_VERSION)
 ok-release-acceptance: ## Official build + verify + smoke: make ok-release-acceptance RELEASE_VERSION=v1.0.1 RELEASE_COMMIT=<tagged SHA>
 	@test -n "$(RELEASE_VERSION)" && test -n "$(RELEASE_COMMIT)" || { echo "set RELEASE_VERSION and RELEASE_COMMIT explicitly" >&2; exit 2; }
 	@bash $(SCRIPT_DIR)/scripts/ok-rc-acceptance.sh --release --version "$(RELEASE_VERSION)" --commit "$(RELEASE_COMMIT)" \
-		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RELEASE_OUT)" $(if $(RC_WORK),--work "$(RC_WORK)")
+		--ok-linux "$(OK_LINUX_PATH)" --chart "$(CILIUM_CHART)" --out "$(RELEASE_OUT)" --targets "$(RC_TARGETS)" $(if $(RC_WORK),--work "$(RC_WORK)")
 
 ok-target-admission-build: ## Build the target admission HTTPS service without contacting a cluster
 	@mkdir -p $(SCRIPT_DIR)/.tools/bin

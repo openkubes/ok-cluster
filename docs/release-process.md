@@ -57,16 +57,49 @@ Overrides: `OK_LINUX_PATH=…`, `CILIUM_CHART=…`, `RC_OUT=…`, `RC_WORK=…` 
 
 **Each machine smoke-tests only its native bundle.** Run `ok-rc-smoke-install` on the other platform too, natively: macOS ARM64 on a Mac, Linux AMD64 on Linux or WSL2. Building uses the Go module cache or proxy as configured for `go build`; the smoke test needs no network.
 
+## Official build pipeline: GitHub Actions
+
+**`.github/workflows/ok-cli-build.yaml` ("OK CLI build and acceptance") is the primary build system.** It runs the same `make` targets and script as above, so there is no second copy of the build logic in YAML.
+
+| Property | How |
+|---|---|
+| Trigger | manual only: **Actions → OK CLI build and acceptance → Run workflow** on `main`. Inputs: `version`, `commit` (full 40-character SHA), `release` (default off) and `attest` (default off). Dispatch needs write access. There is no `pull_request` trigger, so PR code never runs here. |
+| Commit identity | a `bind` job validates the inputs (passed via `env`, never interpolated into shell). It checks out exactly `commit` and requires it to be on `main`. For `release=true`, the tag `version` must already point at `commit`, and the script checks that again. |
+| Runners and toolchain | `macos-15` builds and accepts `darwin-arm64`, `ubuntu-24.04` builds and accepts `linux-amd64`, each natively (`--targets`). Go **1.24.13** is pinned explicitly, without a dependency cache. |
+| Checks | per runner, the full script: source identity (clean commit, pinned `ok-linux`, chart SHA-256), tests, native build, `.sha256`, `release.txt`, isolated install and first-run smoke. |
+| Outputs | Actions artifacts `ok-<version>-<target>` (bundle, `.sha256`, acceptance report JSON; kept 30 days), and logs on failure. Nothing is installed outside the runner. |
+| Permissions | the workflow default is `{}`. Build jobs get `contents: read` only, with `persist-credentials: false`. Only the opt-in `attest` job gets `id-token: write` / `attestations: write`; it runs no repository code, only downloads the bundles, re-checks their SHA-256 and calls `actions/attest`. |
+| Pins | `actions/checkout` v4.4.0, `setup-go` v7.0.0, `upload-artifact` v4.6.2, `download-artifact` v4.3.0, `attest` v4.2.2, all pinned by full commit SHA. |
+| Never | creates or pushes tags, creates or publishes a GitHub release, or merges. |
+
+**Attestations (evaluation).** `attest=true` creates a GitHub artifact attestation (signed SLSA build provenance) for each bundle; it can be verified with `gh attestation verify <bundle> --repo openkubes/ok-cluster`.
+- This repository is public, so each attestation is also written to **Sigstore's public transparency log**. That is a form of publication, which is why it is opt-in and should be used only for an approved official build.
+- Recommended before first use: give the `attest` job a protected GitHub environment with required reviewers.
+- Attestations prove which workflow run built a file from which commit. They don't replace the release gates, and the bundles remain unsigned and not notarized for macOS Gatekeeper.
+
+### Promoting an accepted commit to the official v1.0.1
+
+Each arrow is a recorded owner decision; nothing below happens automatically.
+
+1. **Merge** the release PR after review, with all CI checks green. Record the merge commit's full SHA as `C`.
+2. **Acceptance build:** run the workflow with `version=v1.0.1-rc3`, `commit=C`, `release=false`, `attest=false`. Both jobs must pass. Download the artifacts; keep the two acceptance reports as evidence.
+3. **Lifecycle safety gates** with those artifacts, on separately authorized disposable infrastructure (`docs/cli-v1.0.1-release-acceptance.md`, sections D and E). If anything fails, fix it on a new PR, which gives a new `C` and `-rc4`, and repeat.
+4. **Decisions recorded:** licensing/redistribution, provenance/signing policy (including whether to attest), final release notes.
+5. → **Approval to tag.** A maintainer runs `git fetch origin && git tag -a v1.0.1 -m "v1.0.1" C && git rev-parse v1.0.1^{commit}` (it must print `C`), then `git push origin refs/tags/v1.0.1`, then `git ls-remote origin refs/tags/v1.0.1^{}` (it must show `C`).
+6. **Official build:** run the workflow with `version=v1.0.1`, `commit=C`, `release=true`, and `attest` as decided in step 4. It refuses unless the tag points at `C`. Download both bundles, their `.sha256` and the reports; check `sha256sum -c`, `release.txt` (`version: v1.0.1`, `ok-cluster commit: C`) and, if attested, `gh attestation verify`.
+7. → **Approval to publish.** Create a **draft** GitHub release for tag `v1.0.1`. Attach the two official bundles, their `.sha256` files and `scripts/install-ok.sh` from `C`, and the release notes with the SHA-256 values. Re-download the attachments, verify them, then publish. Announce the SHA-256 values through a second channel.
+8. The next patch release is **v1.0.2**, through the same steps.
+
 ## Release checklist (GitHub release `vX.Y.Z`)
 
 Each step needs a recorded owner decision. Nothing is tagged, published or merged without explicit approval.
 
 1. [ ] The release PR is reviewed and merged; CI is green on the merge commit. Record the full SHA as the approved commit.
-2. [ ] An acceptance build of that exact commit (`vX.Y.Z-rcN`) passes `make ok-rc-acceptance`, plus `ok-rc-smoke-install` natively on the other platform.
+2. [ ] An acceptance build of that exact commit (`vX.Y.Z-rcN`) passes in the **OK CLI build and acceptance** workflow, natively on both platforms (local fallback: `make ok-rc-acceptance`, plus `ok-rc-smoke-install` natively on the other platform).
 3. [ ] **Lifecycle safety gates** pass with those artifacts on separately authorized disposable infrastructure (see `docs/cli-v1.0.1-release-acceptance.md`, sections D and E): `ok up`, independent verification, `ok destroy`, independent absence checks, two clusters from one installation. **No stable declaration before this.**
 4. [ ] Licensing/redistribution and provenance/signing decisions are recorded (or an explicit unsigned-preview policy).
 5. [ ] Release notes are final (`docs/release-notes/vX.Y.Z.md`, limitations included).
 6. [ ] **Approval to tag.** Then: `git tag -a vX.Y.Z -m "vX.Y.Z" <approved commit>`, and confirm `git rev-parse vX.Y.Z^{commit}` equals the approved commit. Push only that tag, and confirm the remote tag resolves to the same commit.
-7. [ ] `make ok-release-acceptance RELEASE_VERSION=vX.Y.Z RELEASE_COMMIT=<approved commit>`, plus the native smoke on the other platform. Official artifacts are rebuilt from the tag, never renamed acceptance artifacts.
+7. [ ] Official build: the workflow with `release=true` (local fallback: `make ok-release-acceptance RELEASE_VERSION=vX.Y.Z RELEASE_COMMIT=<approved commit>`). Official artifacts are rebuilt from the tag, never renamed acceptance artifacts.
 8. [ ] **Approval to publish.** Create a draft GitHub release for the tag. Attach both `.tar.gz`, their `.sha256` and `install-ok.sh`. Paste the notes and the SHA-256 values. Re-download the attachments and check them against the recorded values before publishing.
 9. [ ] Announce the SHA-256 values through a second channel. The next development version is `vX.Y.(Z+1)`.

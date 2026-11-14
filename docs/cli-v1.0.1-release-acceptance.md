@@ -6,7 +6,7 @@ The live steps require separately authorized disposable infrastructure and a ded
 
 ## A. Build (maintainer, clean checkout of the reviewed commit)
 
-- [ ] `make ok-rc-acceptance RC_VERSION=v1.0.1-rcN RC_COMMIT=<approved commit>` passes. It checks the sources, runs the tests, builds both bundles, verifies the checksums and `release.txt`, smoke-tests the native bundle, and writes `acceptance-*.json` next to the artifacts
+- [ ] The **OK CLI build and acceptance** workflow (`release=false`) passes for `v1.0.1-rcN` and the approved commit, natively on `macos-15` and `ubuntu-24.04`; the artifacts and both acceptance reports are kept as evidence. Local equivalent: `make ok-rc-acceptance RC_VERSION=v1.0.1-rcN RC_COMMIT=<approved commit>` passes. It checks the sources, runs the tests, builds both bundles, verifies the checksums and `release.txt`, smoke-tests the native bundle, and writes `acceptance-*.json` next to the artifacts
 - [ ] `make ok-rc-smoke-install …` passes natively on the other platform (macOS ARM64 and Linux AMD64/WSL2)
 - [ ] Record the Go toolchain, build host and the acceptance reports. Never claim a signature or reproducibility that wasn't established.
 - [ ] CI green on the reviewed commit: `test`, `release-bundle` (macOS and Ubuntu, including `install_ok_test.py` and `ok_rc_acceptance_test.py`)
