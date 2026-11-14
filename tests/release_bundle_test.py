@@ -78,6 +78,15 @@ class ReleaseBundleTest(unittest.TestCase):
             self.assertEqual(git("-C", str(self.bundle / tree), "status", "--porcelain", "--untracked-files=all"), "")
             self.assertEqual(git("-C", str(self.bundle / tree), "remote"), "")
 
+    def test_official_version_requires_its_tag_on_this_commit(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "build_release_bundle.sh"), "--out", str(self.temp / "official"),
+             "--goos", GOOS, "--goarch", GOARCH, "--ok-linux", os.environ["OK_LINUX_PATH"], "--version", "v99.0.0"],
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tag v99.0.0 does not point at", result.stderr)
+        self.assertFalse((self.temp / "official").exists())
+
     def test_extracted_binary_runs_and_reports_its_revision(self):
         result = subprocess.run([str(self.ok), "version"], capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.strip(), f"{VERSION} {self.commit}")

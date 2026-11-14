@@ -59,7 +59,9 @@ ok-<version>-<os>-<arch>/
   release.txt          version, both commits, SHA-256 of bin/ok and the chart
 ```
 
-**Provenance.** The published SHA-256 of the tarball is the trust anchor. `release.txt` makes the relationships explicit: the binary's embedded revision is the `ok-cluster` commit, and the binary pins the `ok-linux` commit. At runtime, `ok` checks that both copies sit at those commits with no changes. That check catches accidental modification. It is **not** release provenance, and this preview bundle is neither signed nor notarized.
+**Integrity and provenance.** Checking the SHA-256 proves only that your tarball matches a published value. It shows you got the intended file, but only as far as you trust where that value was published. A checksum does not independently establish who built the bundle, or from what. `release.txt` makes the relationships explicit: the binary's embedded revision is the `ok-cluster` commit, and the binary pins the `ok-linux` commit. At runtime, `ok` checks that both copies sit at those commits with no changes, which catches accidental modification. None of this is signed release provenance, and this bundle is neither signed nor notarized.
+
+**Versions.** Without `--version`, the bundle is named by `git describe` (for example `v0.15.0-531-g3633dc9`). An official version such as `v1.0.1` is accepted only when the tag `v1.0.1` points at the commit being packaged. Any other build keeps a distinct preview version.
 
 Install into a prefix of your own, as the user who will run `ok`. Git refuses checkouts owned by another user, and the source check then fails closed.
 

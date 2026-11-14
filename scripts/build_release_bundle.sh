@@ -41,6 +41,12 @@ OK_LINUX_COMMIT="$(sed -n 's/^[[:space:]]*clusterProvisionReviewedOKLinux[[:spac
 clean_at "$OK_LINUX" "$OK_LINUX_COMMIT"
 VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always)}"
 [[ "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || fail "unsafe version: $VERSION"
+# An official version (vX.Y.Z) only for the commit its tag points at; any
+# other build keeps a distinct preview version (git describe, or --version).
+if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  [[ "$(git -C "$ROOT" rev-parse -q --verify "refs/tags/$VERSION^{commit}" || true)" == "$COMMIT" ]] ||
+    fail "$VERSION is an official release version, but tag $VERSION does not point at $COMMIT; use a preview version"
+fi
 
 NAME="ok-${VERSION}-${GOOS_TARGET}-${GOARCH_TARGET}"
 mkdir -p "$OUT"
