@@ -113,6 +113,7 @@ jobs:
           python3 -B tests/ok186_lifecycle_test.py
           python3 -B tests/ok197_teardown_ledger_test.py
           python3 -B tests/ok76_make_fail_closed_test.py
+          python3 -B tests/ok_cli_build_workflow_test.py
 
       - name: Test automatic preparation and runner handoff without cluster access
         run: |
@@ -128,7 +129,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Check out source without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -144,10 +145,13 @@ jobs:
           path: ok-linux
           persist-credentials: false
 
-      - name: Set up Go from go.mod
+      # Release bundles are built with the recorded release toolchain (the RC1
+      # bundles used go1.24.13). go.mod's go 1.21 builds go test binaries that
+      # macOS 15 runners refuse to load (dyld: missing LC_UUID load command).
+      - name: Set up the release Go toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: ok-cluster/go.mod
+          go-version: "1.24.13"
           check-latest: false
           cache: true
           cache-dependency-path: ok-cluster/go.sum
@@ -168,6 +172,13 @@ jobs:
           CILIUM_CHART: ${{ runner.temp }}/cilium-1.19.6.tgz
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -B ok-cluster/tests/install_ok_test.py
+
+      - name: Release-candidate acceptance automation (build, verify, isolated smoke)
+        env:
+          OK_LINUX_PATH: ${{ github.workspace }}/ok-linux
+          CILIUM_CHART: ${{ runner.temp }}/cilium-1.19.6.tgz
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -B ok-cluster/tests/ok_rc_acceptance_test.py
 
   target-admission-image:
     runs-on: ubuntu-latest

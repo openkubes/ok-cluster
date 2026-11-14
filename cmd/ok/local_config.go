@@ -183,6 +183,11 @@ func runConfigWithRuntime(ctx context.Context, arguments []string, stdout, stder
 	interactive := false
 	topology, management := "", ""
 	yes := false
+	output := "text"
+	if arguments[0] == "show" {
+		flags.StringVar(&output, "output", "text", "text (default, human-readable) or json (RC2 automation format)")
+		flags.StringVar(&output, "o", "text", "same as --output")
+	}
 	if arguments[0] == "init" {
 		flags.StringVar(&topology, "topology", "", "same-plane (default) or split-plane (the five-path legacy setup)")
 		flags.StringVar(&management, "management", "", "Same-Plane: management cluster kubeconfig reference (contents are not read)")
@@ -216,7 +221,10 @@ func runConfigWithRuntime(ctx context.Context, arguments []string, stdout, stder
 		return err
 	}
 	if arguments[0] == "show" {
-		return showLocalConfig(ctx, resolved, stdout, stderr, rt)
+		if output != "text" && output != "json" {
+			return errors.New("--output must be text or json")
+		}
+		return showLocalConfig(ctx, resolved, output == "json", stdout, stderr, rt)
 	}
 	if _, err := os.Lstat(resolved); err == nil {
 		return errors.New("configuration is create-only; existing files are never overwritten")
@@ -345,7 +353,15 @@ func writeConfigHelp(output io.Writer) {
 Usage:
   ok config init [--management <kubeconfig>] [--yes]  Same-Plane (ok up / ok destroy <name>)
   ok config init --topology split-plane ...           legacy five-path setup (see below)
-  ok config show
+  ok config show [-o|--output text|json]
+
+ok config show prints a readable summary: the saved settings (paths only) and,
+for Same-Plane, a live check of the ok you are running (verified or NOT VERIFIED,
+with the same checks as ok up), plus a warning when the saved sources belong to
+another bundle. It is read-only: no file is changed, no kubeconfig is opened and
+no cluster is contacted. For scripts, -o json / --output json prints the
+unchanged RC2 format: one JSON object {"path", "config"} on stdout and the
+running-bundle diagnostics on stderr.
 
 All forms accept --config <file>. The default is <OS user configuration directory>/ok/config.json
 (macOS: ~/Library/Application Support/ok/config.json;

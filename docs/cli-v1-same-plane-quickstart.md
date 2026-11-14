@@ -187,7 +187,7 @@ On failures or interruption, **do not force-delete finalizers, namespaces, PVs o
 | Cluster lifecycle state and evidence | `$XDG_STATE_HOME/ok/clusters` or `~/.local/state/ok/clusters` | `ok up`, `ok destroy` |
 | Installed bundles | `~/.local/share/ok/<bundle>` (or `--prefix`) | `install-ok.sh` |
 
-Settings can be recreated; lifecycle state cannot: never delete it to work around an error. An explicit `--config` must exist and is never replaced by another file. `ok config show` prints the saved settings and verifies the **running** `ok`'s bundle live, with the same checks as `ok up`. It does not re-verify the saved source paths: `ok up` and `ok destroy` never use them, they always use the sources of the `ok` you run, and `ok config show` notes when the saved paths belong to another bundle (for example after an upgrade).
+Settings can be recreated; lifecycle state cannot: never delete it to work around an error. An explicit `--config` must exist and is never replaced by another file. `ok config show` prints a readable summary of the saved settings and verifies the **running** `ok`'s bundle live, with the same checks as `ok up` (`verified` or `NOT VERIFIED` with the reason). Scripts use `ok config show -o json`, which keeps the RC2 format: a JSON object `{"path", "config"}` on stdout and the diagnostics on stderr. It does not re-verify the saved source paths: `ok up` and `ok destroy` never use them, they always use the sources of the `ok` you run, and `ok config show` notes when the saved paths belong to another bundle (for example after an upgrade).
 
 ### Lifecycle state
 

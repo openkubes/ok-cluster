@@ -1,0 +1,253 @@
+name: OK CLI build and acceptance
+
+# Official OpenKubes CLI build pipeline (docs/release-process.md).
+# - Manual only (workflow_dispatch, needs write access), and only with the
+#   workflow definition from main. No pull_request trigger: PR code never runs
+#   here and never gets an OIDC token.
+# - Builds an explicit version from an explicit full commit on main. The build
+#   logic is scripts/ok-rc-acceptance.sh via make, run natively per platform.
+# - Never creates tags, never publishes a release, never installs anything
+#   outside the runner. Artifacts and reports go to the Actions run only.
+# - GitHub artifact attestations only for approved official builds
+#   (release=true and attest=true): an acceptance build (-rcN) that asks for one
+#   is refused upfront. The repository is public, so an attestation is also
+#   recorded in Sigstore's public transparency log. The attest job uses the
+#   protected environment ok-cli-release-attestation (required reviewers,
+#   configured in GitHub); attest-gate fails closed unless that protection
+#   exists, and attest itself runs no repository code.
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version: v1.0.1-rcN (acceptance build) or v1.0.1 (official, needs release=true and the tag)"
+        required: true
+        type: string
+      commit:
+        description: Exact lowercase 40-character commit on main
+        required: true
+        type: string
+      release:
+        description: Official build (the tag <version> must already point at <commit>)
+        required: false
+        default: false
+        type: boolean
+      attest:
+        description: "Attest an official build (needs release=true and reviewer approval; public Sigstore log entry)"
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: ok-cli-build-${{ inputs.version }}-${{ inputs.commit }}
+  cancel-in-progress: false
+
+jobs:
+  bind:
+    name: Verify inputs and commit identity
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      ok-linux: ${{ steps.bind.outputs.ok_linux }}
+    steps:
+      - name: Validate inputs
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          INPUT_RELEASE: ${{ inputs.release }}
+          INPUT_ATTEST: ${{ inputs.attest }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          version, commit = os.environ["INPUT_VERSION"], os.environ["INPUT_COMMIT"]
+          release, attest = os.environ["INPUT_RELEASE"] == "true", os.environ["INPUT_ATTEST"] == "true"
+          if attest and not release:
+              sys.exit("attest=true is only allowed for official builds (release=true); acceptance builds never create public attestations")
+          ok = re.fullmatch(r"[0-9a-f]{40}", commit) and (
+              re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", version) if release else re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+", version))
+          sys.exit(0 if ok else "version/commit/release combination refused: official vX.Y.Z needs release=true, vX.Y.Z-rcN needs release=false")
+          PY
+
+      - name: Check out the requested commit without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind the commit to main (and to the tag for official builds)
+        id: bind
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          INPUT_RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$INPUT_COMMIT"
+          git merge-base --is-ancestor "$INPUT_COMMIT" origin/main || { echo "::error::$INPUT_COMMIT is not on main"; exit 1; }
+          if [ "$INPUT_RELEASE" = true ]; then
+            tagged="$(git rev-parse -q --verify "refs/tags/$INPUT_VERSION^{commit}" || true)"
+            test "$tagged" = "$INPUT_COMMIT" || { echo "::error::tag $INPUT_VERSION must already point at $INPUT_COMMIT (it is: ${tagged:-absent})"; exit 1; }
+          fi
+          test -f scripts/ok-rc-acceptance.sh || { echo "::error::this commit has no scripts/ok-rc-acceptance.sh"; exit 1; }
+          pin="$(sed -n 's/^[[:space:]]*clusterProvisionReviewedOKLinux[[:space:]]*= "\([0-9a-f]\{40\}\)"$/\1/p' cmd/ok/cluster_provision.go)"
+          printf '%s' "$pin" | grep -Eqx '[0-9a-f]{40}'
+          printf 'ok_linux=%s\n' "$pin" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and accept ${{ matrix.target }} on ${{ matrix.runner }}
+    needs: bind
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: ubuntu-24.04
+            target: linux-amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the bound commit without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          path: ok-cluster
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the pinned ok-linux as a sibling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: openkubes/ok-linux
+          ref: ${{ needs.bind.outputs.ok-linux }}
+          path: ok-linux
+          persist-credentials: false
+
+      - name: Set up the pinned Go toolchain (no cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24.13"
+          check-latest: false
+          cache: false
+
+      - name: Stage the digest-pinned Cilium chart
+        run: python3 ok-cluster/scripts/prepare_cilium_chart.py --cache "$RUNNER_TEMP/cilium-1.19.6.tgz"
+
+      - name: Source, tests, native build, checksums, isolated install and first-run acceptance
+        working-directory: ok-cluster
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          INPUT_RELEASE: ${{ inputs.release }}
+          TARGET: ${{ matrix.target }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          common=(OK_LINUX_PATH="$GITHUB_WORKSPACE/ok-linux" CILIUM_CHART="$RUNNER_TEMP/cilium-1.19.6.tgz"
+                  RC_TARGETS="$TARGET" RC_WORK="$RUNNER_TEMP/work")
+          if [ "$INPUT_RELEASE" = true ]; then
+            make ok-release-acceptance RELEASE_VERSION="$INPUT_VERSION" RELEASE_COMMIT="$INPUT_COMMIT" RELEASE_OUT="$RUNNER_TEMP/out" "${common[@]}"
+          else
+            make ok-rc-acceptance RC_VERSION="$INPUT_VERSION" RC_COMMIT="$INPUT_COMMIT" RC_OUT="$RUNNER_TEMP/out" "${common[@]}"
+          fi
+
+      - name: Upload the bundle, its SHA-256 and the acceptance report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ok-${{ inputs.version }}-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/out/ok-*.tar.gz
+            ${{ runner.temp }}/out/ok-*.tar.gz.sha256
+            ${{ runner.temp }}/out/acceptance-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: logs-${{ inputs.version }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/work/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  attest-gate:
+    name: Require the protected attestation environment
+    needs: build
+    if: inputs.release && inputs.attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Without this check, GitHub would create a missing environment on first
+    # use without any protection. Read-only; no OIDC token.
+    permissions:
+      actions: read
+    steps:
+      - name: Fetch the environment configuration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/environments/ok-cli-release-attestation" -o "$RUNNER_TEMP/environment.json" ||
+            { echo "::error::environment ok-cli-release-attestation is missing or unreadable; configure it with required reviewers first"; exit 1; }
+
+      - name: Require reviewers and a main-only deployment policy
+        run: |
+          python3 - "$RUNNER_TEMP/environment.json" <<'PY'
+          import json, sys
+          env = json.load(open(sys.argv[1]))
+          reviewers = [r for rule in env.get("protection_rules") or [] if rule.get("type") == "required_reviewers"
+                       for r in rule.get("reviewers") or []]
+          policy = env.get("deployment_branch_policy") or {}
+          problems = []
+          if not reviewers:
+              problems.append("no required reviewers")
+          if not (policy.get("protected_branches") or policy.get("custom_branch_policies")):
+              problems.append("deployments are not restricted to protected or selected branches")
+          if problems:
+              sys.exit("environment ok-cli-release-attestation is not protected: " + "; ".join(problems))
+          print(f"ok-cli-release-attestation: {len(reviewers)} required reviewer entr{'y' if len(reviewers) == 1 else 'ies'}, branch policy {policy}")
+          PY
+
+  attest:
+    name: Attest the official bundles (approved release only)
+    needs: [build, attest-gate]
+    if: inputs.release && inputs.attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Waits for reviewer approval in the protected environment. Only this job
+    # can request an OIDC token, and it runs no repository code: it downloads
+    # the uploaded bundles, re-checks their SHA-256 and attests them.
+    environment: ok-cli-release-attestation
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the bundles of this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ok-${{ inputs.version }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Re-check the SHA-256 files
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls ok-*.tar.gz >/dev/null
+          for sum in ok-*.tar.gz.sha256; do sha256sum -c "$sum"; done
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/ok-*.tar.gz

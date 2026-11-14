@@ -94,7 +94,7 @@ func TestLocalConfigInitAndShowArePrivateCreateOnlyAndPathOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout.Reset()
-	if err := run([]string{"config", "show"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "managementKubeconfig") {
+	if err := run([]string{"config", "show", "--output", "json"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "managementKubeconfig") {
 		t.Fatalf("show err=%v stdout=%s", err, &stdout)
 	}
 }
