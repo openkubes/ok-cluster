@@ -223,13 +223,9 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 	if err != nil {
 		return clusterProvisionRuntime{}, errors.New("cannot resolve the built CLI location")
 	}
-	binDir := filepath.Dir(executable)
-	if filepath.Base(binDir) != "bin" || filepath.Base(filepath.Dir(binDir)) != ".tools" || filepath.Base(executable) != "ok" {
-		return clusterProvisionRuntime{}, errors.New("build the CLI at <ok-cluster>/.tools/bin/ok using make ok-cli-build")
-	}
-	makeRoot, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(binDir)))
-	if err != nil || !clusterProvisionSafePathPattern.MatchString(makeRoot) {
-		return clusterProvisionRuntime{}, errors.New("Make checkout path is missing or contains unsupported shell-sensitive characters")
+	makeRoot, err := resolveProvisionMakeRoot(executable, os.Getenv("OK_CLUSTER_HOME"))
+	if err != nil {
+		return clusterProvisionRuntime{}, err
 	}
 	okLinuxRoot := filepath.Join(filepath.Dir(makeRoot), "ok-linux")
 	if resolved, resolveErr := filepath.EvalSymlinks(okLinuxRoot); resolveErr == nil {
@@ -294,6 +290,32 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 		toolPaths:       toolPaths, command: runClusterProvisionCommand, isTerminal: stdinIsTerminal(),
 		cleanupToolPath: cleanup,
 	}, nil
+}
+
+// resolveProvisionMakeRoot keeps the established colocated developer binary
+// path and permits an explicitly bound checkout for a globally installed CLI.
+// The existing provision/destroy source-checkout verifier subsequently binds
+// this checkout to the binary's embedded full revision and checks cleanliness.
+// OK_CLUSTER_HOME is never inferred from cwd, KUBECONFIG or the shell PATH.
+func resolveProvisionMakeRoot(executable, configured string) (string, error) {
+	if configured == "" {
+		binDir := filepath.Dir(executable)
+		if filepath.Base(binDir) != "bin" || filepath.Base(filepath.Dir(binDir)) != ".tools" || filepath.Base(executable) != "ok" {
+			return "", errors.New("installed CLI needs an explicitly selected reviewed lifecycle checkout; set OK_CLUSTER_HOME=<ok-cluster-checkout> or use <ok-cluster>/.tools/bin/ok")
+		}
+		configured = filepath.Dir(filepath.Dir(binDir))
+	} else if !filepath.IsAbs(configured) || filepath.Clean(configured) != configured || !clusterProvisionSafePathPattern.MatchString(configured) {
+		return "", errors.New("OK_CLUSTER_HOME must be an explicit absolute shell-safe checkout directory")
+	}
+	resolved, err := filepath.EvalSymlinks(configured)
+	if err != nil || !filepath.IsAbs(resolved) || !clusterProvisionSafePathPattern.MatchString(resolved) {
+		return "", errors.New("reviewed lifecycle checkout is absent or has unsafe path components")
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("reviewed lifecycle checkout is not a real directory")
+	}
+	return resolved, nil
 }
 
 func createProvisionToolPath(toolPaths map[string]string) (string, func(), error) {
