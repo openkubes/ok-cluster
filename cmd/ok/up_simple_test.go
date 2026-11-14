@@ -371,13 +371,30 @@ func TestSimpleUpCancelledInputStartsNothing(t *testing.T) {
 	if err := run(context.Background(), []string{"-f", request}, strings.NewReader("")); !errors.Is(err, errPromptCancelled) {
 		t.Fatalf("end of input at the management prompt: %v", err)
 	}
-	// Ctrl-C while a prompt is waiting returns at once.
+	// Ctrl-C while a prompt waits ends the process (exit 130) at once; here
+	// the fake exit closes the input so the test can observe the outcome.
 	ctx, cancel := context.WithCancel(context.Background())
-	waiting, _ := io.Pipe()
+	waiting, typing := io.Pipe()
+	exited := 0
+	exit := promptCancelExit
+	promptCancelExit = func() { exited++; typing.Close() }
+	t.Cleanup(func() { promptCancelExit = exit })
 	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
-	if err := run(ctx, nil, waiting); !errors.Is(err, errPromptCancelled) {
-		t.Fatalf("Ctrl-C at the menu: %v", err)
+	if err := run(ctx, nil, waiting); !errors.Is(err, errPromptCancelled) || exited != 1 {
+		t.Fatalf("Ctrl-C at the menu: %v exited=%d", err, exited)
 	}
+	// Once the questions are answered, Ctrl-C belongs to the engine again.
+	ctx, cancel = context.WithCancel(context.Background())
+	t.Setenv("TALOS_INFRA_KUBECONFIG", writeManagementKubeconfig(t, base))
+	rt.provision = func(context.Context, string, string, io.Reader, io.Writer, io.Writer, func() (*os.File, error)) error {
+		cancel()
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	}
+	if err := run(ctx, []string{"-f", request}, strings.NewReader("")); err != nil || exited != 1 {
+		t.Fatalf("prompt cancellation fired during provisioning: %v exited=%d", err, exited)
+	}
+	t.Setenv("TALOS_INFRA_KUBECONFIG", "")
 	if fake.calls != 0 || os.Getenv("TALOS_INFRA_KUBECONFIG") != "" {
 		t.Fatalf("cancelled input started provisioning: calls=%d", fake.calls)
 	}

@@ -61,6 +61,13 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 	// One buffered reader for every prompt and both engine confirmations; the
 	// engine's bufio.NewReader reuses it, so no typed input is lost.
 	reader := bufio.NewReaderSize(rt.input, 4096)
+	// Nothing has started while ok up asks its questions, so Ctrl-C (the main
+	// signal context) ends the process at once; no read is left waiting.
+	stopPromptCancel := context.AfterFunc(ctx, func() {
+		fmt.Fprintln(stderr, "\n"+errPromptCancelled.Error())
+		promptCancelExit()
+	})
+	defer stopPromptCancel()
 	requestPath := input.value
 	if requestPath == "" {
 		if !rt.terminal {
@@ -92,6 +99,9 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 			return err
 		}
 		source = "your input"
+	}
+	if !stopPromptCancel() {
+		return errPromptCancelled
 	}
 	if managementPath == "" {
 		return errors.New("no management cluster selected\n" +
@@ -319,27 +329,16 @@ func createClusterRequest(ctx context.Context, home, directory string, input *bu
 
 var errPromptCancelled = errors.New("cancelled; nothing was started")
 
-// readPromptLine returns one typed line. Ctrl-C (the context) and end of input
-// cancel instead of selecting a default, so nothing starts.
+var promptCancelExit = func() { os.Exit(130) }
+
+// readPromptLine returns one typed line; end of input cancels instead of
+// selecting a default.
 func readPromptLine(ctx context.Context, input *bufio.Reader) (string, error) {
-	type result struct {
-		line string
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		line, err := input.ReadString('\n')
-		done <- result{line, err}
-	}()
-	select {
-	case <-ctx.Done():
+	line, err := input.ReadString('\n')
+	if err != nil || ctx.Err() != nil {
 		return "", errPromptCancelled
-	case read := <-done:
-		if read.err != nil {
-			return "", errPromptCancelled
-		}
-		return strings.TrimSpace(read.line), nil
 	}
+	return strings.TrimSpace(line), nil
 }
 
 // readPromptPath accepts an absolute, relative or ~/ path; empty stays empty.
