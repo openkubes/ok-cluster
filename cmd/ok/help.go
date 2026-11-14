@@ -205,11 +205,12 @@ func writeOperatorUpHelp(output io.Writer) {
 	fmt.Fprint(output, `Create a Same-Plane Talos/KubeVirt cluster with two typed confirmations
 
 Usage:
-  ok up                         find or create a request in <ok config>/requests
+  ok up                         choose, give or create a request (<ok config>/requests)
   ok up -f <cluster.yaml>       use a ClusterRequest (cli.openkubes.io/v1alpha1)
 
 Flags:
-  --management <kubeconfig>     management cluster (or set TALOS_INFRA_KUBECONFIG)
+  --management <kubeconfig>     management cluster (or set TALOS_INFRA_KUBECONFIG;
+                                otherwise ok up asks for the path)
   --workload-kubeconfig <path>  output kubeconfig (default: <ok config>/kubeconfigs/<name>.yaml)
   -v, --verbose                 technical details and live Make output instead of a log
 

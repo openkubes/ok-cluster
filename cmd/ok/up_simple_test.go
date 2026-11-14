@@ -18,6 +18,7 @@ type fakeSimpleUp struct {
 	workload    string
 	openLog     func() (*os.File, error)
 	writeLog    string // when set, open the log and write this, like Make would
+	stdin       string // what the engine could still read for its confirmations
 	err         error
 }
 
@@ -33,8 +34,11 @@ func newFakeSimpleUp(t *testing.T) (*fakeSimpleUp, simpleUpRuntime, string) {
 	t.Setenv("TALOS_INFRA_KUBECONFIG", "")
 	fake := &fakeSimpleUp{}
 	rt := simpleUpRuntime{input: strings.NewReader(""), terminal: true,
-		provision: func(_ context.Context, requestPath, workload string, _ io.Reader, stdout, _ io.Writer, openLog func() (*os.File, error)) error {
+		provision: func(_ context.Context, requestPath, workload string, stdin io.Reader, stdout, _ io.Writer, openLog func() (*os.File, error)) error {
 			fake.calls++
+			if rest, err := io.ReadAll(stdin); err == nil {
+				fake.stdin = string(rest)
+			}
 			fake.requestPath, fake.workload, fake.openLog = requestPath, workload, openLog
 			if fake.writeLog != "" && openLog != nil {
 				file, err := openLog()
@@ -167,6 +171,7 @@ func TestSimpleUpHelpAndPlanCreateNothing(t *testing.T) {
 
 func TestSimpleUpRequiresExplicitManagementCluster(t *testing.T) {
 	fake, rt, base := newFakeSimpleUp(t)
+	rt.input = strings.NewReader("\n") // an empty answer at the management prompt
 	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
 	err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt)
 	if err == nil || !strings.Contains(err.Error(), "no management cluster selected") || !strings.Contains(err.Error(), "never uses KUBECONFIG") {
@@ -254,41 +259,144 @@ func TestSimpleUpDefaultPathsArePrivateAndNeverWidened(t *testing.T) {
 	assertNotExist(t, filepath.Join(base, "fresh"))
 }
 
-func TestSimpleUpBareDiscoversOrCreatesRequest(t *testing.T) {
+func TestSimpleUpBareChoosesOrCreatesRequest(t *testing.T) {
 	fake, rt, base := newFakeSimpleUp(t)
 	t.Setenv("TALOS_INFRA_KUBECONFIG", writeManagementKubeconfig(t, base))
 	requests := filepath.Join(base, "xdg", "ok", "requests")
+	up := func(input string) (string, error) {
+		var out bytes.Buffer
+		rt.input = strings.NewReader(input)
+		err := runSimpleUpWith(context.Background(), nil, &out, io.Discard, rt)
+		return out.String(), err
+	}
 
-	rt.input = strings.NewReader("Bad Name!\n")
-	if err := runSimpleUpWith(context.Background(), nil, io.Discard, io.Discard, rt); err == nil || !strings.Contains(err.Error(), "not a valid cluster name") {
+	// No requests: Enter selects "new"; an invalid name writes nothing.
+	if _, err := up("\nBad Name!\n"); err == nil || !strings.Contains(err.Error(), "not a valid cluster name") {
 		t.Fatalf("invalid name accepted: %v", err)
 	}
 	assertNotExist(t, requests)
 
-	rt.input = strings.NewReader("demo-one\n")
-	var out bytes.Buffer
-	if err := runSimpleUpWith(context.Background(), nil, &out, io.Discard, rt); err != nil {
-		t.Fatal(err)
-	}
+	// A new request is written privately from the validated template and used
+	// right away; the plan and both typed confirmations stay in the engine.
+	out, err := up("\ndemo-one\nprovision demo-one\n")
 	created := filepath.Join(requests, "demo-one.yaml")
-	if info, err := os.Stat(created); err != nil || info.Mode().Perm() != 0o600 || fake.calls != 0 || !strings.Contains(out.String(), "ok up -f "+created) {
-		t.Fatalf("starter request not written privately, or provisioning started: %v calls=%d\n%s", err, fake.calls, out.String())
+	if err != nil || fake.calls != 1 || fake.requestPath != created || !strings.Contains(out, "Wrote "+created) {
+		t.Fatalf("new request not used: %v calls=%d path=%s\n%s", err, fake.calls, fake.requestPath, out)
+	}
+	if info, err := os.Stat(created); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("request not private: %v", err)
 	}
 	if _, err := readClusterRequest(created); err != nil {
 		t.Fatalf("starter request is invalid: %v", err)
 	}
+	if fake.stdin != "provision demo-one\n" {
+		t.Fatalf("engine lost typed input after the prompts: %q", fake.stdin)
+	}
 
-	out.Reset()
-	if err := runSimpleUpWith(context.Background(), nil, &out, io.Discard, rt); err != nil {
+	// One request: Enter selects it.
+	if out, err := up("\n"); err != nil || fake.calls != 2 || fake.requestPath != created || !strings.Contains(out, "1) demo-one.yaml") {
+		t.Fatalf("single request not chosen: %v %s\n%s", err, fake.requestPath, out)
+	}
+
+	// Several requests are listed in order and chosen by number.
+	other := writeSimpleUpFile(t, requests, "other.yaml", validClusterRequestYAML)
+	if out, err := up("2\n"); err != nil || fake.requestPath != other || !strings.Contains(out, "2) other.yaml") {
+		t.Fatalf("numbered choice: %v %s\n%s", err, fake.requestPath, out)
+	}
+
+	// Another path, including ~/ expansion.
+	elsewhere := writeSimpleUpFile(t, filepath.Join(base, "home", "inputs"), "c.yaml", validClusterRequestYAML)
+	if _, err := up("p\n~/inputs/c.yaml\n"); err != nil || fake.requestPath != elsewhere {
+		t.Fatalf("path choice: %v %s", err, fake.requestPath)
+	}
+
+	calls := fake.calls
+	for _, input := range []string{"9\n", "x\n", "p\n\n"} {
+		if _, err := up(input); err == nil {
+			t.Fatalf("%q accepted", input)
+		}
+	}
+	// The profile comes from spec.profile, never from the file name.
+	writeSimpleUpFile(t, requests, "talos-kubevirt.yaml", strings.Replace(validClusterRequestYAML, "talos-kubevirt-reference", "ubuntu-kubevirt", 1))
+	if _, err := up("3\n"); err == nil || !strings.Contains(err.Error(), "unsupported profile") {
+		t.Fatalf("unsupported profile accepted: %v", err)
+	}
+	if fake.calls != calls {
+		t.Fatal("provisioning started after an invalid choice")
+	}
+}
+
+func TestSimpleUpAsksForManagementWhenNotSelected(t *testing.T) {
+	fake, rt, base := newFakeSimpleUp(t)
+	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
+	management := writeManagementKubeconfig(t, base)
+	rt.input = strings.NewReader(management + "\nprovision preview-one\n")
+	var out bytes.Buffer
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request}, &out, io.Discard, rt); err != nil {
 		t.Fatal(err)
 	}
-	if fake.calls != 1 || fake.requestPath != created || !strings.Contains(out.String(), "Using "+created) {
-		t.Fatalf("single request not used: calls=%d path=%s", fake.calls, fake.requestPath)
+	if fake.calls != 1 || os.Getenv("TALOS_INFRA_KUBECONFIG") != management || fake.stdin != "provision preview-one\n" ||
+		!strings.Contains(out.String(), "KUBECONFIG is never used") || !strings.Contains(out.String(), "management kubeconfig from your input") {
+		t.Fatalf("prompted management not used: calls=%d env=%s stdin=%q\n%s", fake.calls, os.Getenv("TALOS_INFRA_KUBECONFIG"), fake.stdin, out.String())
 	}
+	t.Setenv("TALOS_INFRA_KUBECONFIG", "") // ok up exported the first choice for its engine
+	rt.input = strings.NewReader(filepath.Join(base, "absent.yaml") + "\n")
+	if err := runSimpleUpWith(context.Background(), []string{"-f", request}, io.Discard, io.Discard, rt); err == nil ||
+		!strings.Contains(err.Error(), "from your input") || fake.calls != 1 {
+		t.Fatalf("absent prompted management accepted: %v", err)
+	}
+}
 
-	writeSimpleUpFile(t, requests, "other.yaml", validClusterRequestYAML)
-	if err := runSimpleUpWith(context.Background(), nil, io.Discard, io.Discard, rt); err == nil || !strings.Contains(err.Error(), "several cluster requests") || fake.calls != 1 {
-		t.Fatalf("ambiguous requests not refused: %v", err)
+// Ctrl-C or end of input at any prompt cancels; a default is never taken and
+// nothing is created or provisioned.
+func TestSimpleUpCancelledInputStartsNothing(t *testing.T) {
+	fake, rt, base := newFakeSimpleUp(t)
+	requests := filepath.Join(base, "xdg", "ok", "requests")
+	request := writeSimpleUpFile(t, filepath.Join(base, "inputs"), "cluster.yaml", validClusterRequestYAML)
+	run := func(ctx context.Context, arguments []string, input io.Reader) error {
+		rt.input = input
+		return runSimpleUpWith(ctx, arguments, io.Discard, io.Discard, rt)
+	}
+	// End of input (Ctrl-D) at the menu, the name prompt and the management prompt.
+	for _, input := range []string{"", "n\n", "n\ndemo-one"} {
+		if err := run(context.Background(), nil, strings.NewReader(input)); !errors.Is(err, errPromptCancelled) {
+			t.Fatalf("%q: %v", input, err)
+		}
+	}
+	assertNotExist(t, requests)
+	writeSimpleUpFile(t, requests, "existing.yaml", validClusterRequestYAML)
+	if err := run(context.Background(), nil, strings.NewReader("")); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("end of input selected the default request: %v", err)
+	}
+	if err := run(context.Background(), []string{"-f", request}, strings.NewReader("")); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("end of input at the management prompt: %v", err)
+	}
+	// Ctrl-C while a prompt waits ends the process (exit 130) at once; here
+	// the fake exit closes the input so the test can observe the outcome.
+	ctx, cancel := context.WithCancel(context.Background())
+	waiting, typing := io.Pipe()
+	exited := 0
+	exit := promptCancelExit
+	promptCancelExit = func() { exited++; typing.Close() }
+	t.Cleanup(func() { promptCancelExit = exit })
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	if err := run(ctx, nil, waiting); !errors.Is(err, errPromptCancelled) || exited != 1 {
+		t.Fatalf("Ctrl-C at the menu: %v exited=%d", err, exited)
+	}
+	// Once the questions are answered, Ctrl-C belongs to the engine again.
+	ctx, cancel = context.WithCancel(context.Background())
+	t.Setenv("TALOS_INFRA_KUBECONFIG", writeManagementKubeconfig(t, base))
+	rt.provision = func(context.Context, string, string, io.Reader, io.Writer, io.Writer, func() (*os.File, error)) error {
+		cancel()
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	}
+	if err := run(ctx, []string{"-f", request}, strings.NewReader("")); err != nil || exited != 1 {
+		t.Fatalf("prompt cancellation fired during provisioning: %v exited=%d", err, exited)
+	}
+	t.Setenv("TALOS_INFRA_KUBECONFIG", "")
+	if fake.calls != 0 || os.Getenv("TALOS_INFRA_KUBECONFIG") != "" {
+		t.Fatalf("cancelled input started provisioning: calls=%d", fake.calls)
 	}
 }
 

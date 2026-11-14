@@ -50,11 +50,11 @@ kubectl --kubeconfig "$TALOS_INFRA_KUBECONFIG" get clusters.cluster.x-k8s.io -A
 
 Replace the path with **your** management-cluster kubeconfig. For the internal OpenKubes acceptance environment it is `~/.kube/ok-infra-operator.yaml` (RKE2 `ok-infra`), **not** a path users should copy blindly. In Same-Plane mode this management cluster also hosts the KubeVirt workload VMs. The created workload cluster gets a **different** kubeconfig.
 
-The simple CLI ignores `KUBECONFIG` and the current kubectl context for management selection.
+The simple CLI ignores `KUBECONFIG` and the current kubectl context for management selection. It uses `--management`, otherwise `TALOS_INFRA_KUBECONFIG`, otherwise it asks you for the path. The choice is not stored.
 
 ## 3. Write an intent file
 
-Create `my-cluster.yaml` with the **operator-mode `ClusterRequest`** contract. **Do not copy `examples/ok-cli-cluster.yaml`**: that file uses `kind: Cluster` and `talos-kubevirt-mvp` for the separate Runner intent, and is rejected by `ok cluster plan`.
+Bare `ok up` can write this file for you (option `n`, see step 4). To write it yourself, create `my-cluster.yaml` with the **operator-mode `ClusterRequest`** contract. **Do not copy `examples/ok-cli-cluster.yaml`**: that file uses `kind: Cluster` and `talos-kubevirt-mvp` for the separate Runner intent, and is rejected by `ok cluster plan`.
 
 ```yaml
 apiVersion: cli.openkubes.io/v1alpha1
@@ -80,6 +80,24 @@ The Make reference profile allows network fields to be omitted or set to `auto` 
   -f my-cluster.yaml \
   --management "$TALOS_INFRA_KUBECONFIG"
 ```
+
+Or run `ok up` without arguments in an interactive terminal:
+
+```text
+$ .tools/bin/ok up
+Cluster requests in ~/.config/ok/requests:
+  1) my-cluster.yaml
+  n) new cluster request
+  p) path to another ClusterRequest file
+Choose [1]:
+Management cluster kubeconfig (path; KUBECONFIG is never used): ~/.kube/management-operator.yaml
+```
+
+- **Enter** picks the first listed request, or `n` when there is none.
+- **`n`** asks for a cluster name and writes `~/.config/ok/requests/<name>.yaml` (mode 0600) from the validated template above, then continues.
+- **`p`** takes any other ClusterRequest path.
+
+The OS profile comes only from `spec.profile` inside the file, never from its name. The management prompt appears only when neither `--management` nor `TALOS_INFRA_KUBECONFIG` is set. Cancelling or ending input (Ctrl-C, Ctrl-D) at any prompt starts nothing. Both paths then run the same plan, preflight and typed confirmations.
 
 Read the plan and the target-cluster identity before authorizing either step. In interactive operator mode, the CLI requests **two separate typed confirmations**:
 

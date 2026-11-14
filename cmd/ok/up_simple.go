@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,16 +58,24 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 	if err != nil {
 		return err
 	}
+	// One buffered reader for every prompt and both engine confirmations; the
+	// engine's bufio.NewReader reuses it, so no typed input is lost.
+	reader := bufio.NewReaderSize(rt.input, 4096)
+	// Nothing has started while ok up asks its questions, so Ctrl-C (the main
+	// signal context) ends the process at once; no read is left waiting.
+	stopPromptCancel := context.AfterFunc(ctx, func() {
+		fmt.Fprintln(stderr, "\n"+errPromptCancelled.Error())
+		promptCancelExit()
+	})
+	defer stopPromptCancel()
 	requestPath := input.value
 	if requestPath == "" {
 		if !rt.terminal {
 			return errSimpleUpNeedsTerminal
 		}
-		path, stop, err := discoverOrCreateClusterRequest(home, rt.input, stdout)
-		if err != nil || stop {
+		if requestPath, err = chooseClusterRequest(ctx, home, reader, stdout); err != nil {
 			return err
 		}
-		requestPath = path
 	}
 	if requestPath, err = filepath.Abs(requestPath); err != nil {
 		return err
@@ -83,6 +92,16 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 	managementPath, source := *management, "--management"
 	if managementPath == "" {
 		managementPath, source = os.Getenv("TALOS_INFRA_KUBECONFIG"), "TALOS_INFRA_KUBECONFIG"
+	}
+	if managementPath == "" {
+		fmt.Fprint(stdout, "Management cluster kubeconfig (path; KUBECONFIG is never used): ")
+		if managementPath, err = readPromptPath(ctx, reader); err != nil {
+			return err
+		}
+		source = "your input"
+	}
+	if !stopPromptCancel() {
+		return errPromptCancelled
 	}
 	if managementPath == "" {
 		return errors.New("no management cluster selected\n" +
@@ -131,7 +150,7 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 	}
 	fmt.Fprintf(stdout, "OpenKubes ok up · Same-Plane Talos/KubeVirt · build %s\n", shortProvisionRevision(revision))
 	fmt.Fprintf(stdout, "Request %s · management kubeconfig from %s\n\n", requestPath, source)
-	err = rt.provision(ctx, requestPath, workloadPath, rt.input, stdout, stderr, openMakeLog)
+	err = rt.provision(ctx, requestPath, workloadPath, reader, stdout, stderr, openMakeLog)
 	if makeLog == nil {
 		return err
 	}
@@ -235,45 +254,102 @@ func ensurePrivateDirs(directories ...string) error {
 	return nil
 }
 
-func discoverOrCreateClusterRequest(home string, input io.Reader, stdout io.Writer) (string, bool, error) {
+// chooseClusterRequest lists <ok config>/requests and lets the operator pick a
+// request, give another path, or create one from the validated template. The
+// profile always comes from the file's spec.profile, never from its name.
+func chooseClusterRequest(ctx context.Context, home string, input *bufio.Reader, stdout io.Writer) (string, error) {
 	directory := filepath.Join(home, "requests")
 	found, err := filepath.Glob(filepath.Join(directory, "*.y*ml"))
 	if err != nil {
-		return "", true, err
+		return "", err
 	}
 	sort.Strings(found)
-	switch len(found) {
-	case 0:
-	case 1:
-		fmt.Fprintf(stdout, "Using %s\n\n", found[0])
-		return found[0], false, nil
-	default:
-		return "", true, fmt.Errorf("several cluster requests found; choose one:\n    ok up -f %s", strings.Join(found, "\n    ok up -f "))
+	fmt.Fprintf(stdout, "Cluster requests in %s:\n", directory)
+	for index, path := range found {
+		fmt.Fprintf(stdout, "  %d) %s\n", index+1, filepath.Base(path))
 	}
-	fmt.Fprintf(stdout, "No cluster request found in %s.\nCluster name: ", directory)
-	line, err := bufio.NewReader(input).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", true, errors.New("could not read the cluster name")
+	fmt.Fprint(stdout, "  n) new cluster request\n  p) path to another ClusterRequest file\n")
+	choice := "n"
+	if len(found) > 0 {
+		choice = "1"
 	}
-	name := strings.TrimSpace(line)
+	fmt.Fprintf(stdout, "Choose [%s]: ", choice)
+	line, err := readPromptLine(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	if line != "" {
+		choice = line
+	}
+	switch choice {
+	case "n":
+		return createClusterRequest(ctx, home, directory, input, stdout)
+	case "p":
+		fmt.Fprint(stdout, "ClusterRequest file: ")
+		path, err := readPromptPath(ctx, input)
+		if err == nil && path == "" {
+			err = errors.New("no ClusterRequest file given")
+		}
+		return path, err
+	}
+	index, err := strconv.Atoi(choice)
+	if err != nil || index < 1 || index > len(found) {
+		return "", fmt.Errorf("%q is not one of the listed choices", choice)
+	}
+	return found[index-1], nil
+}
+
+func createClusterRequest(ctx context.Context, home, directory string, input *bufio.Reader, stdout io.Writer) (string, error) {
+	fmt.Fprint(stdout, "Cluster name: ")
+	name, err := readPromptLine(ctx, input)
+	if err != nil {
+		return "", err
+	}
 	contents := []byte(fmt.Sprintf("apiVersion: %s\nkind: %s\nmetadata:\n  name: %s\nspec:\n  profile: %s\n  network:\n    endpoint: auto\n    podCIDR: auto\n    serviceCIDR: auto\n",
 		clusterRequestAPIVersion, clusterRequestKind, name, clusterRequestProfile))
 	var request clusterRequest
 	if yaml.Unmarshal(contents, &request) != nil || request.Metadata.Name != name || validateClusterRequest(request) != nil {
-		return "", true, fmt.Errorf("%q is not a valid cluster name (use lowercase letters, digits and '-')", name)
+		return "", fmt.Errorf("%q is not a valid cluster name (use lowercase letters, digits and '-')", name)
 	}
 	if err := ensurePrivateDirs(home, directory); err != nil {
-		return "", true, err
+		return "", err
 	}
 	path := filepath.Join(directory, name+".yaml")
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", true, fmt.Errorf("cannot create %s: %w", path, err)
+		return "", fmt.Errorf("cannot create %s: %w", path, err)
 	}
 	_, writeErr := file.Write(contents)
 	if err := errors.Join(writeErr, file.Close()); err != nil {
-		return "", true, fmt.Errorf("cannot write %s: %w", path, err)
+		return "", fmt.Errorf("cannot write %s: %w", path, err)
 	}
-	fmt.Fprintf(stdout, "Wrote %s (1 control plane, 1 worker, automatic network).\nReview it, then run:\n  ok up -f %s\n", path, path)
-	return "", true, nil
+	fmt.Fprintf(stdout, "Wrote %s (1 control plane, 1 worker, automatic network).\n\n", path)
+	return path, nil
+}
+
+var errPromptCancelled = errors.New("cancelled; nothing was started")
+
+var promptCancelExit = func() { os.Exit(130) }
+
+// readPromptLine returns one typed line; end of input cancels instead of
+// selecting a default.
+func readPromptLine(ctx context.Context, input *bufio.Reader) (string, error) {
+	line, err := input.ReadString('\n')
+	if err != nil || ctx.Err() != nil {
+		return "", errPromptCancelled
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// readPromptPath accepts an absolute, relative or ~/ path; empty stays empty.
+func readPromptPath(ctx context.Context, input *bufio.Reader) (string, error) {
+	path, err := readPromptLine(ctx, input)
+	if err != nil || !strings.HasPrefix(path, "~/") {
+		return path, err
+	}
+	home := os.Getenv("HOME")
+	if !filepath.IsAbs(home) {
+		return "", errors.New("HOME must be an absolute path to expand ~/")
+	}
+	return filepath.Join(home, path[2:]), nil
 }
