@@ -571,7 +571,7 @@ talos-golden-preflight: require-cluster ## Read-only Golden-PVC/RBAC preflight
 	if [ "$$CLUSTER_TYPE" = "talos" ]; then \
 		python3 $(SCRIPT_DIR)/scripts/talos_golden_lifecycle.py \
 			--preflight \
-			--cluster "$(CLUSTER)" \
+			--cluster "$(CLUSTER)" --cluster-dir "$(CLUSTERS_DIR)/$(CLUSTER)" \
 			--kubeconfig "$(TALOS_INFRA_KUBECONFIG)" \
 			--ok-linux-path "$(OK_LINUX_PATH)"; \
 	else \

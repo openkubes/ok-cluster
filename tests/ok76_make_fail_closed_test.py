@@ -191,6 +191,22 @@ class RenderInventoryTests(unittest.TestCase):
             self.assertEqual([path.name for path in stage.iterdir()], ["cluster-config.yaml"])
 
 
+class BootstrapStateDirectoryTests(unittest.TestCase):
+    """make bootstrap's Golden preflight must read the scaffold from CLUSTERS_DIR."""
+
+    def test_golden_preflight_reads_the_state_directory(self):
+        state = "/state-home/ok/clusters"
+        result = subprocess.run(
+            ["make", "-n", "-s", "-C", str(ROOT), "talos-golden-preflight", "CLUSTER=demo",
+             f"CLUSTERS_DIR={state}", "TALOS_INFRA_KUBECONFIG=/k/management.yaml"],
+            capture_output=True, text=True, check=False, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'--cluster-dir "{state}/demo"', result.stdout)
+        self.assertIn(f'"{state}/demo/cluster-config.yaml"', result.stdout)
+        self.assertNotIn(f"{ROOT}/demo", result.stdout)
+
+
 class DiscoverClustersTests(unittest.TestCase):
     """Allocation sees committed/pre-v1.0.1 clusters and the external state."""
 
