@@ -299,3 +299,20 @@ func TestSimpleDestroyFindsStateOrLegacyClusterAndRefusesBoth(t *testing.T) {
 		t.Fatalf("missing cluster must name both locations: %v", err)
 	}
 }
+
+// An uninspectable state location never falls back to the legacy checkout.
+func TestSimpleDestroyUninspectableStateFailsClosed(t *testing.T) {
+	f := newSimpleDestroyFixture(t) // the legacy cluster exists in the checkout
+	if err := os.MkdirAll(filepath.Dir(f.state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A file where the clusters directory should be: Lstat fails with ENOTDIR
+	// (not ErrNotExist), also when the tests run as root.
+	if err := os.WriteFile(f.state, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run("--management", f.management)
+	if err == nil || !strings.Contains(err.Error(), "cannot inspect "+filepath.Join(f.state, "ok-v1-test")) || len(f.calls) != 0 {
+		t.Fatalf("legacy chosen despite uninspectable state: %v calls=%d", err, len(f.calls))
+	}
+}

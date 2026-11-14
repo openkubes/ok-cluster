@@ -105,15 +105,16 @@ func destroyDirectory(runtime clusterProvisionRuntime, name string) (string, err
 	state, legacy := filepath.Join(runtime.clustersDir, name), filepath.Join(runtime.makeRoot, name)
 	_, stateErr := os.Lstat(state)
 	_, legacyErr := os.Lstat(legacy)
+	// A location that cannot be inspected is never treated as absent.
 	switch {
+	case stateErr != nil && !errors.Is(stateErr, os.ErrNotExist):
+		return "", fmt.Errorf("cannot inspect %s: %w; nothing deleted", state, stateErr)
+	case legacyErr != nil && !errors.Is(legacyErr, os.ErrNotExist):
+		return "", fmt.Errorf("cannot inspect %s: %w; nothing deleted", legacy, legacyErr)
 	case stateErr == nil && legacyErr == nil:
 		return "", fmt.Errorf("both %s and %s exist for %s; ok destroy will not choose between them; nothing deleted", state, legacy, name)
 	case legacyErr == nil:
 		return legacy, nil
-	case stateErr != nil && !errors.Is(stateErr, os.ErrNotExist):
-		return "", stateErr
-	case legacyErr != nil && !errors.Is(legacyErr, os.ErrNotExist):
-		return "", legacyErr
 	case stateErr != nil:
 		return "", fmt.Errorf("no cluster provisioned by ok up named %s in %s or %s; nothing deleted\n"+
 			"  Runner or split-plane clusters: ok cluster destroy %s --help", name, runtime.clustersDir, runtime.makeRoot, name)
