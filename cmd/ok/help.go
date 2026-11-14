@@ -192,7 +192,7 @@ Commands:
   preview     Experimental local-only authoring preview (no authority or mutation)
   destroy     Destroy a cluster created by ok up (ok destroy <name>)
   local       Manage the dedicated local kind + Console demo environment
-  config      Save and inspect local CLI paths (no cluster contact)
+  config      First-run setup: verify this bundle, save settings (no cluster contact)
   version     Print version and source revision
   authority   Expert commands for the bounded stage authority
   evidence    Expert commands for independent evidence collection
@@ -209,8 +209,9 @@ Usage:
   ok up -f <cluster.yaml>       use a ClusterRequest (cli.openkubes.io/v1alpha1)
 
 Flags:
-  --management <kubeconfig>     management cluster (or set TALOS_INFRA_KUBECONFIG;
-                                otherwise ok up asks for the path)
+  --management <kubeconfig>     management cluster; else TALOS_INFRA_KUBECONFIG,
+                                else the path saved by ok config init, else ok up asks
+  --config <file>               settings file from ok config init (an explicit file must exist)
   --workload-kubeconfig <path>  output kubeconfig (default: <ok config>/kubeconfigs/<name>.yaml)
   -v, --verbose                 technical details and live Make output instead of a log
 
@@ -222,7 +223,7 @@ output and may contain sensitive information; nothing is removed or masked.
 CLI v1.0 supports only the Same-Plane Talos/KubeVirt operator workflow: the
 management cluster also hosts the cluster VMs. ok up never uses KUBECONFIG or
 your current kubectl context for the management cluster. It runs only from the
-clean checkout the CLI was built from (make ok-cli-build), checks pinned
+verified bundle or clean checkout the CLI was built from, checks pinned
 ok-linux and Cilium inputs, and asks you to type "provision <name>" before
 make new and "bootstrap <name>" before make bootstrap. Nothing is retried or
 cleaned up automatically. A finished bootstrap is not a readiness check: verify

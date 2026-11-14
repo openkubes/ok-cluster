@@ -44,7 +44,8 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 	var input clusterPlanInputFlag
 	flags.Var(&input, "f", "ClusterRequest YAML file")
 	flags.Var(&input, "file", "ClusterRequest YAML file")
-	management := flags.String("management", "", "management cluster kubeconfig (or set TALOS_INFRA_KUBECONFIG)")
+	management := flags.String("management", "", "management cluster kubeconfig (or set TALOS_INFRA_KUBECONFIG, or save it with ok config init)")
+	configFile := flags.String("config", "", "settings file from ok config init (default: user configuration directory/ok/config.json)")
 	workload := flags.String("workload-kubeconfig", "", "output kubeconfig (default: <ok config>/kubeconfigs/<name>.yaml)")
 	verbose := flags.Bool("verbose", false, "technical details and live Make output instead of a log file")
 	flags.BoolVar(verbose, "v", false, "same as --verbose")
@@ -52,7 +53,10 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected argument %q; usage: ok up [-f cluster.yaml] [--management <kubeconfig>]", flags.Arg(0))
+		return fmt.Errorf("unexpected argument %q; usage: ok up [-f cluster.yaml] [--management <kubeconfig>] [--config <file>]", flags.Arg(0))
+	}
+	if err := rejectExplicitEmptyConfig(flags); err != nil {
+		return err
 	}
 	home, err := okUpHome()
 	if err != nil {
@@ -89,9 +93,9 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 		return errSimpleUpNeedsTerminal
 	}
 
-	managementPath, source := *management, "--management"
-	if managementPath == "" {
-		managementPath, source = os.Getenv("TALOS_INFRA_KUBECONFIG"), "TALOS_INFRA_KUBECONFIG"
+	managementPath, source, err := samePlaneManagement(*management, *configFile)
+	if err != nil {
+		return err
 	}
 	if managementPath == "" {
 		fmt.Fprint(stdout, "Management cluster kubeconfig (path; KUBECONFIG is never used): ")
@@ -107,7 +111,8 @@ func runSimpleUpWith(ctx context.Context, arguments []string, stdout, stderr io.
 		return errors.New("no management cluster selected\n" +
 			"  ok up never uses KUBECONFIG or your current kubectl context for privileged access.\n" +
 			"  Choose it explicitly: ok up -f " + requestPath + " --management <management-kubeconfig>\n" +
-			"  or: export TALOS_INFRA_KUBECONFIG=<management-kubeconfig>")
+			"  or: export TALOS_INFRA_KUBECONFIG=<management-kubeconfig>\n" +
+			"  or save the path once: ok config init --management <management-kubeconfig>")
 	}
 	if managementPath, err = filepath.Abs(managementPath); err != nil {
 		return err
@@ -179,7 +184,7 @@ func simpleUpHandles(arguments []string) bool {
 		name, value, hasValue := strings.Cut(strings.TrimLeft(arguments[index], "-"), "=")
 		switch name {
 		case "v", "verbose", "h", "help":
-		case "f", "file", "management", "workload-kubeconfig":
+		case "f", "file", "management", "workload-kubeconfig", "config":
 			if !hasValue && index+1 < len(arguments) {
 				index++
 				value = arguments[index]

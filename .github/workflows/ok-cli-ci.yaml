@@ -128,7 +128,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out source without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -161,6 +161,13 @@ jobs:
           CILIUM_CHART: ${{ runner.temp }}/cilium-1.19.6.tgz
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -B ok-cluster/tests/release_bundle_test.py
+
+      - name: Install the bundle with install-ok.sh as an unprivileged user
+        env:
+          OK_LINUX_PATH: ${{ github.workspace }}/ok-linux
+          CILIUM_CHART: ${{ runner.temp }}/cilium-1.19.6.tgz
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -B ok-cluster/tests/install_ok_test.py
 
   target-admission-image:
     runs-on: ubuntu-latest

@@ -35,12 +35,16 @@ func runSimpleDestroyWith(ctx context.Context, name string, arguments []string, 
 	flags := flag.NewFlagSet("ok destroy", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() { writeSimpleDestroyHelp(stdout) }
-	management := flags.String("management", "", "management cluster kubeconfig (or set TALOS_INFRA_KUBECONFIG)")
+	management := flags.String("management", "", "management cluster kubeconfig (or set TALOS_INFRA_KUBECONFIG, or save it with ok config init)")
+	configFile := flags.String("config", "", "settings file from ok config init (default: user configuration directory/ok/config.json)")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected argument %q; usage: ok destroy <name> [--management <kubeconfig>]", flags.Arg(0))
+		return fmt.Errorf("unexpected argument %q; usage: ok destroy <name> [--management <kubeconfig>] [--config <file>]", flags.Arg(0))
+	}
+	if err := rejectExplicitEmptyConfig(flags); err != nil {
+		return err
 	}
 	if err := validateDestroyName(name); err != nil {
 		return err
@@ -48,17 +52,22 @@ func runSimpleDestroyWith(ctx context.Context, name string, arguments []string, 
 	if !rt.terminal {
 		return errors.New("ok destroy needs an interactive terminal to type the cluster name; nothing deleted")
 	}
-	managementPath, source := *management, "--management"
-	if managementPath == "" {
-		managementPath, source = os.Getenv("TALOS_INFRA_KUBECONFIG"), "TALOS_INFRA_KUBECONFIG"
+	configPath, err := localConfigPath(*configFile)
+	if err != nil {
+		return err
+	}
+	managementPath, source, err := samePlaneManagement(*management, *configFile)
+	if err != nil {
+		return fmt.Errorf("%w; nothing deleted", err)
 	}
 	if managementPath == "" {
 		return errors.New("no management cluster selected\n" +
 			"  ok destroy never uses KUBECONFIG or your current kubectl context.\n" +
 			"  Choose it explicitly: ok destroy " + name + " --management <management-kubeconfig>\n" +
-			"  or: export TALOS_INFRA_KUBECONFIG=<management-kubeconfig>")
+			"  or: export TALOS_INFRA_KUBECONFIG=<management-kubeconfig>\n" +
+			"  or save the path once: ok config init --management <management-kubeconfig>")
 	}
-	managementPath, err := filepath.Abs(managementPath)
+	managementPath, err = filepath.Abs(managementPath)
 	if err != nil {
 		return err
 	}
@@ -83,7 +92,7 @@ func runSimpleDestroyWith(ctx context.Context, name string, arguments []string, 
 	if err := requireOperatorEvidence(directory, name); err != nil {
 		return err
 	}
-	if err := refuseOtherDestroyRoutes(name, directory); err != nil {
+	if err := refuseOtherDestroyRoutes(name, directory, configPath); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "OpenKubes ok destroy · Same-Plane Talos/KubeVirt · build %s\n", shortProvisionRevision(runtime.makeRevision))
@@ -188,14 +197,10 @@ func requireOperatorEvidence(directory, name string) error {
 
 // refuseOtherDestroyRoutes stops when `ok cluster destroy` could select a
 // different directory for the same name, so one name never means two clusters.
-func refuseOtherDestroyRoutes(name, directory string) error {
+func refuseOtherDestroyRoutes(name, directory, path string) error {
 	others := []string{}
 	if base, err := os.UserConfigDir(); err == nil {
 		others = append(others, filepath.Join(base, "ok", "runs", name))
-	}
-	path, err := localConfigPath("")
-	if err != nil {
-		return err
 	}
 	config, err := loadLocalConfig(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -229,10 +234,13 @@ func writeSimpleDestroyHelp(output io.Writer) {
 	fmt.Fprint(output, `Destroy a Same-Plane Talos/KubeVirt cluster created by ok up
 
 Usage:
-  ok destroy <name> [--management <kubeconfig>]
+  ok destroy <name> [--management <kubeconfig>] [--config <file>]
 
-  --management   management cluster kubeconfig (or set TALOS_INFRA_KUBECONFIG);
-                 never KUBECONFIG or the current kubectl context
+  --management   management cluster kubeconfig; else TALOS_INFRA_KUBECONFIG,
+                 else the path saved by ok config init; never KUBECONFIG or the
+                 current kubectl context
+  --config       settings file from ok config init (default: the OS user
+                 configuration directory); an explicit file must exist
 
 Only acts on the evidence ok up left in <state>/ok/clusters/<name>/ (state is
 $XDG_STATE_HOME, else ~/.local/state) or, for clusters created before v1.0.1, in

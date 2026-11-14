@@ -85,6 +85,15 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 		if err != nil && !(os.IsNotExist(err) && *configFile == "") {
 			return fmt.Errorf("cannot load local configuration %s: %w", path, err)
 		}
+		if err == nil && config.Format == localConfigFormatV2 {
+			// A Same-Plane reference is never reused as one half of a split-plane
+			// credential pair; this route needs both kubeconfigs explicitly.
+			if *management == "" || *provider == "" {
+				return fmt.Errorf("%s is a Same-Plane configuration; for clusters created by ok up use: ok destroy %s\n"+
+					"  this route needs explicit --management-kubeconfig and --provider-kubeconfig", path, name)
+			}
+			err = os.ErrNotExist
+		}
 		if err == nil {
 			configUsed = path
 			for destination, value := range map[*string]string{root: config.LifecycleRoot, okLinux: config.OKLinuxPath,
@@ -99,7 +108,7 @@ func runDestroyClusterWithRuntime(ctx context.Context, arguments []string, stdou
 		}
 	}
 	if *management == "" || *provider == "" {
-		return errors.New("destroy requires explicit --management-kubeconfig and --provider-kubeconfig, or paths saved by ok config init; no default context is used")
+		return errors.New("destroy requires explicit --management-kubeconfig and --provider-kubeconfig, or paths saved by ok config init --topology split-plane; no default context is used")
 	}
 	if *root == "" {
 		*root = "."

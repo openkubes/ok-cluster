@@ -40,7 +40,8 @@ func configFixture(t *testing.T) (localCLIConfig, []string) {
 			t.Fatal(err)
 		}
 	}
-	config := localCLIConfig{localConfigFormat, root, profiles, clusters, filepath.Join(root, "management.yaml"), filepath.Join(root, "provider.yaml")}
+	config := localCLIConfig{Format: localConfigFormat, LifecycleRoot: root, OKLinuxPath: profiles, ClustersDir: clusters,
+		ManagementKubeconfig: filepath.Join(root, "management.yaml"), ProviderKubeconfig: filepath.Join(root, "provider.yaml")}
 	return config, []string{"config", "init", "--lifecycle-root", root, "--ok-linux-path", profiles,
 		"--clusters-dir", clusters, "--management-kubeconfig", config.ManagementKubeconfig,
 		"--provider-kubeconfig", config.ProviderKubeconfig}
