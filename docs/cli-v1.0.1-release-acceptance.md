@@ -54,5 +54,6 @@ The live steps require separately authorized disposable infrastructure and a ded
 - [ ] Provenance/signing decision (or an explicit unsigned Community Preview policy)
 - [x] Version semantics decided: SemVer, one version for ok-cluster releases and the `ok` CLI; v1.0.1 is the first `1.x` release, and the next patch release is v1.0.2
 - [ ] Approval to tag: `v1.0.1` (free in the tag history as of 2026-11-14) on the approved commit only; then `make ok-release-acceptance RELEASE_VERSION=v1.0.1 RELEASE_COMMIT=<approved commit>`
+- [ ] If attesting: environment `ok-cli-release-attestation` exists with required reviewers and a protected/selected-branch policy; the official run (`release=true attest=true`) is approved by a reviewer. Acceptance builds never attest
 - [ ] Approval to publish the GitHub release (checklist in `docs/release-process.md`); release notes in `docs/release-notes/v1.0.1.md`
 - [ ] Release notes state the limitations: Same-Plane only, prepared management cluster, unsigned, local CIDR inventory, no cross-version destroy, no name reuse

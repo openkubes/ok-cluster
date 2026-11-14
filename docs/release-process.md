@@ -63,19 +63,29 @@ Overrides: `OK_LINUX_PATH=…`, `CILIUM_CHART=…`, `RC_OUT=…`, `RC_WORK=…` 
 
 | Property | How |
 |---|---|
-| Trigger | manual only: **Actions → OK CLI build and acceptance → Run workflow** on `main`. Inputs: `version`, `commit` (full 40-character SHA), `release` (default off) and `attest` (default off). Dispatch needs write access. There is no `pull_request` trigger, so PR code never runs here. |
+| Trigger | manual only: **Actions → OK CLI build and acceptance → Run workflow** on `main`. Inputs: `version`, `commit` (full 40-character SHA), `release` (default off) and `attest` (default off; refused unless `release` is on). Dispatch needs write access. There is no `pull_request` trigger, so PR code never runs here. |
 | Commit identity | a `bind` job validates the inputs (passed via `env`, never interpolated into shell). It checks out exactly `commit` and requires it to be on `main`. For `release=true`, the tag `version` must already point at `commit`, and the script checks that again. |
 | Runners and toolchain | `macos-15` builds and accepts `darwin-arm64`, `ubuntu-24.04` builds and accepts `linux-amd64`, each natively (`--targets`). Go **1.24.13** is pinned explicitly, without a dependency cache. |
 | Checks | per runner, the full script: source identity (clean commit, pinned `ok-linux`, chart SHA-256), tests, native build, `.sha256`, `release.txt`, isolated install and first-run smoke. |
 | Outputs | Actions artifacts `ok-<version>-<target>` (bundle, `.sha256`, acceptance report JSON; kept 30 days), and logs on failure. Nothing is installed outside the runner. |
-| Permissions | the workflow default is `{}`. Build jobs get `contents: read` only, with `persist-credentials: false`. Only the opt-in `attest` job gets `id-token: write` / `attestations: write`; it runs no repository code, only downloads the bundles, re-checks their SHA-256 and calls `actions/attest`. |
+| Permissions | the workflow default is `{}`. Build jobs get `contents: read` only, with `persist-credentials: false`. `attest-gate` gets `actions: read` only. Only the `attest` job gets `id-token: write` / `attestations: write`; it runs no repository code, only downloads the bundles, re-checks their SHA-256 and calls `actions/attest`. |
 | Pins | `actions/checkout` v4.4.0, `setup-go` v7.0.0, `upload-artifact` v4.6.2, `download-artifact` v4.3.0, `attest` v4.2.2, all pinned by full commit SHA. |
 | Never | creates or pushes tags, creates or publishes a GitHub release, or merges. |
 
-**Attestations (evaluation).** `attest=true` creates a GitHub artifact attestation (signed SLSA build provenance) for each bundle; it can be verified with `gh attestation verify <bundle> --repo openkubes/ok-cluster`.
-- This repository is public, so each attestation is also written to **Sigstore's public transparency log**. That is a form of publication, which is why it is opt-in and should be used only for an approved official build.
-- Recommended before first use: give the `attest` job a protected GitHub environment with required reviewers.
-- Attestations prove which workflow run built a file from which commit. They don't replace the release gates, and the bundles remain unsigned and not notarized for macOS Gatekeeper.
+**Attestations: approved official builds only.** An attestation is signed SLSA build provenance for each bundle; verify it with `gh attestation verify <bundle> --repo openkubes/ok-cluster`. This repository is public, so each attestation is also written to **Sigstore's public transparency log**, which is a form of publication.
+- **No public attestations for acceptance builds.** The `bind` job refuses `attest=true` unless `release=true`, before anything is built, and the `attest-gate` and `attest` jobs run only if `inputs.release && inputs.attest`.
+- **Reviewer approval.** The `attest` job uses the protected environment `ok-cli-release-attestation` and waits for a required reviewer to approve that specific run.
+- **Fail closed.** `attest-gate` reads the environment through the API first and fails unless it exists with required reviewers and a deployment policy limited to protected or selected branches. Without this, GitHub would create a missing environment on first use with no protection at all.
+- **No repository code with the token.** `attest` never checks out or runs repository code; it attests the files uploaded by the build jobs after re-checking their SHA-256.
+- **Not a replacement.** Attestations prove which workflow run built a file from which commit. They don't replace the release gates, and the bundles remain unsigned and not notarized for macOS Gatekeeper.
+- **Policy test.** `tests/ok_cli_build_workflow_test.py`, in the CI `test` job, checks these rules: trigger, permissions, pins, no inputs in shell, the attestation conditions and environment. It also executes the workflow's own input validation and environment gate against accept/refuse cases.
+
+**One-time admin setup (in GitHub, not by this PR):** Settings → Environments → New environment `ok-cli-release-attestation`:
+- Required reviewers: at least one release maintainer; enable "Prevent self-review".
+- Deployment branches and tags: "Protected branches only", or "Selected branches" with `main`.
+- No secrets or variables are needed.
+
+Until it exists, official builds with `attest=true` fail at `attest-gate`; builds without attestation are unaffected.
 
 ### Promoting an accepted commit to the official v1.0.1
 
@@ -86,7 +96,7 @@ Each arrow is a recorded owner decision; nothing below happens automatically.
 3. **Lifecycle safety gates** with those artifacts, on separately authorized disposable infrastructure (`docs/cli-v1.0.1-release-acceptance.md`, sections D and E). If anything fails, fix it on a new PR, which gives a new `C` and `-rc4`, and repeat.
 4. **Decisions recorded:** licensing/redistribution, provenance/signing policy (including whether to attest), final release notes.
 5. → **Approval to tag.** A maintainer runs `git fetch origin && git tag -a v1.0.1 -m "v1.0.1" C && git rev-parse v1.0.1^{commit}` (it must print `C`), then `git push origin refs/tags/v1.0.1`, then `git ls-remote origin refs/tags/v1.0.1^{}` (it must show `C`).
-6. **Official build:** run the workflow with `version=v1.0.1`, `commit=C`, `release=true`, and `attest` as decided in step 4. It refuses unless the tag points at `C`. Download both bundles, their `.sha256` and the reports; check `sha256sum -c`, `release.txt` (`version: v1.0.1`, `ok-cluster commit: C`) and, if attested, `gh attestation verify`.
+6. **Official build:** run the workflow with `version=v1.0.1`, `commit=C`, `release=true`, and `attest` as decided in step 4. It refuses unless the tag points at `C`. With `attest=true`, `attest-gate` must pass and a required reviewer approves the `attest` job in the `ok-cli-release-attestation` environment. Download both bundles, their `.sha256` and the reports; check `sha256sum -c`, `release.txt` (`version: v1.0.1`, `ok-cluster commit: C`) and, if attested, `gh attestation verify`.
 7. → **Approval to publish.** Create a **draft** GitHub release for tag `v1.0.1`. Attach the two official bundles, their `.sha256` files and `scripts/install-ok.sh` from `C`, and the release notes with the SHA-256 values. Re-download the attachments, verify them, then publish. Announce the SHA-256 values through a second channel.
 8. The next patch release is **v1.0.2**, through the same steps.
 
