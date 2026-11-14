@@ -1,8 +1,8 @@
 # OpenKubes CLI v1.0 — Same-Plane installation and first cluster (Community Preview)
 
-> **Scope and status (November 2026):** This is the source-checkout-based **Same-Plane Talos/KubeVirt operator** workflow, not a general-purpose, one-command Kubernetes installation and not the separate OK-147 Runner/Bare-MVP path. The complete `ok up` → independently verify Kubernetes readiness → `ok destroy <name>` → independently verify absence workflow **passed a live acceptance run** for `ok-v1-test-2` on the existing RKE2 management cluster, using CLI build `4cb6f12d0dff9a166e41212bd5ec8290b6e557de`. This is evidence for that narrow operator workflow, not general production support, arbitrary providers, or release-asset verification.
+> **Scope and status (November 2026):** This is the **Same-Plane Talos/KubeVirt operator** workflow, not a general-purpose, one-command Kubernetes installation and not the separate OK-147 Runner/Bare-MVP path. The installed-bundle workflow (`ok up` → independently verify Kubernetes readiness → `ok destroy <name>` → independently verify absence) **passed a live acceptance run** on macOS ARM64 against the existing RKE2 management cluster (OK-228, cluster `ok-v101-a2`, build `2a9b805`). This is evidence for that narrow operator workflow, not general production support, arbitrary providers or signed release provenance.
 >
-> **v1.0.1 UX direction:** We plan to simplify installation, dependency setup and the CLI experience. These improvements are not implemented in v1.0; no release date or particular installer is promised.
+> **v1.0.1 first run:** `install-ok.sh` installs a verified bundle without root, and `ok config init` finds and verifies that bundle and saves your management kubeconfig path. These are new in v1.0.1 and are being accepted as a new release candidate; until then, treat them as preview.
 
 ## What this workflow does
 
@@ -12,85 +12,82 @@ The management cluster needs a previously validated Talos/KubeVirt provider prof
 
 ## Prerequisites
 
-- macOS or Linux; Git, Go, Python 3, Make, kubectl and the exact tooling required by the CLI preflight (including clusterctl and Helm). Tool versions must meet the repository's tested requirements.
-- Two sibling checkouts at the **reviewed, pinned revisions**: `ok-cluster` and `ok-linux`. A random HEAD of `ok-linux` is not sufficient. Use the revision required by your checked-out `ok-cluster` and validate it using the CLI preflight. The source-integrity checks require reviewed/clean source, and may reject unrelated untracked files.
+- macOS ARM64 or Linux AMD64. Runtime tools: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm, plus standard shell tools. **Go is only needed to build from source.** `ok config init` lists any tool that is missing; it never installs anything.
+- A release bundle and its SHA-256 from a trusted channel, or (developers) two sibling checkouts at the **reviewed, pinned revisions**: `ok-cluster` and `ok-linux`.
 - A prepared Same-Plane provider/management cluster with an explicitly selected and authorized kubeconfig; do not use the current kubectl context or rely on `KUBECONFIG`.
 - A unique, currently unused workload-cluster name, coordinated exclusive access to the shared network-allocation pool. This profile requires **automatic** endpoint and CIDR allocation; review its live inventory and the allocated values during provisioning.
 
 **Shared infrastructure safety:** Read-only-check the API endpoint assignment, network allocations and other clusters before confirming provisioning. Never remove, overwrite or forcibly clean up existing namespaces, storage, evidence, or worktrees to make the preflight pass. A separate clean worktree can help, but must still match the CLI's embedded source revision and pinned dependencies.
 
-## 1. Get and build the CLI
+## 1. Install the CLI from a release bundle
+
+You need the archive `ok-<version>-<os>-<arch>.tar.gz` and its expected SHA-256 from a trusted channel (not only the `.sha256` file shipped next to the archive). Run everything as the user who will run `ok`; no root is needed.
+
+```bash
+EXPECTED=<sha256 from the trusted channel>
+ARCHIVE=ok-<version>-<os>-<arch>.tar.gz
+# The installer ships inside the archive. Verify the archive first, then use the installer from it:
+shasum -a 256 "$ARCHIVE"          # Linux: sha256sum "$ARCHIVE"; must print $EXPECTED
+tar -xzOf "$ARCHIVE" "${ARCHIVE%.tar.gz}/ok-cluster/scripts/install-ok.sh" > install-ok.sh
+sh install-ok.sh --archive "$ARCHIVE" --sha256 "$EXPECTED" --link
+ok version
+```
+
+`install-ok.sh` checks the SHA-256 again before it reads the archive, and refuses links, special files, absolute or `..` paths, privileged modes and archives for another OS/architecture. It extracts into a private staging directory and verifies the bundle there: `release.txt` against the binary and the Cilium chart, `ok version`, and both Git copies at their commits and clean. Only then does it move the bundle to `~/.local/share/ok/<bundle>`.
+
+- **It never overwrites anything.** An existing installation of the same version is refused. `--link` creates `~/.local/bin/ok` only if nothing is there; without `--link` it prints the `ln -s` command. It never edits your shell profile; if `~/.local/bin` is not on `PATH`, it prints the line to add.
+- **Other locations:** `--prefix DIR` and `--bin-dir DIR` (absolute paths of letters, digits, `.`, `_`, `/`, `-`).
+- **macOS:** a browser download is quarantined, and macOS blocks the unsigned binary. Download with `curl`, or remove the flag only after the checksum matched: `xattr -d com.apple.quarantine "$ARCHIVE"`.
+- **Integrity is not provenance.** The checksum shows you have the file whose value you trust; it does not establish who built it. The bundle is neither signed nor notarized.
+- **Upgrades.** Install the new version next to the old one (`--link` leaves an existing link alone; repoint it yourself). **Destroying a cluster with a different version than the one that created it is not yet tested and not promised.** Keep the creating bundle until its clusters are destroyed, and destroy with that version: call its `ok-cluster/.tools/bin/ok` by full path.
+
+### Developers: build from source
 
 ```bash
 git clone https://github.com/openkubes/ok-cluster.git
-git clone https://github.com/openkubes/ok-linux.git
-cd ok-cluster
-
-# Select the reviewed v1.0 source revision and the matching pinned
-# ok-linux revision according to the release/maintainer instructions.
-# Do not assume the latest main branch is a stable v1.0 release.
-
-make ok-cli-build
-.tools/bin/ok version
-.tools/bin/ok up --help
-.tools/bin/ok destroy --help
+git clone https://github.com/openkubes/ok-linux.git   # check out the commit pinned in cmd/ok/cluster_provision.go
+cd ok-cluster && make ok-cli-build && .tools/bin/ok version
 ```
 
-`make ok-cli-build` is the supported Make target (not `make ok-cli`). The resulting CLI is `.tools/bin/ok`; running an ad-hoc `go build` without the Makefile's version/revision linker flags can produce `unknown` revision and fail source-integrity verification.
-
-> **Current installation limitation:** Unlike a standalone distributable binary, these operator commands depend on the matching reviewed source checkout and local lifecycle tools. Installation is not complete merely by placing `ok` on `PATH`. A release bundle (below) packages exactly that.
-
-### Alternative: install a release bundle (no source checkout to maintain)
-
-A maintainer builds one bundle per platform from a clean, reviewed commit:
-
-```bash
-make ok-release-bundle GOOS=darwin GOARCH=arm64 OUT=dist   # needs the pinned ../ok-linux
-```
-
-This produces `ok-<version>-<os>-<arch>.tar.gz`, its `.sha256` and an unpacked copy:
+`make ok-cli-build` embeds the exact revision; an ad-hoc `go build` reports `unknown` and fails the source checks. Maintainers build bundles with `make ok-release-bundle GOOS=<os> GOARCH=<arch> OUT=dist` from a clean commit. The bundle layout:
 
 ```text
 ok-<version>-<os>-<arch>/
   ok-cluster/          minimal Git copy of the release commit
     .tools/bin/ok      built from that commit (its embedded revision)
     .tools/cilium-1.19.6.tgz   pinned chart, SHA-256 verified
+    scripts/install-ok.sh
   ok-linux/            minimal Git copy of the ok-linux commit pinned in bin/ok
   release.txt          version, both commits, SHA-256 of bin/ok and the chart
 ```
 
-**Integrity and provenance.** Checking the SHA-256 proves only that your tarball matches a published value. It shows you got the intended file, but only as far as you trust where that value was published. A checksum does not independently establish who built the bundle, or from what. `release.txt` makes the relationships explicit: the binary's embedded revision is the `ok-cluster` commit, and the binary pins the `ok-linux` commit. At runtime, `ok` checks that both copies sit at those commits with no changes, which catches accidental modification. None of this is signed release provenance, and this bundle is neither signed nor notarized.
+An official version such as `v1.0.1` is accepted only when the tag `v1.0.1` points at the packaged commit; any other build keeps a distinct preview version.
 
-**Versions.** Without `--version`, the bundle is named by `git describe` (for example `v0.15.0-531-g3633dc9`). An official version such as `v1.0.1` is accepted only when the tag `v1.0.1` points at the commit being packaged. Any other build keeps a distinct preview version.
-
-Install into a prefix of your own, as the user who will run `ok`. Git refuses checkouts owned by another user, and the source check then fails closed.
+## 2. First run: `ok config init`
 
 ```bash
-shasum -a 256 -c ok-<version>-<os>-<arch>.tar.gz.sha256     # Linux: sha256sum -c
-PREFIX="$HOME/.local/share/ok"                              # or an isolated test prefix
-mkdir -p "$PREFIX" "$HOME/.local/bin"
-tar -xzf ok-<version>-<os>-<arch>.tar.gz -C "$PREFIX"
-ln -s "$PREFIX/ok-<version>-<os>-<arch>/ok-cluster/.tools/bin/ok" "$HOME/.local/bin/ok"
-ok version
+ok config init --management "$HOME/.kube/management-operator.yaml"
 ```
 
-- **Keep your current `ok`.** For acceptance testing, use an isolated prefix and call the linked binary by its full path. Do not overwrite an existing global `ok`.
-- **macOS:** a tarball downloaded with a browser is quarantined, and macOS blocks the unsigned binary. Download with `curl`, or review it and clear the flag yourself.
-- **Tools:** the required tools are unchanged: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm.
+Replace the path with **your** management-cluster kubeconfig (for the internal OpenKubes acceptance environment `~/.kube/ok-infra-operator.yaml`, **not** a path to copy blindly). Without `--management`, init asks for it on a terminal; Enter skips, and `ok up` then asks each time.
 
-**Upgrades.** Install the new bundle next to the old one and repoint the link. Lifecycle state in `~/.local/state/ok` and requests in `~/.config/ok` are kept. **Destroying a cluster with a different version than the one that created it is not yet tested and not promised.** Keep the creating bundle installed until its clusters are destroyed, and destroy with that version: call its `ok-cluster/.tools/bin/ok` by full path.
+`ok config init`:
 
-## 2. Select the management Kubernetes cluster
+- finds the bundle from where `ok` really is (through the `~/.local/bin/ok` link) and verifies it like `ok up`: `ok-cluster` at this binary's commit and clean, `ok-linux` at the pinned commit and clean, the pinned Cilium chart, and `release.txt`. It never searches for other checkouts;
+- lists missing runtime tools (nothing is installed);
+- saves only the **path** of the management kubeconfig: the file must be a private (0600) regular file; its contents are not read and no cluster is contacted. **No provider kubeconfig is needed for Same-Plane;**
+- shows everything and, on a terminal, asks `ok`/`no` before writing a private, create-only file. Without a terminal it saves nothing unless you pass `--yes` (scripts: `ok config init --management <file> --yes`); `--yes` skips only the prompts, never the verification. It never overwrites an existing file.
+
+The management cluster is chosen in this order: `--management`, then `TALOS_INFRA_KUBECONFIG`, then the saved path. `KUBECONFIG` and the current kubectl context are never used. The saved path only selects the file: `ok up` and `ok destroy` still verify the API server, CA and kube-system UID, and still require their typed confirmations. Check the target first:
 
 ```bash
-export TALOS_INFRA_KUBECONFIG="$HOME/.kube/management-operator.yaml"
-kubectl --kubeconfig "$TALOS_INFRA_KUBECONFIG" config current-context
-kubectl --kubeconfig "$TALOS_INFRA_KUBECONFIG" get clusters.cluster.x-k8s.io -A
+kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" config current-context
+kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" get clusters.cluster.x-k8s.io -A
 ```
 
-Replace the path with **your** management-cluster kubeconfig. For the internal OpenKubes acceptance environment it is `~/.kube/ok-infra-operator.yaml` (RKE2 `ok-infra`), **not** a path users should copy blindly. In Same-Plane mode this management cluster also hosts the KubeVirt workload VMs. The created workload cluster gets a **different** kubeconfig.
+In Same-Plane mode this management cluster also hosts the KubeVirt workload VMs. The created workload cluster gets a **different** kubeconfig.
 
-The simple CLI ignores `KUBECONFIG` and the current kubectl context for management selection. It uses `--management`, otherwise `TALOS_INFRA_KUBECONFIG`, otherwise it asks you for the path. The choice is not stored.
+Split-plane and legacy workflows (`ok cluster destroy`, Runner paths) keep the five-path setup: `ok config init --topology split-plane` or the explicit path flags; see `ok config init --help`.
 
 ## 3. Write an intent file
 
@@ -114,30 +111,26 @@ The Make reference profile allows network fields to be omitted or set to `auto` 
 ## 4. Plan, provision and verify
 
 ```bash
-.tools/bin/ok cluster plan -f my-cluster.yaml
-
-.tools/bin/ok up \
-  -f my-cluster.yaml \
-  --management "$TALOS_INFRA_KUBECONFIG"
+ok cluster plan -f my-cluster.yaml
+ok up -f my-cluster.yaml
 ```
 
 Or run `ok up` without arguments in an interactive terminal:
 
 ```text
-$ .tools/bin/ok up
+$ ok up
 Cluster requests in ~/.config/ok/requests:
   1) my-cluster.yaml
   n) new cluster request
   p) path to another ClusterRequest file
 Choose [1]:
-Management cluster kubeconfig (path; KUBECONFIG is never used): ~/.kube/management-operator.yaml
 ```
 
 - **Enter** picks the first listed request, or `n` when there is none.
 - **`n`** asks for a cluster name and writes `~/.config/ok/requests/<name>.yaml` (mode 0600) from the validated template above, then continues.
 - **`p`** takes any other ClusterRequest path.
 
-The OS profile comes only from `spec.profile` inside the file, never from its name. The management prompt appears only when neither `--management` nor `TALOS_INFRA_KUBECONFIG` is set. Cancelling or ending input (Ctrl-C, Ctrl-D) at any prompt starts nothing. Both paths then run the same plan, preflight and typed confirmations.
+The OS profile comes only from `spec.profile` inside the file, never from its name. The management prompt appears only when neither `--management`, `TALOS_INFRA_KUBECONFIG` nor a path saved by `ok config init` selects the cluster; the banner shows which one was used. Cancelling or ending input (Ctrl-C, Ctrl-D) at any prompt starts nothing. Both paths then run the same plan, preflight and typed confirmations.
 
 Read the plan and the target-cluster identity before authorizing either step. In interactive operator mode, the CLI requests **two separate typed confirmations**:
 
@@ -151,7 +144,7 @@ Bootstrap completion **does not** establish Kubernetes readiness. Read the actua
 ```bash
 kubectl --kubeconfig "$HOME/.config/ok/kubeconfigs/my-cluster.yaml" get nodes
 kubectl --kubeconfig "$HOME/.config/ok/kubeconfigs/my-cluster.yaml" -n kube-system get pods
-kubectl --kubeconfig "$TALOS_INFRA_KUBECONFIG" -n my-cluster get cluster,machines,vm,vmi,pvc
+kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" -n my-cluster get cluster,machines,vm,vmi,pvc
 ```
 
 Verify Ready nodes, expected CAPI/KubeVirt resources and system components; investigate failures before declaring the cluster ready. Default workload kubeconfig path is shown above; override it with `--workload-kubeconfig` if necessary.
@@ -161,9 +154,10 @@ Verify Ready nodes, expected CAPI/KubeVirt resources and system components; inve
 **Destructive operation:** Check the selected management cluster and exact target. The following operation will remove the cluster, its namespace, KubeVirt compute and any specifically identified retained storage volumes. Never try this command against another team's cluster.
 
 ```bash
-.tools/bin/ok destroy my-cluster \
-  --management "$TALOS_INFRA_KUBECONFIG"
+ok destroy my-cluster
 ```
+
+It uses the same management selection as `ok up` (`--management`, `TALOS_INFRA_KUBECONFIG`, then the saved path) and names its source in the banner.
 
 This path is specifically for clusters created with the operator-mode `ok up`. It requires the original local preparation and provisioned UID evidence: in `~/.local/state/ok/clusters/<name>/` (or `$XDG_STATE_HOME/ok/clusters/<name>/`) for clusters created by v1.0.1, or in `<checkout>/<name>/` for clusters created earlier. If both exist, `ok destroy` refuses and deletes nothing. The same Python Same-Plane teardown engine independently validates management API identity, object UIDs, ownership, Golden-image state and storage bindings. It presents a live deletion inventory and requires **typing the exact cluster name**. It reports five progress stages and only reports success after the engine's final absence checks and durable teardown-ledger completion.
 
@@ -174,9 +168,9 @@ The current schema-3 teardown ledger preserves audit/evidence history and **prev
 ### Read-only teardown verification
 
 ```bash
-kubectl --kubeconfig "$TALOS_INFRA_KUBECONFIG" get namespace my-cluster
-kubectl --kubeconfig "$TALOS_INFRA_KUBECONFIG" get clusters.cluster.x-k8s.io -A
-kubectl --kubeconfig "$TALOS_INFRA_KUBECONFIG" -n ok-cluster-teardown \
+kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" get namespace my-cluster
+kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" get clusters.cluster.x-k8s.io -A
+kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" -n ok-cluster-teardown \
   get configmap ok-cluster-teardown-my-cluster
 ```
 
@@ -184,7 +178,18 @@ The deleted namespace should be `NotFound`; the teardown evidence ConfigMap shou
 
 On failures or interruption, **do not force-delete finalizers, namespaces, PVs or Longhorn volumes**. Preserve the original evidence and the ledger, inspect the error, then use the documented guarded recovery process. The CLI does not automatically retry.
 
-## Where lifecycle state lives
+## Where configuration and state live
+
+| What | Where | Written by |
+|---|---|---|
+| Settings (bundle paths, management kubeconfig **path**) | macOS `~/Library/Application Support/ok/config.json`; Linux `$XDG_CONFIG_HOME/ok/config.json` or `~/.config/ok/config.json`; or `--config <file>` | `ok config init` (create-only) |
+| Requests, workload kubeconfigs, Make logs | `$XDG_CONFIG_HOME/ok` or `~/.config/ok` (also on macOS) | `ok up` |
+| Cluster lifecycle state and evidence | `$XDG_STATE_HOME/ok/clusters` or `~/.local/state/ok/clusters` | `ok up`, `ok destroy` |
+| Installed bundles | `~/.local/share/ok/<bundle>` (or `--prefix`) | `install-ok.sh` |
+
+Settings can be recreated; lifecycle state cannot: never delete it to work around an error. An explicit `--config` must exist and is never replaced by another file. `ok config show` prints the saved settings and verifies the **running** `ok`'s bundle live, with the same checks as `ok up`. It does not re-verify the saved source paths: `ok up` and `ok destroy` never use them, they always use the sources of the `ok` you run, and `ok config show` notes when the saved paths belong to another bundle (for example after an upgrade).
+
+### Lifecycle state
 
 From v1.0.1, `ok up` writes each cluster's lifecycle evidence (scaffold, preparation and provisioned-UID records) to `~/.local/state/ok/clusters/<name>/`, or `$XDG_STATE_HOME/ok/clusters/<name>/` when that is set. The source checkout stays clean, so one installation can create several clusters. Nothing is migrated: clusters created earlier keep their evidence in `<checkout>/<name>/` and remain destroyable from there. `ok up` refuses a name that already exists in either place.
 
@@ -192,9 +197,9 @@ Network allocation considers the committed clusters in the checkout, earlier che
 
 ## Current limitations and next version
 
-- v1.0 requires a prepared management infrastructure, reviewed source checkout, pinned `ok-linux`, local toolchain and explicit kubeconfig.
+- Requires a prepared management infrastructure, a verified bundle (or reviewed source checkout with pinned `ok-linux`), the local toolchain and an explicitly selected management kubeconfig.
 - Source-integrity checks may reject modified or unrelated untracked files; do not erase evidence to satisfy them. A checkout that still holds an earlier `<checkout>/<name>/` cluster can destroy it, but new `ok up` runs need a clean checkout.
 - Cluster-name reuse is not supported by the current durable teardown ledger.
-- v1.0.1 is intended to improve **UX and installation simplicity**, while keeping identity checks, human approval and independently verifiable operations. The exact UX and release timing remain to be defined.
+- Bundles are not signed, notarized or attested; the checksum is only as trustworthy as the channel it came from.
 
 For legacy/Runner Bare-MVP behavior, see the separate sections and [security contract](ok147-security-review-contract.md) rather than assuming those paths are enabled by this quickstart.

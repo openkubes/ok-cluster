@@ -220,24 +220,9 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 	if err != nil {
 		return clusterProvisionRuntime{}, errors.New("cannot identify the built CLI location")
 	}
-	executable, err = filepath.EvalSymlinks(executable)
+	makeRoot, okLinuxRoot, _, err := bundleRootsForExecutable(executable)
 	if err != nil {
-		return clusterProvisionRuntime{}, errors.New("cannot resolve the built CLI location")
-	}
-	binDir := filepath.Dir(executable)
-	if filepath.Base(binDir) != "bin" || filepath.Base(filepath.Dir(binDir)) != ".tools" || filepath.Base(executable) != "ok" {
-		return clusterProvisionRuntime{}, errors.New("build the CLI at <ok-cluster>/.tools/bin/ok using make ok-cli-build")
-	}
-	makeRoot, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(binDir)))
-	if err != nil || !clusterProvisionSafePathPattern.MatchString(makeRoot) {
-		return clusterProvisionRuntime{}, errors.New("Make checkout path is missing or contains unsupported shell-sensitive characters")
-	}
-	okLinuxRoot := filepath.Join(filepath.Dir(makeRoot), "ok-linux")
-	if resolved, resolveErr := filepath.EvalSymlinks(okLinuxRoot); resolveErr == nil {
-		okLinuxRoot = resolved
-	}
-	if !clusterProvisionSafePathPattern.MatchString(okLinuxRoot) {
-		return clusterProvisionRuntime{}, errors.New("ok-linux checkout path contains unsupported shell-sensitive characters")
+		return clusterProvisionRuntime{}, err
 	}
 	pathValue := os.Getenv("PATH")
 	if pathValue == "" {
@@ -300,6 +285,32 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 		toolPaths:       toolPaths, command: runClusterProvisionCommand, isTerminal: stdinIsTerminal(),
 		cleanupToolPath: cleanup,
 	}, nil
+}
+
+// bundleRootsForExecutable derives the lifecycle sources only from where this
+// CLI really is (symlinks resolved): <root>/ok-cluster/.tools/bin/ok and the
+// sibling <root>/ok-linux. No other location is ever searched.
+func bundleRootsForExecutable(executable string) (makeRoot, okLinuxRoot, resolvedExecutable string, err error) {
+	resolvedExecutable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return "", "", "", errors.New("cannot resolve the built CLI location")
+	}
+	binDir := filepath.Dir(resolvedExecutable)
+	if filepath.Base(binDir) != "bin" || filepath.Base(filepath.Dir(binDir)) != ".tools" || filepath.Base(resolvedExecutable) != "ok" {
+		return "", "", "", errors.New("build the CLI at <ok-cluster>/.tools/bin/ok using make ok-cli-build")
+	}
+	makeRoot, err = filepath.EvalSymlinks(filepath.Dir(filepath.Dir(binDir)))
+	if err != nil || !clusterProvisionSafePathPattern.MatchString(makeRoot) {
+		return "", "", "", errors.New("Make checkout path is missing or contains unsupported shell-sensitive characters")
+	}
+	okLinuxRoot = filepath.Join(filepath.Dir(makeRoot), "ok-linux")
+	if resolved, resolveErr := filepath.EvalSymlinks(okLinuxRoot); resolveErr == nil {
+		okLinuxRoot = resolved
+	}
+	if !clusterProvisionSafePathPattern.MatchString(okLinuxRoot) {
+		return "", "", "", errors.New("ok-linux checkout path contains unsupported shell-sensitive characters")
+	}
+	return makeRoot, okLinuxRoot, resolvedExecutable, nil
 }
 
 // okClustersDir is $XDG_STATE_HOME/ok/clusters, else ~/.local/state/ok/clusters.

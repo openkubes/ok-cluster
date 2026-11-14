@@ -18,7 +18,7 @@ func TestLocalConfigInteractiveConfirmation(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "not-created", "config.json")
 			input := strings.Join([]string{config.LifecycleRoot, config.OKLinuxPath, config.ClustersDir, config.ManagementKubeconfig, config.ProviderKubeconfig}, "\n") + "\n" + answer
 			var stdout, stderr bytes.Buffer
-			err := runConfigWithRuntime(context.Background(), []string{"init", "--config", path}, &stdout, &stderr, configInitRuntime{strings.NewReader(input), true})
+			err := runConfigWithRuntime(context.Background(), []string{"init", "--topology", "split-plane", "--config", path}, &stdout, &stderr, configInitRuntime{input: strings.NewReader(input), interactive: true})
 			if answer == "ok\n" {
 				loaded, loadErr := loadLocalConfig(path)
 				if err != nil || loadErr != nil || loaded != config {
@@ -39,7 +39,7 @@ func TestLocalConfigInteractivePartialAndNonTerminal(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "private", "config.json")
 		args = append(args[1:], "--interactive", "--config", path)
 		var stdout, stderr bytes.Buffer
-		err := runConfigWithRuntime(context.Background(), args, &stdout, &stderr, configInitRuntime{strings.NewReader("ok\n"), terminal})
+		err := runConfigWithRuntime(context.Background(), args, &stdout, &stderr, configInitRuntime{input: strings.NewReader("ok\n"), interactive: terminal})
 		if (err == nil) != terminal {
 			t.Fatalf("terminal=%v err=%v", terminal, err)
 		}
@@ -48,7 +48,7 @@ func TestLocalConfigInteractivePartialAndNonTerminal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "config.json")
 	var stdout, stderr bytes.Buffer
 	input := strings.Join([]string{config.OKLinuxPath, config.ClustersDir, config.ManagementKubeconfig, config.ProviderKubeconfig, "ok", ""}, "\n")
-	err := runConfigWithRuntime(context.Background(), []string{"init", "--interactive", "--lifecycle-root", config.LifecycleRoot, "--config", path}, &stdout, &stderr, configInitRuntime{strings.NewReader(input), true})
+	err := runConfigWithRuntime(context.Background(), []string{"init", "--interactive", "--lifecycle-root", config.LifecycleRoot, "--config", path}, &stdout, &stderr, configInitRuntime{input: strings.NewReader(input), interactive: true})
 	if err != nil || strings.Contains(stderr.String(), "Trusted ok-cluster checkout: ") {
 		t.Fatalf("err=%v prompts=%s", err, &stderr)
 	}
@@ -62,7 +62,7 @@ func TestLocalConfigInteractiveNoInputOnExistingOrDisabled(t *testing.T) {
 	}
 	for _, args := range [][]string{append(args[1:], "--interactive", "--config", path), {"init", "--interactive=false", "--config", filepath.Join(t.TempDir(), "missing.json")}, {"init", "--interactive", "--lifecycle-root=", "--config", filepath.Join(t.TempDir(), "missing.json")}} {
 		var output bytes.Buffer
-		if err := runConfigWithRuntime(context.Background(), args, &output, &output, configInitRuntime{panicConfigReader{}, true}); err == nil {
+		if err := runConfigWithRuntime(context.Background(), args, &output, &output, configInitRuntime{input: panicConfigReader{}, interactive: true}); err == nil {
 			t.Fatal("expected rejection")
 		}
 	}
