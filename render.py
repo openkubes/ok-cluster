@@ -856,21 +856,29 @@ def render_cluster(cluster_name: str, output_dir: Path, cfg: dict) -> None:
     resolved_cfg_path = out_dir / "cluster-config.yaml"
     with open(resolved_cfg_path, "w") as f:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
-    print(f"  ✔ {resolved_cfg_path.relative_to(SCRIPT_DIR)}")
+    print(f"  ✔ {shown(resolved_cfg_path)}")
 
     for out_name, (tpl, rendered) in rendered_templates.items():
         out_path = out_dir / out_name
         out_path.write_text(rendered)
         if out_path.suffix == ".sh":
             out_path.chmod(0o755)
-        print(f"  ✔ {out_path.relative_to(SCRIPT_DIR)}")
+        print(f"  ✔ {shown(out_path)}")
+
+def shown(path: Path) -> Path:
+    """Checkout-relative when inside the checkout; absolute for external state."""
+    try:
+        return path.relative_to(SCRIPT_DIR)
+    except ValueError:
+        return path
+
 
 def cmd_render(args):
     cluster_name = args.cluster
     if args.cluster_dir:
         cluster_dir = Path(args.cluster_dir)
         if (not cluster_dir.is_absolute()
-                or cluster_dir.parent.resolve() != SCRIPT_DIR.resolve()
+                or cluster_dir.parent.resolve() != CLUSTERS_DIR.resolve()
                 or not cluster_dir.name.startswith(f".ok76-{cluster_name}.")
                 or cluster_dir.is_symlink()
                 or not cluster_dir.is_dir()):
@@ -891,7 +899,7 @@ def cmd_render(args):
             raw["workloadUserNamespaces"] = capability
     cfg = resolve_config(raw, cluster_name, require_live_inventory=args.require_live_inventory)
     render_cluster(cluster_name, cluster_dir, cfg)
-    print(f"\nCluster '{cluster_name}' rendered → {cluster_dir.relative_to(SCRIPT_DIR)}/")
+    print(f"\nCluster '{cluster_name}' rendered → {shown(cluster_dir)}/")
 
 def cmd_list(args):
     clusters = discover_clusters()
