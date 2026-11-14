@@ -38,7 +38,9 @@ class ConfigTerminalTests(unittest.TestCase):
 
     def invoke_terminal(self, answer, partial=False):
         master, slave = pty.openpty()
-        args = self.args + (['--interactive', '--lifecycle-root', str(self.paths[0])] if partial else [])
+        # Bare init is the Same-Plane setup now; the five-path prompt is split-plane.
+        args = self.args + (['--interactive', '--lifecycle-root', str(self.paths[0])] if partial
+                            else ['--topology', 'split-plane'])
         process = subprocess.Popen(args, stdin=slave, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, env=self.env, cwd=self.home)
         os.close(slave)
@@ -113,6 +115,18 @@ class ConfigTerminalTests(unittest.TestCase):
                                 capture_output=True, env=self.env, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('requires a terminal', result.stderr)
+        self.assertFalse(self.config.parent.exists())
+
+    def test_bare_init_outside_a_verified_bundle_saves_nothing(self):
+        master, slave = pty.openpty()
+        try:
+            result = subprocess.run(self.args, stdin=slave, capture_output=True, env=self.env, timeout=15)
+        finally:
+            os.close(slave)
+            os.close(master)
+        if result.returncode == 0:
+            self.skipTest('this test binary is inside a verified bundle')
+        self.assertIn(b'nothing saved', result.stderr)
         self.assertFalse(self.config.parent.exists())
 
     def test_existing_config_preserved(self):
