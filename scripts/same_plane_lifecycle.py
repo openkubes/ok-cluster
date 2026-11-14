@@ -10,7 +10,9 @@ import base64
 import hashlib
 import json
 import os
+import re
 import ssl
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -140,6 +142,74 @@ def require_authority(life, path, cluster):
             fail("same-plane cleanup authority is unavailable")
 
 
+COMMIT = re.compile(r"[0-9a-f]{40}")
+BUILD_KEYS = {"okClusterCommit", "okLinuxCommit"}
+
+
+def source_commit(path):
+    """HEAD of the sources actually running (the CLI verified they are clean)."""
+    try:
+        head = subprocess.run(
+            ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+             "-C", str(path), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        head = ""
+    if not COMMIT.fullmatch(head):
+        fail(f"cannot determine the source commit of {path}")
+    return head
+
+
+def created_by():
+    """Informational creator metadata, structurally validated but never matched."""
+    version = os.environ.get("OK_CLI_VERSION") or "unrecorded"
+    binary = os.environ.get("OK_CLI_BINARY_SHA256") or "unrecorded"
+    record = {"version": version, "binarySHA256": binary}
+    if not valid_created_by(record):
+        fail("OK_CLI_VERSION/OK_CLI_BINARY_SHA256 are malformed")
+    return record
+
+
+def valid_created_by(value):
+    return (
+        isinstance(value, dict)
+        and set(value) == {"version", "binarySHA256"}
+        and isinstance(value["version"], str)
+        and re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", value["version"]) is not None
+        and isinstance(value["binarySHA256"], str)
+        and (value["binarySHA256"] == "unrecorded"
+             or re.fullmatch(r"[0-9a-f]{64}", value["binarySHA256"]) is not None)
+    )
+
+
+def check_preparation(saved, expected):
+    """Record integrity first, then creating-build compatibility, then the
+    unchanged exact equality of every other field."""
+    if not isinstance(saved, dict):
+        fail("same-plane preparation is malformed")
+    if "build" not in saved:
+        fail("same-plane preparation predates creating-build identity (created before "
+             "OK-228 R1); refusing. Legacy destroy is a separately reviewed exception, "
+             "see docs/cli-v1-same-plane-quickstart.md")
+    build = saved["build"]
+    if not (isinstance(build, dict) and set(build) == BUILD_KEYS
+            and all(isinstance(v, str) and COMMIT.fullmatch(v) for v in build.values())):
+        fail("same-plane preparation creating-build identity is malformed")
+    if not valid_created_by(saved.get("createdBy")):
+        fail("same-plane preparation creator metadata is missing or malformed")
+    if build != expected["build"]:
+        fail(
+            "same-plane cluster was created by ok-cluster "
+            f"{build['okClusterCommit']} / ok-linux {build['okLinuxCommit']}; "
+            f"this CLI runs ok-cluster {expected['build']['okClusterCommit']} / "
+            f"ok-linux {expected['build']['okLinuxCommit']}. Run it with the "
+            "creating build; nothing was changed"
+        )
+    if {k: v for k, v in saved.items() if k != "createdBy"} != expected:
+        fail("same-plane preparation identity/artifacts changed")
+
+
 def preparation(life, args, *, create=False):
     management, provider, current = selected_identity(life, args)
     config, original = artifacts(life, args)
@@ -154,6 +224,10 @@ def preparation(life, args, *, create=False):
         "ledgerNamespaceUID": life.require_teardown_ledger_namespace(management)[
             "metadata"
         ]["uid"],
+        "build": {
+            "okClusterCommit": source_commit(Path(__file__).resolve().parents[1]),
+            "okLinuxCommit": source_commit(life.required_ok_linux_path(args)),
+        },
     }
     if path.is_symlink():
         fail("same-plane preparation must not be a symlink")
@@ -167,8 +241,13 @@ def preparation(life, args, *, create=False):
             fail("same-plane bootstrap refuses a pre-existing target namespace")
         require_authority(life, management, args.cluster)
     if path.exists():
-        if path.stat().st_size > 600 * 1024 or json.loads(path.read_text()) != expected:
+        if path.stat().st_size > 600 * 1024:
             fail("same-plane preparation identity/artifacts changed")
+        try:
+            saved = json.loads(path.read_text())
+        except ValueError:
+            fail("same-plane preparation is unreadable or truncated")
+        check_preparation(saved, expected)
     elif create:
         if (
             life.kubectl_json_optional(management, ["get", "namespace", args.cluster])
@@ -179,9 +258,10 @@ def preparation(life, args, *, create=False):
         # Verify Golden identity/readability and deletion authority prerequisites,
         # without creating a ledger, token, or any live object.
         life.verify_golden(config, provider)
+        record = {**expected, "createdBy": created_by()}
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as out:
-            out.write(json.dumps(expected, sort_keys=True, indent=2) + "\n")
+            out.write(json.dumps(record, sort_keys=True, indent=2) + "\n")
     else:
         fail("original same-plane preparation is missing; no reconstruction/fallback")
     return management, provider, config, expected

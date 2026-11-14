@@ -47,6 +47,7 @@ var (
 type clusterProvisionRuntime struct {
 	makeRoot, okLinuxRoot, makeExecutable    string
 	clustersDir                              string // lifecycle state: <state>/ok/clusters, outside the checkout
+	cliBinarySHA256                          string // informational creator metadata in the preparation record
 	makeRevision, okLinuxRevision            string
 	expectedChartHash                        string
 	managementKubeconfig, workloadKubeconfig string
@@ -224,6 +225,10 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 	if err != nil {
 		return clusterProvisionRuntime{}, errors.New("cannot resolve the built CLI location")
 	}
+	binaryHash, err := provisionFileSHA256(executable)
+	if err != nil {
+		return clusterProvisionRuntime{}, errors.New("cannot hash the built CLI")
+	}
 	binDir := filepath.Dir(executable)
 	if filepath.Base(binDir) != "bin" || filepath.Base(filepath.Dir(binDir)) != ".tools" || filepath.Base(executable) != "ok" {
 		return clusterProvisionRuntime{}, errors.New("build the CLI at <ok-cluster>/.tools/bin/ok using make ok-cli-build")
@@ -293,7 +298,7 @@ func clusterProvisionRuntimeFromProcess(workloadKubeconfig string) (clusterProvi
 	}
 	return clusterProvisionRuntime{
 		makeRoot: makeRoot, okLinuxRoot: okLinuxRoot, makeExecutable: toolPaths["make"], clustersDir: clustersDir,
-		makeRevision: revision, okLinuxRevision: clusterProvisionReviewedOKLinux,
+		makeRevision: revision, okLinuxRevision: clusterProvisionReviewedOKLinux, cliBinarySHA256: binaryHash,
 		expectedChartHash:    clusterProvisionCiliumSHA256,
 		managementKubeconfig: managementKubeconfig, workloadKubeconfig: workloadKubeconfig,
 		environmentPath: restrictedPath,
@@ -733,6 +738,19 @@ func verifyProvisionInputs(ctx context.Context, prepared clusterProvisionPrepare
 	return nil
 }
 
+func provisionFileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func hashRegularPrivateFile(path string, maxBytes int64) (string, error) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || info.Size() <= 0 || info.Size() > maxBytes {
@@ -1001,6 +1019,8 @@ func provisionEnvironment(runtime clusterProvisionRuntime) []string {
 		"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "PYTHONNOUSERSITE": "1",
 		"PYTHONDONTWRITEBYTECODE": "1", "LANG": "C", "LC_ALL": "C",
 		"OK_LINUX_PATH": runtime.okLinuxRoot, "TALOS_INFRA_KUBECONFIG": runtime.managementKubeconfig,
+		// Informational creator metadata for the preparation record (OK-228 R1).
+		"OK_CLI_VERSION": version, "OK_CLI_BINARY_SHA256": runtime.cliBinarySHA256,
 	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
