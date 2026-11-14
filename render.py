@@ -22,7 +22,9 @@ from profile_resolvers.flatcar import resolve_flatcar_config
 from profile_resolvers.talos import resolve_talos_config
 
 SCRIPT_DIR = Path(__file__).parent
-CLUSTERS_DIR = SCRIPT_DIR
+# ok up keeps lifecycle state outside the checkout (CLUSTERS_DIR); committed
+# and pre-v1.0.1 clusters stay in the checkout. Allocation must see both.
+CLUSTERS_DIR = Path(os.environ.get("CLUSTERS_DIR") or SCRIPT_DIR)
 TEMPLATES_DIR = SCRIPT_DIR / "templates"
 
 METALLB_POOL_START = ipaddress.IPv4Address("192.168.100.200")
@@ -58,12 +60,17 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 def discover_clusters() -> list[dict]:
-    clusters = []
-    for d in sorted(CLUSTERS_DIR.iterdir()):
-        cfg_path = d / "cluster-config.yaml"
-        if cfg_path.exists():
-            clusters.append({"name": d.name, "config": load_yaml(cfg_path)})
-    return clusters
+    clusters = {}
+    for root in dict.fromkeys([SCRIPT_DIR.resolve(), CLUSTERS_DIR.resolve()]):
+        if not root.is_dir():
+            continue
+        for d in sorted(root.iterdir()):
+            cfg_path = d / "cluster-config.yaml"
+            if cfg_path.exists():
+                if d.name in clusters:
+                    raise SystemExit(f"ERROR: cluster {d.name} exists in both {SCRIPT_DIR} and {CLUSTERS_DIR}; refusing ambiguous allocation")
+                clusters[d.name] = {"name": d.name, "config": load_yaml(cfg_path)}
+    return list(clusters.values())
 
 def allocated_ips(clusters):
     return {c["config"]["network"]["endpoint"] for c in clusters

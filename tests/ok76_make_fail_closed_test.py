@@ -191,6 +191,31 @@ class RenderInventoryTests(unittest.TestCase):
             self.assertEqual([path.name for path in stage.iterdir()], ["cluster-config.yaml"])
 
 
+class DiscoverClustersTests(unittest.TestCase):
+    """Allocation sees committed/pre-v1.0.1 clusters and the external state."""
+
+    def write(self, root, name, endpoint):
+        (root / name).mkdir(parents=True)
+        (root / name / "cluster-config.yaml").write_text(
+            f"network:\n  endpoint: {endpoint}\n  podCIDR: auto\n  serviceCIDR: auto\n", encoding="utf-8")
+
+    def test_scans_checkout_and_state_and_refuses_duplicate_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            checkout, state = Path(temp) / "checkout", Path(temp) / "state"
+            self.write(checkout, "ok-ai", "192.168.100.10")
+            self.write(state, "team-a", "192.168.100.11")
+            with mock.patch.object(render, "SCRIPT_DIR", checkout), mock.patch.object(render, "CLUSTERS_DIR", state):
+                clusters = render.discover_clusters()
+                self.assertEqual(sorted(c["name"] for c in clusters), ["ok-ai", "team-a"])
+                self.assertEqual(render.allocated_ips(clusters), {"192.168.100.10", "192.168.100.11"})
+                self.write(state, "ok-ai", "192.168.100.12")
+                with self.assertRaisesRegex(SystemExit, "exists in both"):
+                    render.discover_clusters()
+            with mock.patch.object(render, "SCRIPT_DIR", checkout), \
+                 mock.patch.object(render, "CLUSTERS_DIR", Path(temp) / "not-created-yet"):
+                self.assertEqual([c["name"] for c in render.discover_clusters()], ["ok-ai"])
+
+
 class NewClusterPreflightTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -228,7 +253,7 @@ exit 99
 
     def invoke(self, kubectl_mode=None, include_kubectl=True, kubeconfig=None, inventory_fail=False,
                render_fail=False, missing_okb=False, okb_kubeconfig=None,
-               strict=True, profile="ok-infra"):
+               strict=True, profile="ok-infra", clusters_dir=None):
         if include_kubectl:
             mode = kubectl_mode or "empty"
             self._write_executable(self.bin / "kubectl", f"""#!/bin/sh
@@ -261,6 +286,8 @@ esac
         }
         if missing_okb:
             env.pop("OKB_KUBECONFIG")
+        if clusters_dir is not None:
+            env["CLUSTERS_DIR"] = str(clusters_dir)
         return subprocess.run(["/bin/bash", str(self.repo / "new-cluster.sh")],
                               cwd=self.repo, env=env, capture_output=True, text=True)
 
@@ -322,6 +349,36 @@ esac
         self.assertIn("--require-live-inventory", render_call)
         self.assertTrue((self.repo / "ok-m2-test" / "cluster-config.yaml").is_file())
         self.assertEqual(list(self.repo.glob(".ok76-ok-m2-test.*")), [])
+
+    def test_clusters_dir_publishes_scaffold_outside_checkout(self):
+        state = self.root / "state" / "ok" / "clusters"
+        state.mkdir(parents=True)
+        result = self.invoke("empty", clusters_dir=state)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((state / "ok-m2-test" / "cluster-config.yaml").is_file())
+        self.assertFalse((self.repo / "ok-m2-test").exists())
+        self.assertEqual(list(state.glob(".ok76-ok-m2-test.*")) + list(self.repo.glob(".ok76-*")), [])
+        render_call = next(call for call in self.python_log.read_text(encoding="utf-8").splitlines()
+                           if "render.py render --cluster ok-m2-test" in call)
+        self.assertIn(f"--cluster-dir {state}/.ok76-ok-m2-test.", render_call)
+
+    def test_clusters_dir_refuses_name_in_checkout_and_stale_state_stage(self):
+        state = self.root / "state"
+        state.mkdir()
+        legacy = self.repo / "ok-m2-test"
+        legacy.mkdir()
+        (legacy / "cluster-config.yaml").write_text("pre-v1.0.1 evidence\n", encoding="utf-8")
+        result = self.invoke("empty", clusters_dir=state)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already exists in the checkout", result.stdout + result.stderr)
+        self.assertEqual((legacy / "cluster-config.yaml").read_text(encoding="utf-8"), "pre-v1.0.1 evidence\n")
+        self.assertEqual(list(state.iterdir()), [])
+        legacy.joinpath("cluster-config.yaml").unlink()
+        legacy.rmdir()
+        stale = state / ".ok76-ok-m2-test.previous"
+        stale.mkdir()
+        self.assertNotEqual(self.invoke("empty", clusters_dir=state).returncode, 0)
+        self.assertEqual(sorted(path.name for path in state.iterdir()), [stale.name])
 
     def test_unrelated_talos_profile_keeps_legacy_inventory_mode(self):
         result = self.invoke("empty", strict=False, profile="ok-gpu")

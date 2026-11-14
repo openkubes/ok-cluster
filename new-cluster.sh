@@ -173,15 +173,21 @@ if [[ "$TYPE" == "flatcar" ]]; then
     --golden-image-storage-class "${GOLDEN_IMAGE_STORAGE_CLASS}"
 fi
 
-CLUSTER_DIR="${SCRIPT_DIR}/${CLUSTER}"
+# Lifecycle state may live outside the checkout (CLUSTERS_DIR, set by ok up).
+CLUSTERS_ROOT="${CLUSTERS_DIR:-$SCRIPT_DIR}"
+CLUSTER_DIR="${CLUSTERS_ROOT}/${CLUSTER}"
 CFG="${CLUSTER_DIR}/cluster-config.yaml"
 
 if [[ -d "$CLUSTER_DIR" ]]; then
   echo "ERROR: Cluster '${CLUSTER}' already exists. Use 'make clean CLUSTER=${CLUSTER}' first."
   exit 1
 fi
+if [[ -e "${SCRIPT_DIR}/${CLUSTER}" ]]; then
+  echo "ERROR: Cluster '${CLUSTER}' already exists in the checkout; refusing to reuse the name."
+  exit 1
+fi
 if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
-  for STALE_STAGING_DIR in "${SCRIPT_DIR}"/.ok76-"${CLUSTER}".*; do
+  for STALE_STAGING_DIR in "${CLUSTERS_ROOT}"/.ok76-"${CLUSTER}".*; do
     if [[ -e "$STALE_STAGING_DIR" ]]; then
       echo "ERROR: a prior incomplete OK-76 staging directory exists for '${CLUSTER}'; refusing to retry or remove it automatically."
       exit 1
@@ -230,7 +236,7 @@ fi
 # Do not create any cluster scaffold until the required live checks and network
 # allocation query have both succeeded.
 if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
-  STAGING_DIR=$(mktemp -d "${SCRIPT_DIR}/.ok76-${CLUSTER}.XXXXXX")
+  STAGING_DIR=$(mktemp -d "${CLUSTERS_ROOT}/.ok76-${CLUSTER}.XXXXXX")
   trap cleanup_ok76_staging EXIT
   CLUSTER_DIR="$STAGING_DIR"
   CFG="${CLUSTER_DIR}/cluster-config.yaml"
@@ -344,27 +350,27 @@ else
 fi
 
 if [[ "$OK76_REQUIRE_LIVE_METALLB_INVENTORY" == "true" ]]; then
-  if [[ -e "${SCRIPT_DIR}/${CLUSTER}" ]]; then
+  if [[ -e "${CLUSTERS_ROOT}/${CLUSTER}" ]]; then
     echo "ERROR: Cluster '${CLUSTER}' appeared during scaffolding; preserving existing path and refusing to publish generated files."
     exit 1
   fi
   STAGING_BASENAME="$(basename "$STAGING_DIR")"
-  mv -n "$STAGING_DIR" "${SCRIPT_DIR}/${CLUSTER}"
-  if [[ -d "${SCRIPT_DIR}/${CLUSTER}/${STAGING_BASENAME}" ]]; then
+  mv -n "$STAGING_DIR" "${CLUSTERS_ROOT}/${CLUSTER}"
+  if [[ -d "${CLUSTERS_ROOT}/${CLUSTER}/${STAGING_BASENAME}" ]]; then
     # If another writer created the destination between the check and rename,
     # BSD/GNU mv may place our stage inside it. Point the trap only at our
     # uniquely named temporary directory; never remove the competing target.
-    STAGING_DIR="${SCRIPT_DIR}/${CLUSTER}/${STAGING_BASENAME}"
+    STAGING_DIR="${CLUSTERS_ROOT}/${CLUSTER}/${STAGING_BASENAME}"
     echo "ERROR: Cluster '${CLUSTER}' appeared during scaffold publication; existing path is preserved."
     exit 1
   fi
-  if [[ -d "$STAGING_DIR" || ! -f "${SCRIPT_DIR}/${CLUSTER}/cluster-config.yaml" ]]; then
+  if [[ -d "$STAGING_DIR" || ! -f "${CLUSTERS_ROOT}/${CLUSTER}/cluster-config.yaml" ]]; then
     echo "ERROR: could not atomically publish the completed scaffold; staged files were not applied to infrastructure."
     exit 1
   fi
   STAGING_DIR=""
   trap - EXIT
-  CLUSTER_DIR="${SCRIPT_DIR}/${CLUSTER}"
+  CLUSTER_DIR="${CLUSTERS_ROOT}/${CLUSTER}"
   CFG="${CLUSTER_DIR}/cluster-config.yaml"
 fi
 

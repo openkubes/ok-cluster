@@ -76,7 +76,10 @@ func runSimpleDestroyWith(ctx context.Context, name string, arguments []string, 
 	if err != nil {
 		return err
 	}
-	directory := filepath.Join(runtime.makeRoot, name)
+	directory, err := destroyDirectory(runtime, name)
+	if err != nil {
+		return err
+	}
 	if err := requireOperatorEvidence(directory, name); err != nil {
 		return err
 	}
@@ -96,15 +99,42 @@ func runSimpleDestroyWith(ctx context.Context, name string, arguments []string, 
 	return nil
 }
 
+// destroyDirectory finds the cluster's evidence in the state directory or, for
+// clusters created before v1.0.1, in the checkout. Both present is ambiguous.
+func destroyDirectory(runtime clusterProvisionRuntime, name string) (string, error) {
+	state, legacy := filepath.Join(runtime.clustersDir, name), filepath.Join(runtime.makeRoot, name)
+	_, stateErr := os.Lstat(state)
+	_, legacyErr := os.Lstat(legacy)
+	switch {
+	case stateErr == nil && legacyErr == nil:
+		return "", fmt.Errorf("both %s and %s exist for %s; ok destroy will not choose between them; nothing deleted", state, legacy, name)
+	case legacyErr == nil:
+		return legacy, nil
+	case stateErr != nil && !errors.Is(stateErr, os.ErrNotExist):
+		return "", stateErr
+	case legacyErr != nil && !errors.Is(legacyErr, os.ErrNotExist):
+		return "", legacyErr
+	case stateErr != nil:
+		return "", fmt.Errorf("no cluster provisioned by ok up named %s in %s or %s; nothing deleted\n"+
+			"  Runner or split-plane clusters: ok cluster destroy %s --help", name, runtime.clustersDir, runtime.makeRoot, name)
+	}
+	return state, nil
+}
+
 // verifiedDestroySources applies the same source-integrity checks as `ok up`:
-// this CLI's own checkout at its build revision, clean except for the cluster's
-// own scaffold, and the pinned clean ok-linux checkout.
+// this CLI's own checkout at its build revision and the pinned clean ok-linux
+// checkout. Only a cluster in the old checkout layout may be untracked there.
 func verifiedDestroySources(ctx context.Context, name string) (clusterProvisionRuntime, error) {
 	runtime, err := clusterProvisionRuntimeFromProcess("")
 	if err != nil {
 		return runtime, err
 	}
-	if err := verifyProvisionCheckout(ctx, runtime, runtime.makeRoot, runtime.makeRevision, true, name, true); err != nil {
+	_, legacyErr := os.Lstat(filepath.Join(runtime.makeRoot, name))
+	allowLegacy, legacyName := legacyErr == nil, ""
+	if allowLegacy {
+		legacyName = name
+	}
+	if err := verifyProvisionCheckout(ctx, runtime, runtime.makeRoot, runtime.makeRevision, allowLegacy, legacyName, true); err != nil {
 		return runtime, fmt.Errorf("Make checkout is not the reviewed source: %w", err)
 	}
 	if err := verifyProvisionCheckout(ctx, runtime, runtime.okLinuxRoot, runtime.okLinuxRevision, false, "", false); err != nil {
@@ -203,8 +233,10 @@ Usage:
   --management   management cluster kubeconfig (or set TALOS_INFRA_KUBECONFIG);
                  never KUBECONFIG or the current kubectl context
 
-Only acts on the evidence ok up left in this CLI's checkout (<checkout>/<name>/)
-and runs the existing Same-Plane teardown once. Before anything is deleted it
+Only acts on the evidence ok up left in <state>/ok/clusters/<name>/ (state is
+$XDG_STATE_HOME, else ~/.local/state) or, for clusters created before v1.0.1, in
+this CLI's checkout (<checkout>/<name>/); both present is refused. It runs
+the existing Same-Plane teardown once. Before anything is deleted it
 checks API identity, original UIDs and the Golden image, shows what will be
 deleted, and asks you to type the cluster name. Progress is shown in 5 stages;
 success is reported only after independent absence checks and the completed

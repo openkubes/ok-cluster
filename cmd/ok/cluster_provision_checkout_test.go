@@ -335,7 +335,7 @@ func TestClusterProvisionRealGitRejectsChangesOutsideScaffoldBeforeBootstrap(t *
 			if fixture.makeCount["new"] != 1 || fixture.makeCount["bootstrap"] != 0 {
 				t.Fatalf("bootstrap ran despite unsafe checkout: %#v", fixture.makeCount)
 			}
-			if _, statErr := os.Stat(filepath.Join(fixture.root, "preview-one", "cluster-config.yaml")); statErr != nil {
+			if _, statErr := os.Stat(filepath.Join(fixture.runtime.clustersDir, "preview-one", "cluster-config.yaml")); statErr != nil {
 				t.Fatalf("scaffold was not preserved: %v", statErr)
 			}
 		})

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 )
 
@@ -12,3 +13,7 @@ func clusterProvisionSignalContext(parent context.Context) (context.Context, con
 }
 
 func configureClusterProvisionProcess(command *exec.Cmd) {}
+
+func lockProvisionAllocation(string) (func(), error) {
+	return nil, errors.New("ok up provisioning requires macOS or Linux")
+}
