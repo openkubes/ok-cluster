@@ -190,8 +190,73 @@ func runClusterProvision(ctx context.Context, arguments []string, stdin io.Reade
 	return runClusterProvisionFor(ctx, input.value, *workloadKubeconfig, stdin, stdout, stderr, nil)
 }
 
-// runClusterProvisionFor is the single provisioning entry used by both
-// `ok cluster provision` and `ok up`.
+// runClusterProvisionForSimple preserves the same guarded provision engine while
+// preparing only a missing digest-pinned chart for the interactive `ok up` UX.
+// Existing artifacts (including symlinks or mismatched charts) are never repaired.
+func runClusterProvisionForSimple(ctx context.Context, requestPath, workloadKubeconfig string, stdin io.Reader, stdout, stderr io.Writer, openMakeLog func() (*os.File, error)) error {
+	request, err := readClusterRequest(requestPath)
+	if err != nil {
+		return err
+	}
+	rt, err := clusterProvisionRuntimeFromProcess(workloadKubeconfig)
+	if err != nil {
+		return err
+	}
+	if rt.cleanupToolPath != nil {
+		defer rt.cleanupToolPath()
+	}
+	if err := prepareMissingProvisionChart(ctx, rt, stdout); err != nil {
+		return err
+	}
+	rt.openMakeLog = openMakeLog
+	return runClusterProvisionWithRuntime(ctx, request, stdin, stdout, stderr, rt)
+}
+
+// prepareMissingProvisionChart is local-only. The already reviewed Python
+// acquisition code enforces the authoritative chart SHA-256 and atomically
+// installs the cache; the existing Go verifier is the final acceptance gate.
+// Source and tool identities are checked *before* running the downloader.
+func prepareMissingProvisionChart(ctx context.Context, rt clusterProvisionRuntime, stdout io.Writer) error {
+	dir := filepath.Join(rt.makeRoot, ".tools")
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("CLI tool cache must be an existing real directory: <ok-cluster>/.tools")
+	}
+	chart := filepath.Join(dir, "cilium-1.19.6.tgz")
+	if _, err := os.Lstat(chart); err == nil {
+		return nil // verified by the existing fail-closed provision engine
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cannot inspect pinned Cilium chart: %w", err)
+	}
+	if err := verifyProvisionCheckout(ctx, rt, rt.makeRoot, rt.makeRevision, false, "", true); err != nil {
+		return fmt.Errorf("cannot prepare Cilium chart from unreviewed CLI checkout: %w", err)
+	}
+	if err := verifyProvisionCheckout(ctx, rt, rt.okLinuxRoot, rt.okLinuxRevision, false, "", false); err != nil {
+		return fmt.Errorf("cannot prepare Cilium chart with unreviewed ok-linux checkout: %w", err)
+	}
+	if err := verifyProvisionTools(rt); err != nil {
+		return fmt.Errorf("cannot prepare Cilium chart: %w", err)
+	}
+	script := filepath.Join(rt.makeRoot, "scripts", "prepare_cilium_chart.py")
+	if item, err := os.Lstat(script); err != nil || !item.Mode().IsRegular() || item.Mode()&os.ModeSymlink != 0 {
+		return errors.New("reviewed Cilium preparation script is absent or unsafe")
+	}
+	fmt.Fprintln(stdout, "Preparing missing digest-pinned Cilium 1.19.6 chart (local dependency; no Kubernetes changes)...")
+	prepareCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := rt.command(prepareCtx, provisionPythonExecutable(rt), []string{script, "--cache", chart},
+		rt.makeRoot, provisionEnvironment(rt), io.Discard, io.Discard); err != nil {
+		return fmt.Errorf("could not acquire verified Cilium 1.19.6 chart; no cluster changes were made: %w", err)
+	}
+	if err := verifyProvisionChart(rt); err != nil {
+		return fmt.Errorf("Cilium artifact did not pass independent SHA-256 verification; no cluster changes were made: %w", err)
+	}
+	fmt.Fprintln(stdout, "  ✓ Cilium 1.19.6 SHA-256 verified")
+	return nil
+}
+
+// runClusterProvisionFor is the single provisioning entry used by the expert
+// `ok cluster provision` route.
 func runClusterProvisionFor(ctx context.Context, requestPath, workloadKubeconfig string, stdin io.Reader, stdout, stderr io.Writer, openMakeLog func() (*os.File, error)) error {
 	request, err := readClusterRequest(requestPath)
 	if err != nil {
