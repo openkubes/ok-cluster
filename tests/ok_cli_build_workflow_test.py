@@ -137,7 +137,7 @@ class WorkflowPolicyTest(unittest.TestCase):
     def test_build_reuses_make_targets_with_pinned_go(self):
         build = JOBS["build"]
         self.assertEqual({(i["runner"], i["target"]) for i in build["strategy"]["matrix"]["include"]},
-                         {("macos-15", "darwin-arm64"), ("ubuntu-24.04", "linux-amd64")})
+                         {("macos-15", "darwin-arm64"), ("macos-15-intel", "darwin-amd64"), ("ubuntu-24.04", "linux-amd64")})
         go = next(s for s in build["steps"] if s.get("uses", "").startswith("actions/setup-go@"))
         self.assertEqual((go["with"]["go-version"], go["with"]["cache"]), ("1.24.13", False))
         accept = step("build", "Source, tests")["run"]
