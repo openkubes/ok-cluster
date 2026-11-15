@@ -6,6 +6,7 @@
 #                   holds bin/ok (built from that commit) and the pinned chart
 #     ok-linux/     minimal Git copy of the ok-linux commit pinned in the CLI
 #     release.txt   commits, versions and SHA-256 of the binary and chart
+#     THIRD_PARTY_LICENSES/  pinned Go dependency LICENSE and NOTICE files
 #   ok-<version>-<os>-<arch>.tar.gz + .tar.gz.sha256
 #
 # The bundle has the layout the CLI already verifies at runtime (HEAD equals
@@ -63,8 +64,13 @@ copy_commit() { # <source repo> <commit> <destination>: minimal Git copy, no rem
 copy_commit "$ROOT" "$COMMIT" "$STAGE/ok-cluster"
 copy_commit "$OK_LINUX" "$OK_LINUX_COMMIT" "$STAGE/ok-linux"
 
+# No license discovery or downloads during a build. Verify against the exact
+# target's pinned package graph before copying the committed attribution bytes.
+python3 "$ROOT/scripts/verify_third_party_licenses.py" --platform "$GOOS_TARGET/$GOARCH_TARGET"
+cp -R "$STAGE/ok-cluster/THIRD_PARTY_LICENSES" "$STAGE/THIRD_PARTY_LICENSES"
+
 mkdir -p "$STAGE/ok-cluster/.tools/bin"
-(cd "$ROOT" && CGO_ENABLED=0 GOOS="$GOOS_TARGET" GOARCH="$GOARCH_TARGET" go build -mod=readonly -trimpath -buildvcs=false \
+(cd "$ROOT" && GOWORK=off GOFLAGS= CGO_ENABLED=0 GOOS="$GOOS_TARGET" GOARCH="$GOARCH_TARGET" go build -mod=readonly -trimpath -buildvcs=false \
   -ldflags "-s -w -X=main.version=$VERSION -X=main.revision=$COMMIT" -o "$STAGE/ok-cluster/.tools/bin/ok" ./cmd/ok)
 CHART="$STAGE/ok-cluster/.tools/cilium-1.19.6.tgz"
 python3 "$ROOT/scripts/prepare_cilium_chart.py" --cache "$CHART" ${CHART_SOURCE:+--source "$CHART_SOURCE"} >/dev/null

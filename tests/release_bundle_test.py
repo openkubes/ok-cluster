@@ -3,12 +3,14 @@
 isolated prefix and run it. Read-only: no cluster or global ok is touched."""
 
 import hashlib
+import json
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import prepare_cilium_chart  # noqa: E402
+import verify_third_party_licenses  # noqa: E402
 
 GOOS = {"Linux": "linux", "Darwin": "darwin"}[platform.system()]
 GOARCH = {"x86_64": "amd64", "amd64": "amd64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine().lower()]
@@ -86,6 +89,52 @@ class ReleaseBundleTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("tag v99.0.0 does not point at", result.stderr)
         self.assertFalse((self.temp / "official").exists())
+
+    def assert_attributions(self, tarball, name):
+        collection = ROOT / "THIRD_PARTY_LICENSES"
+        manifest = json.loads((collection / "manifest.json").read_text())
+        required = {
+            "github.com/moby/spdystream/NOTICE",
+            "gopkg.in/yaml.v2/NOTICE", "gopkg.in/yaml.v3/NOTICE",
+            "k8s.io/apimachinery/third_party/forked/golang/LICENSE",
+            "k8s.io/utils/internal/third_party/forked/golang/net/LICENSE",
+        }
+        self.assertTrue(required <= manifest["files"].keys())
+        expected = set(manifest["files"]) | {"manifest.json", "README.md"}
+        prefix = name + "/THIRD_PARTY_LICENSES/"
+        with tarfile.open(tarball) as archive:
+            actual = {m.name[len(prefix):] for m in archive.getmembers()
+                      if m.name.startswith(prefix) and m.isfile()}
+            self.assertEqual(actual, expected)
+            for relative in expected:
+                data = archive.extractfile(prefix + relative).read()
+                self.assertEqual(data, (collection / relative).read_bytes(), relative)
+                if relative in manifest["files"]:
+                    self.assertEqual(hashlib.sha256(data).hexdigest(),
+                                     manifest["files"][relative]["sha256"], relative)
+
+    def test_all_supported_bundles_preserve_licenses_and_notices(self):
+        verify_third_party_licenses.verify()
+        for target in verify_third_party_licenses.PLATFORMS:
+            goos, goarch = target.split("/")
+            name = f"ok-{VERSION}-{goos}-{goarch}"
+            if target == f"{GOOS}/{GOARCH}":
+                tarball = self.tarball
+            else:
+                command = ["bash", str(ROOT / "scripts/build_release_bundle.sh"),
+                           "--out", str(self.temp / "dist"), "--goos", goos, "--goarch", goarch,
+                           "--ok-linux", os.environ["OK_LINUX_PATH"], "--version", VERSION,
+                           "--chart-source", str(self.bundle / "ok-cluster/.tools/cilium-1.19.6.tgz")]
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                tarball = self.temp / "dist" / f"{name}.tar.gz"
+            with self.subTest(platform=target):
+                self.assert_attributions(tarball, name)
+                checksum = tarball.with_suffix(".gz.sha256").read_text().split()
+                self.assertEqual(checksum, [hashlib.sha256(tarball.read_bytes()).hexdigest(), tarball.name])
+                stage = self.temp / "dist" / name
+                for tree in ("ok-cluster", "ok-linux"):
+                    self.assertEqual(git("-C", str(stage / tree), "status", "--porcelain", "--untracked-files=all"), "")
 
     def test_extracted_binary_runs_and_reports_its_revision(self):
         result = subprocess.run([str(self.ok), "version"], capture_output=True, text=True, check=True)
