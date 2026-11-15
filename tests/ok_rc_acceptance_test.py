@@ -142,7 +142,7 @@ class RCAcceptanceTest(unittest.TestCase):
         self.assertEqual((report["commit"], report["kind"]), (commit, "release-candidate"))
         self.assertEqual([s["name"] for s in report["steps"]], ["source", "tests", "build", "verify", "smoke", "final"])
         names = {a["platform"]: a for a in report["artifacts"]}
-        self.assertEqual(set(names), {"darwin-arm64", "linux-amd64"})
+        self.assertEqual(set(names), {"darwin-arm64", "darwin-amd64", "linux-amd64"})
         for platform, artifact in names.items():
             archive = out / artifact["file"]
             self.assertTrue(archive.is_file())
