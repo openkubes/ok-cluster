@@ -528,7 +528,6 @@ func TestProvisionCheckoutErrorNamesChangedPaths(t *testing.T) {
 	}
 }
 
-
 func TestProvisionBootstrapHeartbeatShowsProgressAndStops(t *testing.T) {
 	var output bytes.Buffer
 	done := make(chan struct{})
