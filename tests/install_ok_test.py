@@ -79,6 +79,10 @@ class InstallOkTest(unittest.TestCase):
         self.assertEqual(version, f"{VERSION} {commit}")
         for item in ("ok-cluster/.tools/cilium-1.19.6.tgz", "ok-linux/profiles/kubevirt/profile.yaml", "release.txt"):
             self.assertTrue((bundle / item).is_file(), item)
+        for source in (ROOT / "THIRD_PARTY_LICENSES").rglob("*"):
+            if source.is_file():
+                relative = source.relative_to(ROOT)
+                self.assertEqual((bundle / relative).read_bytes(), source.read_bytes(), str(relative))
         after = self.archive.stat()
         self.assertEqual((before.st_size, before.st_mtime_ns), (after.st_size, after.st_mtime_ns))
         self.assertEqual(sha256(self.archive), self.digest)
@@ -126,6 +130,21 @@ class InstallOkTest(unittest.TestCase):
             result = self.install(digest=digest)
             self.assertNothingInstalled(result)
         self.assertIn("nothing was extracted", self.install(digest="0" * 64).stderr)
+
+    def test_unexpected_bundle_root_entry_is_refused(self):
+        archive, digest = self.crafted(
+            lambda out, _: out.addfile(*self.member(f"{NAME}/UNEXPECTED")))
+        self.assertNothingInstalled(self.install(archive=archive, digest=digest), reason="must contain exactly")
+
+    def test_earlier_bundle_without_attributions_still_installs(self):
+        archive = self.case / f"{NAME}.tar.gz"
+        prefix = f"{NAME}/THIRD_PARTY_LICENSES"
+        with tarfile.open(self.archive) as original, tarfile.open(archive, "w:gz") as out:
+            for member in original.getmembers():
+                if member.name != prefix and not member.name.startswith(prefix + "/"):
+                    out.addfile(member, original.extractfile(member) if member.isfile() else None)
+        result = self.install(archive=archive, digest=sha256(archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_refuses_root_relative_or_unsafe_paths_and_missing_flags(self):
         for args in (("--prefix", "relative/ok"), ("--prefix", str(self.case / "bad dir")), ("--bin-dir", str(self.case / "a/../b"))):

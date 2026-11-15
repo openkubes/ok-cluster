@@ -163,10 +163,14 @@ say "Bundle verified: $R_VERSION, ok-cluster $R_CLUSTER, ok-linux $R_LINUX"
 #    inside it, and a rename can replace a file. Instead, claim $DEST with
 #    mkdir, which fails atomically if anything exists there, then rename the
 #    verified entries into the empty, private (0700) directory we just created.
-[ "$(find "$B" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 3 ] && [ -d "$B/ok-cluster" ] && [ -d "$B/ok-linux" ] &&
-  [ -f "$B/release.txt" ] || die "$NAME must contain exactly ok-cluster/, ok-linux/ and release.txt"
+# Keep support for earlier bundles while carrying the attribution directory
+# when present. No other additional top-level entry is accepted.
+set -- ok-cluster ok-linux release.txt
+if [ -d "$B/THIRD_PARTY_LICENSES" ]; then set -- "$@" THIRD_PARTY_LICENSES; fi
+[ "$(find "$B" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "$#" ] && [ -d "$B/ok-cluster" ] && [ -d "$B/ok-linux" ] &&
+  [ -f "$B/release.txt" ] || die "$NAME must contain exactly ok-cluster/, ok-linux/, release.txt and optionally THIRD_PARTY_LICENSES/"
 mkdir "$DEST" 2>/dev/null || die "$DEST already exists (an existing or concurrent installation); nothing replaced"
-for entry in ok-cluster ok-linux release.txt; do
+for entry in "$@"; do
   mv "$B/$entry" "$DEST/$entry" || die "cannot move $entry into $DEST; the incomplete $DEST was left for inspection"
 done
 TARGET=$DEST/ok-cluster/.tools/bin/ok
