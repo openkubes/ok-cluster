@@ -1047,7 +1047,25 @@ func runProvisionMake(ctx context.Context, runtime clusterProvisionRuntime, args
 	if runtime.makeLog != nil {
 		makeStdout, makeStderr = runtime.makeLog, runtime.makeLog
 	}
-	if err := runtime.command(stepContext, runtime.makeExecutable, args, runtime.makeRoot, provisionEnvironment(runtime), makeStdout, makeStderr); err != nil {
+	// The default 'ok up' keeps raw Make output in a private log. Give the
+	// operator periodic liveness feedback during bootstrap without streaming
+	// sensitive logs or claiming that Kubernetes is Ready.
+	var heartbeatDone chan struct{}
+	var heartbeatStopped chan struct{}
+	if runtime.makeLog != nil && args[1] == "bootstrap" {
+		heartbeatDone = make(chan struct{})
+		heartbeatStopped = make(chan struct{})
+		go func() {
+			defer close(heartbeatStopped)
+			printProvisionBootstrapHeartbeat(stepContext, stdout, 15*time.Second, heartbeatDone)
+		}()
+	}
+	commandErr := runtime.command(stepContext, runtime.makeExecutable, args, runtime.makeRoot, provisionEnvironment(runtime), makeStdout, makeStderr)
+	if heartbeatDone != nil {
+		close(heartbeatDone)
+		<-heartbeatStopped // Never print progress after the Make result.
+	}
+	if err := commandErr; err != nil {
 		if errors.Is(stepContext.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("timed out after %s", timeout)
 		}
@@ -1061,6 +1079,33 @@ func runProvisionMake(ctx context.Context, runtime clusterProvisionRuntime, args
 		return errors.New("could not start or complete the Make process")
 	}
 	return nil
+}
+
+// printProvisionBootstrapHeartbeat provides a low-noise, non-assertive progress
+// indication while Make runs. It only reads its context and the completion
+// signal; it never contacts a cluster or changes the bootstrap deadline.
+func printProvisionBootstrapHeartbeat(ctx context.Context, output io.Writer, interval time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	started := time.Now()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// A coincident completion should not print a stale progress line.
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			default:
+			}
+			fmt.Fprintf(output, "⏳ Bootstrap still running (%s elapsed). Details are in the private Make log; Kubernetes readiness is not yet verified.\n", time.Since(started).Round(time.Second))
+		}
+	}
 }
 
 func printClusterProvisionPlan(output io.Writer, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) {
