@@ -108,6 +108,8 @@ jobs:
         include:
           - runner: macos-15
             target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-amd64
           - runner: ubuntu-24.04
             target: linux-amd64
     runs-on: ${{ matrix.runner }}
