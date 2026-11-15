@@ -4,6 +4,31 @@
 >
 > **v1.0.1 first run:** `install-ok.sh` installs a verified bundle without root, and `ok config init` finds and verifies that bundle and saves your management kubeconfig path. These are new in v1.0.1 and are being accepted as a new release candidate; until then, treat them as preview.
 
+## Fast path for a new user (macOS ARM64 or Linux AMD64)
+
+**No manual working directory, `mkdir`, `XDG_CONFIG_HOME` or `XDG_STATE_HOME` exports are required.** The CLI creates private request, log, kubeconfig and lifecycle-state directories as needed. The only user-supplied credential input is an existing, authorized management kubeconfig, whose path is saved by `ok config init`.
+
+1. On a supported host, download the correct **published** `ok-v1.0.1-<os>-<arch>.tar.gz` and obtain its SHA-256 **independently**. Follow [step 1](#1-install-the-cli-from-a-release-bundle) to verify and install; do not use made-up or RC artifact checksums for the official release.
+2. Ensure `~/.local/bin` is on your shell `PATH` (the installer does not edit shell startup files); use `ok version`.
+3. Prepare a private (0600), **working** management kubeconfig. It must contain a current context and identify the intended management API; verify with `kubectl --kubeconfig /path/to/management.yaml get nodes` **before** provisioning. If it has no current context, select the intended context explicitly in that file; do not use the host's active kubectl context as a substitute.
+4. Run `ok config init`, provide that kubeconfig path, review the bundle/source checks and accept. `ok config show` is a read-only verification of the saved paths. `ok config init` does **not** create a management cluster, create credentials or contact Kubernetes.
+5. Run `ok up`. If no request exists, select **new cluster request**, choose a unique name and review the generated read-only plan. The CLI prompts for two **distinct**, typed provision/bootstrap confirmations. Check the management identity and auto-allocated endpoint/CIDRs before approving each stage.
+6. Independently verify the workload API, both expected Ready nodes, CNI and management CAPI/KubeVirt resources. When you intentionally no longer need the cluster, run `ok destroy <name>`; review its UID-bound deletion inventory and verify absence.
+
+**What is not automated:** installing or preparing the management cluster (CAPI/CAPK, Talos controllers, KubeVirt, CDI, Golden Image, compatible storage and networking); acquiring a management kubeconfig; cross-operator IP/CIDR coordination; or independent workload-readiness verification. See the full prerequisites and safety notes below.
+
+### Platform support and first-run validation
+
+| Operator host | v1.0.1 bundle | Notes |
+|---|---|---|
+| macOS Apple Silicon (ARM64) | `darwin-arm64` | CLI runs locally; supported workload target is **AMD64** on a prepared remote management cluster. |
+| Linux AMD64 (including Ubuntu in Multipass) | `linux-amd64` | Multipass VM must have network reachability to the management API, and all required runtime tools. |
+| WSL2 on AMD64 Windows | `linux-amd64` | Run inside a Linux distribution; use a Linux path to a private kubeconfig, and configure `PATH` inside WSL. |
+| Intel macOS (AMD64) | **No official bundle in the current release matrix** | Separate platform qualification/build required; do not test it as a supported v1.0.1 installer platform until an artifact is explicitly published. |
+| Linux ARM64 | **No official bundle in the current release matrix** | Not covered by this release. |
+
+**Native workload ARM64 provisioning is not supported in v1.0.1.** The CLI's Same-Plane reference contract pins `ARCHITECTURE=amd64` and an AMD64 Golden Image. A macOS ARM64 executable does not imply ARM64 guest support.
+
 ## What this workflow does
 
 The CLI provisions a new Talos Kubernetes workload cluster as KubeVirt VMs **on an existing management/infra Kubernetes cluster** (Same-Plane). You must supply an authorized kubeconfig for that management cluster. This is **not** the kubeconfig of the cluster being created.
@@ -12,7 +37,7 @@ The management cluster needs a previously validated Talos/KubeVirt provider prof
 
 ## Prerequisites
 
-- macOS ARM64 or Linux AMD64. Runtime tools: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm, plus standard shell tools. **Go is only needed to build from source.** `ok config init` lists any tool that is missing; it never installs anything.
+- Supported operator hosts: macOS ARM64 or Linux AMD64 (including AMD64 WSL2/Multipass). Runtime tools: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm, plus standard shell tools. **Go is only needed to build from source.** `ok config init` lists any tool that is missing; it never installs anything.
 - A release bundle and its SHA-256 from a trusted channel, or (developers) two sibling checkouts at the **reviewed, pinned revisions**: `ok-cluster` and `ok-linux`.
 - A prepared Same-Plane provider/management cluster with an explicitly selected and authorized kubeconfig; do not use the current kubectl context or rely on `KUBECONFIG`.
 - A unique, currently unused workload-cluster name, coordinated exclusive access to the shared network-allocation pool. This profile requires **automatic** endpoint and CIDR allocation; review its live inventory and the allocated values during provisioning.
@@ -77,6 +102,8 @@ Replace the path with **your** management-cluster kubeconfig (for the internal O
 - lists missing runtime tools (nothing is installed);
 - saves only the **path** of the management kubeconfig: the file must be a private (0600) regular file; its contents are not read and no cluster is contacted. **No provider kubeconfig is needed for Same-Plane;**
 - shows everything and, on a terminal, asks `ok`/`no` before writing a private, create-only file. Without a terminal it saves nothing unless you pass `--yes` (scripts: `ok config init --management <file> --yes`); `--yes` skips only the prompts, never the verification. It never overwrites an existing file.
+
+If your management kubeconfig lacks `current-context`, `kubectl` without `--context` may try `localhost:8080`. Select and verify the intended context before passing its file to `ok config init`; the CLI does not repair the kubeconfig.
 
 The management cluster is chosen in this order: `--management`, then `TALOS_INFRA_KUBECONFIG`, then the saved path. `KUBECONFIG` and the current kubectl context are never used. The saved path only selects the file: `ok up` and `ok destroy` still verify the API server, CA and kube-system UID, and still require their typed confirmations. Check the target first:
 
