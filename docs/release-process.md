@@ -65,7 +65,7 @@ Overrides: `OK_LINUX_PATH=…`, `CILIUM_CHART=…`, `RC_OUT=…`, `RC_WORK=…` 
 |---|---|
 | Trigger | manual only: **Actions → OK CLI build and acceptance → Run workflow** on `main`. Inputs: `version`, `commit` (full 40-character SHA), `release` (default off) and `attest` (default off; refused unless `release` is on). Dispatch needs write access. There is no `pull_request` trigger, so PR code never runs here. |
 | Commit identity | a `bind` job validates the inputs (passed via `env`, never interpolated into shell). It checks out exactly `commit` and requires it to be on `main`. For `release=true`, the tag `version` must already point at `commit`, and the script checks that again. |
-| Runners and toolchain | `macos-15` builds and accepts `darwin-arm64`, `ubuntu-24.04` builds and accepts `linux-amd64`, each natively (`--targets`). Go **1.24.13** is pinned explicitly, without a dependency cache. |
+| Runners and toolchain | `macos-15` builds and accepts `darwin-arm64`, `macos-15-intel` builds and accepts `darwin-amd64`, and `ubuntu-24.04` builds and accepts `linux-amd64`, each natively (`--targets`). Go **1.24.13** is pinned explicitly, without a dependency cache. |
 | Checks | per runner, the full script: source identity (clean commit, pinned `ok-linux`, chart SHA-256), tests, native build, `.sha256`, `release.txt`, isolated install and first-run smoke. |
 | Outputs | Actions artifacts `ok-<version>-<target>` (bundle, `.sha256`, acceptance report JSON; kept 30 days), and logs on failure. Nothing is installed outside the runner. |
 | Permissions | the workflow default is `{}`. Build jobs get `contents: read` only, with `persist-credentials: false`. `attest-gate` gets `actions: read` only. Only the `attest` job gets `id-token: write` / `attestations: write`; it runs no repository code, only downloads the bundles, re-checks their SHA-256 and calls `actions/attest`. |
@@ -92,7 +92,7 @@ Until it exists, official builds with `attest=true` fail at `attest-gate`; build
 Each arrow is a recorded owner decision; nothing below happens automatically.
 
 1. **Merge** the release PR after review, with all CI checks green. Record the merge commit's full SHA as `C`.
-2. **Acceptance build:** run the workflow with `version=v1.0.1-rc3`, `commit=C`, `release=false`, `attest=false`. Both jobs must pass. Download the artifacts; keep the two acceptance reports as evidence.
+2. **Acceptance build:** run the workflow with `version=v1.0.1-rc3`, `commit=C`, `release=false`, `attest=false`. All three platform jobs must pass. Download the artifacts; keep all three acceptance reports as evidence.
 3. **Lifecycle safety gates** with those artifacts, on separately authorized disposable infrastructure (`docs/cli-v1.0.1-release-acceptance.md`, sections D and E). If anything fails, fix it on a new PR, which gives a new `C` and `-rc4`, and repeat.
 4. **Decisions recorded:** licensing/redistribution, provenance/signing policy (including whether to attest), final release notes.
 5. → **Approval to tag.** A maintainer runs `git fetch origin && git tag -a v1.0.1 -m "v1.0.1" C && git rev-parse v1.0.1^{commit}` (it must print `C`), then `git push origin refs/tags/v1.0.1`, then `git ls-remote origin refs/tags/v1.0.1^{}` (it must show `C`).
