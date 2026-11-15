@@ -1,0 +1,204 @@
+{
+  "files": {
+    "github.com/davecgh/go-spew/spew/LICENSE": {
+      "module": "github.com/davecgh/go-spew",
+      "sha256": "1b93a317849ee09d3d7e4f1d20c2b78ddb230b4becb12d7c224c927b9d470251",
+      "source": "LICENSE"
+    },
+    "github.com/go-logr/logr/LICENSE": {
+      "module": "github.com/go-logr/logr",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "LICENSE"
+    },
+    "github.com/gogo/protobuf/LICENSE": {
+      "module": "github.com/gogo/protobuf",
+      "sha256": "3f571768c0ba2f330e5fee90de89bfe5141f48c1939be8008fa61461c30ca07f",
+      "source": "LICENSE"
+    },
+    "github.com/google/gofuzz/LICENSE": {
+      "module": "github.com/google/gofuzz",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "LICENSE"
+    },
+    "github.com/gorilla/websocket/LICENSE": {
+      "module": "github.com/gorilla/websocket",
+      "sha256": "2be1b548b0387ca8948e1bb9434e709126904d15f622cc2d0d8e7f186e4d122d",
+      "source": "LICENSE"
+    },
+    "github.com/json-iterator/go/LICENSE": {
+      "module": "github.com/json-iterator/go",
+      "sha256": "3247931083f058b00760a3c32a9ca0962c05e4d562ad2ffcc1753451fa8d4486",
+      "source": "LICENSE"
+    },
+    "github.com/moby/spdystream/LICENSE": {
+      "module": "github.com/moby/spdystream",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "LICENSE"
+    },
+    "github.com/moby/spdystream/NOTICE": {
+      "module": "github.com/moby/spdystream",
+      "sha256": "24f49cb1b9dbc7c08f9200cdcd29065a6072ed57b566370bd25c948fefb8137d",
+      "source": "NOTICE"
+    },
+    "github.com/modern-go/concurrent/LICENSE": {
+      "module": "github.com/modern-go/concurrent",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "LICENSE"
+    },
+    "github.com/modern-go/reflect2/LICENSE": {
+      "module": "github.com/modern-go/reflect2",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "LICENSE"
+    },
+    "github.com/mxk/go-flowrate/flowrate/LICENSE": {
+      "module": "github.com/mxk/go-flowrate",
+      "sha256": "4e52681a4fd97e49903bdf507822b494d91cf877cf3bf4b78d816da5ee4ce4ce",
+      "source": "LICENSE"
+    },
+    "github.com/openkubes/ok-cluster/LICENSE": {
+      "module": "github.com/openkubes/ok-cluster",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "LICENSE"
+    },
+    "golang.org/x/net/LICENSE": {
+      "module": "golang.org/x/net",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "LICENSE"
+    },
+    "golang.org/x/oauth2/LICENSE": {
+      "module": "golang.org/x/oauth2",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "LICENSE"
+    },
+    "golang.org/x/sys/unix/LICENSE": {
+      "module": "golang.org/x/sys",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "LICENSE"
+    },
+    "golang.org/x/term/LICENSE": {
+      "module": "golang.org/x/term",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "LICENSE"
+    },
+    "golang.org/x/text/LICENSE": {
+      "module": "golang.org/x/text",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "LICENSE"
+    },
+    "golang.org/x/time/rate/LICENSE": {
+      "module": "golang.org/x/time",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "LICENSE"
+    },
+    "gopkg.in/inf.v0/LICENSE": {
+      "module": "gopkg.in/inf.v0",
+      "sha256": "050855d9ceedf916a9e9f30d20c6f61a484448d2c2ed5810934bc8aef43861b4",
+      "source": "LICENSE"
+    },
+    "gopkg.in/yaml.v2/LICENSE": {
+      "module": "gopkg.in/yaml.v2",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "LICENSE"
+    },
+    "gopkg.in/yaml.v2/NOTICE": {
+      "module": "gopkg.in/yaml.v2",
+      "sha256": "f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00",
+      "source": "NOTICE"
+    },
+    "gopkg.in/yaml.v3/LICENSE": {
+      "module": "gopkg.in/yaml.v3",
+      "sha256": "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b",
+      "source": "LICENSE"
+    },
+    "gopkg.in/yaml.v3/NOTICE": {
+      "module": "gopkg.in/yaml.v3",
+      "sha256": "f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00",
+      "source": "NOTICE"
+    },
+    "k8s.io/api/core/v1/LICENSE": {
+      "module": "k8s.io/api",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "LICENSE"
+    },
+    "k8s.io/apimachinery/pkg/LICENSE": {
+      "module": "k8s.io/apimachinery",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "LICENSE"
+    },
+    "k8s.io/apimachinery/third_party/forked/golang/LICENSE": {
+      "module": "k8s.io/apimachinery",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "third_party/forked/golang/LICENSE"
+    },
+    "k8s.io/client-go/LICENSE": {
+      "module": "k8s.io/client-go",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "LICENSE"
+    },
+    "k8s.io/klog/v2/LICENSE": {
+      "module": "k8s.io/klog/v2",
+      "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68",
+      "source": "LICENSE"
+    },
+    "k8s.io/utils/LICENSE": {
+      "module": "k8s.io/utils",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "LICENSE"
+    },
+    "k8s.io/utils/internal/third_party/forked/golang/net/LICENSE": {
+      "module": "k8s.io/utils",
+      "sha256": "dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d",
+      "source": "third_party/forked/golang/LICENSE"
+    },
+    "sigs.k8s.io/json/LICENSE": {
+      "module": "sigs.k8s.io/json",
+      "sha256": "ef523ecf6292d4b80e02e6003dcbaf386e774efe70e8607ad762b1437d1f383b",
+      "source": "LICENSE"
+    },
+    "sigs.k8s.io/structured-merge-diff/v4/value/LICENSE": {
+      "module": "sigs.k8s.io/structured-merge-diff/v4",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "LICENSE"
+    },
+    "sigs.k8s.io/yaml/LICENSE": {
+      "module": "sigs.k8s.io/yaml",
+      "sha256": "24653fd8a39354396da1a265d68316399edc39b1df48c5866d55f9f06484fa9a",
+      "source": "LICENSE"
+    }
+  },
+  "modules": {
+    "github.com/davecgh/go-spew": "v1.1.1",
+    "github.com/go-logr/logr": "v1.3.0",
+    "github.com/gogo/protobuf": "v1.3.2",
+    "github.com/google/gofuzz": "v1.2.0",
+    "github.com/gorilla/websocket": "v1.5.0",
+    "github.com/json-iterator/go": "v1.1.12",
+    "github.com/moby/spdystream": "v0.2.0",
+    "github.com/modern-go/concurrent": "v0.0.0-20180306012644-bacd9c7ef1dd",
+    "github.com/modern-go/reflect2": "v1.0.2",
+    "github.com/mxk/go-flowrate": "v0.0.0-20140419014527-cca7078d478f",
+    "golang.org/x/net": "v0.23.0",
+    "golang.org/x/oauth2": "v0.10.0",
+    "golang.org/x/sys": "v0.18.0",
+    "golang.org/x/term": "v0.18.0",
+    "golang.org/x/text": "v0.14.0",
+    "golang.org/x/time": "v0.3.0",
+    "gopkg.in/inf.v0": "v0.9.1",
+    "gopkg.in/yaml.v2": "v2.4.0",
+    "gopkg.in/yaml.v3": "v3.0.1",
+    "k8s.io/api": "v0.29.15",
+    "k8s.io/apimachinery": "v0.29.15",
+    "k8s.io/client-go": "v0.29.15",
+    "k8s.io/klog/v2": "v2.110.1",
+    "k8s.io/utils": "v0.0.0-20230726121419-3b25d923346b",
+    "sigs.k8s.io/json": "v0.0.0-20221116044647-bc3834ca7abd",
+    "sigs.k8s.io/structured-merge-diff/v4": "v4.4.1",
+    "sigs.k8s.io/yaml": "v1.3.0"
+  },
+  "package_inventory_sha256": {
+    "darwin/amd64": "94b97c0d909c674acc7d60015d073a1ff038aa6c147c94b1b1af126a40a79f21",
+    "darwin/arm64": "94b97c0d909c674acc7d60015d073a1ff038aa6c147c94b1b1af126a40a79f21",
+    "linux/amd64": "94b97c0d909c674acc7d60015d073a1ff038aa6c147c94b1b1af126a40a79f21"
+  },
+  "schema": 1
+}
