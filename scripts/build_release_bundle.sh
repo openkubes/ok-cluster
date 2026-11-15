@@ -90,7 +90,9 @@ cilium-1.19.6.tgz sha256: $(sha256_of "$CHART")
 go: $(go version | cut -d' ' -f3)
 EOF
 
-tar -czf "$STAGE.tar.gz" -C "$OUT" "$NAME"
+# macOS tar otherwise adds AppleDouble ._* entries for filesystem metadata,
+# which are not part of the committed sources or attribution collection.
+COPYFILE_DISABLE=1 tar -czf "$STAGE.tar.gz" -C "$OUT" "$NAME"
 (cd "$OUT" && if command -v sha256sum >/dev/null; then sha256sum "$NAME.tar.gz"; else shasum -a 256 "$NAME.tar.gz"; fi) > "$STAGE.tar.gz.sha256"
 (cd "$OUT" && if command -v sha256sum >/dev/null; then sha256sum -c "$NAME.tar.gz.sha256"; else shasum -a 256 -c "$NAME.tar.gz.sha256"; fi) >/dev/null
 echo "Built $STAGE.tar.gz"
