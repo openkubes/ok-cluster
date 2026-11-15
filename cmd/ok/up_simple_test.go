@@ -527,3 +527,48 @@ func TestProvisionCheckoutErrorNamesChangedPaths(t *testing.T) {
 		t.Fatalf("error does not name the offending file: %v", err)
 	}
 }
+
+func TestProvisionBootstrapHeartbeatShowsProgressAndStops(t *testing.T) {
+	var output bytes.Buffer
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		printProvisionBootstrapHeartbeat(context.Background(), &output, 5*time.Millisecond, done)
+	}()
+	time.Sleep(25 * time.Millisecond)
+	close(done)
+	<-stopped
+	got := output.String()
+	if !strings.Contains(got, "Bootstrap still running") || !strings.Contains(got, "readiness is not yet verified") {
+		t.Fatalf("expected non-assertive progress while bootstrap runs, got: %q", got)
+	}
+	if strings.Contains(got, "Ready") || strings.Contains(got, "successfully") {
+		t.Fatalf("heartbeat must not claim workload readiness or success: %q", got)
+	}
+	after := output.Len()
+	time.Sleep(15 * time.Millisecond)
+	if output.Len() != after {
+		t.Fatal("heartbeat wrote after completion")
+	}
+}
+
+func TestProvisionBootstrapHeartbeatStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var output bytes.Buffer
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		printProvisionBootstrapHeartbeat(ctx, &output, time.Hour, done)
+	}()
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not stop on cancellation")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("unexpected output after cancellation: %q", output.String())
+	}
+}
