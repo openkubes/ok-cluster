@@ -6,14 +6,14 @@ The live steps require separately authorized disposable infrastructure and a ded
 
 ## Fresh-user platform validation (after documented release build; record each result separately)
 
-The official v1.0.1 artifact matrix is **darwin-arm64** and **linux-amd64**. The operator host CPU is distinct from the provisioned **AMD64** Talos/KubeVirt workload-node architecture.
+The v1.0.1 target artifact matrix is **darwin-arm64**, **darwin-amd64** and **linux-amd64** (subject to passing native acceptance before publishing). The operator host CPU is distinct from the provisioned **AMD64** Talos/KubeVirt workload-node architecture.
 
 | Tester / environment | Artifact | Minimum evidence | Status |
 |---|---|---|---|
 | Linux AMD64 / Ubuntu Multipass | `linux-amd64` | Download and independent SHA-256, install in clean user HOME, `ok version`, `ok config init`, `ok config show`, `ok up` plan; live lifecycle only when explicitly authorized | NOT TESTED |
 | Daniel / macOS M5 ARM64 | `darwin-arm64` | Clean user installation, unsigned/quarantine handling, PATH, init and interactive `ok up` UX | NOT TESTED |
 | Suchit / WSL2 Linux AMD64 | `linux-amd64` | Native Linux installation in WSL, private Linux-path kubeconfig, PATH/runtime dependencies, init and interactive request flow | NOT TESTED |
-| Intel Mac AMD64 | **No official v1.0.1 artifact** | Separate artifact/platform feasibility; do not report official release install PASS without approved `darwin-amd64` bundle | OUT OF MATRIX |
+| Intel Mac AMD64 | `darwin-amd64` | Native Intel-macOS verified installer and fresh-user initialization, plus first-cluster workflow with authorized management | NOT TESTED |
 
 For a fresh-user test, do **not** precreate config/state/requests/logs/kubeconfig directories, export test-specific XDG paths, or manually scaffold a ClusterRequest unless explicitly testing override behavior. The CLI should create private application directories. A prepared management cluster, required runtime tools and a valid, explicitly authorized management kubeconfig **are** prerequisites. Do not overwrite an existing user's local config to simulate a clean install.
 
@@ -25,8 +25,8 @@ Collect platform, OS/architecture, artifact name/SHA-256, CLI commit, tool versi
 
 ## A. Build (maintainer, clean checkout of the reviewed commit)
 
-- [ ] The **OK CLI build and acceptance** workflow (`release=false`) passes for `v1.0.1-rcN` and the approved commit, natively on `macos-15` and `ubuntu-24.04`; the artifacts and both acceptance reports are kept as evidence. Local equivalent: `make ok-rc-acceptance RC_VERSION=v1.0.1-rcN RC_COMMIT=<approved commit>` passes. It checks the sources, runs the tests, builds both bundles, verifies the checksums and `release.txt`, smoke-tests the native bundle, and writes `acceptance-*.json` next to the artifacts
-- [ ] `make ok-rc-smoke-install …` passes natively on the other platform (macOS ARM64 and Linux AMD64/WSL2)
+- [ ] The **OK CLI build and acceptance** workflow (`release=false`) passes for `v1.0.1-rcN` and the approved commit, natively on `macos-15`, `macos-15-intel` and `ubuntu-24.04`; the artifacts and both acceptance reports are kept as evidence. Local equivalent: `make ok-rc-acceptance RC_VERSION=v1.0.1-rcN RC_COMMIT=<approved commit>` passes. It checks the sources, runs the tests, builds both bundles, verifies the checksums and `release.txt`, smoke-tests the native bundle, and writes `acceptance-*.json` next to the artifacts
+- [ ] `make ok-rc-smoke-install …` passes natively on the other platform (macOS ARM64, macOS Intel AMD64 and Linux AMD64/WSL2)
 - [ ] Record the Go toolchain, build host and the acceptance reports. Never claim a signature or reproducibility that wasn't established.
 - [ ] CI green on the reviewed commit: `test`, `release-bundle` (macOS and Ubuntu, including `install_ok_test.py` and `ok_rc_acceptance_test.py`)
 
