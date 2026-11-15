@@ -25,7 +25,7 @@ Collect platform, OS/architecture, artifact name/SHA-256, CLI commit, tool versi
 
 ## A. Build (maintainer, clean checkout of the reviewed commit)
 
-- [ ] The **OK CLI build and acceptance** workflow (`release=false`) passes for `v1.0.1-rcN` and the approved commit, natively on `macos-15`, `macos-15-intel` and `ubuntu-24.04`; the artifacts and both acceptance reports are kept as evidence. Local equivalent: `make ok-rc-acceptance RC_VERSION=v1.0.1-rcN RC_COMMIT=<approved commit>` passes. It checks the sources, runs the tests, builds both bundles, verifies the checksums and `release.txt`, smoke-tests the native bundle, and writes `acceptance-*.json` next to the artifacts
+- [ ] The **OK CLI build and acceptance** workflow (`release=false`) passes for `v1.0.1-rcN` and the approved commit, natively on `macos-15`, `macos-15-intel` and `ubuntu-24.04`; the artifacts and all three acceptance reports are kept as evidence. Local equivalent: `make ok-rc-acceptance RC_VERSION=v1.0.1-rcN RC_COMMIT=<approved commit>` passes. It checks the sources, runs the tests, builds all three bundles, verifies the checksums and `release.txt`, smoke-tests the native bundle, and writes `acceptance-*.json` next to the artifacts
 - [ ] `make ok-rc-smoke-install …` passes natively on the other platform (macOS ARM64, macOS Intel AMD64 and Linux AMD64/WSL2)
 - [ ] Record the Go toolchain, build host and the acceptance reports. Never claim a signature or reproducibility that wasn't established.
 - [ ] CI green on the reviewed commit: `test`, `release-bundle` (macOS and Ubuntu, including `install_ok_test.py` and `ok_rc_acceptance_test.py`)
@@ -66,6 +66,14 @@ Collect platform, OS/architecture, artifact name/SHA-256, CLI commit, tool versi
 - [ ] `ok destroy <name>` without `--management`: same source line, UID and ledger checks, typed cluster name
 - [ ] Independent absence checks for namespace, exact PVs, Longhorn volumes and Golden image cloner RBAC; the ledger ConfigMap persists; the Golden image is preserved
 - [ ] Two disposable clusters from the same installation (OK-228 gate)
+
+## Licensing and distribution review (maintainer decision required)
+
+- The repository README declares Apache-2.0, but the original `ok-cluster` tree lacked the linked `LICENSE` file. The corresponding Apache-2.0 license text has now been added to the repository in this proposed change. **Adding this text does not itself prove that every contribution or bundled third-party dependency is appropriately licensed.**
+- `ok-linux` has its own Apache-2.0 `LICENSE`, retained in the bundle's minimal Git copy. The release bundle also contains compiled Go dependencies and a pinned Cilium Helm chart. Check their licenses/notices and any applicable redistribution obligations against the exact release artifact; record reviewer, date, and evidence before checking the licensing gate.
+- Inspect the official `ok-v1.0.1-<target>.tar.gz` for `ok-cluster/LICENSE` and `ok-linux/LICENSE`, and any required third-party attribution files. Ensure all three platform artifacts pass the same review.
+- Artifact provenance policy is a separate decision: SHA-256 integrity is **not** publisher authenticity. Either approve the documented unsigned Community Preview policy with independently published hashes, or configure the protected `ok-cli-release-attestation` environment and run the official workflow with `attest=true` after reviewer approval. Never state that code signing, notarization, or attestation was completed unless verified.
+- The RC4 build at commit `7cfe5623d8afc86be2811baa52a4c1b7dcf512bc` passed native smoke tests on three architectures, but any change on main requires a new exact-commit acceptance build. Preserve RC3 live lifecycle evidence; independently close the **two disposable clusters from one installed release** gate before calling v1.0.1 stable.
 
 ## E. Release gates (v1.0.1 is not stable before A to D and these are complete)
 
