@@ -4,7 +4,7 @@
 #   scripts/ok-rc-acceptance.sh --version v1.0.1-rc3 --commit <40-hex SHA> ...        acceptance build
 #   scripts/ok-rc-acceptance.sh --release --version v1.0.1 --commit <40-hex SHA> ...  official release
 #     [--ok-linux DIR] [--chart FILE] [--out DIR] [--work DIR] [--smoke-only]
-#     [--targets "darwin-arm64 linux-amd64"]   default: both; CI builds each natively
+#     [--targets "darwin-arm64 darwin-amd64 linux-amd64"]   default: all three; CI builds each natively
 #
 # Versions follow SemVer and are shared by ok-cluster releases and the ok CLI.
 # Acceptance builds are vX.Y.Z-rcN and go to ../rc-artifacts/<version>; an
@@ -19,7 +19,7 @@
 #                the pinned SHA-256
 #   2. tests:    go vet ./cmd/ok, go test ./cmd/ok, tests/release_bundle_test.py,
 #                tests/install_ok_test.py (skipped with --smoke-only)
-#   3. build:    darwin/arm64 and linux/amd64 bundles into a new --out; never
+#   3. build:    darwin/arm64, darwin/amd64 and linux/amd64 bundles into a new --out; never
 #                overwrites (skipped with --smoke-only, which uses existing ones)
 #   4. verify:   each .tar.gz against its .sha256; release.txt version, platform
 #                and both commits
@@ -67,7 +67,7 @@ trap early_exit EXIT
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 VERSION="" COMMIT="" OK_LINUX="$ROOT/../ok-linux" CHART="$ROOT/.tools/cilium-1.19.6.tgz" OUT="" WORK="" SMOKE_ONLY=0 RELEASE=0
-TARGETS="darwin-arm64 linux-amd64"
+TARGETS="darwin-arm64 darwin-amd64 linux-amd64"
 while (( $# )); do
   case "$1" in
     --version|--commit|--ok-linux|--chart|--out|--work|--targets)
@@ -93,7 +93,7 @@ fi
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "--commit must be the full 40-character lowercase source SHA"
 seen=" "
 for target in $TARGETS; do
-  case "$target" in darwin-arm64|linux-amd64) ;; *) fail "--targets accepts darwin-arm64 and linux-amd64, not: $target" ;; esac
+  case "$target" in darwin-arm64|darwin-amd64|linux-amd64) ;; *) fail "--targets accepts darwin-arm64, darwin-amd64 and linux-amd64, not: $target" ;; esac
   [[ "$seen" != *" $target "* ]] || fail "--targets lists $target twice"
   seen="$seen$target "
 done
@@ -212,7 +212,7 @@ fi
 
 # 4. Verify every artifact
 CURRENT="verify"
-case "$(uname -s)/$(uname -m)" in Darwin/arm64) NATIVE=darwin-arm64 ;; Linux/x86_64|Linux/amd64) NATIVE=linux-amd64 ;; *) NATIVE=none ;; esac
+case "$(uname -s)/$(uname -m)" in Darwin/arm64) NATIVE=darwin-arm64 ;; Darwin/x86_64|Darwin/amd64) NATIVE=darwin-amd64 ;; Linux/x86_64|Linux/amd64) NATIVE=linux-amd64 ;; *) NATIVE=none ;; esac
 for target in $TARGETS; do
   name="ok-$VERSION-$target" archive="$OUT/ok-$VERSION-$target.tar.gz"
   [[ -f "$archive" && -f "$archive.sha256" ]] || fail "missing $name.tar.gz or its .sha256 in $OUT"
