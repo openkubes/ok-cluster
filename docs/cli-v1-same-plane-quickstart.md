@@ -1,124 +1,80 @@
-# OpenKubes CLI v1.0 — Same-Plane installation and first cluster (Community Preview)
+# OpenKubes CLI v1.0.1 — Same-Plane Quickstart
 
-> **Scope and status (November 2026):** This is the **Same-Plane Talos/KubeVirt operator** workflow, not a general-purpose, one-command Kubernetes installation and not the separate OK-147 Runner/Bare-MVP path. The installed-bundle workflow (`ok up` → independently verify Kubernetes readiness → `ok destroy <name>` → independently verify absence) **passed a live acceptance run** on macOS ARM64 against the existing RKE2 management cluster (OK-228, cluster `ok-v101-a2`, build `2a9b805`). This is evidence for that narrow operator workflow, not general production support, arbitrary providers or signed release provenance.
->
-> **v1.0.1 first run:** `install-ok.sh` installs a verified bundle without root, and `ok config init` finds and verifies that bundle and saves your management kubeconfig path. These are new in v1.0.1 and are being accepted as a new release candidate; until then, treat them as preview.
+**Status:** [v1.0.1 Community Release](https://github.com/openkubes/ok-cluster/releases/tag/v1.0.1) (15 November 2026). Not production-certified.
 
-## Fast path for a new user (macOS ARM64/AMD64 or Linux AMD64)
+The `ok` CLI creates and removes **Talos/KubeVirt workload clusters on an already prepared Kubernetes management cluster**. It does **not** install the management cluster or its CAPI/CAPK, KubeVirt, storage, networking, Talos controllers, or Golden Images. The separate Runner/Bare-MVP workflow is not enabled by this guide.
 
-**No manual working directory, `mkdir`, `XDG_CONFIG_HOME` or `XDG_STATE_HOME` exports are required.** The CLI creates private request, log, kubeconfig and lifecycle-state directories as needed. The only user-supplied credential input is an existing, authorized management kubeconfig, whose path is saved by `ok config init`.
+## 1. Download
 
-1. On a supported host, download the correct **published** `ok-v1.0.1-<os>-<arch>.tar.gz` and obtain its SHA-256 **independently**. Follow [step 1](#1-install-the-cli-from-a-release-bundle) to verify and install; do not use made-up or RC artifact checksums for the official release.
-2. Ensure `~/.local/bin` is on your shell `PATH` (the installer does not edit shell startup files); use `ok version`.
-3. Prepare a private (0600), **working** management kubeconfig. It must contain a current context and identify the intended management API; verify with `kubectl --kubeconfig /path/to/management.yaml get nodes` **before** provisioning. If it has no current context, select the intended context explicitly in that file; do not use the host's active kubectl context as a substitute.
-4. Run `ok config init`, provide that kubeconfig path, review the bundle/source checks and accept. `ok config show` is a read-only verification of the saved paths. `ok config init` does **not** create a management cluster, create credentials or contact Kubernetes.
-5. Run `ok up`. If no request exists, select **new cluster request**, choose a unique name and review the generated read-only plan. The CLI prompts for two **distinct**, typed provision/bootstrap confirmations. Check the management identity and auto-allocated endpoint/CIDRs before approving each stage.
-6. Independently verify the workload API, both expected Ready nodes, CNI and management CAPI/KubeVirt resources. When you intentionally no longer need the cluster, run `ok destroy <name>`; review its UID-bound deletion inventory and verify absence.
+Choose the bundle for the computer **running the CLI** (not the Kubernetes nodes):
 
-**What is not automated:** installing or preparing the management cluster (CAPI/CAPK, Talos controllers, KubeVirt, CDI, Golden Image, compatible storage and networking); acquiring a management kubeconfig; cross-operator IP/CIDR coordination; or independent workload-readiness verification. See the full prerequisites and safety notes below.
+| Your computer | Bundle |
+| --- | --- |
+| Apple Silicon Mac | [macOS ARM64](https://github.com/openkubes/ok-cluster/releases/download/v1.0.1/ok-v1.0.1-darwin-arm64.tar.gz) |
+| Intel Mac | [macOS AMD64](https://github.com/openkubes/ok-cluster/releases/download/v1.0.1/ok-v1.0.1-darwin-amd64.tar.gz) |
+| Linux/WSL2 AMD64 | [Linux AMD64](https://github.com/openkubes/ok-cluster/releases/download/v1.0.1/ok-v1.0.1-linux-amd64.tar.gz) |
 
-### Platform support and first-run validation
+[All v1.0.1 release assets, installer and official checksums](https://github.com/openkubes/ok-cluster/releases/tag/v1.0.1)
 
-| Operator host | v1.0.1 bundle | Notes |
-|---|---|---|
-| macOS Apple Silicon (ARM64) | `darwin-arm64` | CLI runs locally; supported workload target is **AMD64** on a prepared remote management cluster. |
-| Linux AMD64 (including Ubuntu in Multipass) | `linux-amd64` | Multipass VM must have network reachability to the management API, and all required runtime tools. |
-| WSL2 on AMD64 Windows | `linux-amd64` | Run inside a Linux distribution; use a Linux path to a private kubeconfig, and configure `PATH` inside WSL. |
-| Intel macOS (AMD64) | `darwin-amd64` | Native Intel macOS bundle; release validation on an Intel runner and fresh-user acceptance are required before publication. |
-| Linux ARM64 | **No official bundle in the current release matrix** | Not covered by this release. |
+The bundles include the CLI, pinned `ok-cluster` and `ok-linux` sources, and Cilium. No Go compiler or separate source checkout is needed.
 
-**Native workload ARM64 provisioning is not supported in v1.0.1.** The CLI's Same-Plane reference contract pins `ARCHITECTURE=amd64` and an AMD64 Golden Image. A macOS ARM64 executable does not imply ARM64 guest support.
+## 2. Verify and install (no sudo)
 
-## What this workflow does
+From the directory containing your downloaded archive, select the matching two values:
 
-The CLI provisions a new Talos Kubernetes workload cluster as KubeVirt VMs **on an existing management/infra Kubernetes cluster** (Same-Plane). You must supply an authorized kubeconfig for that management cluster. This is **not** the kubeconfig of the cluster being created.
+| Platform | `ARCHIVE` | `EXPECTED` (official SHA-256) |
+| --- | --- | --- |
+| Apple Silicon | `ok-v1.0.1-darwin-arm64.tar.gz` | `28e412ea9fa6c116d85caf4650c6449030d17d8b50de9d964c6ed2ee39795d11` |
+| Intel Mac | `ok-v1.0.1-darwin-amd64.tar.gz` | `3b69891825e641e1f1dc09c7102b9f8fc82205577d08713341394bb3b1cb5369` |
+| Linux AMD64 | `ok-v1.0.1-linux-amd64.tar.gz` | `722c09f3307d70bb5e05a76d93dd685c9fa9918ac2c2ce69a316d3afaee7e694` |
 
-The management cluster needs a previously validated Talos/KubeVirt provider profile, Cluster API controllers, KubeVirt, storage with the appropriate Longhorn/CSI integration, Golden image and clone prerequisites, and required network services. A fresh generic Kubernetes cluster is **not** automatically prepared by these commands. Consult the infrastructure/operator runbooks before running against shared infrastructure.
-
-## Prerequisites
-
-- Supported operator hosts: macOS ARM64, macOS AMD64 or Linux AMD64 (including AMD64 WSL2/Multipass). Runtime tools: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm, plus standard shell tools. **Go is only needed to build from source.** `ok config init` lists any tool that is missing; it never installs anything.
-- A release bundle and its SHA-256 from a trusted channel, or (developers) two sibling checkouts at the **reviewed, pinned revisions**: `ok-cluster` and `ok-linux`.
-- A prepared Same-Plane provider/management cluster with an explicitly selected and authorized kubeconfig; do not use the current kubectl context or rely on `KUBECONFIG`.
-- A unique, currently unused workload-cluster name, coordinated exclusive access to the shared network-allocation pool. This profile requires **automatic** endpoint and CIDR allocation; review its live inventory and the allocated values during provisioning.
-
-**Shared infrastructure safety:** Read-only-check the API endpoint assignment, network allocations and other clusters before confirming provisioning. Never remove, overwrite or forcibly clean up existing namespaces, storage, evidence, or worktrees to make the preflight pass. A separate clean worktree can help, but must still match the CLI's embedded source revision and pinned dependencies.
-
-## 1. Install the CLI from a release bundle
-
-You need the archive `ok-<version>-<os>-<arch>.tar.gz` and its expected SHA-256 from a trusted channel (not only the `.sha256` file shipped next to the archive). Run everything as the user who will run `ok`; no root is needed.
+Example for **Apple Silicon** (change `ARCHIVE` and `EXPECTED` for another platform):
 
 ```bash
-EXPECTED=<sha256 from the trusted channel>
-ARCHIVE=ok-<version>-<os>-<arch>.tar.gz
-# The installer ships inside the archive. Verify the archive first, then use the installer from it:
-shasum -a 256 "$ARCHIVE"          # Linux: sha256sum "$ARCHIVE"; must print $EXPECTED
+ARCHIVE=ok-v1.0.1-darwin-arm64.tar.gz
+EXPECTED=28e412ea9fa6c116d85caf4650c6449030d17d8b50de9d964c6ed2ee39795d11
+
+# Check before extracting anything; on Linux use sha256sum -c - instead.
+printf '%s  %s\n' "$EXPECTED" "$ARCHIVE" | shasum -a 256 -c - || exit 1
+
+# Extract only the bundled installer (not an unverified web script).
 tar -xzOf "$ARCHIVE" "${ARCHIVE%.tar.gz}/ok-cluster/scripts/install-ok.sh" > install-ok.sh
 sh install-ok.sh --archive "$ARCHIVE" --sha256 "$EXPECTED" --link
-ok version
+
+~/.local/bin/ok version
 ```
 
-`install-ok.sh` checks the SHA-256 again before it reads the archive, and refuses links, special files, absolute or `..` paths, privileged modes and archives for another OS/architecture. It extracts into a private staging directory and verifies the bundle there: `release.txt` against the binary and the Cilium chart, `ok version`, and both Git copies at their commits and clean. Only then does it move the bundle to `~/.local/share/ok/<bundle>`.
+On Linux, replace `shasum -a 256 -c -` with `sha256sum -c -`. The installer validates the archive again and installs under `~/.local/share/ok/` without root. Add `~/.local/bin` to `PATH` if needed; the installer does not edit your shell configuration. It refuses to overwrite an existing installation or `ok` link.
 
-- **It never overwrites anything.** An existing installation of the same version is refused. `--link` creates `~/.local/bin/ok` only if nothing is there; without `--link` it prints the `ln -s` command. It never edits your shell profile; if `~/.local/bin` is not on `PATH`, it prints the line to add.
-- **Other locations:** `--prefix DIR` and `--bin-dir DIR` (absolute paths of letters, digits, `.`, `_`, `/`, `-`).
-- **macOS:** a browser download is quarantined, and macOS blocks the unsigned binary. Download with `curl`, or remove the flag only after the checksum matched: `xattr -d com.apple.quarantine "$ARCHIVE"`.
-- **Integrity is not provenance.** The checksum shows you have the file whose value you trust; it does not establish who built it. The bundle is neither signed nor notarized.
-- **Upgrades.** Install the new version next to the old one (`--link` leaves an existing link alone; repoint it yourself). **Destroying a cluster with a different version than the one that created it is not yet tested and not promised.** Keep the creating bundle until its clusters are destroyed, and destroy with that version: call its `ok-cluster/.tools/bin/ok` by full path.
+**Security:** Compare the expected checksum with the official release notes through a trusted channel. v1.0.1 bundles are not signed, notarized or attested. macOS may quarantine browser downloads; use `curl -fLO` with the release URL, or remove the quarantine attribute only after verification.
 
-### Developers: build from source
+## 3. Configure your management cluster
+
+**Before `ok up`**, you need an authorized **management** kubeconfig (not a workload-cluster kubeconfig), with a valid current context, and a prepared Same-Plane Talos/KubeVirt provider profile. The kubeconfig must be a private regular file (mode 0600).
+
+Required runtime tools: Git, Make, Python 3 with PyYAML, kubectl, clusterctl and Helm. `ok config init` reports missing tools but does not install them.
 
 ```bash
-git clone https://github.com/openkubes/ok-cluster.git
-git clone https://github.com/openkubes/ok-linux.git   # check out the commit pinned in cmd/ok/cluster_provision.go
-cd ok-cluster && make ok-cli-build && .tools/bin/ok version
+# Replace with your own management kubeconfig.
+MGMT="$HOME/.kube/management-operator.yaml"
+kubectl --kubeconfig "$MGMT" config current-context
+kubectl --kubeconfig "$MGMT" get nodes
+
+~/.local/bin/ok config init --management "$MGMT"
+~/.local/bin/ok config show
 ```
 
-`make ok-cli-build` embeds the exact revision; an ad-hoc `go build` reports `unknown` and fails the source checks. Maintainers build bundles with `make ok-release-bundle GOOS=<os> GOARCH=<arch> OUT=dist` from a clean commit. The bundle layout:
+`ok config init` saves the **path**, not kubeconfig contents. It does not create a cluster or contact Kubernetes. `ok up` separately verifies the management API identity before making changes. It does not silently use `KUBECONFIG` or your active kubectl context.
 
-```text
-ok-<version>-<os>-<arch>/
-  ok-cluster/          minimal Git copy of the release commit
-    .tools/bin/ok      built from that commit (its embedded revision)
-    .tools/cilium-1.19.6.tgz   pinned chart, SHA-256 verified
-    scripts/install-ok.sh
-  ok-linux/            minimal Git copy of the ok-linux commit pinned in bin/ok
-  release.txt          version, both commits, SHA-256 of bin/ok and the chart
-```
-
-An official version such as `v1.0.1` is accepted only when the tag `v1.0.1` points at the packaged commit; any other build keeps a distinct preview version.
-
-## 2. First run: `ok config init`
+## 4. Create and verify a workload cluster
 
 ```bash
-ok config init --management "$HOME/.kube/management-operator.yaml"
+ok up
 ```
 
-Replace the path with **your** management-cluster kubeconfig (for the internal OpenKubes acceptance environment `~/.kube/ok-infra-operator.yaml`, **not** a path to copy blindly). Without `--management`, init asks for it on a terminal; Enter skips, and `ok up` then asks each time.
+In the interactive prompt, choose **new cluster request** and enter a unique cluster name. Review the plan, selected management cluster, endpoint and auto-allocated CIDRs. Provisioning and bootstrap each require their own exact typed confirmation. `ok up` finishing is **not** proof that Kubernetes is Ready.
 
-`ok config init`:
-
-- finds the bundle from where `ok` really is (through the `~/.local/bin/ok` link) and verifies it like `ok up`: `ok-cluster` at this binary's commit and clean, `ok-linux` at the pinned commit and clean, the pinned Cilium chart, and `release.txt`. It never searches for other checkouts;
-- lists missing runtime tools (nothing is installed);
-- saves only the **path** of the management kubeconfig: the file must be a private (0600) regular file; its contents are not read and no cluster is contacted. **No provider kubeconfig is needed for Same-Plane;**
-- shows everything and, on a terminal, asks `ok`/`no` before writing a private, create-only file. Without a terminal it saves nothing unless you pass `--yes` (scripts: `ok config init --management <file> --yes`); `--yes` skips only the prompts, never the verification. It never overwrites an existing file.
-
-If your management kubeconfig lacks `current-context`, `kubectl` without `--context` may try `localhost:8080`. Select and verify the intended context before passing its file to `ok config init`; the CLI does not repair the kubeconfig.
-
-The management cluster is chosen in this order: `--management`, then `TALOS_INFRA_KUBECONFIG`, then the saved path. `KUBECONFIG` and the current kubectl context are never used. The saved path only selects the file: `ok up` and `ok destroy` still verify the API server, CA and kube-system UID, and still require their typed confirmations. Check the target first:
-
-```bash
-kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" config current-context
-kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" get clusters.cluster.x-k8s.io -A
-```
-
-In Same-Plane mode this management cluster also hosts the KubeVirt workload VMs. The created workload cluster gets a **different** kubeconfig.
-
-Split-plane and legacy workflows (`ok cluster destroy`, Runner paths) keep the five-path setup: `ok config init --topology split-plane` or the explicit path flags; see `ok config init --help`.
-
-## 3. Write an intent file
-
-Bare `ok up` can write this file for you (option `n`, see step 4). To write it yourself, create `my-cluster.yaml` with the **operator-mode `ClusterRequest`** contract. **Do not copy `examples/ok-cli-cluster.yaml`**: that file uses `kind: Cluster` and `talos-kubevirt-mvp` for the separate Runner intent, and is rejected by `ok cluster plan`.
+Alternatively, save this request as `my-cluster.yaml`:
 
 ```yaml
 apiVersion: cli.openkubes.io/v1alpha1
@@ -133,100 +89,30 @@ spec:
     serviceCIDR: auto
 ```
 
-The Make reference profile allows network fields to be omitted or set to `auto` **only**. It rejects explicit IPs and CIDRs in the request. The existing Make scaffold selects values later; `ok cluster plan` does **not** allocate or reserve them. Before authorizing live provisioning, coordinate exclusive access to the shared MetalLB/network allocation pool, inspect existing allocations, and independently validate the chosen endpoint/CIDRs. The request is not the generated `cluster-config.yaml` from a previous cluster.
+Then run `ok cluster plan -f my-cluster.yaml` followed by `ok up -f my-cluster.yaml`.
 
-## 4. Plan, provision and verify
-
-```bash
-ok cluster plan -f my-cluster.yaml
-ok up -f my-cluster.yaml
-```
-
-Or run `ok up` without arguments in an interactive terminal:
-
-```text
-$ ok up
-Cluster requests in ~/.config/ok/requests:
-  1) my-cluster.yaml
-  n) new cluster request
-  p) path to another ClusterRequest file
-Choose [1]:
-```
-
-- **Enter** picks the first listed request, or `n` when there is none.
-- **`n`** asks for a cluster name and writes `~/.config/ok/requests/<name>.yaml` (mode 0600) from the validated template above, then continues.
-- **`p`** takes any other ClusterRequest path.
-
-The OS profile comes only from `spec.profile` inside the file, never from its name. The management prompt appears only when neither `--management`, `TALOS_INFRA_KUBECONFIG` nor a path saved by `ok config init` selects the cluster; the banner shows which one was used. Cancelling or ending input (Ctrl-C, Ctrl-D) at any prompt starts nothing. Both paths then run the same plan, preflight and typed confirmations.
-
-Read the plan and the target-cluster identity before authorizing either step. In interactive operator mode, the CLI requests **two separate typed confirmations**:
-
-```text
-provision my-cluster
-bootstrap my-cluster
-```
-
-Bootstrap completion **does not** establish Kubernetes readiness. Read the actual workload kubeconfig generated by `ok up`:
+**Verify independently** (replace `my-cluster` and the management kubeconfig path):
 
 ```bash
 kubectl --kubeconfig "$HOME/.config/ok/kubeconfigs/my-cluster.yaml" get nodes
 kubectl --kubeconfig "$HOME/.config/ok/kubeconfigs/my-cluster.yaml" -n kube-system get pods
-kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" -n my-cluster get cluster,machines,vm,vmi,pvc
+kubectl --kubeconfig "$MGMT" -n my-cluster get cluster,machines,vm,vmi,pvc
 ```
 
-Verify Ready nodes, expected CAPI/KubeVirt resources and system components; investigate failures before declaring the cluster ready. Default workload kubeconfig path is shown above; override it with `--workload-kubeconfig` if necessary.
+Check the expected Ready nodes, CNI and CAPI/KubeVirt resources. Coordinate endpoint and CIDR allocation with other operators: the local allocation lock does **not** prevent collisions between computers. CLI workload ARM64 is not supported in v1.0.1 even when the CLI runs on Apple Silicon.
 
-## 5. Destroy a cluster provisioned by this CLI
-
-**Destructive operation:** Check the selected management cluster and exact target. The following operation will remove the cluster, its namespace, KubeVirt compute and any specifically identified retained storage volumes. Never try this command against another team's cluster.
+## 5. Destroy when finished
 
 ```bash
 ok destroy my-cluster
 ```
 
-It uses the same management selection as `ok up` (`--management`, `TALOS_INFRA_KUBECONFIG`, then the saved path) and names its source in the banner.
+Review the management identity and UID-bound deletion inventory before typing the exact cluster name. Verify that the workload namespace and cluster objects are gone. **Destruction with a different CLI version is not supported**: keep and use the version that created the cluster. A destroyed cluster name cannot currently be reused because its teardown evidence is retained. Never delete state, finalizers, namespaces or storage manually to bypass a refusal.
 
-This path is specifically for clusters created with the operator-mode `ok up`. It requires the original local preparation and provisioned UID evidence: in `~/.local/state/ok/clusters/<name>/` (or `$XDG_STATE_HOME/ok/clusters/<name>/`) for clusters created by v1.0.1, or in `<checkout>/<name>/` for clusters created earlier. If both exist, `ok destroy` refuses and deletes nothing. The same Python Same-Plane teardown engine independently validates management API identity, object UIDs, ownership, Golden-image state and storage bindings. It presents a live deletion inventory and requires **typing the exact cluster name**. It reports five progress stages and only reports success after the engine's final absence checks and durable teardown-ledger completion.
+## Reference
 
-The historic form `ok cluster destroy <name>` (and its `ok destroy cluster <name>` alias) retains its distinct Runner/legacy routing; `ok local down` is for local kind environments. These are **not** interchangeable.
+- [Release notes and SHA-256 values](https://github.com/openkubes/ok-cluster/releases/tag/v1.0.1)
+- [OK-Cluster documentation](./)
+- [Runner/Bare-MVP security boundary](ok147-security-review-contract.md)
 
-The current schema-3 teardown ledger preserves audit/evidence history and **prevents reusing a destroyed cluster name**. Choose a new test name for repeated runs; do not delete or edit ledger evidence to bypass this rule. Safe name reuse across independently identified lifecycle generations is a future improvement.
-
-### Read-only teardown verification
-
-```bash
-kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" get namespace my-cluster
-kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" get clusters.cluster.x-k8s.io -A
-kubectl --kubeconfig "$HOME/.kube/management-operator.yaml" -n ok-cluster-teardown \
-  get configmap ok-cluster-teardown-my-cluster
-```
-
-The deleted namespace should be `NotFound`; the teardown evidence ConfigMap should still exist. For retained PVs and Longhorn volumes, independently inspect **only the exact IDs captured in the teardown inventory**, not arbitrary cluster-wide storage. Verify other shared clusters remain unaffected.
-
-On failures or interruption, **do not force-delete finalizers, namespaces, PVs or Longhorn volumes**. Preserve the original evidence and the ledger, inspect the error, then use the documented guarded recovery process. The CLI does not automatically retry.
-
-## Where configuration and state live
-
-| What | Where | Written by |
-|---|---|---|
-| Settings (bundle paths, management kubeconfig **path**) | macOS `~/Library/Application Support/ok/config.json`; Linux `$XDG_CONFIG_HOME/ok/config.json` or `~/.config/ok/config.json`; or `--config <file>` | `ok config init` (create-only) |
-| Requests, workload kubeconfigs, Make logs | `$XDG_CONFIG_HOME/ok` or `~/.config/ok` (also on macOS) | `ok up` |
-| Cluster lifecycle state and evidence | `$XDG_STATE_HOME/ok/clusters` or `~/.local/state/ok/clusters` | `ok up`, `ok destroy` |
-| Installed bundles | `~/.local/share/ok/<bundle>` (or `--prefix`) | `install-ok.sh` |
-
-Settings can be recreated; lifecycle state cannot: never delete it to work around an error. An explicit `--config` must exist and is never replaced by another file. `ok config show` prints a readable summary of the saved settings and verifies the **running** `ok`'s bundle live, with the same checks as `ok up` (`verified` or `NOT VERIFIED` with the reason). Scripts use `ok config show -o json`, which keeps the RC2 format: a JSON object `{"path", "config"}` on stdout and the diagnostics on stderr. It does not re-verify the saved source paths: `ok up` and `ok destroy` never use them, they always use the sources of the `ok` you run, and `ok config show` notes when the saved paths belong to another bundle (for example after an upgrade).
-
-### Lifecycle state
-
-From v1.0.1, `ok up` writes each cluster's lifecycle evidence (scaffold, preparation and provisioned-UID records) to `~/.local/state/ok/clusters/<name>/`, or `$XDG_STATE_HOME/ok/clusters/<name>/` when that is set. The source checkout stays clean, so one installation can create several clusters. Nothing is migrated: clusters created earlier keep their evidence in `<checkout>/<name>/` and remain destroyable from there. `ok up` refuses a name that already exists in either place.
-
-Network allocation considers the committed clusters in the checkout, earlier checkout-layout clusters, the state directory and the management cluster's live LoadBalancer inventory. While `ok up` allocates and writes a scaffold, it holds a local lock (`~/.local/state/ok/clusters/.allocate.lock`). A second `ok up` on the same machine and user fails at once instead of choosing the same endpoint or CIDRs. **The lock does not coordinate independent machines or operators:** a cluster scaffolded elsewhere but not yet bootstrapped is invisible here, and pod/service CIDRs come only from local files. Coordinate shared-pool use between operators as before.
-
-## Current limitations and next version
-
-- Requires a prepared management infrastructure, a verified bundle (or reviewed source checkout with pinned `ok-linux`), the local toolchain and an explicitly selected management kubeconfig.
-- Source-integrity checks may reject modified or unrelated untracked files; do not erase evidence to satisfy them. A checkout that still holds an earlier `<checkout>/<name>/` cluster can destroy it, but new `ok up` runs need a clean checkout.
-- Cluster-name reuse is not supported by the current durable teardown ledger.
-- Bundles are not signed, notarized or attested; the checksum is only as trustworthy as the channel it came from.
-
-For legacy/Runner Bare-MVP behavior, see the separate sections and [security contract](ok147-security-review-contract.md) rather than assuming those paths are enabled by this quickstart.
+Configuration is stored in `~/Library/Application Support/ok/config.json` on macOS or `~/.config/ok/config.json` on Linux; requests and workload kubeconfigs in `~/.config/ok/`; lifecycle evidence in `~/.local/state/ok/clusters/` (respecting relevant XDG overrides). Never delete lifecycle evidence to repair a failed operation.
