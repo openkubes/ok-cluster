@@ -39,10 +39,33 @@ identical results.
   valid; an invalid value refuses before anything runs; a `COMPATIBILITY MODE` banner appears in the provisioning
   plan.
 
-**Not covered:**
-- **Flatcar:** `scripts/flatcar_lifecycle.py` keeps its v1.0.1 `ok-infra` checks, so a Flatcar run with
-  `OK_COMPAT_PHYSICAL_NODE` fails closed.
-- **Talos-mgmt and the `ok-gpu` profiles** are not remapped.
+## Backward compatibility
+
+Both overrides are opt-in and additive:
+- **Unset (the default):** v1.0.1 behaviour, unchanged for every cluster type (Talos, Talos-mgmt, Ubuntu, Flatcar).
+  Rendered Talos and Ubuntu manifests are byte-identical to v1.0.1; the Go and Python suites give identical results.
+- **Set but invalid:** the CLI refuses before anything runs; the Python entry points raise `CompatError`. An invalid
+  value never silently falls back to the v1.0.1 constants.
+- **Each override is independent:** the physical-node override does not change the endpoint pool, and the
+  endpoint-pool override does not change node placement.
+- **No new required input:** no variable, flag, file or configuration key becomes mandatory. The logical profile name
+  `ok-infra` remains the contract in `cluster-config.yaml`.
+
+## Support matrix with the overrides
+
+| Cluster type | Overrides unset | `OK_COMPAT_PHYSICAL_NODE` and/or `OK_COMPAT_ENDPOINT_POOL` set |
+|---|---|---|
+| Talos (`ok up`, Make) | v1.0.1, unchanged | supported by this patch; target of the Scaleway E2E run (not yet run) |
+| Ubuntu (Make) | v1.0.1, unchanged | rendered by this patch; not yet validated end to end |
+| **Flatcar (Make)** | **v1.0.1, unchanged and still supported** | **not supported yet** |
+| Talos-mgmt, `ok-gpu` profiles | v1.0.1, unchanged | not remapped; not supported |
+
+**Flatcar is not supported with the overrides yet.** Flatcar Make workflows are unchanged when the overrides are unset:
+this patch does not remove, disable or alter Flatcar support. Only the combination "Flatcar + override" is
+unsupported, because `scripts/flatcar_lifecycle.py` keeps its v1.0.1 checks against a node named `ok-infra` and has
+not been validated with a different endpoint pool. A Flatcar run with `OK_COMPAT_PHYSICAL_NODE` set fails closed in
+those checks; a Flatcar run with only `OK_COMPAT_ENDPOINT_POOL` set is untested and must not be used. Extending the
+Flatcar lifecycle is a separate, later change.
 
 ## Use (Scaleway lab)
 
