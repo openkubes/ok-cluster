@@ -27,7 +27,7 @@ Powered by [Cluster API (CAPI)](https://cluster-api.sigs.k8s.io/), [CAPK (KubeVi
 | **[OpenKubes Framework Repository](https://github.com/openkubes/openkubes)** | Platform contracts, architecture decisions and shared integration layer |
 | **[OK-Cluster documentation](docs/)** | Technical cluster lifecycle documentation maintained in this repository |
 
-> **CLI v1.0 Same-Plane Community Preview:** Start with the [installation and first-cluster guide](docs/cli-v1-same-plane-quickstart.md): install a verified release bundle with `install-ok.sh` (no root, no Go, no source checkout), run `ok config init` once, connect a prepared management cluster, and use `ok up` / `ok destroy <name>`. This is a Talos/KubeVirt operator workflow for an already prepared management cluster, **not** a generally supported one-command installer or an activation of the separately gated Runner/Bare-MVP path. Bundles are not signed; verify the SHA-256 from a trusted channel.
+> **Install OK CLI v1.0.1:** [Download, install and create your first cluster →](docs/cli-v1-same-plane-quickstart.md) · [Official release and checksums](https://github.com/openkubes/ok-cluster/releases/tag/v1.0.1). No root, Go compiler or source checkout required. **Requires an already prepared Same-Plane Talos/KubeVirt management cluster**; not production-certified. Bundles are not signed.
 
 > **Cluster installation:** Follow the documented `ok-cluster` Makefile workflows below, with the required infrastructure and provider configuration. The emerging `ok` CLI is **not yet a generally supported one-command cluster installer**. Its current Bare-MVP flows need explicitly reviewed inputs and separate authorization for live execution.
 
