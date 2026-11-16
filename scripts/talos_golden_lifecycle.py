@@ -36,6 +36,7 @@ TEARDOWN_LEDGER_SUPPORTED_SCHEMAS = (
 )
 sys.path.insert(0, str(ROOT))
 
+from profile_resolvers.compat import physical_node  # noqa: E402  (v1.0.1 + compat patch)
 from profile_resolvers.talos import (  # noqa: E402
     EXPECTED_PROVIDER_PROFILES,
     TalosProfileError,
@@ -250,7 +251,7 @@ def validate_manifest(config: dict, manifest_path: Path) -> None:
     ]
     if (
         len(node_selectors) != 2
-        or set(node_selectors) != {provider["nodeSelector"]}
+        or set(node_selectors) != {physical_node(provider["nodeSelector"])}
         or len(storage_classes) != 2
         or set(storage_classes) != {provider["cloneTargetStorageClass"]}
         or any(
@@ -429,7 +430,7 @@ def pod_requests(pods: list[dict]) -> tuple[int, int]:
 def verify_scheduling(
     config: dict, kubeconfig: Path, *, require_create_capacity: bool = True
 ) -> dict:
-    expected_node = config["providerProfile"]["nodeSelector"]
+    expected_node = physical_node(config["providerProfile"]["nodeSelector"])
     node = kubectl_json(kubeconfig, ["get", "node", expected_node])
     ready = next(
         (
@@ -594,7 +595,7 @@ def verify_clone_storage(config: dict, kubeconfig: Path) -> dict:
             )
     if (
         len(eligible) < expected["replica_count"]
-        or provider["nodeSelector"] not in {item["name"] for item in eligible}
+        or physical_node(provider["nodeSelector"]) not in {item["name"] for item in eligible}
     ):
         raise TalosLifecycleError(
             "Longhorn capacity/placement is insufficient: "
@@ -1346,7 +1347,7 @@ def runtime_infrastructure_state(
         )
     if len(virtual_machine_instances) != expected_count or any(
         item.get("status", {}).get("phase") != "Running"
-        or item.get("status", {}).get("nodeName") != provider["nodeSelector"]
+        or item.get("status", {}).get("nodeName") != physical_node(provider["nodeSelector"])
         for item in virtual_machine_instances
     ):
         raise TalosLifecycleError(

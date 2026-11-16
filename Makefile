@@ -949,7 +949,7 @@ bootstrap-post-apply: require-cluster
 	@echo "   make status                CLUSTER=$(CLUSTER)"
 
 annotate-pvcs: require-cluster
-	@$(eval NODE := $(shell python3 -c "import yaml; cfg=yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')); print(cfg.get('nodeSelector','ok-gpu'))"))
+	@$(eval NODE := $(shell python3 -c "import sys, yaml; sys.path.insert(0, '$(SCRIPT_DIR)'); from profile_resolvers.compat import physical_node; cfg=yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')); print(physical_node(cfg.get('nodeSelector','ok-gpu')))"))
 	@$(eval EXPECTED := $(shell python3 -c "import yaml; c=yaml.safe_load(open('$(CLUSTERS_DIR)/$(CLUSTER)/cluster-config.yaml')); print(int(c['controlPlane']['replicas'])+int(c['workers']['replicas']))"))
 	@echo "Annotating PVCs for $(CLUSTER) → $(NODE) (until $(EXPECTED) DataVolume imports succeed)..."
 	@for i in $$(seq 1 20); do \

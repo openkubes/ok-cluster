@@ -20,6 +20,7 @@ from string import Template
 
 from profile_resolvers.flatcar import resolve_flatcar_config
 from profile_resolvers.talos import resolve_talos_config
+from profile_resolvers.compat import CompatError, endpoint_pool, physical_node
 
 SCRIPT_DIR = Path(__file__).parent
 # ok up keeps lifecycle state outside the checkout (CLUSTERS_DIR); committed
@@ -29,6 +30,11 @@ TEMPLATES_DIR = SCRIPT_DIR / "templates"
 
 METALLB_POOL_START = ipaddress.IPv4Address("192.168.100.200")
 METALLB_POOL_END   = ipaddress.IPv4Address("192.168.100.254")
+# v1.0.1 + compatibility patch: optional OK_COMPAT_ENDPOINT_POOL (unset => the constants above)
+try:
+    METALLB_POOL_START, METALLB_POOL_END = endpoint_pool(METALLB_POOL_START, METALLB_POOL_END)
+except CompatError as _compat_error:
+    raise SystemExit(f"ERROR: {_compat_error}")
 POD_CIDR_POOL = ipaddress.IPv4Network("10.32.0.0/11")
 SERVICE_CIDR_POOL = ipaddress.IPv4Network("10.96.0.0/12")
 
@@ -756,7 +762,8 @@ def build_context(cfg: dict) -> dict:
         "TALOS_VERSION":      talos_version,
         "TALOS_VERSION_NAME": talos_version_name,
         "UPGRADE_STRATEGY":   upg.get("strategy", "blue-green"),
-        "NODE_SELECTOR":      cfg.get("nodeSelector", ""),
+        # placement uses the physical node (v1.0.1 + compat patch; identity when OK_COMPAT_PHYSICAL_NODE is unset)
+        "NODE_SELECTOR":      physical_node(cfg.get("nodeSelector", "")),
         "PROVIDER_PROFILE_NAME": provider_name,
         "PROVIDER_PROFILE_IDENTITY": provider_identity,
         "MACHINE_TEMPLATE_ID": machine_template_id,

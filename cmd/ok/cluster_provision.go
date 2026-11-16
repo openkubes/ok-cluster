@@ -194,6 +194,9 @@ func runClusterProvision(ctx context.Context, arguments []string, stdin io.Reade
 // runClusterProvisionFor is the single provisioning entry used by both
 // `ok cluster provision` and `ok up`.
 func runClusterProvisionFor(ctx context.Context, requestPath, workloadKubeconfig string, stdin io.Reader, stdout, stderr io.Writer, openMakeLog func() (*os.File, error)) error {
+	if err := requireValidCompatEnvironment(); err != nil { // v1.0.1 + compat patch: fail closed on invalid overrides
+		return err
+	}
 	request, err := readClusterRequest(requestPath)
 	if err != nil {
 		return err
@@ -1013,6 +1016,11 @@ func provisionEnvironment(runtime clusterProvisionRuntime) []string {
 		"PYTHONDONTWRITEBYTECODE": "1", "LANG": "C", "LC_ALL": "C",
 		"OK_LINUX_PATH": runtime.okLinuxRoot, "TALOS_INFRA_KUBECONFIG": runtime.managementKubeconfig,
 	}
+	if compat, err := compatEnvironment(); err == nil { // v1.0.1 + compat patch: only validated, explicitly set values
+		for key, value := range compat {
+			values[key] = value
+		}
+	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		if values[key] != "" {
@@ -1109,6 +1117,7 @@ func printProvisionBootstrapHeartbeat(ctx context.Context, output io.Writer, int
 }
 
 func printClusterProvisionPlan(output io.Writer, prepared clusterProvisionPrepared, runtime clusterProvisionRuntime) {
+	printCompatBanner(output)
 	fmt.Fprintf(output, "Topology: same-plane; management/provider kube-system UID: %s\n", prepared.managementUID)
 	fmt.Fprintf(output, "OK-76 operator provisioning plan\nRequest: %s (%s)\n", prepared.name, clusterRequestProfile)
 	fmt.Fprintf(output, "Trusted Make checkout: %s @ %s (clean; exact commit this CLI was built from)\n", runtime.makeRoot, runtime.makeRevision)
