@@ -80,3 +80,21 @@ Build the CLI from this branch with `make ok-cli-build`, so that it runs from th
 
 `tests/compat_scaleway_test.py` (set `COMPAT_REFERENCE_JSON` to a render produced by the unpatched v1.0.1 tree
 for the byte-identity check) and `cmd/ok/compat_scaleway_test.go`.
+
+## Talos image re-pin (ok-linux `compat/talos-v1.9.6-repin-scaleway`)
+
+Image Factory no longer serves the byte-identical Talos v1.9.6
+`openstack-amd64.qcow2` pinned by ok-linux `a1687263` (sha256 `461d72d30750…`).
+For the Scaleway compatibility build the CLI pins the ok-linux re-pin commit
+`0e9ecdcd6317bcfc27fa623295f464972697d4a5`, which changes only the boot
+artifact digest and what derives from it:
+
+| | v1.0.1 (unchanged) | compatibility build |
+|---|---|---|
+| qcow2 sha256 | `461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5` | `11d7cbe34417199e6bad2fe455b79eb4e6c5e51d455be561aa686d317bf2b364` |
+| OS identity | `sha256:7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d` | `sha256:bd10742249caf9437168b59f119f42834cb313597dc10a4310629be78723a1e7` |
+| Golden PVC | `ok-images/talos-v1-9-6-ce4c980550dd-461d72d30750-amd64` | `ok-images/talos-v1-9-6-ce4c980550dd-11d7cbe34417-amd64` |
+
+Talos version, schematic, URL and size are unchanged. Runs with this build are
+reported as "OK CLI v1.0.1 + Scaleway compatibility patch with Talos image
+re-pin". Historical fixtures and evidence keep the v1.0.1 values.

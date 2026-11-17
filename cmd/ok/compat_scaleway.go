@@ -103,7 +103,7 @@ func printCompatBanner(output io.Writer) {
 	if err != nil || len(values) == 0 {
 		return
 	}
-	fmt.Fprintln(output, "COMPATIBILITY MODE: v1.0.1 + compatibility patch (compat/v1.0.1-scaleway) - NOT an unmodified v1.0.1 run")
+	fmt.Fprintln(output, "COMPATIBILITY MODE: v1.0.1 + Scaleway compatibility patch with Talos image re-pin (compat/v1.0.1-scaleway) - NOT an unmodified v1.0.1 run")
 	if node, ok := values[compatPhysicalNodeEnv]; ok {
 		fmt.Fprintf(output, "  %s=%s (VMs of the logical profile ok-infra are placed on this node)\n", compatPhysicalNodeEnv, node)
 	}

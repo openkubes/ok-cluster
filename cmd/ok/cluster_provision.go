@@ -31,7 +31,7 @@ const (
 	// The newer profile source is recorded in the repository's OK-147 evidence;
 	// the earlier OK-130 runtime commit predates provider_profiles required by
 	// the current resolver and fails the existing offline profile contract.
-	clusterProvisionReviewedOKLinux  = "a1687263d46c48e47c14f5bf202c9a652d7c1a71"
+	clusterProvisionReviewedOKLinux  = "0e9ecdcd6317bcfc27fa623295f464972697d4a5"
 	clusterProvisionCiliumSHA256     = "21c43cf53841f9ab0375047d95aa4c64051ea52bbd2c679416e6408f5f1c9179"
 	clusterProvisionNewTimeout       = 10 * time.Minute
 	clusterProvisionBootstrapTimeout = 2 * time.Hour

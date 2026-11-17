@@ -92,7 +92,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: openkubes/ok-linux
-          ref: a1687263d46c48e47c14f5bf202c9a652d7c1a71
+          ref: 0e9ecdcd6317bcfc27fa623295f464972697d4a5
           path: .ci/ok-linux
           persist-credentials: false
 
@@ -141,7 +141,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: openkubes/ok-linux
-          ref: a1687263d46c48e47c14f5bf202c9a652d7c1a71
+          ref: 0e9ecdcd6317bcfc27fa623295f464972697d4a5
           path: ok-linux
           persist-credentials: false
 

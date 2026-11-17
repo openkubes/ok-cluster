@@ -95,17 +95,17 @@ def main() -> int:
     resolved = resolve_talos_config(raw, OK_LINUX)
     identity = (
         "sha256:"
-        "7f5dd4276432f522727a50e604538b6befc0cac51ee2b90d4b1ccbfcac774a2d"
+        "bd10742249caf9437168b59f119f42834cb313597dc10a4310629be78723a1e7"
     )
     check(
         resolved["os"]["identity"] == identity
         and resolved["os"]["imageDigest"]
         == "sha256:"
-        "461d72d30750b9e18cf0656239e0274764b1e391bde5bbc41084a887b8a55ed5"
+        "11d7cbe34417199e6bad2fe455b79eb4e6c5e51d455be561aa686d317bf2b364"
         and resolved["os"]["goldenImage"]
         == {
             "namespace": "ok-images",
-            "claim": "talos-v1-9-6-ce4c980550dd-461d72d30750-amd64",
+            "claim": "talos-v1-9-6-ce4c980550dd-11d7cbe34417-amd64",
             "published": True,
             "storageClass": "ok-storage-block",
         },
@@ -294,13 +294,13 @@ def main() -> int:
                 {
                     "namespace": "ok-images",
                     "name": (
-                        "talos-v1-9-6-ce4c980550dd-461d72d30750-amd64"
+                        "talos-v1-9-6-ce4c980550dd-11d7cbe34417-amd64"
                     ),
                 },
                 {
                     "namespace": "ok-images",
                     "name": (
-                        "talos-v1-9-6-ce4c980550dd-461d72d30750-amd64"
+                        "talos-v1-9-6-ce4c980550dd-11d7cbe34417-amd64"
                     ),
                 },
             ],
