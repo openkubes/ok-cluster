@@ -1,7 +1,9 @@
 # v1.0.1 + compatibility patch (`compat/v1.0.1-scaleway`)
 
-**Status:** prepared for review only. Not merged to main, not released and not deployed. Every run that uses it
-must be reported as **"v1.0.1 + compatibility patch"**, never as an unmodified v1.0.1 run.
+**Status:** lab compatibility build, not merged to main and not released. Validated end to end on Scaleway on
+2026-11-17 (`ok up` and `ok destroy`, see "Validation" below). Every run that uses it must be reported as
+**"OK CLI v1.0.1 + Scaleway compatibility patch with Talos image re-pin"**, never as an unmodified v1.0.1 run. The
+official `v1.0.1` tag and release are unchanged.
 
 ## Why
 
@@ -55,7 +57,7 @@ Both overrides are opt-in and additive:
 
 | Cluster type | Overrides unset | `OK_COMPAT_PHYSICAL_NODE` and/or `OK_COMPAT_ENDPOINT_POOL` set |
 |---|---|---|
-| Talos (`ok up`, Make) | v1.0.1, unchanged | supported by this patch; target of the Scaleway E2E run (not yet run) |
+| Talos (`ok up`, Make) | v1.0.1, unchanged | supported by this patch; validated on Scaleway (2026-11-17, `ok up` + `ok destroy`) |
 | Ubuntu (Make) | v1.0.1, unchanged | rendered by this patch; not yet validated end to end |
 | **Flatcar (Make)** | **v1.0.1, unchanged and still supported** | **not supported yet** |
 | Talos-mgmt, `ok-gpu` profiles | v1.0.1, unchanged | not remapped; not supported |
@@ -72,9 +74,30 @@ Flatcar lifecycle is a separate, later change.
 ```bash
 export OK_COMPAT_PHYSICAL_NODE=scw2 OK_COMPAT_ENDPOINT_POOL=10.250.0.10-10.250.0.20
 ok up -f <cluster.yaml> --management <private-kubeconfig> --workload-kubeconfig <private-dir>/<cluster>.yaml
+ok destroy <cluster> --management <private-kubeconfig>
 ```
 
+`ok destroy` needs **the same** compatibility environment as `ok up`. Without it, the teardown validator compares the
+rendered machine templates with the logical node name `ok-infra` and refuses before any change ("Talos machine
+templates differ from the reviewed provider profile"); no ledger entry is written and nothing is deleted.
+
 Build the CLI from this branch with `make ok-cli-build`, so that it runs from the exact checkout it was built from.
+
+## Validation (Scaleway, 2026-11-17)
+
+Build `v1.0.1+scaleway-compat-talos-repin` from commit `3a3f730e44cc8588695b79064c674041a78128a6` (later commits on
+this branch change documentation only), ok-linux `0e9ecdcd6317bcfc27fa623295f464972697d4a5`, management cluster:
+ok-rke2 `main` `3342468` on two Scaleway Elastic Metal servers (RKE2 v1.35.5, KubeVirt v1.8.1, CDI v1.65.0,
+Longhorn v1.12.2, Cluster API v1.13.3, MetalLB v0.16.2).
+
+| Check | Result |
+|---|---|
+| `ok up` (Talos v1.9.6, Kubernetes v1.34.1, 1 control plane + 1 worker) | PASS: 2/2 nodes Ready |
+| Cilium, CoreDNS, workload scheduling and DNS | PASS |
+| `ok destroy` without the compatibility environment | refused before any change (expected, see above) |
+| `ok destroy` with the compatibility environment | PASS: all five teardown stages; Cluster API objects, KubeVirt VMs, DataVolumes and retained Longhorn volumes removed; teardown ledger completed; Golden Image PVC preserved |
+
+The procedure for rebuilding the lab and repeating this run is in ok-rke2 `docs/scaleway-lab-rebuild.md`.
 
 ## Tests
 
