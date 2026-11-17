@@ -67,6 +67,616 @@ not provisioning success. CAPI and existing lifecycle owners retain convergence
 ownership. This is a design direction, not a new CRD/controller or authority
 contract implemented here.
 
+### Workload credential bootstrap: review proposal, not an enabled feature
+
+Status: **DESIGN ONLY / NO-GO**. This section does not approve an issuer,
+certificate identity, lifetime, RBAC installation or execution. The security
+contract from [PR #437](https://github.com/openkubes/ok-cluster/pull/437), merged at
+`main@b1ecf24`, remains authoritative; its post-merge independent review and
+ADR-030 security acceptance are not implied complete by the merge. No accepted
+security requirement is changed here. Even matching platform inputs cannot make
+the current v3/v4 YAML runner handoff executable. Do not implement preparation
+automation that works around that gate.
+
+#### MVP decision: one runner path for CLI and future Console self-service
+
+The operator confirmed retaining the bounded runner as the shared execution
+path, with `ok-console` self-service in view. This supersedes the earlier idea of
+deferring bootstrap by introducing a local trusted-operator mode. **Do not build
+that second mode or silently wrap Make after a runner denial.** Make remains
+development/operator tooling, not an alternate production authority contract.
+Its lifecycle-generated workload admin access must not enter the bounded runner.
+
+The simplification target is the user workflow, not removing authority checks:
+one separately authorized platform setup, then understandable create/destroy
+requests under that delegation. Users must not have recurring CSR, token,
+digest, port-forward or handoff-file chores. A user confirmation submits a
+reviewed operation; it does not grant the platform new rights or authorize an
+arbitrary issuer request. CLI and Console may differ in authentication and
+presentation, not runner grants, stage order or success evidence.
+
+Local Console source inspection at
+[`72a816e3e0bb9ca1eb9d67e0432b7e6e27da2e5b`](https://github.com/openkubes/ok-console/tree/72a816e3e0bb9ca1eb9d67e0432b7e6e27da2e5b)
+confirmed that its BFF exposes read-only platform resources; authentication
+session mutations are not cluster create/destroy endpoints. The inspected
+`bff/README.md` and `contracts/security/v0alpha1/README.md` describe point-of-use
+environment/tenant/permission checks and a browser-safe session projection.
+This is source evidence, not a deployed-state observation. Console mutation
+integration is future work, not enabled by this decision or a login session.
+
+Before self-service integration, a reviewed server-side operation boundary must
+authenticate the caller, verify scope at the point of use and submit only typed,
+bound operations under explicit platform delegation. The browser receives
+redacted status/evidence, never Kubernetes credentials, signing keys, reusable
+stage grants or an arbitrary shell/Kubernetes proxy. CLI possession of a local
+kubeconfig must not become a second authorization policy. No new Console route,
+permission name or public operation schema is defined here. Existing managed
+CLI teardown remains unchanged; its future Console integration must preserve
+its separate plan, ownership and recovery contract rather than use create stages.
+
+**Minimum for a safe runner MVP** (requirements, not implemented deployment):
+
+| Required boundary | Existing evidence | Work still needed before activation |
+| --- | --- | --- |
+| Authenticated operation/plan and platform delegation | Existing stage plans/grants; #437 denies unsupported provenance | Bind verified caller scope, exact plan/attempt/target and authoritative predecessor outcomes. A supplied matching digest or frontend permission is not proof of authority. Resolve Stage-7 plan provenance separately. |
+| Bounded workload access | #455 offline checks; #456 request/result authentication | Establish the reviewed platform issuer task, real source UID/RV/owner/CA checks and in-task CA/key correspondence. Per-role rights, lifetime and stage budget must match the accepted profile. No CAPI-admin fallback or CA key in CLI/runner. |
+| Durable one-use issuance | #456 claims/results; #457 create-only adapter with fake TLS tests | Prove the selected store domain, writer isolation and enforced protection against deletion/replacement before signing. A claim with no authenticated result stays STOP. Fake API success is not deployment proof. |
+| Required network observation and fixed probe | Existing collector/probe adapters; offline observer profile | Establish bounded Pod discovery and mediated fixed-probe authority, including Pod replacement races. A fixed command in Go alone does not restrict a stolen exec credential. Do not drop the probe. |
+| Exact target-access installation | Existing renderer/plan checks for the fixed Stage-7 object set | Enforce the reviewed bodies and privilege boundary at the platform/API boundary, not merely in CLI validation. No blanket bind/escalate or reduced object set under the existing completion label. |
+| Explicit integration and evidence-driven completion | Seven-stage runner orchestration, durable receipts, explicit management/infra targets | Review the next manifest/adapter revision, role-specific access wiring and end-to-end negative tests before changing any gate. All required convergence/probe/receipt evidence remains necessary. |
+
+These are not six new services. Request authentication, bounded issuance and
+fixed tasks may be implemented by one narrowly reviewed platform integration;
+separate capabilities and trust boundaries must still be enforced. A bootstrap
+access result is not a stage grant; a successful stage invocation is not cluster
+success. Merely implementing both observer credentials cannot complete Stage 7.
+
+**Defer without weakening that minimum:** a new Installer Operator/controller,
+new CRDs, a generic multi-provider issuer, Ubuntu/Flatcar execution, Console
+mutation UI/endpoints in this slice, automatic issuance renewal, automatic
+recovery/takeover/replay, generic retention/garbage-collection machinery and
+OK-197/OK-198. Keep the existing narrow Talos/KubeVirt MVP profile and exact
+completion contract. The Console-compatible operation seam is a design
+constraint now, not permission to implement its full service here.
+
+For the initial no-recovery profile, retain issuance records instead of adding a
+cleanup controller. Do not build automatic disaster recovery as a prerequisite
+to a first run, but do not declare datastore rollback/fork risks solved: the
+trusted administration/storage boundary and enforced stop after continuity loss
+still require independent acceptance. No silent empty-store adoption, namespace
+recreation or domain rebinding. Full recovery can wait; fail-closed behavior
+and the accepted threat boundary cannot.
+
+Implementation order: (1) review concrete platform task/delegation, authoritative
+evidence and store-enforcement contracts together; (2) offline negative proofs
+for their adapters, including probe/installer boundaries; (3) separately approved
+installation and bounded enforcement validation; (4) explicit runner revision
+and end-to-end offline proof, then separate live approval for one Candidate;
+(5) future Console submission/status integration through the same operation
+boundary. Do not activate a partially supported profile or re-enable a gate on
+the strength of this design decision. Existing historical happy-run evidence,
+Candidate files and immutable terminal outcomes remain unchanged.
+
+#### Concrete platform tasks: offline contract proposal
+
+This inventory makes the shared-runner minimum reviewable; it defines neither
+HTTP routes nor a new public schema, executable task registry or deployable Job.
+The labels below describe fixed capabilities, not caller-selected commands.
+One platform integration may own them, but must not expose their union as a
+credential to a runner, CLI user or browser. Actual issuer image/spec/identity,
+request-window policy and enforcement/recovery boundaries remain unapproved.
+
+Every future request must be authenticated under platform delegation and match
+independently verified operation/plan/attempt, target Cluster UID, API/CA trust,
+policy and authoritative predecessor evidence. Bind caller environment/tenant
+scope at the operation boundary; never infer it from submitted fields or a
+matching digest. The task owner must verify current authority at point of use.
+No client can choose an image, ServiceAccount, key path, shell command, arbitrary
+resource path, API endpoint, Pod selector or RBAC body outside that bound plan.
+Public source/CA identity is not authority to read its signing key.
+
+| Fixed task | Exact allowed input/action | Result allowed back across its boundary |
+| --- | --- | --- |
+| Observer access | Existing #456 signed request for exactly `network-observer` after the successful Stage-4 prefix or `runtime-observer` after Stage 5. Verify the exact CSR and local profile, source namespace/name/UID/RV/Cluster owner, CA fingerprint and public/private-key correspondence inside the privileged task. Claim the #456 slot before signing, check source identity immediately before use, then persist the bound authenticated result before delivery. | The existing signed candidate result contains the public leaf certificate and exact request/slot/claim binding. Private client key stays with the runner; CA key never leaves the task. The public certificate is runtime transport material, not a browser result or a stage grant. Claim-only/unknown write stays STOP; no second issuance. |
+| Cilium Pod discovery | Stage-5 target and four-receipt prefix; the platform performs only the fixed `kube-system` Cilium discovery, not a caller-chosen selector. Verify the bound DaemonSet/controller identity, selected Pod UID, expected node association and required container. Existing collection/evaluator size limits still apply. | A bounded allowlisted projection of agent identity/readiness required by the existing evaluator plus an authenticated binding to the target/sample. Never raw Pod objects/specs, environment variables, annotations, tokens or arbitrary Pod inventory. The current direct Pod LIST is not this mediated boundary. |
+| Fixed Cilium probe | Same authorized Stage-5 observation window and platform-selected Pod identity; only `cilium-health status --probe --output json` in `kube-system`, container `cilium-agent`, with no stdin/TTY or caller arguments. Platform retains the exec capability. | Only the bounded probe evidence needed by the existing network evaluator, bound to the observed target, selected Pod UID and sample. Raw stdout/stderr is not a Console response. Missing or unauthenticated evidence cannot become success. |
+| Target-access installation | Exact Stage-7 selection after six durable successful receipts, verified runtime target, separately authenticated plan provenance/grant and the renderer-owned sixteen-object artifact. Reuse existing plan/object checks; enforcement must also constrain accepted bodies and privileges at the platform/API boundary. No generic apply/patch/delete endpoint or blanket bind/escalate. | Durable per-object identity/content observations and the existing stage outcome/evidence semantics. No installer credential is returned to the runner/browser. A submitted body or HTTP success alone does not establish convergence; partial/unknown outcomes remain incomplete/STOP. |
+
+The observer candidate message checks already exist. For discovery, probe and
+installation, an authenticated request/result envelope and its exact delegation
+to the existing adapters still need review; a boolean such as `authorized=true`
+is not a substitute. Issuer request/result keys must not be repurposed as
+Stage-Authority, independent-evidence or CA signing keys. Do not silently extend
+#456 messages, stage grants or the current shared certificate manifest fields to
+carry these other tasks. Role-specific runtime wiring needs its own reviewed
+revision, not a flag that re-enables certificate mode globally.
+
+**Accepted MVP platform trust boundary:** in [Suchit's independent review
+decision](https://github.com/openkubes/ok-cluster/pull/452#issuecomment-6264742337),
+platform administrators, CAPI/Enablement, the approved ArgoCD identity and the
+privileged Cilium runtime are trusted. CLI, runner, Console and tenant workloads
+remain outside that administrative boundary. Containing a compromised platform
+controller or privileged Cilium runtime is out of scope for this MVP. That
+residual risk matters because a successful network-observation receipt gates
+runtime binding; trusted-source evidence is part of this model, not proof
+against a compromised trusted runtime.
+
+**Probe TOCTOU is an accepted limitation under that trust model, not an
+additional activation blocker.** Existing
+`KubernetesCiliumWebSocketExecutor` performs a Pod identity GET, then a name-based
+exec, then another identity GET. The Kubernetes
+[`PodExecOptions` at v0.35.5](https://github.com/kubernetes/api/blob/v0.35.5/core/v1/types.go#L6810-L6836)
+does not provide a Pod-UID precondition: the fixed command may already have run
+in a normal rollout replacement when the final GET detects a changed UID.
+The post-exec check rejects that observation and returns no usable probe output.
+It does not prevent the earlier stream from executing, and must not be
+described as an atomic UID-bound execution guarantee.
+
+The accepted scope is the existing fixed
+`cilium-health status --probe --output json` action in a trusted Cilium runtime,
+not arbitrary exec or configuration modification. It sends functional probe
+traffic and updates health observations/metrics; it is not a read-only
+Kubernetes API request. The [pinned Cilium command](https://github.com/cilium/cilium/blob/v1.19.6/cilium-health/cmd/status.go)
+requests a synchronous connectivity probe rather than merely returning cached
+status. Under the accepted platform trust boundary, allowing that fixed action
+to run in a trusted replacement Pod while discarding its raced output is
+acceptable. No Bash wrapper, UID environment projection, guarded framing
+decoder or new prevention protocol is required for that race.
+
+| Principal/path | Accepted MVP trust scope | Still required before activation |
+| --- | --- | --- |
+| Platform administrators, CAPI/Enablement, approved ArgoCD identity and privileged Cilium runtime | Trusted for their existing platform responsibilities, including Cilium and admission/RBAC integrity. Compromise containment of these trusted actors is out of scope. | Bind the actual approved platform identities and delegation to the selected profile. Existing object labels/names alone are not authorization. No existing Platform rights are silently removed. |
+| CLI, runner, Console callers and tenant workloads | Outside platform administrative authority. No arbitrary command/image/Pod/endpoint selection or platform exec credential is delegated to them. | Authenticated operation/plan/attempt/target and fixed-task delegation; bounded discovery; effective negative-RBAC/indirect privilege-path checks for actual execution identities. A UI permission or code allowlist alone is not proof. |
+| Trusted network observation used for runtime binding | Source evidence is evaluated under the accepted trusted-runtime model, not as evidence resistant to a compromised Cilium runtime. | Exact successful NetworkReady receipt, target/prefix binding and all unchanged convergence/evidence checks. UID drift discards the sample; process exit success or incomplete output cannot produce success. |
+
+This decision does not enable mediated exec, discovery, authorization,
+certificate issuance, store continuity/anti-delete enforcement, Stage-7 signing,
+recovery or a live run. These gates remain closed as written. The new shared
+task must not expose the union of platform privileges to the runner or Console.
+The renderer-owned sixteen-object Stage-7 contract and ADR-030 item 9 OPEN are
+unchanged; #458 remains a separate internal-denial follow-up. No resolver
+allowlist is expanded by accepting this trust model.
+
+Source-only writer review (2026-10-19): the current CLI profile grants
+`ok147-argocd-manager` Services access, not Pod writes, through its `kube-system`
+Role. Its cluster role grants CREATE/UPDATE/PATCH/DELETE on mutating/validating
+webhook configurations. This is privileged platform authority
+([Kubernetes guidance](https://kubernetes.io/docs/concepts/security/rbac-good-practices/#control-admission-webhooks)),
+not automatically an unexpected tenant privilege under the accepted trust
+model. Do not infer tenant isolation from the namespace Role alone, or silently
+remove existing Platform permissions. Stage 7 follows initial network
+observation; its grants must not be retroactively assumed present before Stage
+5, or absent in a reused/partially configured target. No source review proves
+the identity of every credential holder or the absence of future changes.
+
+Separately authorized read-only follow-up on `ok-cli-mvp-3` (2026-10-19): the
+existing CAPI guest kubeconfig was retrieved from the management plane and
+stored privately; its endpoint matched the exact CAPI Cluster. The snapshot
+contained nine `kube-system` Roles and RoleBindings each, 78 ClusterRoles and 57
+ClusterRoleBindings. It confirmed the webhook-mutation ClusterRole and its
+binding to `kube-system/ok147-argocd-manager`. No mutating/validating webhooks,
+ValidatingAdmissionPolicies or policy bindings were present in that snapshot.
+The Cilium DaemonSet used the digest-pinned 1.19.6 image. No Pod exec or Cilium
+action was performed, no credential was issued/renewed, and no cluster resource
+was changed. This limited projection does not enumerate all token holders,
+arbitrary namespace roles, runtime image state or a fresh Candidate's Stage-5
+frontier. Raw credentials and snapshots are not committed to this PR.
+
+The earlier UID-guard candidate and its Bash/YAML fixtures, Python suite,
+test-only Go decoder and dedicated CI step are removed following the review.
+The accurate executor TOCTOU comment, changed-task-before-I/O regression and
+empty-output assertion on UID drift remain. Historical experiment results do not
+constitute activation evidence; actual platform-task authorization, discovery,
+issuance and Stage-7 proofs remain outstanding.
+
+Cleanup validation (Go 1.26.7/macOS amd64): all-package
+`go test -mod=readonly ./... -count=1` and `go vet -mod=readonly ./...` PASS;
+`go test -race -mod=readonly ./internal/runner -run
+TestKubernetesCiliumWebSocketExecutor -count=10` PASS. The opt-in
+`OK147_WEBSOCKET_INTEGRATION=yes` RemoteCommand-v5 test PASS three times against
+only a local fake TLS server. CI YAML parsing and diff checks PASS; the removed
+candidate has no remaining executable/CI references. These are offline proofs,
+not live authorization, issuer installation or complete security acceptance.
+
+Alternatives not selected: more pre/post GETs cannot make exec atomic; Kubelet
+has a UID-specific route but accessing it through `nodes/proxy` brings broad
+node-level authority ([Kubernetes guidance](https://kubernetes.io/docs/concepts/security/rbac-good-practices/#access-to-proxy-subresource-of-nodes)).
+Do not grant that right as a shortcut. A helper mounting host/Cilium sockets
+would add another privileged boundary and is not selected here. Removing
+`--probe` would substitute cached status for the required synchronous probe
+([Cilium v1.19.6 source](https://github.com/cilium/cilium/blob/v1.19.6/cilium-health/cmd/status.go));
+it is not an acceptable readiness shortcut under the current contract.
+
+Observation polling is distinct from mutation replay. Preserve the existing
+bounded convergence polling and evaluator Unknown/pending states for warmup.
+Each collection permits only its fixed bounded reads/probe within the accepted
+stage/credential window. Polling must not renew credentials, acquire a second
+issuance slot, repeat installation or restart a stopped stage. Source identity,
+authorization or evidence-integrity failure is not a transient warmup condition.
+
+Offline acceptance cases, before selecting any runtime protocol:
+
+1. Observer request/claim/result: existing #455–#457 wrong-role/key/source/CSR,
+   concurrency, crash and lost-response tests, plus future authoritative-prefix
+   and actual source/key adapters. Existing fixtures prove only their local scope.
+2. Discovery: reject caller selectors, foreign controller/target/Pod/node,
+   duplicate or oversized projections and raw spec/credential leakage. No
+   discovery adapter or authenticated projection verifier is implemented here.
+3. Probe: every changed namespace/container/command argument must stop before
+   identity HTTP or stream construction. Post-exec UID drift must discard all
+   output with no automatic retry. These regressions prove detection/discard,
+   not prevention of an already-started fixed probe in a trusted replacement;
+   that TOCTOU limit is accepted under the MVP platform trust boundary.
+4. Installation: retain full artifact/prefix/grant/target/body negatives from
+   `submission` and `runner`; future enforcement tests must also reject a
+   credential holder submitting another body outside the Go adapter. Reject
+   subset/success shortcuts, unknown writes and unsupported plan provenance.
+5. End-to-end: no request/result may open a disabled #437 entry point or count
+   task completion as full cluster success. Neither CLI nor Console gets a
+   parallel authorization path. Live enforcement/issuance proofs remain NOT RUN.
+
+#### Confirmed source boundaries
+
+The pinned CLI profile uses the existing Talos/KubeVirt renderer. Its control
+plane template already includes `cluster.inlineManifests` for local-path storage.
+That is a possible **declarative bootstrap seam**, not an existing credential
+issuer or permission to place credentials in rendered artifacts. The checked
+local `ok-linux/profiles/kubevirt/profile.yaml` pins Talos v1.9.6; this is source
+evidence, not verification of any deployed cluster/version.
+
+| Runner boundary | Existing workload action | Constraint on a future access profile |
+| --- | --- | --- |
+| Stage 5: network observation | Read Nodes, exact Cilium workloads and Cilium Pods; execute the fixed Cilium health probe in a selected Pod | A probe is not a read-only API capability. Do not describe `pods/exec` permission as command-restricted RBAC; the fixed command is enforced by the adapter, not ordinary RBAC. Keep Pod identity checks and arbitrary-exec denial; trusted replacement execution with raced output discarded is an accepted MVP limitation, not atomic execution. |
+| Stage 6: runtime binding | GET `kube-system` Namespace and `local-path` StorageClass; persist binding material and the stage receipt separately on the management plane | No workload storage sandbox or new write test is performed here. Keep workload observation rights separate from management evidence writes. |
+| Stage 7: target access | Submit the fixed namespace, ServiceAccount and RBAC object set, including reviewed platform ClusterRole prerequisites | Role creation/binding has privilege-escalation implications. Exact manifest validation in Go is not proof that a stolen credential cannot submit another body. |
+
+Sources: `internal/observation/network_collector.go`,
+`internal/runner/cilium_websocket.go`, `internal/runner/runtime_binding_source.go`,
+`internal/submission/target_access.go`, `profiles/cli/talos-kubevirt-mvp-v1.json`,
+and `templates/talos/providers/kubevirt/cluster-base.yaml.tpl`.
+
+The current full-run composition shares workload credential destinations between
+these stages. A per-role credential split must therefore be an explicit reviewed
+manifest/adapter change, not an undocumented widening of one observer identity.
+Do not change stage order, completion/readiness evidence or use the Bare-MVP
+label to omit any required probe. Stages 8–12 are not implicitly reopened by a
+Stage-5–7 proposal.
+
+#### Recommended integration sequence
+
+1. Retain the merged #437 certificate/recovery gates and its independent-review
+   follow-up; merging a mitigation does not approve a new issuance profile.
+2. Agree the initial workload issuance profile and the existing platform owner
+   that can enforce it. A narrowly scoped certificate issuer outside the runner
+   is a candidate because the current manifest is certificate-shaped; an approved
+   token bootstrap is an alternative, not already proven by TokenRequest support.
+   The candidate below recommends an architecture for review, not an approved
+   or implemented issuance option. A CSR or
+   TokenRequest alone does not solve authenticated first access to the new API.
+3. For certificate mode, review exact per-role CN, complete O/group set, trust
+   root, clientAuth usage, target binding and maximum total validity, together
+   with installed RBAC. No numeric TTL or accepted subject is invented here.
+   The runner must never receive a CA signing key or use the retained CAPI admin
+   kubeconfig to obtain the bounded credential. A signer with workload-CA access
+   is itself a privileged platform authority whose key isolation, issuance
+   restrictions, audit and compromise boundary require review; it is not made
+   least-privilege merely by being called a broker.
+4. Bind a typed issuance request/result to Contract/plan, execution attempt,
+   observed target Cluster UID and API/CA identity, role and policy revision.
+   Define the durable claim/outcome boundary before issuance: a lost response
+   must not silently cause a second issuance or runner replay. Target recreation,
+   predecessor drift, expired access or an indeterminate outcome stops the run.
+5. Review bootstrap RBAC/admission installation through the existing renderer/
+   lifecycle seam. Preserve Talos sysctls, user-namespace settings, kubelet bind
+   mounts and storage identity. Never hide this as a new imperative Go renderer.
+   Kubernetes `resourceNames` cannot constrain collection CREATE requests; named
+   `escalate` rules must not be assumed to protect Role CREATE. Exact-content
+   admission or an equivalently reviewed boundary is needed where body scope is
+   security-critical. Do not replace this with wildcard or broad escalation.
+6. Prove negative cases offline first: wrong issuer/subject/groups/target/CA,
+   lifetime drift, cross-role use, extra RBAC bodies, arbitrary exec, concurrent
+   duplicate requests, target recreation and crash after claim. Then obtain a
+   **separate** approval for a bounded live issuance/deployment validation. Only
+   reviewed supported profiles may be enabled; unsupported modes keep failing
+   before Stage 1. Recovery/fencing and old-grant retirement remain separate.
+
+#### Candidate A: platform-owned one-shot certificate issuer
+
+**Recommended for feasibility/security review, not selected for execution.** A
+fixed, digest-pinned, short-lived issuance Job on management workers would sign
+one approved request per role. It would not be another cluster controller or a
+long-running Installer Operator. The runner would retain its existing ephemeral
+execution model and CAPI would retain lifecycle ownership.
+
+Why investigate this first: a management-side signer could issue the first
+bounded workload credential without authenticating to that workload API using
+the prohibited CAPI admin kubeconfig. Upstream CABPT documents a Kubernetes CA
+Secret separately from the Talos secret bundle and Talos API configuration.
+That establishes a possible source seam, **not** that its deployed version,
+actual owner, Secret identity/key layout or access permissions are verified.
+The exact provider release and source must be pinned before implementation;
+do not infer ownership from a `<cluster>-ca` name alone. Upstream maintenance
+status is an integration risk to review, not authority to migrate providers.
+
+The offline source/key helper proposed in #460 accepts one unencrypted PEM
+block. Multi-block `EC PARAMETERS` plus `EC PRIVATE KEY` output (for example
+from `openssl ecparam -genkey`) is rejected, not implicitly stripped or
+converted. This format limit does not select or approve a live key source.
+
+The proposed trust boundaries are:
+
+- The runner generates its own client private key and CSR locally/in its private
+  execution volume. It never reads the CA private key, CAPI admin kubeconfig or
+  Talos admin configuration; private keys never enter Contract/plan, public
+  requests, receipts, Job arguments or logs.
+- A separately authorized platform installer owns the exact Job spec, pinned
+  image, ServiceAccount, key-source access and admission policy. Runner users do
+  not receive arbitrary Job-create or Secret-read rights to invoke the signer.
+  RBAC alone cannot constrain a Job-create body or which Secret it mounts.
+- The signer's reviewed request surface must limit it to its target CA source
+  and issuance coordination/result records. It must not mint stage grants,
+  update desired state, rotate CAs or issue for another target.
+  Possession of a CA key is nevertheless a high-privilege compromise boundary:
+  a compromised signer could impersonate privileged users. The proposal does
+  not claim RBAC can restrict what a process can sign with a key it possesses.
+- The source must bind namespace/name, observed Secret UID, owner references,
+  CA fingerprint and target Cluster UID to the verified lifecycle receipt
+  prefix. Source identity/RV drift stops before signing. Result verification
+  rejects wrong CA, subject/groups, EKU, validity or CSR public key before use.
+  No CA key or another user's client private key is returned to the runner.
+
+The future flow would be: verify issuer/profile/delegation wiring before Stage 1;
+let the existing owners create/converge infrastructure; verify the authoritative
+Stage-4 prefix and target UID; claim issuance, run the exact platform task once,
+verify its result, then continue the existing required observations. An unknown
+source contract or missing accepted profile still denies before Stage 1. This is a future
+explicit manifest/profile revision, not a reinterpretation of current v3/v4.
+
+Proposed identity separation for review (not an accepted CN allowlist):
+
+| Capability | Proposed boundary |
+| --- | --- |
+| Network observation | Read-only workload identity; no exec, RBAC write, Secret read or token minting. |
+| Fixed Cilium probe | Separate platform-mediated fixed-probe capability; no arbitrary command argument or raw exec credential returned to the user-facing CLI. Ordinary exec has no atomic target-UID precondition; fixed-probe execution in a trusted rollout replacement with output discarded on UID drift is an accepted MVP limitation. Mediated task authorization remains unimplemented and closed. |
+| Runtime binding | Separate observer limited to the required Namespace/StorageClass reads; management persistence remains separate. |
+| Target-access installation | Separate exact-body submission capability; RBAC/admission and privilege-escalation negatives must be proven before issuing usable installer access. No blanket `escalate`, `bind`, impersonation or wildcard alternative. |
+
+For X.509 role identities, propose explicit User subjects with an exact empty
+certificate O/group set (not a new shared group). Kubernetes' automatically
+assigned authenticated group is distinct from certificate O. Subject templates
+must be operation-specific and reject `system:` identities; exact templates
+remain unapproved. If a fresh operation nonce is used, generate and bind it
+**before** rendering/hashing: embedding a final plan digest in a subject already
+inside the plan would create a circular identity. Target UID binding belongs in
+the verified issuance request/result after lifecycle convergence, not guessed
+inside a pre-rendered object.
+
+An issuance slot must be keyed by accepted plan/attempt, target UID and role;
+its immutable claim binds the exact CSR and policy revision. Do not put only the
+CSR digest into the slot key: changing a CSR must not create another issuance
+opportunity for the same operation/role. Concurrent tasks have one winner. An
+issued result may be retrieved idempotently; claim-without-result remains
+indeterminate with no automatic issuance retry, timeout takeover or runner
+replay. The issuer's coordination backend needs its own reviewed narrow write
+policy; existing immutable stage outcome records must not become mutable slots.
+
+#### Issuer-record protection: bounded installation plan for review
+
+**PLAN ONLY / NOT INSTALLED.** Merged #455 provides offline observer validation,
+#456 separates request/result authority and one-use coordination, and #457 adds
+an explicitly configured Kubernetes storage adapter. None is linked into the
+CLI/runner, and none installs an issuer. The locally approved observer profile
+does not constitute production security acceptance or deployment approval.
+See [the adapter evidence](evidence/ok147-bootstrap-issuer-store/README.md).
+
+The purpose is replay prevention, not preventing cluster deletion. A claim says
+that the one issuance opportunity for plan/attempt/target/role is consumed. If
+the process crashes after claiming, the durable state remains STOP, even if no
+result was recorded. Deleting the claim and result could otherwise make the
+same slot appear empty. Expiry of a certificate does not erase this history.
+These records are not cluster-convergence evidence or authorization to repeat
+an operation.
+
+Proposed controls, restricted to a **separate issuer-storage domain**:
+
+| Surface | Required protection before activation |
+| --- | --- |
+| Issuer writer | Dedicated platform identity: only required exact GETs and ConfigMap CREATE. No update, patch, delete/deletecollection, namespace mutation, RBAC/admission mutation, impersonation or Secret access through this storage role. The runner/user does not receive it. Other required signer capabilities need their own reviewed boundary. |
+| New claim/result | Admission checks the reviewed writer, full slot/name relationship, immutable flag, exact record envelope, pinned domain/namespace identity and absence of owners. No arbitrary ConfigMap creation. Schema checks do not authenticate signed contents; the Authority still verifies signatures, predecessor evidence and time. |
+| Existing records and fence | Deny UPDATE/PATCH and DELETE within the dedicated namespace, including deletion requests that omit an individual name. Protect metadata as well as data, preventing owner injection or removal of identity markers. No overwrite, TTL cleanup or automatic repair. |
+| Storage namespace | Protect the exact namespace against deletion and identity/purpose drift; do not rely on removable object labels for policy coverage. Include collection-delete/finalization paths in the review and tests, rather than assuming ConfigMap protection covers namespace lifecycle. |
+| Enforcement and writer identity | Runner/issuer may not alter policy/binding, service-account or RBAC definitions to bypass the controls. Their lifecycle belongs to separately authorized platform administration. Policy removal/reconfiguration is a security boundary, not ordinary cluster cleanup. |
+
+Kubernetes immutable ConfigMaps still permit deletion/recreation
+([ConfigMap documentation](https://kubernetes.io/docs/concepts/configuration/configmap/#configmap-immutable)).
+RBAC permissions are additive, and `resourceNames` cannot restrict collection
+CREATE requests ([RBAC documentation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)).
+Consequently, omitting DELETE from one Role or validating bodies only in Go is
+not sufficient enforcement. A candidate is built-in ValidatingAdmissionPolicy
+with failurePolicy Fail and a Deny binding; exact capabilities/version and CEL
+rules must be reviewed and tested before selecting an installable package
+([admission documentation](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/)).
+No executable policy manifest or claim that these controls are deployed is
+introduced here.
+
+Installation order for a **future separately authorized** platform setup:
+
+1. Prepare the exact object inventory, API-version prerequisites, protected
+   names, dedicated identity, intended rules and package digest offline. Reject
+   collisions rather than adopting similarly named objects. Do not invent UIDs
+   or assert that the current management API supports the proposal.
+2. After separate read-only approval, observe API capabilities and existing
+   objects. After separate installation approval, establish restrictive
+   policy/binding coverage before any issuance writer becomes usable. Keep the
+   issuer disabled throughout bootstrap; missing enforcement means NO-GO.
+3. Create the dedicated namespace and immutable fence through the narrowly
+   reviewed platform installation path, not through an issuer exception. Record
+   their actual UIDs and fence resourceVersion, bind API/CA trust and compute the
+   exact domain identity. Installation exceptions must not remain a general
+   replacement/delete capability. Enable only the reviewed narrow storage role.
+4. Verify the exact installed definitions and negative cases using disposable
+   fixtures under a separate bounded validation approval. Observed acceptance of
+   CREATE is not proof that DELETE is denied, nor are fake-API tests proof of
+   real admission enforcement. Partial installation, drift or an unknown write
+   outcome stops; do not automatically roll back protections or start a signer.
+5. Only after independent security review and the remaining bootstrap/probe/
+   installer contracts may a separately authorized issuance integration be
+   considered. Storage protection alone does not reopen #437 gates or prove a
+   successful cluster run.
+
+Acceptance matrix to implement/test before installation: allowed exact create
+and historical read; wrong writer/body/domain/name; concurrent same-slot create;
+record/fence update and delete; collection delete; namespace deletion and label/
+UID drift; owner-reference injection/garbage-collection paths; enforcement
+disablement; claim-only crash; lost write response; and normal Candidate teardown
+leaving the issuer store untouched. Tests of hypothetical rules are not evidence
+of the management cluster enforcing them. No live validation was run for this
+plan.
+
+**Limits and recovery:** these controls do not defend against an administrator
+who can remove enforcement, direct datastore access or restoration/forking of an
+old management snapshot with the same UIDs. Client-side pre/post checks are not
+an atomic namespace-lifecycle fence. After such an event the issuer must remain
+disabled; no automatic resume, empty-store adoption, domain rebinding or request
+reissuance is allowed. A separately reviewed externally trustworthy continuity/
+recovery mechanism is still required; this plan does not implement one. Initial
+retention proposes no automatic record removal. Future retention/recovery and
+administrative escape procedures need explicit review, not a hidden bypass.
+
+`ok cluster destroy <name>` should continue to remove the authorized workload
+cluster, not this independent history. No changes to existing execution-ledger
+RBAC, teardown ownership, OK-197/OK-198, Candidate manifests or readiness contracts
+are proposed. This is one-time platform work, not new recurring end-user prompts.
+
+**Still blocking activation:** exact deployed CA ownership/key-source contract;
+approved per-role subjects and RBAC/admission/probe restrictions; a justified
+certificate lifetime and clock-skew policy; issuance-request authentication and
+durable coordination; authenticated plan provenance before any Stage-7 signing
+can return. An active numeric TTL remains UNSET/NO-GO (the review proposal below
+is not an enabled default): the CLI's three-hour execution
+timeout and the existing one-hour TokenRequest limit are not certificate-policy
+approval. Renewal after expiry is a new authorized issuance decision, not an
+implicit replay or automatic extension of a previous outcome.
+
+The first local checkpoint is now present in #455: offline request/result
+validation and negative fixtures, without a signing method, CA-key reader,
+Job launcher, enabled certificate profile or live entry point. #456 and #457
+add candidate authority/storage boundaries without activation. The next platform
+task and adapters still require the concrete contracts above and a reviewed next
+revision. Do not mix them into the accepted #437 mitigation or silently expand
+a public CLI/runtime schema.
+
+#### First observer profile: concrete decisions for review
+
+**LOCALLY APPROVED CHECKS; no production issuer activation or live authority.**
+The observer constraints below are implemented in the isolated #455 package;
+#456 authenticates candidate request/result messages and #457 adds a fake-API-
+tested storage adapter. None establishes deployed issuer/source/RBAC enforcement
+or independent security acceptance of Candidate A. Production policy and
+integration still need the reviewed platform contract. The synthetic ten-minute
+test cap is not policy. The following table describes the local profile and
+remaining production proposal, not enabled runtime defaults:
+
+| Decision | Review proposal, not an active default |
+| --- | --- |
+| Identities | Separate exact CNs `ok147:<operation-nonce>:network-observer` and `ok147:<operation-nonce>:runtime-observer`; nonce is 32 lowercase hexadecimal characters generated before rendering/plan hashing. Empty certificate O/group set; no SANs; digitalSignature and clientAuth only. |
+| Lifetime | Locally approved maximum total certificate validity 45 minutes, including at most 60 seconds of backdating. No acceptance before NotBefore or after NotAfter, and no automatic renewal. Production issuer activation remains subject to review. |
+| Issuance timing | One distinct role slot per plan/attempt/target UID, issued just before the relevant stage after its authoritative predecessor prefix. Do not issue both roles before infrastructure convergence, share one credential between stages, or reinterpret the current v3/v4 shared credential fields. |
+| Budget | The selected observation window must be at most 30 minutes. Initial issuer-result handoff plus scheduling must consume at most five minutes; check actual remaining certificate lifetime before stage entry. A missed budget stops without shortening observation, extending the certificate, reissuing or replaying. |
+| Runtime observer | Only GET the `kube-system` Namespace and `local-path` StorageClass in the bound workload cluster. No workload writes, Secret access, TokenRequest, RBAC modification or exec. Management receipt persistence uses a distinct authority. |
+| Network observer | LIST Nodes; GET `kube-system` DaemonSets `cilium`/`cilium-envoy` and Deployment `cilium-operator`. Recommend platform-mediated, fixed-selector Pod discovery instead of delegating raw Pod LIST to the runner/user. The current adapter's Cilium label selector is **not** an RBAC restriction: direct Pod LIST permits reading other Pods in that namespace. The mediated adapter/protocol must be reviewed before enablement; namespace-wide direct Pod LIST is not selected by this proposal. No exec, Secret access, TokenRequest or RBAC writes. |
+
+Timing rationale: `cmd/ok/cluster_create_template.go` supplies 30-minute
+lifecycle/network polling windows; `cmd/ok/cluster_intent_plan.go` supplies a
+1,800-second observation budget. The direct runtime-binding source independently
+allows 30 minutes (`internal/runner/runtime_binding_source.go`). A separate
+Stage-6 Job fixture has a 180-second deadline; that does not shorten the direct
+source contract. A proposed 45-minute cap leaves room for the selected 30-minute
+observation, bounded initial handoff and backdating; remaining margin is an
+operational proposal, not measured issuance latency or an existing entitlement.
+Longer expert polling windows must remain unsupported by this initial profile
+unless a separately reviewed policy changes it. No current polling limit changes.
+
+The profile budget check needs to include the actual role-specific stage wrapper
+overhead as well as polling and reject insufficient remaining lifetime. A
+network observer credential does not replace the required functional Cilium
+probe. Probe mediation/authorization and exact-body target-access
+installation/admission are still separate unresolved capabilities; implementing
+only these observers cannot claim complete automatic cluster creation.
+The fixed probe's name/UID TOCTOU limit is accepted under the trusted-platform
+model; no additional atomic-exec guard is a prerequisite for this MVP.
+
+Platform task requirements remain: fixed reviewed image/spec/ServiceAccount;
+authenticated request and predecessor evidence; source UID/RV/Cluster owner and
+CA fingerprint checks; CA certificate/private-key public-key correspondence
+checked **inside the privileged platform task**, never by exporting the signing
+key to the CLI; atomic single-winner claim before signing and immutable result
+persistence. Image digest, request authentication, coordination backend and
+admission rules still need concrete review. No arbitrary Job-create or Secret
+read is delegated to the runner/user, and a claim without a durable result stays
+STOP/indeterminate. Do not start a real signing task based on this proposal.
+
+A separately approved metadata-only observation on 2026-10-18 confirmed that one
+existing test cluster's named CA Secret had exactly the corresponding Cluster
+controller owner UID, using two GETs and no Secret data. Selected identities were
+retained privately; raw metadata and annotations were not published. This is
+point-in-time object-ownership evidence only, not proof of CA contents, signing
+key correspondence, cross-read stability or rights for a new operation. The
+observation grants no issuer installation, key access, credential issuance or
+runner execution.
+
+#### Deployed provider inventory and release-specific source check
+
+The separately authorized read-only inventory completed on 2026-10-18 after
+management API recovery. Each listed Deployment had one ready replica and a
+Running/ready manager container with the following image identity. These are
+point-in-time observations, not a compatibility certification or issuance grant.
+
+| Namespace / Deployment | Declared manager image | Running container image digest |
+| --- | --- | --- |
+| `capi-system/capi-controller-manager` | `registry.k8s.io/cluster-api/cluster-api-controller:v1.13.4` | `sha256:7a70942e0b45ae59514ee03cf448b64dbd2d77ef2fd7104e6c104f1c6b6b2013` |
+| `cabpt-system/cabpt-controller-manager` | `ghcr.io/siderolabs/cluster-api-talos-controller:v0.6.12` | `sha256:ff3f4fc7dada9c3a6ca310921ee68be3d50f6e714b42976d85965cf61180b788` |
+| `cacppt-system/cacppt-controller-manager` | `ghcr.io/siderolabs/cluster-api-control-plane-talos-controller:v0.5.13` | `sha256:5196c77e1dd872ea75aacc264d7cc720944e824237c766143da541dd49bd342f` |
+
+Scope was Deployment image references and Pod status/image IDs in these three
+management namespaces only, using existing access. No Secret query, credential
+issuance/renewal, resource mutation or workload API call was part of this
+inventory. The preceding failed inventory observed an API discovery timeout;
+that failure was not evidence of absent providers or expired credentials.
+
+The matching [CABPT v0.6.12 source, `writeK8sCASecret`](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/blob/v0.6.12/controllers/secrets.go#L121-L153)
+creates `<cluster>-ca` in the bootstrap config namespace, with a Cluster
+controller owner reference and `tls.crt` / `tls.key` entries. Crucially, it returns
+without validating an already existing Secret. Therefore a matching name and
+running provider version do **not** prove actual owner, key layout, CA identity
+or suitability as a signing source. The source check establishes a possible
+integration seam only; no live CA Secret metadata or data was inspected.
+Release-tag source inspection is not an image-to-source provenance attestation.
+
+Remaining activation blockers above are unchanged. A future separately scoped
+source-identity check must bind actual Cluster/Secret UID and owner references,
+CA fingerprint and the durable lifecycle receipt prefix; it must not expose a
+CA private key to the CLI or runner. Do not turn this inventory into implicit
+permission for Secret reads, a signing Job, new RBAC or certificate issuance.
+
+#### User experience after that contract is implemented
+
+One explicit platform setup delegates the reviewed scope. Normal users still
+use `ok cluster create --file cluster.yaml` and `ok cluster destroy <name>` with
+one understandable confirmation. The CLI automates the internal preparation,
+private credential references and temporary connectivity within that delegation;
+users do not manage issuers, token files, digests or handoff JSON per cluster.
+No extra end-user command, long-running Installer Operator, public CRD, automatic
+retry or privileged bootstrap fallback is introduced by this design proposal.
+
+Primary references: [Talos v1.9 machine configuration / inline manifests](https://docs.siderolabs.com/talos/v1.9/reference/configuration/v1alpha1/config),
+[Kubernetes RBAC restrictions and escalation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/),
+and [Kubernetes certificate requests and signers](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/).
+For Candidate A: [CABPT CA/secret ownership documentation](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos#operation)
+and [Kubernetes X.509 user/group authentication](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#x509-client-certs).
+These upstream references must be matched to the deployed/pinned provider
+release before being treated as implementation evidence.
+
 For the Bare-MVP completion mode, operators use the product CLI facade rather
 than assembling stage commands manually:
 
