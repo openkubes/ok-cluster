@@ -28,6 +28,10 @@ The OpenKubes CAPI architecture makes these boundaries explicit. It uses existin
 
 ## Two management topologies, one set of lifecycle contracts
 
+![OpenKubes management topologies: self-managed and centralized CAPI with BYOH shadow management](diagrams/management-topologies.svg)
+
+*Figure 1 — Two management topologies with separate lifecycle ownership and failure domains.*
+
 ### Self-managed CAPI
 
 A temporary bootstrap Kubernetes environment starts CAPI and provisions the target cluster. Once the target Kubernetes API is available, a compatible management stack is installed there. A controlled `clusterctl move` transfers supported CAPI resources into the target. From then on, the cluster's own CAPI installation manages its lifecycle.
@@ -45,6 +49,10 @@ For planned replacement, a second BYOH-based *Green* management cluster is prepa
 The centralized model simplifies shared governance and compatibility policy while increasing the blast radius of a management-plane incident. It therefore requires a stronger fencing, backup, audit and recovery contract.
 
 ## Bootstrap without a permanent management dependency
+
+![OpenKubes VM and kind bootstrap with self-managed pivot and centralized BYOH path](diagrams/bootstrap-pivot.svg)
+
+*Figure 2 — Lightweight VM/kind/CAPI/BYOH bootstrap, showing the different pivot and centralized-management outcomes.*
 
 The OpenKubes reference bootstrap path is deliberately lightweight:
 
@@ -101,6 +109,10 @@ Existing CAPI reconciliation and provider APIs stay responsible for cluster life
 
 ## Planned Blue/Green management handover
 
+![Domain-scoped BYOH blue green CAPI management handover with verified fencing and ownership epoch](diagrams/blue-green-handover.svg)
+
+*Figure 3 — Variant A: domain-scoped management transfer, not workload-cluster migration.*
+
 **Scope: the entire management domain, Variant A.** Blue and Green must not simultaneously own different subsets of this same domain as part of the first handover design.
 
 1. **Prepare Green.** Build a separate BYOH management cluster and install compatible Kubernetes, CAPI and providers. It holds no active lifecycle write authority.
@@ -143,6 +155,10 @@ Production backup policy must address encryption, least-privilege access, retent
 Velero backups are operational recovery material, not the whole declarative truth and not evidence that restored controllers may safely start writing.
 
 ## Cold disaster recovery after total management loss
+
+![Cold management disaster recovery with external Git and Velero state plus safe BYOH reattachment](diagrams/disaster-recovery.svg)
+
+*Figure 4 — Management reconstruction with external recovery sources and explicit reattachment authorization.*
 
 A completely lost Blue manager cannot serve as the source for normal `clusterctl move`. Disaster recovery instead follows an independently authorized **cold rebuild and reattachment**:
 
