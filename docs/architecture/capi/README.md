@@ -4,6 +4,10 @@
 
 This is the standalone architecture series for OpenKubes CAPI/BYOH lifecycle management. It does not depend on any earlier platform-specific architecture series.
 
+## Architecture Blueprint
+
+Read [Managing the Managers: A Resilient CAPI Architecture for OpenKubes](blueprint.md) for the full publication-oriented English architecture narrative, risks, lifecycle contracts and implementation-status boundaries.
+
 ## Accepted Architecture Decisions
 
 | ADR | Decision |
