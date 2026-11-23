@@ -29,7 +29,10 @@ type websocketExecutorFactory func(*rest.Config, string, string) (remotecommand.
 
 // KubernetesCiliumWebSocketExecutor executes only the fixed Cilium health
 // command over Kubernetes RemoteCommand v5 WebSockets. It performs exact Pod
-// UID checks immediately before and after exec to reject name-reuse races.
+// UID checks immediately before and after exec to discard results on observed
+// name-reuse races. Those separate reads are not an atomic exec UID precondition:
+// a stream may already have run when the post-check detects a replacement.
+// This adapter alone does not establish the proposed mediated-probe authority.
 type KubernetesCiliumWebSocketExecutor struct {
 	endpoint          *url.URL
 	token             string
